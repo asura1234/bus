@@ -14,9 +14,13 @@ A blocker stops work or waits on the developer; name what must happen. Put
 non-blocking concerns under Ongoing, and use `None` alone when there are no
 blockers. A task can appear in Blockers and Ongoing when both describe the same
 active work. Deferred items are explicitly postponed, not merely incomplete.
-Finished includes work completed or merged in the specified time window; use
-timestamped evidence rather than an undated DONE label. Do not repeat older
-finished items just because they remain in notes. Include the initial 24-hour
+Finished lists only work merged or landed in the specified time window: a
+merged PR with its link and title, or a landed commit. Ready, approved,
+gate-green, and waiting-to-merge work stays under Ongoing with its real status.
+If nothing merged or landed, Finished is exactly `None`, with no caveat such as
+"none merged, but...". Use timestamped merge or landing evidence rather than an
+undated DONE label. Do not repeat older finished items just because they remain
+in notes. Include the initial 24-hour
 window and any missing source or truncated query in an appropriate Context.
 
 Map an evidenced current phase to status with this precedence: waiting on a

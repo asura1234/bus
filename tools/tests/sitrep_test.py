@@ -45,7 +45,7 @@ def test_blocker_cannot_smuggle_none_or_extra_lines(blocker):
 def test_complete_report_and_invalid_status():
     data = report([])
     data["ongoing"] = [{"name": "Feature", "tldr": "Building it.", "context": "Fix round underway.", "status": "in-development", "pr": "[#12 Add it](https://example.com/pr/12)"}]
-    data["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "[#11 Fix it](https://example.com/pr/11)"}]
+    data["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "merged [#11 Fix it](https://example.com/pr/11)"}]
     data["deferred"] = [{"name": "Later", "tldr": "On hold.", "context": "Waiting for scheduling."}]
     result = render(data)
     assert result.returncode == 0, result.stderr
@@ -68,7 +68,7 @@ def test_pr_title_with_bracketed_type_is_a_valid_link():
 
 def test_pr_title_with_escaped_brackets_is_a_valid_link():
     data = report([])
-    data["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Complete.", "pr": r"[#12 fix \[unmatched](https://example.com/pr/12)"}]
+    data["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Complete.", "pr": r"merged [#12 fix \[unmatched](https://example.com/pr/12)"}]
     result = render(data)
     assert result.returncode == 0, result.stderr
     assert data["finished"][0]["pr"] in result.stdout

@@ -35,16 +35,22 @@ the authenticated user in this repo using `gh pr list --repo <owner/name> --stat
 open --author @me --limit 1000` and the equivalent `--state merged`, requesting
 number, title, url, state, headRefName and mergedAt where available. Resolve the
 repository from origin, never guess it. Limit merged entries to since < mergedAt
-<= cutoff; if either query reaches its limit, disclose possible truncation. Never fetch,
+<= cutoff; if either query reaches its limit, disclose possible truncation. An
+open PR is never Finished. Never fetch,
 checkout, alter Git config, or create/update PRs. On Codeup, use the shared
 PR host supplied by the installed pr skill if it supports read-only listing;
 inspect its help first. If unavailable or listing is unsupported, skip and note
 it in the report. For other hosts or any failed query, note the limitation.
 
 Reconcile current room notes, workflow, recent history, Git and host evidence.
-Use the guide's evidence and status rules. Include completed work only when an
-evidenced completion or merge occurred after since and no later than cutoff.
-Do not infer a completion time from an undated note. Keep task names, PR titles,
+Use the guide's evidence and status rules. Finished lists only work actually
+merged or landed after since and no later than cutoff: a merged PR as
+`merged [#N title](url)`, or a commit that landed on the default branch as
+`landed` plus its 40-hex SHA. Ready, approved, gate-green, and waiting-to-merge
+items stay under Ongoing with their real status. If nothing merged or landed,
+finished is `[]`, which renders exactly `None`, with no "none merged, but..."
+caveat. The renderer rejects a Finished item without that evidence. Do not
+infer a completion time from an undated note. Keep task names, PR titles,
 URLs and branches grounded in their sources. For a missing marker, say the
 finished window is the last 24 hours in an appropriate Context field. If no
 other task can carry a required source or window note, include the current status

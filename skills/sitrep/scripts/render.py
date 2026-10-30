@@ -5,7 +5,13 @@ import re
 import sys
 
 STATUSES = {"planning", "in-development", "test", "review", "blocked"}
-PR = re.compile(r"(?:\[#\d+ (?:\\[^\n]|[^\[\]\\\n]|\[(?:\\[^\n]|[^\[\]\\\n])*\])+\]\(https?://[^\s)]+\)|not opened yet \(branch: [^)\n]+\))\Z")
+PR_LINK = r"\[#\d+ (?:\\[^\n]|[^\[\]\\\n]|\[(?:\\[^\n]|[^\[\]\\\n])*\])+\]\(https?://[^\s)]+\)"
+PR = re.compile(rf"(?:{PR_LINK}|not opened yet \(branch: [^)\n]+\))\Z")
+MERGED_PR = re.compile(rf"merged {PR_LINK}\Z")
+LANDED_COMMIT = re.compile(r"landed [0-9a-fA-F]{40}\Z")
+UNMERGED_FINISHED = re.compile(
+    r"(?i)(?:waiting to merge|gate[- ]green|ready[- ]but[- ]unmerged|\bapproved\b|none merged|^none(?:\b|$))"
+)
 
 
 def line(value):
@@ -36,7 +42,12 @@ def render(data):
             values = {k: line(item[k]) for k in keys}
             if "status" in values and values["status"] not in STATUSES:
                 raise ValueError("invalid status")
-            if "pr" in values and not PR.fullmatch(values["pr"]):
+            if key == "finished":
+                if any(UNMERGED_FINISHED.search(values[field]) for field in ("name", "tldr", "context")):
+                    raise ValueError("finished lists only merged or landed work")
+                if not (MERGED_PR.fullmatch(values["pr"]) or LANDED_COMMIT.fullmatch(values["pr"])):
+                    raise ValueError("finished item requires a merged PR link and title or a landed commit")
+            elif "pr" in values and not PR.fullmatch(values["pr"]):
                 raise ValueError("invalid PR/MR link or branch")
             rows.append("- " + values["name"] + "\n" + "\n".join(
                 f"  - {labels[k]}: {values[k]}" for k in keys[1:]))

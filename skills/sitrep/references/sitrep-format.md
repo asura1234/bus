@@ -13,9 +13,18 @@ The other arrays contain objects with exactly these keys:
 - `finished`: `name`, `tldr`, `context`, `pr`.
 - `deferred`: `name`, `tldr`, `context`.
 
+A finished `pr` is merge evidence and nothing else. It is exactly
+`merged [#N title](url)` for a PR merged in the window, or `landed` plus the
+40-hex SHA of a commit that landed on the default branch in the window. The
+renderer rejects any other finished `pr`, including an open link, `not opened
+yet`, or text that the work is ready, approved, gate-green, or waiting to
+merge. It also rejects a finished name, TLDR, or context that says that, or
+that starts with `None` or says `none merged`. Put that work under Ongoing. An
+empty finished array renders exactly `None`.
+
 `status` is exactly `planning`, `in-development`, `test`, `review`, or
 `blocked`. In a blocked task, context names the dependency or developer action.
-`pr` is a Markdown link `[#N title](https://example.com/pr/N)` for an opened PR/MR. Escape literal
+On ongoing, `pr` is a Markdown link `[#N title](https://example.com/pr/N)` for an opened PR/MR. Escape literal
 backslashes and unmatched brackets in titles for Markdown. If none exists,
 use `not opened yet (branch: BRANCH)` and supply the evidenced branch; if the
 branch is unknown, use `not opened yet (branch: unknown)`.
@@ -40,7 +49,7 @@ None
 - Completed task
   - TLDR: One-line summary.
   - Context: Full evidenced context.
-  - PR/MR: [#11 Title](https://example.com/pr/11)
+  - PR/MR: merged [#11 Title](https://example.com/pr/11)
 
 ## Deferred
 - Deferred task
@@ -49,7 +58,9 @@ None
 ```
 
 Malformed examples include `None for you right now, but ...` in Blockers,
-multiline fields, omitted sections, unknown status values, and bare PR URLs.
+`none merged, but ...` in Finished, a Finished item that is only ready,
+approved, gate-green, or waiting to merge, multiline fields, omitted sections,
+unknown status values, and bare PR URLs.
 
 ## Room marker
 
