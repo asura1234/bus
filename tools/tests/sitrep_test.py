@@ -35,7 +35,7 @@ def test_blockers_are_only_bullets():
     )
 
 
-@pytest.mark.parametrize("blocker", ["None", "None for you right now, but work is ongoing", "first\ncommentary", "", "  "])
+@pytest.mark.parametrize("blocker", ["None", "None for you right now, but work is ongoing", "first\ncommentary", "first\u0085commentary", "", "  "])
 def test_blocker_cannot_smuggle_none_or_extra_lines(blocker):
     result = render(report([blocker]))
     assert result.returncode != 0
