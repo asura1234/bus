@@ -5,12 +5,28 @@ use std::path::{Path, PathBuf};
 const MAX_WIRE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: u64 = 4 * 1024 * 1024;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Outcome {
+    Final(String),
+    NoReply,
+    Failed(String),
+}
+
+#[cfg(test)]
 pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<String> {
+    match committed_outcome(wire, turn_id, prompt)? {
+        Outcome::Final(text) => Some(text),
+        Outcome::NoReply | Outcome::Failed(_) => None,
+    }
+}
+
+pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Option<Outcome> {
     let mut owned = false;
     let mut prompt_id = String::new();
     let mut answer = None;
-    let mut agent_done = false;
-    let mut turn_done = false;
+    let mut agent_outcome = None;
+    let mut agent_error = None;
+    let mut turn_reason = None;
     for line in wire.lines() {
         let value: Value = serde_json::from_str(line).ok()?;
         match value.get("type")?.as_str()? {
@@ -36,7 +52,7 @@ pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<
                 }
                 owned = true;
             }
-            "agent.message.appended" if owned && !agent_done => {
+            "agent.message.appended" if owned && agent_outcome.is_none() => {
                 let message = value.get("message")?.get("message")?;
                 if message.get("role").and_then(Value::as_str) != Some("assistant")
                     || value
@@ -68,34 +84,40 @@ pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<
             }
             "agent.turn.ended" if owned => {
                 if value.get("turnId").and_then(Value::as_u64) == Some(turn_id) {
-                    if value.get("outcome").and_then(Value::as_str) != Some("done") {
-                        return None;
-                    }
-                    agent_done = true;
+                    agent_outcome = Some(value.get("outcome")?.as_str()?.to_owned());
+                    agent_error = value
+                        .get("errorMessage")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
                 }
             }
             "turn.ended" if owned => {
                 if value.get("agentId").and_then(Value::as_str) == Some("main")
                     && value.get("turnId").and_then(Value::as_u64) == Some(turn_id)
                 {
-                    if !agent_done
-                        || value.get("reason").and_then(Value::as_str) != Some("completed")
-                    {
+                    if agent_outcome.is_none() {
                         return None;
                     }
-                    turn_done = true;
+                    turn_reason = Some(value.get("reason")?.as_str()?.to_owned());
                 }
             }
             "prompt.completed" if owned => {
                 if value.get("agentId").and_then(Value::as_str) == Some("main")
                     && value.get("promptId").and_then(Value::as_str) == Some(&prompt_id)
                 {
-                    if !turn_done
-                        || value.get("reason").and_then(Value::as_str) != Some("completed")
-                    {
-                        return None;
-                    }
-                    return answer;
+                    let reason = value.get("reason")?.as_str()?;
+                    return match (agent_outcome.as_deref(), turn_reason.as_deref(), reason) {
+                        (Some("done"), Some("completed"), "completed") => {
+                            Some(answer.map_or(Outcome::NoReply, Outcome::Final))
+                        }
+                        (Some("failed"), Some("failed"), "failed") => Some(Outcome::Failed(
+                            agent_error.unwrap_or_else(|| "Kimi turn failed".into()),
+                        )),
+                        (Some("interrupted"), Some("interrupted"), "interrupted") => {
+                            Some(Outcome::Failed("Kimi turn interrupted".into()))
+                        }
+                        _ => None,
+                    };
                 }
             }
             _ => {}
@@ -111,6 +133,19 @@ pub(crate) fn resolve(
     turn: &str,
     prompt: &str,
 ) -> Result<Option<String>, String> {
+    Ok(match resolve_outcome(home, cwd, session, turn, prompt)? {
+        Some(Outcome::Final(text)) => Some(text),
+        _ => None,
+    })
+}
+
+pub(crate) fn resolve_outcome(
+    home: &Path,
+    cwd: &Path,
+    session: &str,
+    turn: &str,
+    prompt: &str,
+) -> Result<Option<Outcome>, String> {
     let turn_id = turn.parse::<u64>().map_err(|_| "Invalid Kimi turn id")?;
     let root = home.canonicalize().map_err(|e| e.to_string())?;
     let index = home.join("session_index.jsonl");
@@ -168,12 +203,57 @@ pub(crate) fn resolve(
         Err(error) => return Err(error.to_string()),
     };
     let wire = String::from_utf8(bytes).map_err(|_| "Kimi wire is not UTF-8")?;
-    Ok(committed_final(&wire, turn_id, prompt))
+    Ok(committed_outcome(&wire, turn_id, prompt))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_outcome_requires_the_owned_prompt_and_complete_consistent_chain() {
+        let start = "{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":7,\"promptId\":\"p7\",\"input\":[{\"type\":\"text\",\"text\":\"Bus task\"}]}\n";
+        let agent = "{\"type\":\"agent.turn.ended\",\"turnId\":7,\"outcome\":\"failed\"}\n";
+        let turn =
+            "{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":7,\"reason\":\"failed\"}\n";
+        let prompt = "{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p7\",\"reason\":\"failed\"}\n";
+        assert_eq!(committed_outcome(start, 7, "Bus task"), None);
+        assert_eq!(
+            committed_outcome(&format!("{start}{agent}{turn}"), 7, "Bus task"),
+            None
+        );
+        let finished = format!("{start}{agent}{turn}{prompt}");
+        assert_eq!(
+            committed_outcome(&finished, 7, "Bus task"),
+            Some(Outcome::Failed("Kimi turn failed".into()))
+        );
+        let with_error = finished.replace(
+            "\"outcome\":\"failed\"",
+            "\"outcome\":\"failed\",\"errorMessage\":\"OAuthUnauthorizedError: login required\"",
+        );
+        assert_eq!(
+            committed_outcome(&with_error, 7, "Bus task"),
+            Some(Outcome::Failed(
+                "OAuthUnauthorizedError: login required".into()
+            ))
+        );
+        assert_eq!(committed_outcome(&finished, 7, "other"), None);
+        assert_eq!(
+            committed_outcome(
+                &finished.replace("\"reason\":\"failed\"", "\"reason\":\"completed\""),
+                7,
+                "Bus task"
+            ),
+            None
+        );
+        let success = finished
+            .replace("\"outcome\":\"failed\"", "\"outcome\":\"done\"")
+            .replace("\"reason\":\"failed\"", "\"reason\":\"completed\"");
+        assert_eq!(
+            committed_outcome(&success, 7, "Bus task"),
+            Some(Outcome::NoReply)
+        );
+    }
 
     #[test]
     fn resolver_requires_its_private_session_cwd_and_committed_turn() {

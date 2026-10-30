@@ -318,6 +318,16 @@ impl BusState {
         if request.phase == RequestPhase::Completed {
             return true;
         }
+        // Kimi can briefly paint an empty, idle composer while its bound
+        // turn is still executing tools. Only its owned terminal wire (or a
+        // captured reply) can establish that the turn actually finished.
+        if self
+            .agents
+            .get(&request.agent_id)
+            .is_some_and(|agent| agent.provider == super::Provider::Kimi)
+        {
+            return false;
+        }
         // An uncertain write without a matching provider start may be a
         // startup dialog or unrelated activity, not work on this message.
         if request.uncertain_outcome && !request.trusted_start_bound {
