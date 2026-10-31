@@ -94,7 +94,7 @@ pub(crate) fn load(
         })?
         .ok_or("Bus resume state is missing")?;
     let (agent, corrected) = if facts.session.is_none() {
-        if super::unstarted_codex_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
+        if super::unstarted_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
             return Err("Bus resume has no saved provider session".into());
         }
         (ownership::unstarted_owner(&state, facts)?, None)
@@ -129,6 +129,9 @@ pub(crate) fn load(
         identity::provider_kind(agent.provider),
         &mut args,
     );
+    if agent.provider == ProviderKind::Kimi {
+        crate::agents::providers::kimi::launch::validate_run_permissions(&args)?;
+    }
     let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),
@@ -140,22 +143,48 @@ pub(crate) fn load(
             path = %path.display(), "Bus hooks moved back to this executable for resume");
     }
     // Prompt policy stays with messaging; provider-specific argv stays below it.
-    let prompt = crate::messaging::orchestration::resume_prompt_args(agent.provider, &hooks.spool)?;
+    let prompt = if agent.provider == ProviderKind::Kimi && facts.session.is_none() {
+        crate::messaging::orchestration::prompt_args(
+            agent.provider,
+            &hooks
+                .spool
+                .join(crate::messaging::orchestration::PROMPT_FILE),
+            false,
+        )?
+        .unwrap_or_default()
+    } else {
+        crate::messaging::orchestration::resume_prompt_args(agent.provider, &hooks.spool)?
+    };
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),
         &mut args,
         prompt,
     );
-    let mut env = hooks.env();
-    if agent.provider == ProviderKind::Grok {
-        return Ok(LaunchExtras {
-            env: crate::agents::providers::grok::launch::environment(&hooks)?
+    Ok(LaunchExtras {
+        env: capture_environment(agent.provider, &hooks)?,
+        args,
+        session: corrected,
+    })
+}
+
+fn capture_environment(
+    provider: ProviderKind,
+    hooks: &HookContext,
+) -> Result<Vec<(String, String)>, String> {
+    match provider {
+        ProviderKind::Grok => {
+            return Ok(crate::agents::providers::grok::launch::environment(hooks)?
                 .into_iter()
-                .collect(),
-            args,
-            session: corrected,
-        });
+                .collect())
+        }
+        ProviderKind::Kimi => {
+            return Ok(crate::agents::providers::kimi::launch::environment(hooks)?
+                .into_iter()
+                .collect())
+        }
+        _ => {}
     }
+    let mut env = hooks.env();
     let mut env: Vec<_> = ["BUS_LAUNCH_ID", "BUS_CALLBACK_DIR"]
         .map(|key| {
             (
@@ -165,14 +194,8 @@ pub(crate) fn load(
             )
         })
         .into();
-    env.extend(crate::agents::providers::launch::runtime_env(
-        agent.provider,
-    ));
-    Ok(LaunchExtras {
-        env,
-        args,
-        session: corrected,
-    })
+    env.extend(crate::agents::providers::launch::runtime_env(provider));
+    Ok(env)
 }
 
 fn saved_session<'a>(
@@ -203,11 +226,12 @@ fn capture_args(
     hooks: &HookContext,
     project: &Path,
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
-    use crate::agents::providers::{claude_code, codex, cursor, grok};
+    use crate::agents::providers::{claude_code, codex, cursor, grok, kimi};
     match identity::provider_kind(provider) {
         ProviderKind::ClaudeCode => claude_code::resume::capture_args(hooks, project),
         ProviderKind::Codex => codex::resume::capture_args(hooks, project),
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
         ProviderKind::Grok => grok::resume::capture_args(hooks, project),
+        ProviderKind::Kimi => kimi::resume::capture_args(hooks, project),
     }
 }

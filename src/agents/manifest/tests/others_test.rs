@@ -1,5 +1,92 @@
 use super::*;
 
+#[test]
+fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    let idle = "No session yet — one will be created on your first message.\n╭────────────────────────────╮\n│ >                         │\n╰────────────────────────────╯\nAsk When Needed  K2.8 Preview thinking: max\ncontext: 0% (0/1M)";
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: idle,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Idle);
+    assert!(detection.visible_idle);
+
+    let working = format!("⠋ Working…\n{idle}");
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: &working,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Working);
+    assert!(detection.visible_working);
+
+    let draft = idle.replace(
+        "│ >                         │",
+        "│ > unowned draft           │",
+    );
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: &draft,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Unknown);
+    assert!(!detection.visible_idle);
+}
+
+#[test]
+fn kimi_cache_expiry_chooser_is_blocked() {
+    let frame = "↑↓ navigate · Enter select · Esc cancel\nCache expired — the next message re-sends the entire history at full price.\n ❯ Compact and continue    one-time compact cost\n   Start a new session     zero context cost\n   Continue as-is          full history kept\n   Don't ask me again";
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: frame,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Blocked);
+    assert!(detection.visible_blocker);
+}
+
+#[test]
+fn kimi_idle_composer_remains_ready_with_background_tasks() {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    for tasks in ["[1 task running]", "[2 tasks running]"] {
+        let frame = format!(
+            "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\nAsk When Needed  K2.8 Preview thinking: max  {tasks}\n                               context: 3% (24.4k/1M)"
+        );
+        let detection = evaluate_loaded_manifest(
+            DetectionInput {
+                screen: &frame,
+                osc_title: "",
+                osc_progress: "",
+            },
+            &loaded,
+            true,
+        );
+        assert_eq!(detection.state, AgentState::Idle, "{tasks}");
+        assert!(detection.visible_idle, "{tasks}");
+    }
+}
+
 // Reduced to the live control lines captured from Cursor Agent
 // v2026.09.10-fd3934a, pane w1:p8, on 2026-09-13. Question wording and the
 // transcript above the chooser are deliberately not detection invariants.

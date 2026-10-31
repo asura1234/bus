@@ -13,9 +13,11 @@ use std::path::Path;
 mod callback_spool;
 mod control_reads;
 mod history;
+mod kimi_settlement;
 mod restart_notice;
 mod restored_prompt;
 use control_reads::interrupts_delivery;
+use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 
 /// How often a tick moves settled history out of `state.json`.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
@@ -595,8 +597,21 @@ impl Worker {
         let mut settled_groups = Vec::new();
         for (agent, observed_at_ms) in agents {
             let rollout = self.codex_rollouts.get(&agent);
-            let recorded_end =
-                |request: &crate::messaging::model::Request| recorded_codex_end(rollout?, request);
+            let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
+                .unwrap_or_else(|error| {
+                    if state.record_error_episode(format!("kimi-evidence:{}:{error}", agent.0)) {
+                        tracing::warn!(event = "bus.kimi.evidence_failed", agent_id = agent.0, %error, "Kimi completion evidence failed; closing the request with an actionable error");
+                    }
+                    Some(crate::messaging::model::RecordedTurnEnd::Error(error))
+                });
+            let kimi_recorded = &kimi_recorded;
+            let recorded_end = |request: &crate::messaging::model::Request| {
+                if state_provider_is_kimi(&self.state, request.agent_id) {
+                    (*kimi_recorded).clone()
+                } else {
+                    recorded_codex_end(rollout?, request)
+                }
+            };
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
             if let Some(lead) = state.settle_ended_request(agent, observed_at_ms, recorded_end) {
                 changed = true;

@@ -22,6 +22,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../orchestration/providers/grok.md"),
     ),
     (
+        "providers/kimi.md",
+        include_str!("../../orchestration/providers/kimi.md"),
+    ),
+    (
         "how-to-bus-cli.md",
         include_str!("../../orchestration/how-to-bus-cli.md"),
     ),
@@ -328,6 +332,9 @@ pub(crate) fn prompt_args(
         Provider::Grok => {
             crate::agents::providers::grok::system_prompt::prompt_args(path, adopted)?
         }
+        Provider::Kimi => {
+            crate::agents::providers::kimi::system_prompt::prompt_args(path, adopted)?
+        }
         Provider::ClaudeCode => {
             Some(crate::agents::providers::claude_code::system_prompt::prompt_args(path, adopted))
         }
@@ -342,6 +349,9 @@ pub(crate) fn prompt_args(
 
 /// Prompt arguments for a resumed launch whose callback folder holds a prompt.
 pub(crate) fn resume_prompt_args(provider: Provider, spool: &Path) -> Result<Vec<String>, String> {
+    if provider == Provider::Kimi {
+        return Ok(Vec::new());
+    }
     let path = spool.join(PROMPT_FILE);
     if !path.is_file() {
         return Ok(Vec::new());

@@ -16,7 +16,7 @@ const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
 const REQUEST: &str = "request.json";
 const ACK: &str = "ack.json";
-const MAX_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Operation {
@@ -126,28 +126,41 @@ impl Exchange {
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
         }
         let _lock = lock(&dir)?;
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("draft-") && name.ends_with(".txt") {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    format!(
-                        "A previous draft still needs recovery: {}",
-                        entry.path().display()
-                    ),
-                ));
-            }
-        }
+        let orphaned = fs::read_dir(&dir)?.any(|entry| {
+            entry.is_ok_and(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("draft-") && name.ends_with(".txt")
+            })
+        });
         if read_request(&dir)?.is_some_and(|request| {
-            request.expires_ms > crate::utils::time::now_ms()
-                || request.operation != Operation::Idle && !has_ack(&dir, &request)
+            (request.operation != Operation::Cancelled || !orphaned)
+                && (request.expires_ms > crate::utils::time::now_ms()
+                    || request.operation != Operation::Idle && !has_ack(&dir, &request))
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "A draft exchange already owns this pane",
             ));
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("draft-") && name.ends_with(".txt") {
+                let recovered = entry.path().with_extension("recovered");
+                if recovered.exists() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!(
+                            "A previous draft still needs recovery: {}",
+                            entry.path().display()
+                        ),
+                    ));
+                }
+                fs::rename(entry.path(), &recovered)?;
+                tracing::warn!(event = "bus.draft.recovery_quarantined", path = %recovered.display(), "Preserved an orphaned draft without blocking later input");
+            }
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let token = format!(

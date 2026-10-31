@@ -146,10 +146,9 @@ build actually supports it. Preserve the private root until evidence is saved.
   directory?" must be `dialog` true and status blocked before any delivery.
   Answer Grok with `y` or `n` and no Enter; `y` only for the agent's own cwd.
   `session_hook_missing` with `dialog` false on that screen fails. Kimi 2.4.0's
-  "Trust this folder?" is not that `y`/`n` check. On the branch that lands
-  Kimi, PR #233 (`feat/kimi-provider`, `src/agents/dialog/kimi.rs`), it is a
-  choice dialog: the marked "Trust and continue" is chosen with Enter, and
-  "Exit" is Down then Enter. There is no `y`/`n` key. The hint is
+  "Trust this folder?" is not that `y`/`n` check. `src/agents/dialog/kimi.rs`
+  parses it as a choice dialog: the marked "Trust and continue" is chosen with
+  Enter, and "Exit" is Down then Enter. There is no `y`/`n` key. The hint is
   `↑↓ navigate · Enter select · Esc exit`. Answer only through
   `sbus agent dialog` and `sbus agent choose`, and only when
   `agent add --help` lists `kimi`. Enter on an empty composer is not this
@@ -405,8 +404,12 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   chooser, then send. Kimi's "Cache expired — the next message re-sends the
   entire history at full price" chooser (Compact and continue / Start a new
   session / Continue as-is / Don't ask me again) must be a Bus dialog.
-  `submission_unconfirmed` with `agent dialog` null fails. Do not press Enter.
-  Compact spends a full-history resend, and a new session drops the thread.
+  `submission_unconfirmed` with `agent dialog` null fails. Answer only through
+  `sbus agent dialog` and `sbus agent choose`, the same way as "Trust this
+  folder?". For a delivery that must keep the same session, choose
+  "Continue as-is". Do not press Enter on the composer. Compact spends a
+  full-history resend, and a new session drops the thread. Do not choose
+  "Don't ask me again" to invent a tester default.
   `tui.toml` `cache_expiry_hint` is a product setting, not a default the tester
   invents. A Kimi request that stays `current_request` with `turn_ended` false
   and an empty composer fails the next send as `prior_request_active` or
@@ -542,10 +545,24 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   just test-one cursor_final_reply_waits_for_completed_matching_turn
   ```
 
-  Kimi is not a provider in this build and has no provider fixture directory.
-  There is no Kimi `just test-one` filter to run. When `sbus agent add --help`
-  lists `kimi`, run the Kimi live cases in this guide on that head. When it
-  does not, leave those cases unrun and say so.
+  Kimi has focused fixtures in `src/agents/providers/kimi/` and the shared
+  request/resume suites. Run:
+
+  ```sh
+  just test-one kimi_
+  just test-one committed_final_survives_an_oversized_line_before_the_turn
+  just test-one malformed_wire_is_an_error_not_pending_evidence
+  just test-one kimi_successful_silent_turn_completes_without_a_reply
+  just test-one launch_rejects_attached_session_and_prompt_short_options
+  just test-one launch_rejects_positional_input_after_the_option_terminator
+  just test-one unstarted_kimi_resume_rejects_attached_session_and_prompt_options
+  just test-one identity_includes_every_supported_provider
+  ```
+
+  These cover committed ownership, long and malformed wires, silent success,
+  launch ownership, and restart identity. Run the Kimi live cases in this guide
+  whenever `sbus agent add --help` lists `kimi`; otherwise leave them unrun and
+  say so.
 
   The `just test-one` filters above are the required proof for a torn
   transcript, a wrong session, a cancelled record, and `provider_error`.
@@ -804,15 +821,18 @@ idle then deliver, and an approval card without `--yolo`.
   `agent dialog` null, status idle, on the cache-expired chooser. Cause: the
   four rows (Compact and continue / Start a new session / Continue as-is /
   Don't ask me again) were not a dialog, so the blocked clock never started.
-  Test: long idle, then deliver. Rule: surface it as a dialog. Do not press
-  Enter. Compact spends a full resend; a new session drops history.
-  `cache_expiry_hint` in `tui.toml` is a product setting, not a tester default.
+  Test: long idle, then deliver. Rule: answer only through `sbus agent dialog`
+  and `sbus agent choose`. For the same session, choose "Continue as-is".
+  Do not press Enter on the composer. Compact spends a full resend; a new
+  session drops history. Do not choose "Don't ask me again" to invent a
+  tester default. `cache_expiry_hint` in `tui.toml` is a product setting,
+  not a tester default.
 - **2026-10-31 — Kimi trust:** Symptom: `agent_launching` (and sometimes
   `prompt_not_shown`) on a fresh agent, status still launching. Cause: "Trust
   this folder?" was not a Bus dialog. Test: fresh first launch in an untrusted
-  directory, only when `agent add --help` lists `kimi`. Rule, on the branch
-  that lands Kimi (PR #233, `feat/kimi-provider`, `src/agents/dialog/kimi.rs`):
-  the prompt must be a dialog before any send. The marked "Trust and continue"
+  directory, only when `agent add --help` lists `kimi`. Rule
+  (`src/agents/dialog/kimi.rs`): answer only through `sbus agent dialog` and
+  `sbus agent choose`. The prompt must be a dialog before any send. The marked "Trust and continue"
   is chosen with Enter; "Exit" is Down then Enter. There is no `y`/`n` key.
   Do not press Enter on the composer. An agent left launching fails the case.
 - **2026-10-31 — scratch relaunch is not `bus --dev restart`:** Symptom: an

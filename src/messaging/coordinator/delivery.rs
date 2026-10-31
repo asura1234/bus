@@ -201,7 +201,9 @@ impl Worker {
         ) else {
             return Ok(());
         };
-        if identity.session_id.is_none() && agent.provider != Provider::Codex {
+        if identity.session_id.is_none()
+            && !matches!(agent.provider, Provider::Codex | Provider::Kimi)
+        {
             return Ok(());
         }
         let Some(request) = self.state.next_queued_request(agent.id) else {

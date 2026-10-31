@@ -152,19 +152,23 @@ impl Worker {
         plan: catalog::AgentResumePlan,
         extras: super::resume::LaunchExtras,
     ) -> Result<(), String> {
-        let (executable, grok_home) = if agent.provider == Provider::Grok {
-            let env = extras.env.iter().cloned().collect();
-            let executable =
-                launch::selected_executable(identity::provider_kind(agent.provider), &env)?
-                    .ok_or("Grok resume has no selected executable")?;
-            let home = env
-                .get("GROK_HOME")
-                .cloned()
-                .ok_or("Grok resume has no validated home")?;
-            (Some(executable), Some(home))
-        } else {
-            (None, None)
-        };
+        let (executable, grok_home, kimi_home) =
+            if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
+                let env = extras.env.iter().cloned().collect();
+                let executable =
+                    launch::selected_executable(identity::provider_kind(agent.provider), &env)?
+                        .ok_or("Provider resume has no selected executable")?;
+                let grok_home = env.get("GROK_HOME").cloned();
+                let kimi_home = env.get("KIMI_CODE_HOME").cloned();
+                if agent.provider == Provider::Grok && grok_home.is_none()
+                    || agent.provider == Provider::Kimi && kimi_home.is_none()
+                {
+                    return Err("Provider resume has no validated home".into());
+                }
+                (Some(executable), grok_home, kimi_home)
+            } else {
+                (None, None, None)
+            };
         self.close_resume_terminal(agent)?;
         let mut args = plan.argv[1..].to_vec();
         args.extend(extras.args);
@@ -221,6 +225,7 @@ impl Worker {
                 args: args.clone(),
                 executable,
                 grok_home,
+                kimi_home,
                 timeout_ms: None,
             }));
         match started {

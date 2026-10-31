@@ -273,6 +273,12 @@ impl BusState {
                 {
                     return None;
                 }
+                if agent.provider == super::Provider::Kimi
+                    && lead.trusted_start_bound
+                    && !invalidated
+                {
+                    return None;
+                }
                 Some(
                     if invalidated {
                         "session_invalidated"
@@ -317,6 +323,16 @@ impl BusState {
     pub(crate) fn turn_ended(&self, request: &Request) -> bool {
         if request.phase == RequestPhase::Completed {
             return true;
+        }
+        // Kimi can briefly paint an empty, idle composer while its bound
+        // turn is still executing tools. Only its owned terminal wire (or a
+        // captured reply) can establish that the turn actually finished.
+        if self
+            .agents
+            .get(&request.agent_id)
+            .is_some_and(|agent| agent.provider == super::Provider::Kimi)
+        {
+            return false;
         }
         // An uncertain write without a matching provider start may be a
         // startup dialog or unrelated activity, not work on this message.

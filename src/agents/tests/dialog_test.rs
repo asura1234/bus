@@ -452,6 +452,98 @@ fn unnumbered_options_parse_when_a_confirm_hint_follows() {
     }
 }
 
+// Captured from a fresh real Kimi 2.4.0 agent in an untrusted scratch project.
+const KIMI_TRUST: &str = concat!(
+    " ─────────────────────────────────────────────────────────────────────────────────────────\n",
+    "  Trust this folder?\n",
+    "  ↑↓ navigate · Enter select · Esc exit\n\n",
+    "  /private/tmp/kimi-trust-66127b1/project\n\n",
+    "  No project integrations or instructions to activate.\n\n",
+    "  Trust is remembered for this folder, including future project config changes.\n",
+    "  Tool approvals follow your permission settings.\n\n",
+    "   ❯ Trust and continue\n",
+    "     Exit\n",
+    " ─────────────────────────────────────────────────────────────────────────────────────────\n",
+);
+
+#[test]
+fn kimi_trust_panel_has_choices_even_though_its_hint_is_above_them() {
+    let trust = parse(KIMI_TRUST).unwrap();
+    assert_eq!(
+        labels(&trust),
+        [(1, "Trust and continue", true), (2, "Exit", false)]
+    );
+    assert!(trust
+        .text
+        .contains("/private/tmp/kimi-trust-66127b1/project"));
+    assert_eq!(
+        trust.hint.as_deref(),
+        Some("↑↓ navigate · Enter select · Esc exit")
+    );
+    assert_eq!(trust.keys_for(1), Some(vec!["enter"]));
+    assert_eq!(trust.keys_for(2), Some(vec!["down", "enter"]));
+
+    let exit = KIMI_TRUST
+        .replace("❯ Trust and continue", "  Trust and continue")
+        .replace("     Exit", "   ❯ Exit");
+    assert_eq!(
+        labels(&parse(&exit).unwrap()),
+        [(1, "Trust and continue", false), (2, "Exit", true)]
+    );
+    assert_eq!(parse(&exit).unwrap().keys_for(1), Some(vec!["up", "enter"]));
+    assert!(parse(&KIMI_TRUST.replace("Trust this folder?", "Unrelated question")).is_none());
+}
+
+const KIMI_CACHE_EXPIRED: &str = concat!(
+    " Earlier transcript output\n",
+    " ────────────────────────────────────────────────────────────────────────────\n",
+    "  This session has been idle for 33m and is ~196k tokens.\n",
+    "  ↑↓ navigate · Enter select · Esc cancel\n\n",
+    "  Cache expired — the next message re-sends the entire history at full price.\n",
+    "   ❯ Compact and continue    one-time compact cost · cheapest way to keep this topic\n",
+    "     Start a new session     zero context cost · best for a new task\n",
+    "     Continue as-is          full history kept · highest cost per turn\n",
+    "     Don't ask me again\n\n",
+    " ────────────────────────────────────────────────────────────────────────────\n",
+    " Ask When Needed  K3.1 Pro thinking: high\n",
+);
+
+#[test]
+fn kimi_cache_expiry_chooser_is_actionable_with_its_descriptions() {
+    let dialog = parse(KIMI_CACHE_EXPIRED).unwrap();
+    assert_eq!(
+        labels(&dialog),
+        [
+            (1, "Compact and continue", true),
+            (2, "Start a new session", false),
+            (3, "Continue as-is", false),
+            (4, "Don't ask me again", false),
+        ]
+    );
+    assert_eq!(dialog.keys_for(1), Some(vec!["enter"]));
+    assert_eq!(
+        dialog.keys_for(4),
+        Some(vec!["down", "down", "down", "enter"])
+    );
+    let moved = KIMI_CACHE_EXPIRED
+        .replace("❯ Compact and continue", "  Compact and continue")
+        .replace("     Continue as-is", "   ❯ Continue as-is");
+    assert_eq!(
+        labels(&parse(&moved).unwrap()),
+        [
+            (1, "Compact and continue", false),
+            (2, "Start a new session", false),
+            (3, "Continue as-is", true),
+            (4, "Don't ask me again", false),
+        ]
+    );
+    assert_eq!(
+        parse(&moved).unwrap().keys_for(1),
+        Some(vec!["up", "up", "enter"])
+    );
+    assert!(parse(&KIMI_CACHE_EXPIRED.replace("Cache expired", "Unrelated choice")).is_none());
+}
+
 #[test]
 fn only_the_last_numbered_block_is_live() {
     let screen = format!("Earlier plan:\n❯ 1. Old\n  2. Older\n\nsome output\n\n{CLAUDE_TRUST}");

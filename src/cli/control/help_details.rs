@@ -210,7 +210,7 @@ retrieve the retained outcome. --confirm is required (default false)."#;
 
 const AGENT_ADD: &str = r#"Launch a worker in a work room, or an orchestrator in MASTER. Current names are
 case-sensitive, trimmed and unique session-wide; a fully deleted name is reusable.
-Providers: claude, codex, cursor. --pwd is the project directory; --args is one
+Providers: claude, codex, cursor, grok, kimi. --pwd is the project directory; --args is one
 provider-argument string. Bus disables startup updates on launches/resumes;
 explicit Claude updater environment settings take precedence.
 Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completion.
@@ -224,7 +224,7 @@ naming the binary; affected agents and tasks stay saved.
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. New Codex
 orchestrators are refused: background command completion cannot wake Codex.
-Saved Codex orchestrators still resume. Claude/Cursor can orchestrate.
+Saved Codex orchestrators still resume. Claude, Cursor, Grok and Kimi can orchestrate.
 Default prompt is built in (orchestration/prompt.md); --system-prompt TEXT or
 --system-prompt-file PATH replaces it (mutually exclusive). Bus fills {{ROOM_NAME}},
 {{ROOM_ID}}, {{AGENT_NAME}}, {{DOCS}} (the session's <BUS_DATA_DIR>/docs/) and
@@ -233,7 +233,9 @@ workflow-create.md, templates and shipped workflows; see the named-workflows rul
 Bus saves system-prompt.md in the launch's callback folder and passes the prompt
 again on resume. --args combines with Bus-owned prompt arguments.
 Claude gets --append-system-prompt-file; saved Codex gets a developer_instructions
-pointer via -c; Cursor receives a first message. New PWD trust prompts require
+pointer via -c; Cursor and Grok receive a first message. Kimi uses an agent
+file for new sessions and retains it on exact --session resume. Its hooks and
+session files live in an owner-only per-agent home. New PWD trust prompts require
 an explicit answer; Bus does not pre-trust folders.
 
 Adopt an existing session with --args '--resume UUID' (Claude/Cursor) or
@@ -332,15 +334,15 @@ Cursor): edit/submit in pane, never overwrite. skip_would_cancel_form: Claude
 Esc cancels the whole form; answer instead. dialog_redrawing: observe again.
 An uncertain write may have answered; inspect before retrying with a new token."#;
 
-const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor).
-Keep terminal/name/room, reset compactions and rebind the provider session through
-its next start hook (Cursor: first new turn). This is not a Bus message.
+const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor),
+/new (Grok/Kimi). Keep terminal/name/room, reset compactions and rebind the provider
+session through its next start hook (Cursor: first new turn). This is not a Bus message.
 Result: {agent_id,sent:STRING,stage:"cleared"}.
 Errors: command_failed unless idle, ready, with no active/queued messages and
 valid runtime identity. Settle work first; inspect an uncertain reset before retry.
 Never send reset slash commands through send: they cannot produce a normal reply."#;
 
-const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex, Ctrl+C for Cursor. Wait
+const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi, Ctrl+C for Cursor and Grok. Wait
 up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
 Running/queued/settling requests close as interrupted; no later replay. History

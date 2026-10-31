@@ -72,6 +72,7 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         "claude-hook" => ProviderKind::ClaudeCode,
         "cursor-hook" => ProviderKind::Cursor,
         "grok-hook" => ProviderKind::Grok,
+        "kimi-hook" => ProviderKind::Kimi,
         _ => return Err(io::Error::other("Unknown Bus callback provider")),
     };
     let mut bytes = Vec::new();

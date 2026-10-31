@@ -92,7 +92,7 @@ fn claim_idle_observation(state: &BusState, id: AgentId, path: &Path) -> Result<
 }
 
 impl Worker {
-    pub(super) fn retire_superseded_grok_observation(
+    pub(super) fn retire_superseded_observation(
         &mut self,
         id: AgentId,
         dir: &Path,
@@ -115,18 +115,21 @@ impl Worker {
             | callbacks::Parsed::Response { session, .. } => session,
             callbacks::Parsed::Ignore => return Ok(false),
         };
-        if record.manifest.provider != crate::agents::providers::ProviderKind::Grok
-            || self
-                .state
-                .agent(id)
-                .and_then(|a| a.superseded_session_id.as_deref())
-                != Some(session.as_str())
+        if !matches!(
+            record.manifest.provider,
+            crate::agents::providers::ProviderKind::Grok
+                | crate::agents::providers::ProviderKind::Kimi
+        ) || self
+            .state
+            .agent(id)
+            .and_then(|a| a.superseded_session_id.as_deref())
+            != Some(session.as_str())
         {
             return Ok(false);
         }
         tracing::debug!(
             event = "bus.callback.ignored",
-            reason = "grok_superseded_session",
+            reason = "superseded_session",
             "Retiring observation from the accepted reset's previous session"
         );
         self.acknowledge_spool(dir, observation_paths(path))?;

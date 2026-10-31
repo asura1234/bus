@@ -158,6 +158,209 @@ fn turn_ended_needs_work_after_submission_then_idle_and_ignores_reply_capture() 
 }
 
 #[test]
+fn kimi_intermediate_idle_does_not_end_its_started_turn() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run shell and edit a file");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 21)
+        .unwrap();
+    assert!(!state.turn_ended(state.request(request).unwrap()));
+    assert!(state
+        .settle_ended_request(agent, 100_000, |_| None)
+        .is_none());
+    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 100_001)
+        .unwrap();
+    let payload = state.request(request).unwrap().prompt.rendered_payload();
+    let final_event = ProviderCallback::final_event(
+        "kimi-final",
+        100_002,
+        agent,
+        "launch-codex",
+        "provider-session",
+        "turn-1",
+        &payload,
+        "done",
+    );
+    assert!(matches!(
+        state.accept_callback(final_event),
+        CallbackDisposition::AcceptedCompleted | CallbackDisposition::AcceptedPendingSettlement
+    ));
+}
+
+#[test]
+fn kimi_terminal_failure_can_still_settle_without_a_final_reply() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 21)
+        .unwrap();
+    let ended = RecordedTurnEnd::Error("Kimi turn failed".into());
+    assert_eq!(
+        state.settle_ended_request(agent, 100_000, |_| Some(ended)),
+        Some(request)
+    );
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert!(state
+        .request(request)
+        .unwrap()
+        .failure_reason
+        .as_deref()
+        .unwrap()
+        .contains("Kimi"));
+}
+
+#[test]
+fn kimi_successful_silent_turn_completes_without_a_reply() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 21)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(agent, 100_000, |_| Some(RecordedTurnEnd::NoReply)),
+        Some(request)
+    );
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+}
+
+#[test]
+fn kimi_completed_wire_recovers_one_final_reply_after_intermediate_idle() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 21)
+        .unwrap();
+    assert!(state
+        .settle_ended_request(agent, 100_000, |_| None)
+        .is_none());
+    let prompt = state.request(request).unwrap().prompt.rendered_payload();
+    let record = RecordedTurnEnd::Final {
+        turn_id: "turn-1".into(),
+        text: "finished".into(),
+        prompts: vec![prompt],
+    };
+    assert_eq!(
+        state.settle_ended_request(agent, 100_001, |_| Some(record)),
+        Some(request)
+    );
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(state
+        .settle_ended_request(agent, 100_002, |_| None)
+        .is_none());
+}
+
+#[test]
+fn kimi_process_exit_settles_confirmed_submission_before_start_hook() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    state.begin_submission(request, "launch-codex", 10).unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    assert!(!state.request(request).unwrap().trusted_start_bound);
+    state
+        .record_exit_snapshot(
+            agent,
+            ExitSnapshot {
+                launch_id: Some("launch-codex".into()),
+                terminal_id: "terminal".into(),
+                path: None,
+                error: Some("process exited".into()),
+                tail: String::new(),
+                at_ms: 100,
+                terminal_closed: None,
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 100)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(agent, 10_000, |_| None),
+        Some(request),
+        "a confirmed submission must settle when its provider exits"
+    );
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+}
+
+#[test]
+fn kimi_trusted_turn_does_not_stall_on_transient_idle() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 21)
+        .unwrap();
+    let progress = state.request(request).unwrap().progress_at_ms.unwrap();
+    assert_eq!(
+        stall_at(&state, request, progress.max(21) + DELIVERED_STALL_MS),
+        None
+    );
+}
+
+#[test]
+fn kimi_persistent_invalidation_still_reports_session_invalidated() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .agents
+        .get_mut(&agent)
+        .unwrap()
+        .session_binding_invalidated = true;
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 21)
+        .unwrap();
+    let progress = state.request(request).unwrap().progress_at_ms.unwrap();
+    assert_eq!(
+        stall_at(&state, request, progress.max(21) + DELIVERED_STALL_MS).as_deref(),
+        Some("session_invalidated")
+    );
+}
+
+#[test]
 fn uncertain_submission_cannot_end_from_unrelated_status_activity() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let request = submit_text(&mut state, room, agent, "first");

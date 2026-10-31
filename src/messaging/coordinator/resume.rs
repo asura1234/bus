@@ -7,21 +7,53 @@ mod capture;
 pub(crate) use capture::load;
 pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, NativeResumeFacts};
 
-/// A Codex prompt screen can exist before Codex creates a conversation. Keep
-/// that empty launch across restore; never turn an adopted session into a new one.
-pub(crate) fn unstarted_codex_plan(
+/// Sessionless Codex and Kimi keep the empty launch across restore.
+/// Snapshot argv must pass that provider's launch-argument check, so Kimi
+/// attached `-S<session>` and `-p<text>` cannot become a fresh plan.
+/// Never turn an adopted session into a new one.
+pub(crate) fn unstarted_plan(
     facts: &NativeResumeFacts,
     argv: Option<&[String]>,
 ) -> Option<crate::agents::resume::catalog::AgentResumePlan> {
     if !facts.is_bus_owned()
-        || facts.managed_agent.as_deref() != Some("codex")
+        || !matches!(facts.managed_agent.as_deref(), Some("codex" | "kimi"))
         || facts.session.is_some()
     {
         return None;
     }
+    let kind = facts.managed_agent.as_deref()?;
     let mut args = argv.unwrap_or_default().to_vec();
     if !args.is_empty() {
-        if args.remove(0) != "codex" {
+        if kind == "kimi" {
+            if args.first().map(String::as_str) == Some("/usr/bin/env") {
+                if args.get(1).map(String::as_str) != Some("KIMI_DISABLE_OAUTH_LOCK=0")
+                    || args
+                        .get(2)
+                        .is_none_or(|arg| !arg.starts_with("KIMI_CODE_HOME="))
+                {
+                    return None;
+                }
+                args.drain(0..3);
+            }
+            let executable = args.first()?;
+            if std::path::Path::new(executable)
+                .file_name()
+                .and_then(|name| name.to_str())
+                != Some("kimi")
+            {
+                return None;
+            }
+            args.remove(0);
+            if crate::agents::providers::kimi::launch::validate_owned_launch(&args).is_err() {
+                return None;
+            }
+            return Some(crate::agents::resume::catalog::AgentResumePlan {
+                agent: kind.into(),
+                argv: vec![kind.into()],
+                dedupe_key: format!("bus-unstarted\0{}", facts.agent_name.as_deref()?),
+            });
+        }
+        if args.remove(0) != kind {
             return None;
         }
         args.retain(|arg| arg != "--no-daemon");
@@ -44,15 +76,19 @@ pub(crate) fn unstarted_codex_plan(
     // Snapshot argv only verifies an interactive, unstarted launch. User
     // options have one owner: the launch record loaded by capture::load.
     Some(crate::agents::resume::catalog::AgentResumePlan {
-        agent: "codex".into(),
-        argv: vec!["codex".into()],
+        agent: kind.into(),
+        argv: vec![kind.into()],
         dedupe_key: format!("bus-unstarted\0{}", facts.agent_name.as_deref()?),
     })
 }
 
-fn is_unstarted_codex(state: &BusState, agent: &RoomAgent) -> bool {
-    agent.provider == super::Provider::Codex
-        && agent.runtime_identity.session_id.is_none()
+/// Shared Codex/Kimi sessionless contract: no provider session yet, and no
+/// request has reached provider input.
+fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
+    matches!(
+        agent.provider,
+        super::Provider::Codex | super::Provider::Kimi
+    ) && agent.runtime_identity.session_id.is_none()
         && agent.current_request.is_none()
         && !state.requests().any(|request| {
             // A closed startup-failed send never reached provider input either.
@@ -96,7 +132,7 @@ pub(super) fn restored_agent<'a>(
         .session_id
         .as_deref()
         .filter(|s| !s.is_empty());
-    if session.is_none() && !is_unstarted_codex(state, agent) {
+    if session.is_none() && !is_unstarted(state, agent) {
         return None;
     }
     agent

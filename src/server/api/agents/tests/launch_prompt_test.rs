@@ -19,6 +19,7 @@ async fn launch_prompt_return_without_provider_releases_managed_launch() {
         args: vec![],
         executable: None,
         grok_home: None,
+        kimi_home: None,
         timeout_ms: None,
     })
     .unwrap_or_else(|err| {
@@ -292,6 +293,7 @@ async fn launch_prompt_builtin_read_cannot_swallow_provider_command() {
         args: vec![],
         executable: None,
         grok_home: None,
+        kimi_home: None,
         timeout_ms: None,
     });
     match result {
@@ -543,6 +545,7 @@ fn try_prompt_launch(
         ],
         executable: None,
         grok_home: None,
+        kimi_home: None,
         timeout_ms: None,
     })
     .map(|_| ())

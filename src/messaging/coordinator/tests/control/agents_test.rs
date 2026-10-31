@@ -551,6 +551,7 @@ fn agent_clear_types_each_providers_reset_command_outside_bus_messages() {
         (Provider::ClaudeCode, "/clear"),
         (Provider::Codex, "/clear"),
         (Provider::Cursor, "/new-chat"),
+        (Provider::Kimi, "/new"),
     ] {
         let dir = std::env::temp_dir().join(format!(
             "bus-control-clear-{}-{}-{}",

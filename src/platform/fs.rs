@@ -10,6 +10,25 @@ pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
     super::create_remote_private_dir(path)
 }
 
+/// Create missing directories owner-only and reject a replaced directory.
+pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            private_dir(parent)?;
+        }
+        match create_private_directory(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(io::Error::other("Bus directory is not a real directory"));
+    }
+    Ok(())
+}
+
 /// Extensions whose default "open" runs code, or follows a shortcut that may
 /// lead to code: apps, scripts, installers, Terminal settings, Finder and
 /// Internet location files, desktop entries.

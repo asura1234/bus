@@ -347,7 +347,10 @@ impl Fixture {
 
     fn hook_path(&self) -> PathBuf {
         match self.provider {
-            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+            crate::agents::providers::ProviderKind::Grok
+            | crate::agents::providers::ProviderKind::Kimi => panic!(
+                "This fixture covers the original providers; use dedicated Grok provider tests"
+            ),
             Provider::ClaudeCode => self
                 .root
                 .join("callbacks/owned-launch/claude-settings.json"),
@@ -358,7 +361,10 @@ impl Fixture {
 
     fn write_hooks(&self) {
         let (adapter, events): (&str, &[&str]) = match self.provider {
-            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+            crate::agents::providers::ProviderKind::Grok
+            | crate::agents::providers::ProviderKind::Kimi => panic!(
+                "This fixture covers the original providers; use dedicated Grok provider tests"
+            ),
             Provider::ClaudeCode => (
                 "claude-hook",
                 &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
@@ -528,7 +534,7 @@ fn unstarted_resume_replays_saved_options() {
     fixture.save();
     fixture.facts.session = None;
     fixture.plan =
-        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+        crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
     let path = fixture
         .root
         .join("callbacks/owned-launch/launch-options.json");
@@ -575,6 +581,52 @@ fn resume_does_not_duplicate_an_explicit_private_runtime_option() {
 }
 
 #[test]
+fn unstarted_kimi_resume_accepts_bus_bound_home_argv() {
+    let facts = NativeResumeFacts {
+        agent_name: Some("bus-r1-a2".into()),
+        managed_agent: Some("kimi".into()),
+        session: None,
+    };
+    let argv = crate::agents::providers::kimi::launch::bind_home(
+        vec!["/bin/kimi".into(), "--yolo".into()],
+        Path::new("/private/kimi-home"),
+    )
+    .unwrap();
+    let plan = crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&argv));
+    assert!(plan.is_some(), "saved Bus argv was rejected: {argv:?}");
+}
+
+#[test]
+fn unstarted_kimi_resume_rejects_attached_session_and_prompt_options() {
+    let facts = NativeResumeFacts {
+        agent_name: Some("bus-r1-a2".into()),
+        managed_agent: Some("kimi".into()),
+        session: None,
+    };
+    for option in [
+        "-Sexternal-session",
+        "-punowned task",
+        "--session",
+        "-S",
+        "--session=external-session",
+        "--continue",
+        "-c",
+        "--prompt",
+        "-p",
+    ] {
+        let argv = crate::agents::providers::kimi::launch::bind_home(
+            vec!["/bin/kimi".into(), option.into()],
+            Path::new("/private/kimi-home"),
+        )
+        .unwrap();
+        assert!(
+            crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&argv)).is_none(),
+            "an unowned provider turn must not become a fresh unstarted resume: {argv:?}"
+        );
+    }
+}
+
+#[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
     let mut identity = fixture
@@ -590,7 +642,7 @@ fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
         .unwrap();
     fixture.facts.session = None;
     fixture.plan =
-        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+        crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
     assert_eq!(extras.env, fixture.expected_env());
@@ -626,7 +678,7 @@ fn unstarted_resume_rejects_a_bound_owner_and_noninteractive_argv() {
     let mut fixture = Fixture::new(Provider::Codex);
     fixture.facts.session = None;
     fixture.plan =
-        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+        crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
     assert!(
         fixture.load().is_err(),
         "a bound owner must keep its conversation"
@@ -637,11 +689,10 @@ fn unstarted_resume_rejects_a_bound_owner_and_noninteractive_argv() {
         vec!["codex", "--yolo", "resume", "previous"],
     ] {
         let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
-        assert!(crate::messaging::coordinator::resume::unstarted_codex_plan(
-            &fixture.facts,
-            Some(&argv),
-        )
-        .is_none());
+        assert!(
+            crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, Some(&argv),)
+                .is_none()
+        );
     }
 }
 
@@ -655,7 +706,10 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
         assert_eq!(
             extras.args,
             match provider {
-            crate::agents::providers::ProviderKind::Grok => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+                crate::agents::providers::ProviderKind::Grok
+                | crate::agents::providers::ProviderKind::Kimi => panic!(
+                    "This fixture covers the original providers; use dedicated Grok provider tests"
+                ),
                 Provider::ClaudeCode => vec![
                     "--settings".to_owned(),
                     fixture.hook_path().to_string_lossy().into_owned(),
@@ -995,11 +1049,9 @@ fn unstarted_resume_from_saved_launch_argv_does_not_repeat_original_options() {
     let launch_argv: Vec<String> = ["codex", "--model", "gpt-test", "--no-daemon"]
         .map(str::to_owned)
         .into();
-    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
-        &fixture.facts,
-        Some(&launch_argv),
-    )
-    .unwrap();
+    fixture.plan =
+        crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, Some(&launch_argv))
+            .unwrap();
     std::fs::write(
         fixture
             .root
@@ -1144,7 +1196,9 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
         std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
         let mut expected = launch::parse_path_tokens(expected).unwrap();
         expected.extend(match provider {
-            Provider::Grok => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+            Provider::Grok | Provider::Kimi => {
+                panic!("This fixture covers the original providers; use dedicated provider tests")
+            }
             Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
             Provider::ClaudeCode => vec![
                 "--settings".into(),
@@ -1181,7 +1235,7 @@ fn unstarted_resume_preserves_literal_initial_input_with_capture_options_before_
     fixture.save();
     fixture.facts.session = None;
     fixture.plan =
-        crate::messaging::coordinator::resume::unstarted_codex_plan(&fixture.facts, None).unwrap();
+        crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
     std::fs::write(
         fixture
             .root

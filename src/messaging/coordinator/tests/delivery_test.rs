@@ -103,6 +103,7 @@ fn occupied_composer_retries_steering_without_changing_the_lead_turn() {
             Provider::Grok => {
                 json!({"hookEventName":"before_agent","sessionId":"session","promptId":"turn","prompt":"lead"})
             }
+            Provider::Kimi => panic!("this fixture covers the original steering providers"),
         };
         record(&dir, provider, hook);
         worker
@@ -226,7 +227,8 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
             .unwrap()
             .trim_end();
         let callback = match provider {
-            crate::agents::providers::ProviderKind::Grok => {
+            crate::agents::providers::ProviderKind::Grok
+            | crate::agents::providers::ProviderKind::Kimi => {
                 panic!("This fixture covers the original providers; use dedicated Grok tests")
             }
             Provider::ClaudeCode => json!({

@@ -64,6 +64,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             args: vec!["--no-session".into()],
             executable: None,
             grok_home: None,
+            kimi_home: None,
             timeout_ms: Some(30_000),
         }),
     };

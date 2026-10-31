@@ -42,7 +42,9 @@ fn fail(f: &mut Fixture) -> String {
                 f.status(RuntimeStatus::Idle);
                 "Model at capacity (server_overloaded)"
             }
-            Provider::Grok => panic!("this fixture covers providers with committed final evidence"),
+            Provider::Grok | Provider::Kimi => {
+                panic!("this fixture covers providers with committed final evidence")
+            }
         };
     f.consume();
     reason.into()

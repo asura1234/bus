@@ -1,26 +1,8 @@
 //! Durable private files and OS-released exclusive ownership, outside all UI paths.
 // Preserve existing messaging call sites until the S12 import rewrite.
+pub(crate) use crate::platform::fs::private_dir;
 pub(crate) use crate::utils::time::{now_ms, now_ns};
 use std::{fs::File, io, path::Path};
-
-pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            private_dir(parent)?;
-        }
-        match crate::platform::fs::create_private_directory(path) {
-            Ok(()) => return Ok(()),
-            // Another process or thread created it first; validate theirs.
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-    }
-    let meta = std::fs::symlink_metadata(path)?;
-    if !meta.is_dir() || meta.file_type().is_symlink() {
-        return Err(io::Error::other("Bus directory is not a real directory"));
-    }
-    Ok(())
-}
 
 pub(crate) fn lock(path: &Path) -> io::Result<File> {
     if !path.exists() {

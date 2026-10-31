@@ -10,6 +10,8 @@ use super::{
 pub(crate) enum RecordedTurnEnd {
     /// The provider error that ended the turn.
     Error(String),
+    /// The provider proved completion but recorded no final answer.
+    NoReply,
     /// The final answer of provider turn `turn_id`, attributed to the
     /// request, with every prompt the provider recorded for that turn.
     Final {
@@ -273,7 +275,8 @@ impl BusState {
     /// exited, say) settles too, or async waiters on it would never finish.
     fn settle_candidate(&self, agent: AgentId) -> Option<&Request> {
         let agent_state = self.agents.get(&agent)?;
-        if agent_state.deletion_pending
+        if agent_state.provider == super::Provider::Kimi
+            || agent_state.deletion_pending
             || agent_state.missing_binary.is_some()
             || agent_state.session_binding_invalidated
             || agent_state.dialog
@@ -318,6 +321,9 @@ impl BusState {
         now_ms: u64,
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
+        if self.agents.get(&agent)?.provider == super::Provider::Kimi {
+            return self.settle_kimi_ended_request(agent, now_ms, recorded_end);
+        }
         let request = self.settle_candidate(agent)?;
         let id = request.id;
         let agent_state = self.agents.get(&agent)?;
@@ -329,14 +335,90 @@ impl BusState {
         if now_ms < since.saturating_add(TURN_SETTLE_MS) {
             return None;
         }
-        let provider_error = match recorded_end(request) {
+        self.consume_recorded_end(
+            agent,
+            id,
+            now_ms,
+            recorded_end(request),
+            "rollout",
+            unavailable,
+            "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.",
+            "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.",
+        )
+    }
+
+    /// Kimi's idle frame is not a turn boundary. Close only after an owned
+    /// terminal wire record, or a confirmed process exit with its grace window.
+    fn settle_kimi_ended_request(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+    ) -> Option<RequestId> {
+        let owner = self.agents.get(&agent)?;
+        if owner.dialog
+            || owner.deletion_pending
+            || owner.session_binding_invalidated
+            || !matches!(
+                owner.status,
+                RuntimeStatus::Idle | RuntimeStatus::Unavailable
+            )
+        {
+            return None;
+        }
+        let request = self.requests.get(&owner.current_request?)?;
+        if !matches!(
+            request.phase,
+            RequestPhase::Submitting | RequestPhase::Active
+        ) || request.awaiting_background
+            || request.pending_final.is_some()
+        {
+            return None;
+        }
+        let id = request.id;
+        let exited = owner.status == RuntimeStatus::Unavailable
+            && owner.exit_snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.launch_id == request.expected_launch_id
+                    && now_ms >= snapshot.at_ms.saturating_add(TURN_SETTLE_MS)
+            });
+        if !(request.trusted_start_bound || exited && request.phase == RequestPhase::Active) {
+            return None;
+        }
+        let recorded = recorded_end(request);
+        if recorded.is_none() && !exited {
+            return None;
+        }
+        self.consume_recorded_end(
+            agent,
+            id,
+            now_ms,
+            recorded,
+            "kimi-wire",
+            exited,
+            "Kimi process exited without a captured reply; inspect its terminal.",
+            "Kimi completed without a captured reply; inspect its terminal.",
+        )
+    }
+
+    fn consume_recorded_end(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+        recorded: Option<RecordedTurnEnd>,
+        callback_prefix: &str,
+        unavailable: bool,
+        unavailable_error: &str,
+        no_reply_error: &str,
+    ) -> Option<RequestId> {
+        let provider_error = match recorded {
             Some(RecordedTurnEnd::Final {
                 turn_id,
                 text,
                 prompts,
             }) => {
                 let answer = PendingFinal {
-                    callback_id: format!("rollout:{turn_id}"),
+                    callback_id: format!("{callback_prefix}:{turn_id}"),
                     text,
                     received_at_ms: now_ms,
                     provider_session_id: None,
@@ -348,22 +430,42 @@ impl BusState {
                 None
             }
             Some(RecordedTurnEnd::Error(message)) => Some(message),
+            Some(RecordedTurnEnd::NoReply) => return self.complete_silent_turn(agent, id, now_ms),
             None => None,
         };
-        let (reason, error) = match &provider_error {
-            Some(message) => provider_error_outcome(message),
-            None if unavailable => (
-                AGENT_UNAVAILABLE.to_owned(),
-                "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.".to_owned(),
-            ),
-            None => (
-                "reply_not_captured".to_owned(),
-                "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
-            ),
+        let (reason, error) = match provider_error {
+            Some(message) => provider_error_outcome(&message),
+            None if unavailable => (AGENT_UNAVAILABLE.to_owned(), unavailable_error.to_owned()),
+            None => ("reply_not_captured".to_owned(), no_reply_error.to_owned()),
         };
         let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
-        if let Some(agent) = self.agents.get_mut(&agent) {
-            agent.actionable_error = closed.then_some(error);
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            owner.actionable_error = closed.then_some(error);
+        }
+        Some(id)
+    }
+
+    fn complete_silent_turn(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+    ) -> Option<RequestId> {
+        let mut completed = self.group_members(id);
+        completed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
+        if self.request(id).is_some_and(|request| !request.settled()) {
+            completed.push(id);
+        }
+        self.abandon_current_request(id, now_ms).ok()?;
+        for member in completed {
+            if let Some(request) = self.requests.get_mut(&member) {
+                request.phase = RequestPhase::Completed;
+                request.failure_reason = None;
+                request.pending_final = None;
+            }
+        }
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            owner.actionable_error = None;
         }
         Some(id)
     }

@@ -21,6 +21,7 @@ fn agent_start_argv(
     kind: crate::agents::AgentKind,
     selected_executable: Option<String>,
     grok_home: Option<String>,
+    kimi_home: Option<String>,
     args: &[String],
 ) -> Result<Vec<String>, AgentStartError> {
     let mut args = args.to_vec();
@@ -34,16 +35,16 @@ fn agent_start_argv(
         );
     }
     let executable = match (kind, selected_executable) {
-        (crate::agents::AgentKind::Grok, Some(path))
+        (crate::agents::AgentKind::Grok | crate::agents::AgentKind::Kimi, Some(path))
             if std::path::Path::new(&path).is_absolute()
                 && std::path::Path::new(&path)
                     .file_name()
-                    .is_some_and(|name| name == "grok")
+                    .is_some_and(|name| name == crate::agents::agent_label(kind))
                 && !path.chars().any(char::is_control) =>
         {
             path
         }
-        (crate::agents::AgentKind::Grok, _) | (_, Some(_)) => {
+        (crate::agents::AgentKind::Grok | crate::agents::AgentKind::Kimi, _) | (_, Some(_)) => {
             return Err(AgentStartError::InvalidArgument);
         }
         (_, None) => crate::agents::interactive_agent_executable(kind).to_string(),
@@ -59,6 +60,19 @@ fn agent_start_argv(
             .map_err(|_| AgentStartError::InvalidArgument)?;
         }
         (crate::agents::AgentKind::Grok, None) | (_, Some(_)) => {
+            return Err(AgentStartError::InvalidArgument)
+        }
+        (_, None) => {}
+    }
+    match (kind, kimi_home) {
+        (crate::agents::AgentKind::Kimi, Some(home)) => {
+            argv = crate::agents::providers::kimi::launch::bind_home(
+                argv,
+                std::path::Path::new(&home),
+            )
+            .map_err(|_| AgentStartError::InvalidArgument)?;
+        }
+        (crate::agents::AgentKind::Kimi, None) | (_, Some(_)) => {
             return Err(AgentStartError::InvalidArgument)
         }
         (_, None) => {}
@@ -264,7 +278,13 @@ impl App {
         })?;
 
         let args = params.args;
-        let argv = agent_start_argv(kind, params.executable, params.grok_home, &args)?;
+        let argv = agent_start_argv(
+            kind,
+            params.executable,
+            params.grok_home,
+            params.kimi_home,
+            &args,
+        )?;
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
@@ -683,6 +703,7 @@ mod tests {
                 args: vec![],
                 executable: None,
                 grok_home: None,
+                kimi_home: None,
                 timeout_ms: None,
             });
             assert!(result.is_ok());

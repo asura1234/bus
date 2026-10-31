@@ -833,6 +833,7 @@ async fn definite_launch_rejection_unavailable_agent_start_does_not_mutate_topol
             args: Vec::new(),
             executable: None,
             grok_home: None,
+            kimi_home: None,
             timeout_ms: Some(1_000),
         }),
     });
@@ -880,6 +881,7 @@ async fn failed_agent_start_input_rolls_back_and_can_retry() {
             args: vec!["resume".into(), "codex-session".into()],
             executable: None,
             grok_home: None,
+            kimi_home: None,
             timeout_ms: Some(4_000),
         }),
     };

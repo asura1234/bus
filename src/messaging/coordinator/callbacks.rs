@@ -20,6 +20,8 @@ enum CallbackFlow {
 
 #[path = "callback_binding.rs"]
 mod binding;
+#[path = "callback_completion.rs"]
+mod completion;
 #[path = "grok_callbacks.rs"]
 mod grok_callbacks;
 #[path = "provider_turns.rs"]
@@ -361,19 +363,14 @@ impl Worker {
                 session,
                 turn,
                 prompt,
-            } => Some(callback(
-                record,
-                id,
-                session,
-                turn,
-                Some(prompt),
-                CallbackEventKind::PromptStarted,
+            } => Some(completion::started_callback(
+                record, id, session, turn, prompt,
             )),
             Parsed::CompletionCandidate { session, turn } => {
-                return self.grok_completion_callback(id, state, path, record, session, Some(turn));
+                return self.completion_callback(id, state, path, record, session, Some(turn));
             }
             Parsed::ReconcileSession { session } => {
-                return self.grok_completion_callback(id, state, path, record, session, None);
+                return self.completion_callback(id, state, path, record, session, None);
             }
             Parsed::Final {
                 session,
@@ -438,12 +435,16 @@ impl Worker {
         dir: &Path,
         mut state: BusState,
     ) -> Result<CallbackFlow, String> {
-        // `agent clear` started a fresh provider context in this
-        // terminal. Claude and Codex announce it with SessionStart;
-        // Cursor's first new turn names its new conversation.
-        let source = match parsed {
-            Parsed::Session { source, .. } => source.clone(),
-            _ => None,
+        // Clear starts a fresh context; Cursor reports it on its first turn.
+        let source = if record.manifest.provider == Provider::Kimi {
+            // Kimi 2.4 reports /new as "startup". This path is entered only
+            // after Bus recorded a reset and the session actually changed.
+            Some("new".to_owned())
+        } else {
+            match parsed {
+                Parsed::Session { source, .. } => source.clone(),
+                _ => None,
+            }
         };
         self.transport
             .request(Method::PaneReportAgentSession(
@@ -507,7 +508,7 @@ impl Worker {
         parsed: &Parsed,
         mut state: BusState,
     ) -> Result<ControlFlow<CallbackFlow, BusState>, String> {
-        if self.retire_superseded_grok_observation(id, dir, path, record, parsed)? {
+        if self.retire_superseded_observation(id, dir, path, record, parsed)? {
             return Ok(ControlFlow::Break(CallbackFlow::Next));
         }
         let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
