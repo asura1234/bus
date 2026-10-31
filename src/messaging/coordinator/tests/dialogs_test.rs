@@ -1490,6 +1490,22 @@ fn queue_message(
 }
 
 /// A completed answer whose task was submitted in the previous clock minute.
+fn start_active_task(worker: &mut Worker, room: RoomId, agent: AgentId, text: &str, at_ms: u64) {
+    let request = queue_message(worker, room, agent, Author::Developer, text, at_ms);
+    let mut state = worker.state.clone();
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+}
+
 fn answer_previous_minute(worker: &mut Worker, room: RoomId, agent: AgentId, now: u64) {
     let request = queue_message(
         worker,
@@ -1600,6 +1616,27 @@ fn a_same_minute_task_suppresses_a_steady_dialog() {
         "a task submitted to this agent in the same minute is not a dialog a person must answer"
     );
     assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_in_flight_same_minute_task_still_posts_one_steady_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    start_active_task(
+        &mut worker,
+        room,
+        agent,
+        "the turn that is showing the dialog",
+        settled_now(),
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], expected_blocked(&worker, agent))]
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -255,6 +255,10 @@ fn restart_logged_same_minute(root: &std::path::Path, stamp: u64) -> bool {
 }
 
 fn same_minute_activity(worker: &Worker, id: AgentId, now: u64) -> bool {
+    let current = worker
+        .state
+        .agent(id)
+        .and_then(|agent| agent.current_request);
     worker.state.requests().any(|request| {
         // The blocked notice itself is Bus traffic. It must not hide a later
         // episode, and it must not count as the agent still sending.
@@ -262,7 +266,12 @@ fn same_minute_activity(worker: &Worker, id: AgentId, now: u64) -> bool {
             return false;
         }
         let submitted = same_minute(request.prompt.submitted_at_ms, now);
-        let task = request.agent_id == id && request.prompt.author != Author::Bus && submitted;
+        // The turn already on screen is the dialog's own work. A task that is
+        // still queued, or any other prompt submitted this minute, is new work.
+        let task = request.agent_id == id
+            && request.prompt.author != Author::Bus
+            && submitted
+            && Some(request.id) != current;
         let sent = request.prompt.author == Author::Agent(id) && submitted;
         let result = request.agent_id == id
             && request.reply().is_some()
