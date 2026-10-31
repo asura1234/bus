@@ -1,2 +1,6 @@
+[env]
+# Cargo intentionally fingerprints path packages independently of their absolute path.
+BUS_CHECKOUT_ROOT = { value = ".", relative = true, force = true }
+
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

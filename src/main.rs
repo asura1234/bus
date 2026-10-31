@@ -75,7 +75,16 @@ fn main() -> io::Result<()> {
         }
         Some("--version" | "-V") if raw_args.len() == 2 => {
             platform::begin_cli_output();
-            cli::help::write_stdout_line(format_args!("bus {}", utils::version::version()));
+            cli::help::write_stdout_line(format_args!(
+                "bus {} ({}{})",
+                utils::version::version(),
+                env!("BUS_BUILD_SHA"),
+                if env!("BUS_BUILD_SHORT_SHA").ends_with("-dirty") {
+                    "-dirty"
+                } else {
+                    ""
+                }
+            ));
             Ok(())
         }
         // One JSON line: embedded build SHA and the providers this binary can launch.

@@ -51,6 +51,21 @@ class CutoverTests(unittest.TestCase):
         installed.chmod(0o700)
         self.assertEqual(cutover.verify(installed, self.manifest)["sha256"], receipt["sha256"])
 
+    def test_version_with_matching_clean_embedded_commit_is_accepted(self):
+        self.candidate.write_text(
+            f"#!/bin/sh\nprintf '%s\\n' 'bus 0.9.0-dev.{self.head} ({self.head})'\n"
+        )
+        receipt = cutover.record(self.candidate, self.head, self.manifest)
+        self.assertEqual(receipt["head"], self.head)
+
+    def test_version_with_dirty_or_mismatched_embedded_commit_is_rejected(self):
+        for embedded in (f"{self.head}-dirty", "b" * 40):
+            self.candidate.write_text(
+                f"#!/bin/sh\nprintf '%s\\n' 'bus 0.9.0-dev.{self.head} ({embedded})'\n"
+            )
+            with self.subTest(embedded=embedded), self.assertRaisesRegex(ValueError, "revision mismatch"):
+                cutover.record(self.candidate, self.head, self.manifest)
+
     def test_unlabelled_binary_fails_closed(self):
         self.candidate.write_text("#!/bin/sh\nprintf 'bus 0.9.0\\n'\n")
         with self.assertRaisesRegex(ValueError, "revision mismatch"):

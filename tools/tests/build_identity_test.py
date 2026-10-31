@@ -59,12 +59,13 @@ class BuildIdentityTests(unittest.TestCase):
         }
         self.repo = self.directory / "repo"
         self.repo.mkdir()
+        self.environment["BUS_CHECKOUT_ROOT"] = str(self.repo)
         self.git(self.repo, "init", "-q", "-b", "fixture", f"--template={self.hooks}")
         self.git(self.repo, "commit", "--allow-empty", "-q", "-m", "fixture")
         self.sha = self.git(self.repo, "rev-parse", "HEAD")
 
     def record(self, manifest: Path, extra: dict[str, str] | None = None, *, dev: bool = True) -> str:
-        env = {**self.environment, **(extra or {}), "CARGO_MANIFEST_DIR": str(manifest), "PROFILE": "fixture"}
+        env = {**self.environment, **(extra or {}), "CARGO_MANIFEST_DIR": str(manifest), "BUS_CHECKOUT_ROOT": str(manifest), "PROFILE": "fixture"}
         if dev:
             env["CARGO_FEATURE_DEV_TOOLS"] = "1"
         else:
@@ -103,14 +104,28 @@ class BuildIdentityTests(unittest.TestCase):
         output = self.record(self.repo, {"PATH": str(self.hooks)})
         self.assertIn("cargo:rustc-env=BUS_BUILD_SHORT_SHA=unknown\n", output)
 
-    def test_non_dev_identity_omits_short_hash_and_dirty_input_watches(self) -> None:
+    def test_non_dev_identity_includes_dirty_source(self) -> None:
         (self.repo / "src").mkdir()
         (self.repo / "src/new.rs").write_text("// untracked input\n")
         output = self.record(self.repo, dev=False)
         self.assertIn(f"cargo:rustc-env=BUS_BUILD_SHA={self.sha}\n", output)
-        self.assertNotIn("BUS_BUILD_SHORT_SHA", output)
-        self.assertNotIn("cargo:rerun-if-changed=src\n", output)
+        short = self.git(self.repo, "rev-parse", "--short", "HEAD")
+        self.assertIn(f"cargo:rustc-env=BUS_BUILD_SHORT_SHA={short}-dirty\n", output)
+        self.assertIn("cargo:rerun-if-changed=src\n", output)
         self.assertNotIn("cargo:rerun-if-changed=.git/index\n", output)
+
+    def test_git_checkout_rejects_missing_or_wrong_checkout_marker(self) -> None:
+        for marker in (None, str(self.directory)):
+            env = {**self.environment, "CARGO_MANIFEST_DIR": str(self.repo), "PROFILE": "fixture"}
+            if marker is None:
+                env.pop("BUS_CHECKOUT_ROOT")
+            else:
+                env["BUS_CHECKOUT_ROOT"] = marker
+            result = subprocess.run([str(self.binary)], cwd=self.repo, env=env,
+                                    capture_output=True, text=True)
+            with self.subTest(marker=marker):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("BUS_CHECKOUT_ROOT", result.stderr)
 
     def test_checkout_does_not_use_ambient_git_directories(self) -> None:
         foreign = self.directory / "foreign"
@@ -295,13 +310,14 @@ class BuildIdentityTests(unittest.TestCase):
         self.assertEqual(build(), (short, True))
         self.assertEqual(build(), (short, True))
 
-    def test_non_dev_source_and_doc_changes_do_not_add_identity_rebuilds(self) -> None:
+    def test_non_dev_source_dirty_identity_and_unrelated_doc_changes(self) -> None:
         build = self.cargo_fixture(dev=False)
-        self.assertEqual(build()[0], "non-dev")
+        short = self.git(self.repo, "rev-parse", "--short", "HEAD")
+        self.assertEqual(build()[0], short)
         (self.repo / "src/new.rs").write_text("// unused untracked input\n")
+        self.assertEqual(build()[0], f"{short}-dirty")
         (self.repo / "notes.md").unlink()
-        self.assertEqual(build(), ("non-dev", True))
-        self.assertEqual(build(), ("non-dev", True))
+        self.assertEqual(build(), (f"{short}-dirty", True))
 
     def test_vendor_source_is_watched_but_generated_vendor_output_is_not(self) -> None:
         build = self.cargo_fixture()
@@ -402,7 +418,7 @@ class BuildIdentityCacheProbeTests(BuildIdentityTests):
         base = Path(os.environ.get("CARGO_TARGET_DIR", str(ROOT / "target")))
         target = (base if base.is_absolute() else ROOT / base) / "cache-identity-probe" / self.directory.name
         self.addCleanup(shutil.rmtree, target, True)
-        env = {**self.environment, "CARGO_TARGET_DIR": str(target)}
+        env = {**self.environment, "CARGO_TARGET_DIR": str(target), "BUS_CHECKOUT_ROOT": str(root)}
         for key in ("LLVM_PROFILE_FILE", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
             env.pop(key, None)
 

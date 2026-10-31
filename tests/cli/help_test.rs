@@ -74,3 +74,14 @@ fn unexpected_argument_names_the_flag_and_points_to_help() {
         "{message}"
     );
 }
+
+#[test]
+fn version_identifies_the_compiled_commit() {
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .arg("--version")
+        .output()
+        .expect("run bus --version");
+    assert!(output.status.success());
+    let version = String::from_utf8(output.stdout).expect("UTF-8 version");
+    assert!(version.contains(env!("BUS_BUILD_SHA")), "{version}");
+}

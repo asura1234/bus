@@ -20,7 +20,10 @@ def inspect_binary(binary: Path, head: str) -> dict:
     version = subprocess.check_output(
         [str(binary), "--version"], text=True, timeout=10
     ).strip()
-    if not version.startswith("bus ") or not version.endswith(f"-dev.{head}"):
+    expected = f"-dev.{head}"
+    if not version.startswith("bus ") or not (
+        version.endswith(expected) or version.endswith(f"{expected} ({head})")
+    ):
         raise ValueError(f"binary revision mismatch: expected {head}, got {version!r}")
     return {"head": head, "sha256": digest, "version": version}
 
