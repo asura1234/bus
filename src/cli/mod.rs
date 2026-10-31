@@ -158,20 +158,24 @@ fn restart_session(
     explicit_root: Option<&std::path::Path>,
     fallback: impl FnOnce() -> io::Result<(std::path::PathBuf, String)>,
 ) -> io::Result<(std::path::PathBuf, Option<String>, bool)> {
-    let (root, registry_session) = match explicit_root {
-        Some(root) => (root.to_path_buf(), None),
-        None => {
-            let (root, id) = fallback()?;
-            (root, Some(id))
-        }
-    };
-    let session_id = std::env::var("BUS_SESSION_ID")
+    let env_session = std::env::var("BUS_SESSION_ID")
         .ok()
-        .filter(|id| !id.is_empty())
-        .or(registry_session);
-    let explicit = restart_command_overrides_data_dir(explicit_root, session_id.as_deref(), &root);
-    let kept = if explicit { None } else { session_id };
-    Ok((root, kept, explicit))
+        .filter(|id| !id.is_empty());
+    // No data dir on this command: the registry session is the server.
+    let Some(data_dir) = explicit_root else {
+        let (root, id) = fallback()?;
+        return Ok((root, env_session.or(Some(id)), false));
+    };
+    // Compare with the running server's root. Using `data_dir` as that root
+    // would match every set directory, including one this command chose.
+    let server_root = match fallback() {
+        Ok((root, _)) => root,
+        Err(_) => return Ok((data_dir.to_path_buf(), None, true)),
+    };
+    let explicit =
+        restart_command_overrides_data_dir(Some(data_dir), env_session.as_deref(), &server_root);
+    let kept = if explicit { None } else { env_session };
+    Ok((data_dir.to_path_buf(), kept, explicit))
 }
 
 fn session_root(
@@ -217,8 +221,8 @@ fn session_root(
                 (session.root, Some(session.id))
             }
         },
-        // An inherited BUS_DATA_DIR names this server. It is not an override
-        // while the server's session id is still in the environment.
+        // An inherited BUS_DATA_DIR is not an override when it is the registry
+        // session's root and that server's session id is still in the environment.
         Action::Restart(_) => {
             let (root, session, explicit) = restart_session(explicit_root.as_deref(), || {
                 let session = last_session(registry, &invocation.action)?;
@@ -569,6 +573,73 @@ mod tests {
         assert!(kept.dev && kept.yolo);
         assert!(!kept.explicit_data_dir);
         assert_eq!(kept.session_id.as_deref(), Some("abc"));
+    }
+
+    fn with_session_env(id: &str, body: impl FnOnce()) {
+        struct Restore(Option<String>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(value) => std::env::set_var("BUS_SESSION_ID", value),
+                    None => std::env::remove_var("BUS_SESSION_ID"),
+                }
+            }
+        }
+        let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let _restore = Restore(std::env::var("BUS_SESSION_ID").ok());
+        std::env::set_var("BUS_SESSION_ID", id);
+        body();
+    }
+
+    #[test]
+    fn restart_session_clears_the_session_when_the_data_dir_is_not_the_server_root() {
+        let server = std::path::PathBuf::from("/tmp/bus-recorded-server");
+        let other = std::path::PathBuf::from("/tmp/bus-other-data");
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::restart_session(Some(&other), || {
+                Ok((server.clone(), "from-registry".into()))
+            }));
+        });
+        let (root, session, explicit) = result.expect("called").expect("restart session");
+        assert_eq!(root, other);
+        assert!(
+            explicit,
+            "a data dir other than the running server's root is an override"
+        );
+        assert_eq!(session, None);
+    }
+
+    #[test]
+    fn restart_session_keeps_the_session_when_the_data_dir_is_the_server_root() {
+        let server = std::path::PathBuf::from("/tmp/bus-recorded-server");
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::restart_session(Some(&server), || {
+                Ok((server.clone(), "from-registry".into()))
+            }));
+        });
+        let (root, session, explicit) = result.expect("called").expect("restart session");
+        assert_eq!(root, server);
+        assert!(!explicit);
+        assert_eq!(session.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn restart_session_overrides_a_data_dir_when_no_server_is_recorded() {
+        let other = std::path::PathBuf::from("/tmp/bus-other-data");
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::restart_session(Some(&other), || {
+                Err(std::io::Error::other(
+                    "No local Bus session has been recorded yet",
+                ))
+            }));
+        });
+        let (root, session, explicit) = result.expect("called").expect("restart session");
+        assert_eq!(root, other);
+        assert!(explicit);
+        assert_eq!(session, None);
     }
 
     #[test]
