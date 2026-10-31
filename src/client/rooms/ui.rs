@@ -549,6 +549,36 @@ impl BusUi {
         self.reconcile_deleted_targets(&previous.state);
         self.sync_agent_notices();
     }
+
+    fn record_command_failure(
+        &mut self,
+        pending: &Pending,
+        error: &str,
+        recovered: bool,
+        keep: bool,
+    ) {
+        if !storage_paused_error(error) {
+            tracing::warn!(
+                event = "bus.command.failed",
+                command_id = pending.id,
+                command = crate::messaging::perf::command_name(&pending.command),
+                %error,
+            );
+        }
+        // Only a command that is retried hides its rejection.
+        if !(recovered && keep) {
+            self.error = Some(error.to_owned());
+            if matches!(
+                pending.command,
+                BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+            ) && error.contains("PWD")
+            {
+                self.form_errors.insert(2, error.to_owned());
+                self.error = None;
+            }
+        }
+    }
+
     pub fn settle(&mut self) {
         while self
             .pending
@@ -570,24 +600,7 @@ impl BusUi {
                                 | Effect::Recipients(..)
                                 | Effect::Files(..)
                         ) && super::deletion::target_exists(&pending.command, &self.snapshot.state);
-                    tracing::warn!(
-                        event = "bus.command.failed",
-                        command_id = pending.id,
-                        command = crate::messaging::perf::command_name(&pending.command),
-                        %error,
-                    );
-                    // Only a command that is retried hides its rejection.
-                    if !(recovered && keep) {
-                        self.error = Some(error.clone());
-                        if matches!(
-                            pending.command,
-                            BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
-                        ) && error.contains("PWD")
-                        {
-                            self.form_errors.insert(2, error.clone());
-                            self.error = None;
-                        }
-                    }
+                    self.record_command_failure(&pending, error, recovered, keep);
                     self.send_intent = None;
                     if keep {
                         if recovered {

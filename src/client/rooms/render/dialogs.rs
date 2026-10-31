@@ -354,7 +354,10 @@ impl BusUi {
             false,
         );
         y += 2;
-        if let Some(error) = self.visible_error().filter(|_| self.form_errors.is_empty()) {
+        if let Some(error) = self
+            .visible_error()
+            .filter(|_| !matches!(form, Form::Agent { .. }))
+        {
             view.lines(Rect::new(x, y, width, 3), error, None, false);
             y += 4;
         }
