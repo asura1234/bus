@@ -23,7 +23,11 @@ pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<
 
 #[cfg(test)]
 pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Option<Outcome> {
-    committed_outcome_lines(wire.lines().map(|line| Ok(line.to_owned())), turn_id, prompt)
+    committed_outcome_lines(
+        wire.lines().map(|line| Ok(line.to_owned())),
+        turn_id,
+        prompt,
+    )
 }
 
 fn committed_outcome_lines(
@@ -39,8 +43,9 @@ fn committed_outcome_lines(
     let mut turn_reason = None;
     for line in lines {
         let line = line.ok()?;
+        // One oversized historical line must not hide a later committed turn.
         if line.len() as u64 > MAX_WIRE_BYTES {
-            return None;
+            continue;
         }
         let value: Value = serde_json::from_str(&line).ok()?;
         match value.get("type")?.as_str()? {
@@ -370,6 +375,38 @@ mod tests {
         )
         .to_owned();
         wire.push_str(&" ".repeat(MAX_WIRE_BYTES as usize + 1));
+        std::fs::write(directory.join("agents/main/wire.jsonl"), wire).unwrap();
+        assert_eq!(
+            resolve(&root, &cwd, session, "7", "Bus task").unwrap(),
+            Some("Done".into()),
+            "bytes after this turn must not disable its committed reply"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn committed_final_survives_an_oversized_line_before_the_turn() {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-wire-old-history");
+        let cwd = root.join("project");
+        let session = "session_old";
+        let directory = root.join("sessions/wd_project/session_old");
+        crate::platform::fs::private_dir(&cwd).unwrap();
+        crate::platform::fs::private_dir(&directory.join("agents/main")).unwrap();
+        let index = serde_json::json!({
+            "sessionId": session,
+            "workDir": cwd,
+            "sessionDir": directory,
+        });
+        std::fs::write(root.join("session_index.jsonl"), format!("{index}\n")).unwrap();
+        let mut wire = " ".repeat(MAX_WIRE_BYTES as usize + 1);
+        wire.push('\n');
+        wire.push_str(concat!(
+            "{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":7,\"promptId\":\"p7\",\"input\":[{\"type\":\"text\",\"text\":\"Bus task\"}]}\n",
+            "{\"type\":\"agent.message.appended\",\"message\":{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done\"}],\"toolCalls\":[]},\"meta\":{\"source\":\"llm\"}}}\n",
+            "{\"type\":\"agent.turn.ended\",\"turnId\":7,\"outcome\":\"done\"}\n",
+            "{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":7,\"reason\":\"completed\"}\n",
+            "{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p7\",\"reason\":\"completed\"}\n",
+        ));
         std::fs::write(directory.join("agents/main/wire.jsonl"), wire).unwrap();
         assert_eq!(
             resolve(&root, &cwd, session, "7", "Bus task").unwrap(),
