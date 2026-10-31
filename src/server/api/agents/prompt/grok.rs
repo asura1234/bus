@@ -415,6 +415,20 @@ mod tests {
     }
 
     #[test]
+    fn grok_1070_rejects_kb_label_at_line_count_threshold() {
+        let expected = captured_multiline_paste(10000);
+        let screen = PASTE_10000.replace("[Pasted: 127 lines]", "[Pasted: 10 KB]");
+        assert_eq!(observe(&screen, &expected), InputObservation::Unavailable);
+    }
+
+    #[test]
+    fn grok_1070_rejects_line_label_above_size_threshold() {
+        let expected = captured_multiline_paste(10001);
+        let screen = PASTE_10001.replace("[Pasted: 10 KB]", "[Pasted: 127 lines]");
+        assert_eq!(observe(&screen, &expected), InputObservation::Unavailable);
+    }
+
+    #[test]
     fn grok_1070_scrolled_owned_draft_keeps_its_visible_suffix() {
         let expected = "[Bus message 12; answer with bus send --reply-to 12 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status 12 before resending]\nScratch E2E path 1: assign grok-e2e-a a task to run a shell command in this scratch Git project that writes path1.txt containing PATH1_OK, then require its correlated Bus reply. When its reply reaches you, answer this request with the worker message ID, reply stage, and observed file content. Use your Bus CLI and do not ask for tool approval.";
         assert!(input(NATIVE_1070_SCROLLED).is_some());
