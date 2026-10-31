@@ -14,6 +14,68 @@ fn composer_available() -> Result<ResponseResult, TransportError> {
     })
 }
 
+struct LaunchPromptTransport(Arc<Mutex<Vec<String>>>);
+
+impl Transport for LaunchPromptTransport {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentPromptIfIdle(params) => {
+                self.0.lock().unwrap().push(params.text);
+                Ok(ResponseResult::AgentPrompted {
+                    agent: native_info("pane", "provider", "session"),
+                })
+            }
+            other => panic!("unexpected launch-prompt call: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn cursor_and_grok_launch_prompts_type_once_without_room_history_or_resume_replay() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(LaunchPromptTransport(Arc::clone(&prompts)));
+        orchestrator::write_prompt(&dir.join("callbacks/launch"), "Worker launch instructions")
+            .unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, 2)
+            .unwrap();
+        worker.submit_ready().unwrap();
+        assert!(prompts.lock().unwrap().is_empty());
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 3)
+            .unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        let typed = prompts.lock().unwrap()[0].clone();
+        assert!(typed.contains("Worker launch instructions"));
+        assert!(!typed.contains("reply briefly that you are ready"));
+        assert_eq!(worker.state.requests().count(), 0);
+        assert!(worker
+            .state
+            .notices(room)
+            .all(|notice| !notice.text.contains("Worker launch instructions")));
+        drop(worker);
+
+        let mut recovered = Worker::open(
+            dir.clone(),
+            Box::new(LaunchPromptTransport(Arc::clone(&prompts))),
+        )
+        .unwrap();
+        recovered
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 4)
+            .unwrap();
+        recovered.submit_ready().unwrap();
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        drop(recovered);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn occupied_composer_retains_fifo_without_failure_or_expiry_across_reload() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {

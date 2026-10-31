@@ -1,47 +1,43 @@
 use super::*;
 
 #[test]
-fn grok_worker_bootstrap_uses_worker_instructions_without_orchestrator_guide() {
-    let (worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
-    let mut state = worker.state.clone();
-    let hooks = crate::agents::providers::hook_json::HookContext {
-        binary: dir.join("bus"),
-        spool: dir.join("callbacks/worker-bootstrap"),
-        launch_id: "worker-bootstrap".into(),
-    };
-    std::fs::create_dir_all(&hooks.spool).unwrap();
-    let input = AddAgent {
-        room,
-        name: "author".into(),
-        provider: Provider::Grok,
-        cwd: dir.to_string_lossy().into_owned(),
-        extra_args: String::new(),
-        consent_project_hooks: true,
-    };
-    let mut prepared = launch::PreparedLaunch {
-        cwd: dir.clone(),
-        args: Vec::new(),
-        adopted_session: None,
-        env: std::collections::HashMap::new(),
-    };
-    worker
-        .prepare_agent_prompt(&input, agent, &mut state, None, &mut prepared, &hooks)
-        .unwrap();
-    let request = state.request(state.queued_requests(agent)[0]).unwrap();
-    assert!(request.prompt.text.contains("Bus"));
-    assert!(!request
-        .prompt
-        .text
-        .contains("Grok orchestrator instructions"));
-    assert!(!request
-        .prompt
-        .text
-        .contains("## Authored room instructions"));
-    let prompt = std::fs::read_to_string(hooks.spool.join("system-prompt.md")).unwrap();
-    assert!(!prompt.contains("Grok orchestrator instructions"));
-    assert!(!prompt.contains("## Authored room instructions"));
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
+fn cursor_and_grok_worker_bootstraps_stay_out_of_room_history() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let (worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let mut state = worker.state.clone();
+        let hooks = crate::agents::providers::hook_json::HookContext {
+            binary: dir.join("bus"),
+            spool: dir.join("callbacks/worker-bootstrap"),
+            launch_id: "worker-bootstrap".into(),
+        };
+        std::fs::create_dir_all(&hooks.spool).unwrap();
+        let input = AddAgent {
+            room,
+            name: "author".into(),
+            provider,
+            cwd: dir.to_string_lossy().into_owned(),
+            extra_args: String::new(),
+            consent_project_hooks: true,
+        };
+        let mut prepared = launch::PreparedLaunch {
+            cwd: dir.clone(),
+            args: Vec::new(),
+            adopted_session: None,
+            env: std::collections::HashMap::new(),
+        };
+        worker
+            .prepare_agent_prompt(&input, agent, &mut state, None, &mut prepared, &hooks)
+            .unwrap();
+        assert!(state.queued_requests(agent).is_empty());
+        assert_eq!(state.requests().count(), 0);
+        assert_eq!(state.notices(room).count(), 0);
+        let prompt = std::fs::read_to_string(hooks.spool.join("system-prompt.md")).unwrap();
+        assert!(prompt.contains("Bus messaging"));
+        assert!(!prompt.contains("Grok orchestrator instructions"));
+        assert!(!prompt.contains("## Authored room instructions"));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[derive(Default)]

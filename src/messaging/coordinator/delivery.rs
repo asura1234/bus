@@ -160,6 +160,9 @@ impl Worker {
             {
                 continue;
             }
+            if self.deliver_launch_prompt(&agent)? {
+                continue;
+            }
             self.deliver_request(&agent, waited, steer_unbound)?;
         }
         Ok(())
@@ -185,6 +188,91 @@ impl Worker {
             }
         }
         changed
+    }
+
+    fn deliver_launch_prompt(&mut self, agent: &RoomAgent) -> Result<bool, String> {
+        if !matches!(agent.provider, Provider::Cursor | Provider::Grok)
+            || agent.current_request.is_some()
+        {
+            return Ok(false);
+        }
+        let identity = &agent.runtime_identity;
+        let (Some(launch), Some(terminal), Some(pane)) = (
+            &identity.launch_id,
+            &identity.terminal_id,
+            &identity.pane_id,
+        ) else {
+            return Ok(false);
+        };
+        if identity.session_id.is_none() {
+            return Ok(false);
+        }
+        let spool = self.data_dir.join("callbacks").join(launch);
+        let attempted = spool.join("launch-prompt-attempted");
+        if attempted.exists() {
+            return Ok(false);
+        }
+        let instructions =
+            match std::fs::read_to_string(spool.join(super::orchestrator::PROMPT_FILE)) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(error.to_string()),
+            };
+        if self.state.requests().any(|request| {
+            request.agent_id == agent.id
+                && request.bus_generated
+                && request.prompt.text.ends_with(&instructions)
+        }) {
+            std::fs::write(&attempted, io::now_ms().to_string()).map_err(|e| e.to_string())?;
+            return Ok(false);
+        }
+        let text = super::agents::first_message_text(
+            agent.provider,
+            agent.orchestrates.is_some(),
+            &instructions,
+        );
+        std::fs::write(&attempted, io::now_ms().to_string()).map_err(|e| e.to_string())?;
+        let result = self
+            .transport
+            .request(submission_method(agent, text, terminal, pane, false));
+        match result {
+            Ok(ResponseResult::AgentPrompted { .. }) => {
+                self.own_turns.insert(agent.id, std::time::Instant::now());
+                tracing::info!(
+                    event = "bus.delivery.launch_prompt",
+                    agent_id = agent.id.0,
+                    outcome = "confirmed",
+                    "Launch prompt typed without room history"
+                );
+            }
+            Err(error) if error.definitely_rejected => {
+                std::fs::remove_file(&attempted).map_err(|e| e.to_string())?;
+                if error
+                    .message
+                    .contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)
+                {
+                    self.withdrawn_at
+                        .insert(agent.id, std::time::Instant::now());
+                }
+                tracing::info!(
+                    event = "bus.delivery.launch_prompt",
+                    agent_id = agent.id.0,
+                    outcome = "rejected",
+                    "Launch prompt was not typed; safe to retry"
+                );
+            }
+            Ok(other) => {
+                self.own_turns.insert(agent.id, std::time::Instant::now());
+                tracing::warn!(event = "bus.delivery.launch_prompt", agent_id = agent.id.0,
+                    response = ?other, "Launch prompt outcome unknown; not retrying");
+            }
+            Err(error) => {
+                self.own_turns.insert(agent.id, std::time::Instant::now());
+                tracing::warn!(event = "bus.delivery.launch_prompt", agent_id = agent.id.0,
+                    error = %error.message, "Launch prompt outcome unknown; not retrying");
+            }
+        }
+        Ok(true)
     }
 
     fn deliver_request(
