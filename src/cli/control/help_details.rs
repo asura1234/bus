@@ -342,7 +342,7 @@ Errors: command_failed unless idle, ready, with no active/queued messages and
 valid runtime identity. Settle work first; inspect an uncertain reset before retry.
 Never send reset slash commands through send: they cannot produce a normal reply."#;
 
-const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Grok/Kimi, Ctrl+C for Cursor. Wait
+const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi, Ctrl+C for Cursor and Grok. Wait
 up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
 Running/queued/settling requests close as interrupted; no later replay. History

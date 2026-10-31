@@ -68,6 +68,17 @@ fn unexpected_argument_names_the_argument_and_help() {
 }
 
 #[test]
+fn interrupt_help_uses_ctrl_c_for_grok_and_esc_for_kimi() {
+    let args = ["agent", "interrupt", "--help"].map(String::from);
+    let text = super::help_for(super::command_tree(false), &args).unwrap();
+    assert!(
+        text.contains("Esc for Claude/Codex/Kimi")
+            && text.contains("Ctrl+C for Cursor and Grok"),
+        "{text}"
+    );
+}
+
+#[test]
 fn command_help_matches_process_flag_positions() {
     let args = ["agent", "add", "--help"].map(String::from);
     let text = super::help_for(super::command_tree(false), &args).unwrap();
