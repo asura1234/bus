@@ -325,10 +325,12 @@ class CodeupHost:
         for row in rows:
             if row.get("comment_type") == "INLINE_COMMENT":
                 threads.append({"id": row.get("comment_biz_id"), "in_reply_to_id": None})
-            for child in row.get("child_comments_list") or []:
-                if not child.get("is_deleted"):
-                    threads.append({"id": child.get("comment_biz_id"), "in_reply_to_id": row.get("comment_biz_id")})
-        return {"info": self.view(pr), "reviews": reviews, "threads": threads}
+                for child in row.get("child_comments_list") or []:
+                    if not child.get("is_deleted"):
+                        threads.append({"id": child.get("comment_biz_id"), "in_reply_to_id": row.get("comment_biz_id")})
+        info = self.view(pr)
+        info.update(_diff_size(info["baseRefName"], info["headRefOid"]))
+        return {"info": info, "reviews": reviews, "threads": threads}
 
     def reply(self, pr: str, comment_id: str, body: str) -> dict:
         # 平台要求回复与父评论同类型、同补丁版本；inline 父评论还要带同一处文件、行与对比版本。
@@ -353,6 +355,20 @@ class CodeupHost:
                     args += [flag, str(parent[key])]
         self._mr_call("codeup-create-change-request-comment", pr, *args)
         return {"number": int(pr), "commentId": comment_id}
+
+
+def _diff_size(base: str, head: str) -> dict:
+    def git(*args: str) -> str:
+        done = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+        if done.returncode != 0:
+            raise HostError(f"git {' '.join(args)} 失败：{done.stderr.strip()}")
+        return done.stdout
+
+    merge_base = git("merge-base", f"origin/{base}", head).strip()
+    rows = git("diff", "--numstat", "--no-renames", f"{merge_base}...{head}").splitlines()
+    additions = sum(int(row.split("\t", 1)[0]) for row in rows if row.split("\t", 1)[0].isdigit())
+    deletions = sum(int(row.split("\t", 2)[1]) for row in rows if len(row.split("\t")) == 3 and row.split("\t")[1].isdigit())
+    return {"changedFiles": len(rows), "additions": additions, "deletions": deletions}
 
 
 def _author_replied_last(row: dict, author_id) -> bool:

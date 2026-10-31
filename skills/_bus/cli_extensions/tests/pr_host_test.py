@@ -527,7 +527,10 @@ def test_codeup_comments_empty_has_no_file(codeup_env, tmp_path):
     assert (result["file"], result["aiReviewPending"]) == (None, False)
 
 
-def test_codeup_metrics_uses_reviewer_comments_and_threads(codeup_env):
+def test_codeup_metrics_uses_reviewer_comments_and_threads(codeup_env, monkeypatch):
+    monkeypatch.setattr(
+        pr_host_codeup, "_diff_size", lambda base, head: {"changedFiles": 0, "additions": 0, "deletions": 0}
+    )
     rows = [
         {"comment_biz_id": "r1", "comment_type": "GLOBAL_COMMENT", "author": {"id": 2}, "content": "AI report"},
         {"comment_biz_id": "mine", "comment_type": "GLOBAL_COMMENT", "author": {"id": 1}, "content": "triage"},
@@ -545,6 +548,67 @@ def test_codeup_metrics_uses_reviewer_comments_and_threads(codeup_env):
     assert payload["threads"] == [
         {"id": "c1", "in_reply_to_id": None},
         {"id": "c2", "in_reply_to_id": "c1"},
+    ]
+
+
+def test_codeup_metrics_exposes_diff_size(codeup_env, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-qb", "main", str(repo)], check=True, capture_output=True)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, text=True, capture_output=True).stdout.strip()
+
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    (repo / "a.txt").write_text("one\ntwo\n")
+    (repo / "b.txt").write_text("keep\n")
+    git("add", "a.txt", "b.txt")
+    git("commit", "-qm", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-qb", "feature")
+    (repo / "a.txt").write_text("one\nchanged\nthree\n")
+    (repo / "b.txt").write_text("new\n")
+    git("add", "a.txt", "b.txt")
+    git("commit", "-qm", "feature")
+    head = git("rev-parse", "HEAD")
+    monkeypatch.chdir(repo)
+    host, _ = _codeup(
+        {"codeup-list-change-request-patch-sets": _patch_sets(head), "codeup-list-merge-request-comments": []}
+    )
+
+    info = host.metrics("5")["info"]
+
+    assert (info["changedFiles"], info["additions"], info["deletions"]) == (2, 3, 2)
+
+
+def test_codeup_metrics_excludes_global_comment_replies_from_inline_threads(codeup_env, monkeypatch):
+    monkeypatch.setattr(
+        pr_host_codeup, "_diff_size", lambda base, head: {"changedFiles": 0, "additions": 0, "deletions": 0}
+    )
+    rows = [
+        {
+            "comment_biz_id": "report",
+            "comment_type": "GLOBAL_COMMENT",
+            "author": {"id": 2},
+            "content": "AI report",
+            "child_comments_list": [{"comment_biz_id": "housekeeping", "content": "triaged"}],
+        },
+        {
+            "comment_biz_id": "finding",
+            "comment_type": "INLINE_COMMENT",
+            "author": {"id": 2},
+            "child_comments_list": [{"comment_biz_id": "reply", "content": "fixed"}],
+        },
+    ]
+    host, _ = _codeup(
+        {"codeup-list-change-request-patch-sets": _patch_sets(), "codeup-list-merge-request-comments": rows}
+    )
+
+    threads = host.metrics("5")["threads"]
+
+    assert threads == [
+        {"id": "finding", "in_reply_to_id": None},
+        {"id": "reply", "in_reply_to_id": "finding"},
     ]
 
 
