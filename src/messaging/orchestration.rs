@@ -130,7 +130,8 @@ const fn supported_prompt_placeholders(template: &str) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OrchestratorSpec {
     /// The work room it orchestrates for its whole life; required, because
-    /// the system prompt names it at launch and is never re-sent.
+    /// the system prompt names it at launch. Clear re-sends that saved prompt
+    /// for Cursor and Grok, which cannot take it as a launch argument.
     pub room: RoomId,
     /// The system prompt text; `None` uses [`DEFAULT_PROMPT`]. `{{...}}`
     /// placeholders in it are filled in.
@@ -172,6 +173,7 @@ pub(crate) fn agent_onboarding(
          Merge only with exact-head VERIFIED, all required reviewers Ready, gates and requested acceptance passing, \
          comments adjudicated, recorded authority and no explicit hold. Enforce these checks during merge-pr too. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
+         Deliverable messages start with [Bus message N from NAME]. Answer with bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\" before claiming delivery. If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (Blocked/needs help, No reply/abandoned, idle-agent notices) omit that header. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
          The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit room notes or the roster. \
@@ -183,7 +185,8 @@ pub(crate) fn agent_onboarding(
         docs.display(),
         docs.display(),
         id.0,
-        docs.display()
+        docs.display(),
+        id.0
     )
 }
 

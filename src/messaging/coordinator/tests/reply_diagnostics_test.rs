@@ -141,18 +141,18 @@ fn reply_diagnostics_do_not_disclose_existing_answers_to_other_agents() {
 }
 
 #[test]
-fn reply_diagnostics_each_delivered_hint_explains_receipt_and_recovery() {
+fn reply_diagnostics_delivered_messages_carry_a_short_header_only() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     let lead = start(&mut f, "verify");
     let message = f.request(lead).prompt.id;
     let payload = f.typed().last().unwrap().0.clone();
-    assert!(payload.contains("foreground"), "{payload}");
-    assert!(payload.contains("stage:\"replied\""), "{payload}");
     assert!(
-        payload.contains(&format!("bus message status {}", message.0)),
+        payload.contains(&format!("[Bus message {} from you]", message.0)),
         "{payload}"
     );
-    assert!(payload.contains("before resending"), "{payload}");
+    assert!(!payload.contains("answer with bus send"), "{payload}");
+    assert!(!payload.contains("stage:\"replied\""), "{payload}");
+    assert!(!payload.contains("before resending"), "{payload}");
     assert_eq!(test_prompt_content(&payload), "verify");
 }
 
@@ -217,7 +217,7 @@ fn reply_diagnostics_preview_secrets_stay_out_of_error_text_and_logs() {
 }
 
 #[test]
-fn reply_diagnostics_guidance_and_first_answer_work_for_each_provider() {
+fn reply_diagnostics_short_header_and_first_answer_work_for_each_provider() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         let mut f = Fixture::new(provider);
         let lead = start(&mut f, "verify");
@@ -225,15 +225,13 @@ fn reply_diagnostics_guidance_and_first_answer_work_for_each_provider() {
         let agent = f.agent;
         let payload = f.typed().last().unwrap().0.clone();
         assert!(
-            payload.contains("foreground")
-                && payload.contains("ok:true")
-                && payload.contains("stage:\"replied\""),
+            payload.starts_with(&format!("[Bus message {} from you]\nverify", message.0)),
             "{provider:?}: {payload}"
         );
-        assert!(payload.contains(&format!(
-            "bus message status {} before resending",
-            message.0
-        )));
+        assert!(
+            !payload.contains("answer with bus send") && !payload.contains("before resending"),
+            "{provider:?}: {payload}"
+        );
         assert!(reply(&mut f, message, agent, "first answer").ok);
         f.stopped("infinite-turn", "later final");
         f.consume();

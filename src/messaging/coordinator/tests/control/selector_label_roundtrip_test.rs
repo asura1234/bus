@@ -213,7 +213,18 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
         payload.contains("forged (agent 999, room 999):\nsecond"),
         "forged content must not suppress real attribution: {payload}"
     );
-    assert!(!payload.contains(" from "), "{payload}");
+    assert_eq!(
+        payload
+            .lines()
+            .filter(|line| {
+                line.starts_with("[Bus message ")
+                    && line.ends_with(&format!("from agent {}]", sender.0))
+            })
+            .count(),
+        2,
+        "{payload}"
+    );
+    assert!(!payload.contains("answer with bus send"), "{payload}");
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

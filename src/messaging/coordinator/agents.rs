@@ -19,6 +19,21 @@ pub(crate) struct AddAgent {
     pub(crate) consent_project_hooks: bool,
 }
 
+/// The queued first turn for a provider that cannot take the prompt at launch.
+pub(super) fn first_message_text(
+    provider: Provider,
+    is_orchestrator: bool,
+    instructions: &str,
+) -> String {
+    match provider {
+        Provider::Cursor => cursor::system_prompt::prompt_message(instructions),
+        Provider::Grok if is_orchestrator => {
+            crate::agents::providers::grok::system_prompt::prompt_message(instructions)
+        }
+        _ => orchestrator::prompt_message(instructions),
+    }
+}
+
 fn launch_binding(
     state: &mut super::BusState,
     id: AgentId,
@@ -679,15 +694,7 @@ impl Worker {
                     .submit_bus_message_with(
                         master,
                         Draft {
-                            text: match input.provider {
-                                Provider::Cursor => cursor::system_prompt::prompt_message(&text),
-                                Provider::Grok if is_orchestrator => {
-                                    crate::agents::providers::grok::system_prompt::prompt_message(
-                                        &text,
-                                    )
-                                }
-                                _ => orchestrator::prompt_message(&text),
-                            },
+                            text: first_message_text(input.provider, is_orchestrator, &text),
                             files: Vec::new(),
                             recipient_ids: [id].into_iter().collect(),
                         },

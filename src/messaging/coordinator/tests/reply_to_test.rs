@@ -190,7 +190,7 @@ fn reply_to_is_durable_and_deletion_preserves_answered_success() {
 }
 
 #[test]
-fn reply_to_delivery_includes_each_batched_message_id_and_exact_recipient_command() {
+fn reply_to_delivery_includes_each_batched_message_id_in_the_short_header() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     f.status(RuntimeStatus::Launching);
     let first = f.send("first", false);
@@ -199,16 +199,15 @@ fn reply_to_delivery_includes_each_batched_message_id_and_exact_recipient_comman
     f.status(RuntimeStatus::Idle);
     f.deliver();
     let payload = f.typed().last().unwrap().0.clone();
-    for id in [first, second] {
+    for (id, text) in [(first, "first"), (second, "second")] {
         let message = f.request(id).prompt.id;
         assert!(
-            payload.contains(&format!(
-                "bus send --reply-to {} --as {}",
-                message.0, f.agent.0
-            )),
+            payload.contains(&format!("[Bus message {} from you]\n{text}", message.0)),
             "{payload}"
         );
     }
+    assert!(!payload.contains("bus send --reply-to"), "{payload}");
+    assert!(!payload.contains("answer with bus send"), "{payload}");
 }
 
 #[test]

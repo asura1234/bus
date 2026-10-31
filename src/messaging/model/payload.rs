@@ -52,58 +52,79 @@ impl BusState {
     /// Freeze attribution with the rendered text so typing, retries and callback
     /// matching agree, including after a rename or a coordinator restart.
     pub(crate) fn render_request_payload(&mut self, id: RequestId) -> Option<String> {
-        let request = self.requests.get(&id)?;
-        if let Some(text) = &request.submitted_payload {
-            return Some(text.clone());
-        }
-        let mut text = request.prompt.rendered_payload();
-        let answer = format!(
-            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status {} before resending]",
-            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.id.0,
-        );
-        if let Author::Agent(sender) = request.prompt.author {
-            let identity = request
-                .sender_identity
-                .clone()
-                .or_else(|| self.message_sender(&request.prompt.author));
-            let (header, replace_identity) = if let Some((name, room)) = identity {
-                let label = self.named_agent_label(sender, &name);
-                let crosses_rooms = request.room_id != room
-                    || self
-                        .agent(request.agent_id)
-                        .is_some_and(|a| a.room_id != room)
-                    || self.room(room).is_some_and(|r| r.kind == RoomKind::Master)
-                    || self
-                        .room(request.room_id)
-                        .is_some_and(|r| r.kind == RoomKind::Master);
-                let header = if crosses_rooms {
-                    format!("{label} (room {}):", room.0)
-                } else {
-                    format!("{label}:")
-                };
-                (header, starts_with_sender(&text, &name, sender.0, room.0))
-            } else {
-                // Older saves can omit the snapshot after an author is gone.
-                // Its stable ID is known; do not invent a name or home room.
-                let header = format!("{}:", self.agent_message_label(sender));
-                let first = text.lines().next().unwrap_or_default().trim();
-                let name = format!("agent {}", sender.0);
-                let replace = first.eq_ignore_ascii_case(&header)
-                    || identity_only_line(first, &name, sender.0);
-                (header, replace)
-            };
-            if replace_identity {
-                text = text
-                    .split_once('\n')
-                    .map_or(String::new(), |(_, body)| body.to_owned());
+        let (mut text, message_id, author) = {
+            let request = self.requests.get(&id)?;
+            if let Some(text) = &request.submitted_payload {
+                return Some(text.clone());
             }
-            text = if text.is_empty() {
-                format!("{header}\n{answer}")
+            (
+                request.prompt.rendered_payload(),
+                request.prompt.id.0,
+                request.prompt.author.clone(),
+            )
+        };
+        // Header suppression follows the notice kind. Bus-signed notices and
+        // agent-signed outcome-only notices (No reply/abandoned, retired idle)
+        // need no reply. Deliverable messages keep only a short header; the
+        // reply form lives in the agent system prompt and `bus send --help`.
+        let outcome_only = self.outcome_only_notice(id);
+        if author != Author::Bus && !outcome_only {
+            let request = self.requests.get(&id)?;
+            if let Author::Agent(sender) = request.prompt.author {
+                let identity = request
+                    .sender_identity
+                    .clone()
+                    .or_else(|| self.message_sender(&request.prompt.author));
+                let (header, from, replace_identity) = if let Some((name, room)) = identity {
+                    let label = self.named_agent_label(sender, &name);
+                    let crosses_rooms = request.room_id != room
+                        || self
+                            .agent(request.agent_id)
+                            .is_some_and(|a| a.room_id != room)
+                        || self.room(room).is_some_and(|r| r.kind == RoomKind::Master)
+                        || self
+                            .room(request.room_id)
+                            .is_some_and(|r| r.kind == RoomKind::Master);
+                    let header = if crosses_rooms {
+                        format!("{label} (room {}):", room.0)
+                    } else {
+                        format!("{label}:")
+                    };
+                    (
+                        header,
+                        label,
+                        starts_with_sender(&text, &name, sender.0, room.0),
+                    )
+                } else {
+                    // Older saves can omit the snapshot after an author is gone.
+                    // Its stable ID is known; do not invent a name or home room.
+                    let label = self.agent_message_label(sender);
+                    let header = format!("{label}:");
+                    let first = text.lines().next().unwrap_or_default().trim();
+                    let name = format!("agent {}", sender.0);
+                    let replace = first.eq_ignore_ascii_case(&header)
+                        || identity_only_line(first, &name, sender.0);
+                    (header, label, replace)
+                };
+                if replace_identity {
+                    text = text
+                        .split_once('\n')
+                        .map_or(String::new(), |(_, body)| body.to_owned());
+                }
+                let marker = format!("[Bus message {message_id} from {from}]");
+                text = if text.is_empty() {
+                    format!("{header}\n{marker}")
+                } else {
+                    format!("{header}\n{marker}\n{text}")
+                };
             } else {
-                format!("{header}\n{answer}\n{text}")
-            };
-        } else {
-            text = format!("{answer}\n{text}");
+                let marker = format!("[Bus message {message_id} from you]");
+                text = if text.is_empty() {
+                    marker
+                } else {
+                    format!("{marker}\n{text}")
+                };
+            }
         }
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)

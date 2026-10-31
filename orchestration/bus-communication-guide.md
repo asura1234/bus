@@ -101,8 +101,13 @@ chatter relayed by an orchestrator.
 ## Replies and turn finals
 
 Answer a finished request with `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID
---text ANSWER`, using the message ID and command in its delivered prompt. This
-completes your request immediately, including while a watcher turn stays open.
+--text ANSWER`. A deliverable message starts with `[Bus message N from NAME]`;
+that N is the message ID. The command, the foreground `ok:true` and
+`stage:"replied"` check, and the `bus message status` recovery step live in
+your system prompt and in `bus send --help`, not in the message body. Notices
+that need no reply (Blocked/needs help, No reply/abandoned, idle-agent notices)
+omit that header. This completes your request immediately, including while a
+watcher turn stays open.
 Bus returns the turn's final only to requests that are still outstanding. So:
 
 - **One copy.** Use `--reply-to` for a mid-turn answer; an ordinary separate

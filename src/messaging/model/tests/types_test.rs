@@ -640,3 +640,74 @@ fn shell_ownership_is_scoped_to_the_provider_launch_and_session() {
         assert!(!state.observe_claude_shells(agent, census()).unwrap());
     }
 }
+
+#[test]
+fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
+    let (mut state, room, builder, reviewer) = state_with_room_and_agents();
+    let developer = submit_text(&mut state, room, reviewer, "review the change");
+    let message = state.request(developer).unwrap().prompt.id.0;
+    let payload = state.render_request_payload(developer).unwrap();
+    assert_eq!(
+        payload,
+        format!("[Bus message {message} from you]\nreview the change")
+    );
+    assert!(!payload.contains("answer with bus send"), "{payload}");
+    assert!(!payload.contains("stage:"), "{payload}");
+
+    let sent = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "please recheck".into(),
+                files: Vec::new(),
+                recipient_ids: [reviewer].into(),
+            },
+            Author::Agent(builder),
+            11,
+        )
+        .unwrap()[0];
+    let message = state.request(sent).unwrap().prompt.id.0;
+    assert_eq!(
+        state.render_request_payload(sent).unwrap(),
+        format!("builder:\n[Bus message {message} from builder]\nplease recheck")
+    );
+
+    let numeric = state
+        .create_agent(room, "7", Provider::Codex, PathBuf::from("/repo"), None)
+        .unwrap();
+    let sent = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "numeric sender".into(),
+                files: Vec::new(),
+                recipient_ids: [reviewer].into(),
+            },
+            Author::Agent(numeric),
+            12,
+        )
+        .unwrap()[0];
+    let message = state.request(sent).unwrap().prompt.id.0;
+    let label = format!("7 (agent {})", numeric.0);
+    assert_eq!(
+        state.render_request_payload(sent).unwrap(),
+        format!("{label}:\n[Bus message {message} from {label}]\nnumeric sender")
+    );
+
+    let orchestrator = master_agent(&mut state, "orch");
+    state.bind_orchestrator(orchestrator, room).unwrap();
+    for text in [
+        "builder. Blocked, needs help to continue.\nInspect: bus agent dialog 'builder'",
+        "No reply (abandoned: reply_not_captured)",
+        "2 agents in room 1 are idle (limit 0): reviewer. Give them parallel work \
+         or delete the ones you no longer need (bus agent delete NAME --confirm).",
+    ] {
+        state
+            .post_bus_notice(room, Some(orchestrator), text.into(), 13)
+            .unwrap();
+        let request = state.requests().last().unwrap().id;
+        let payload = state.render_request_payload(request).unwrap();
+        assert_eq!(payload, text, "{payload}");
+        assert!(!payload.contains("[Bus message "), "{payload}");
+    }
+}

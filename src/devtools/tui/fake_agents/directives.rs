@@ -5,13 +5,10 @@ use std::io::Write;
 
 /// A raw final lets acceptance tests exercise protocols that depend on a prefix.
 pub(super) fn reply(prompt: &str) -> String {
-    // Bus's per-request reply instructions are transport metadata, not the work to echo.
+    // The short deliverable header and the legacy reply hint are transport metadata, not the work to echo.
     let prompt = prompt
         .split_inclusive('\n')
-        .filter(|line| {
-            !(line.starts_with("[Bus message ")
-                && line.contains("; answer with bus send --reply-to "))
-        })
+        .filter(|line| !bus_message_header(line))
         .collect::<String>();
     prompt.split_once("fake:raw-reply ").map_or_else(
         || format!("fake reply: {prompt}"),
@@ -46,6 +43,24 @@ pub(super) fn shell_name(prompt: &str) -> Option<String> {
 /// notification into that turn.
 pub(super) fn wake_seconds(prompt: &str) -> Option<u64> {
     directive_seconds(prompt, "fake:wake")
+}
+
+/// Drop the short deliverable header and the legacy reply hint. Neither is the task.
+fn bus_message_header(line: &str) -> bool {
+    let line = line.trim_end_matches(['\n', '\r']);
+    let Some(rest) = line.strip_prefix("[Bus message ") else {
+        return false;
+    };
+    if rest.contains("; answer with bus send --reply-to ") && line.ends_with(']') {
+        return true;
+    }
+    let Some(rest) = rest.strip_suffix(']') else {
+        return false;
+    };
+    let Some((id, name)) = rest.split_once(" from ") else {
+        return false;
+    };
+    id.parse::<u64>().is_ok() && !name.is_empty() && !name.contains('[') && !name.contains(']')
 }
 
 fn directive_seconds(prompt: &str, directive: &str) -> Option<u64> {
@@ -97,6 +112,15 @@ mod tests {
 
     #[test]
     fn fake_reply_echoes_the_task_after_bus_correlation_metadata() {
-        assert_eq!(super::reply("[Bus message 42; answer with bus send --reply-to 42 --as 7 --text 'YOUR ANSWER']\nInspect the parser"), "fake reply: Inspect the parser");
+        assert_eq!(
+            super::reply("[Bus message 42 from codex1]\nInspect the parser"),
+            "fake reply: Inspect the parser"
+        );
+        assert_eq!(
+            super::reply(
+                "[Bus message 42; answer with bus send --reply-to 42 --as 7 --text 'YOUR ANSWER']\nInspect the parser"
+            ),
+            "fake reply: Inspect the parser"
+        );
     }
 }

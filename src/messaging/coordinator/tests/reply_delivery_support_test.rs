@@ -662,11 +662,31 @@ impl Delivery {
             .clone()
     }
     pub(crate) fn correlated_text(&self, request: RequestId) -> String {
-        let request = self.state().request(request).unwrap();
-        format!(
-            "[Bus message {}; answer with bus send --reply-to {} --as {} --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status {} before resending]\n{}",
-            request.prompt.id.0, request.prompt.id.0, request.agent_id.0, request.prompt.id.0, request.prompt.text,
-        )
+        let state = self.state();
+        let request = state.request(request).unwrap();
+        let id = request.prompt.id.0;
+        let body = request.prompt.text.clone();
+        let author = request.prompt.author.clone();
+        let with_body = |marker: String| {
+            if body.is_empty() {
+                marker
+            } else {
+                format!("{marker}\n{body}")
+            }
+        };
+        match author {
+            crate::messaging::model::Author::Bus => body,
+            crate::messaging::model::Author::Developer => {
+                with_body(format!("[Bus message {id} from you]"))
+            }
+            crate::messaging::model::Author::Agent(sender) => {
+                let name = state.agent_message_label(sender);
+                format!(
+                    "{name}:\n{}",
+                    with_body(format!("[Bus message {id} from {name}]"))
+                )
+            }
+        }
     }
     pub(crate) fn record(&self, agent: AgentId, mut value: Value) {
         let provider = self.state().agent(agent).unwrap().provider;
