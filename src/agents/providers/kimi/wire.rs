@@ -209,137 +209,104 @@ fn continuation_text(turn: &OpenTurn) -> Option<String> {
     }
 }
 
-fn session_capture_lines_inner(
-    lines: impl IntoIterator<Item = Result<String, String>>,
-    turn_id: u64,
-    prompt: &str,
-) -> Option<SessionCapture> {
-    let mut open: Option<OpenTurn> = None;
-    let mut done: Vec<OpenTurn> = Vec::new();
-    for line in lines {
-        let Ok(line) = line else {
-            continue;
-        };
-        if line.len() as u64 > MAX_WIRE_BYTES {
-            continue;
+fn open_turn(value: &Value) -> Option<OpenTurn> {
+    if value.get("agentId").and_then(Value::as_str) != Some("main") {
+        return None;
+    }
+    let id = value.get("turnId").and_then(Value::as_u64)?;
+    let input = value.get("input").and_then(Value::as_array)?;
+    if input.len() != 1 {
+        return None;
+    }
+    let text = input
+        .first()
+        .and_then(|part| part.get("text"))
+        .and_then(Value::as_str)?;
+    Some(OpenTurn {
+        id,
+        prompt_text: text.to_owned(),
+        prompt_id: value
+            .get("promptId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        lead_answer: None,
+        after_steer: false,
+        steer_prompt: None,
+        steer_answer: None,
+        steers: Vec::new(),
+        agent_outcome: None,
+        agent_error: None,
+        turn_reason: None,
+        prompt_reason: None,
+    })
+}
+
+fn note_assistant(turn: &mut OpenTurn, value: &Value) {
+    let Some((tool_call, text)) = assistant_text(value) else {
+        return;
+    };
+    if tool_call {
+        if turn.after_steer {
+            turn.steer_answer = None;
+        } else {
+            turn.lead_answer = None;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let Some(kind) = value.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        if kind == "turn.prompt" {
-            if let Some(mut previous) = open.take() {
-                finish_turn(&mut previous);
-                done.push(previous);
+    } else if !text.is_empty() {
+        if turn.after_steer {
+            turn.steer_answer = Some(text);
+        } else {
+            turn.lead_answer = Some(text);
+        }
+    }
+}
+
+fn apply_wire_event(turn: &mut OpenTurn, kind: &str, value: &Value) {
+    match kind {
+        "prompt.steered" | "turn.steer" => {
+            if value
+                .get("turnId")
+                .and_then(Value::as_u64)
+                .is_some_and(|id| id != turn.id)
+            {
+                return;
             }
-            if value.get("agentId").and_then(Value::as_str) != Some("main") {
-                continue;
+            if let Some(text) = steer_text(value) {
+                note_steer(turn, text);
             }
-            let Some(id) = value.get("turnId").and_then(Value::as_u64) else {
-                continue;
-            };
-            let Some(input) = value.get("input").and_then(Value::as_array) else {
-                continue;
-            };
-            if input.len() != 1 {
-                continue;
-            }
-            let Some(text) = input
-                .first()
-                .and_then(|part| part.get("text"))
-                .and_then(Value::as_str)
-            else {
-                continue;
-            };
-            open = Some(OpenTurn {
-                id,
-                prompt_text: text.to_owned(),
-                prompt_id: value
-                    .get("promptId")
+        }
+        "agent.message.appended" if turn.agent_outcome.is_none() => note_assistant(turn, value),
+        "agent.turn.ended" if value.get("turnId").and_then(Value::as_u64) == Some(turn.id) => {
+            if let Some(outcome) = value.get("outcome").and_then(Value::as_str) {
+                turn.agent_outcome = Some(outcome.to_owned());
+                turn.agent_error = value
+                    .get("errorMessage")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                lead_answer: None,
-                after_steer: false,
-                steer_prompt: None,
-                steer_answer: None,
-                steers: Vec::new(),
-                agent_outcome: None,
-                agent_error: None,
-                turn_reason: None,
-                prompt_reason: None,
-            });
-            continue;
+                    .map(str::to_owned);
+            }
         }
-        let Some(turn) = open.as_mut() else {
-            continue;
-        };
-        match kind {
-            "prompt.steered" | "turn.steer" => {
-                if value
-                    .get("turnId")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|id| id != turn.id)
-                {
-                    continue;
-                }
-                if let Some(text) = steer_text(&value) {
-                    note_steer(turn, text);
-                }
+        "turn.ended"
+            if value.get("agentId").and_then(Value::as_str) == Some("main")
+                && value.get("turnId").and_then(Value::as_u64) == Some(turn.id)
+                && turn.agent_outcome.is_some() =>
+        {
+            if let Some(reason) = value.get("reason").and_then(Value::as_str) {
+                turn.turn_reason = Some(reason.to_owned());
             }
-            "agent.message.appended" if turn.agent_outcome.is_none() => {
-                let Some((tool_call, text)) = assistant_text(&value) else {
-                    continue;
-                };
-                if tool_call {
-                    if turn.after_steer {
-                        turn.steer_answer = None;
-                    } else {
-                        turn.lead_answer = None;
-                    }
-                } else if !text.is_empty() {
-                    if turn.after_steer {
-                        turn.steer_answer = Some(text);
-                    } else {
-                        turn.lead_answer = Some(text);
-                    }
-                }
-            }
-            "agent.turn.ended" if value.get("turnId").and_then(Value::as_u64) == Some(turn.id) => {
-                if let Some(outcome) = value.get("outcome").and_then(Value::as_str) {
-                    turn.agent_outcome = Some(outcome.to_owned());
-                    turn.agent_error = value
-                        .get("errorMessage")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-            }
-            "turn.ended"
-                if value.get("agentId").and_then(Value::as_str) == Some("main")
-                    && value.get("turnId").and_then(Value::as_u64) == Some(turn.id)
-                    && turn.agent_outcome.is_some() =>
-            {
-                if let Some(reason) = value.get("reason").and_then(Value::as_str) {
-                    turn.turn_reason = Some(reason.to_owned());
-                }
-            }
-            "prompt.completed"
-                if value.get("agentId").and_then(Value::as_str) == Some("main")
-                    && value.get("promptId").and_then(Value::as_str) == Some(&turn.prompt_id) =>
-            {
-                if let Some(reason) = value.get("reason").and_then(Value::as_str) {
-                    turn.prompt_reason = Some(reason.to_owned());
-                }
-            }
-            _ => {}
         }
+        "prompt.completed"
+            if value.get("agentId").and_then(Value::as_str) == Some("main")
+                && value.get("promptId").and_then(Value::as_str) == Some(&turn.prompt_id) =>
+        {
+            if let Some(reason) = value.get("reason").and_then(Value::as_str) {
+                turn.prompt_reason = Some(reason.to_owned());
+            }
+        }
+        _ => {}
     }
-    if let Some(mut previous) = open.take() {
-        finish_turn(&mut previous);
-        done.push(previous);
-    }
+}
+
+fn capture_bound(done: &[OpenTurn], turn_id: u64, prompt: &str) -> Option<SessionCapture> {
     let bound = done.iter().find(|turn| {
         turn.id == turn_id && normalized_prompt(&turn.prompt_text) == normalized_prompt(prompt)
     })?;
@@ -383,6 +350,45 @@ fn session_capture_lines_inner(
         steered,
         continuation,
     })
+}
+
+fn session_capture_lines_inner(
+    lines: impl IntoIterator<Item = Result<String, String>>,
+    turn_id: u64,
+    prompt: &str,
+) -> Option<SessionCapture> {
+    let mut open: Option<OpenTurn> = None;
+    let mut done: Vec<OpenTurn> = Vec::new();
+    for line in lines {
+        let Ok(line) = line else {
+            continue;
+        };
+        if line.len() as u64 > MAX_WIRE_BYTES {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(kind) = value.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if kind == "turn.prompt" {
+            if let Some(mut previous) = open.take() {
+                finish_turn(&mut previous);
+                done.push(previous);
+            }
+            open = open_turn(&value);
+            continue;
+        }
+        if let Some(turn) = open.as_mut() {
+            apply_wire_event(turn, kind, &value);
+        }
+    }
+    if let Some(mut previous) = open.take() {
+        finish_turn(&mut previous);
+        done.push(previous);
+    }
+    capture_bound(&done, turn_id, prompt)
 }
 
 fn terminal_outcome(
