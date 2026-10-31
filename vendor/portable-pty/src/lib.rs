@@ -37,6 +37,9 @@
 //! # Ok::<(), Error>(())
 //! ```
 //!
+// Cargo must recheck this local path dependency when another checkout uses the target.
+const _: Option<&str> = option_env!("BUS_CHECKOUT_ROOT");
+
 use anyhow::Error;
 use downcast_rs::{impl_downcast, Downcast};
 #[cfg(unix)]

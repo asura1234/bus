@@ -130,3 +130,29 @@ On Windows, also run:
 ```sh
 cargo test --manifest-path vendor/portable-pty/Cargo.toml windows_environment_rejects_malformed_entries
 ```
+
+## 0004 fingerprint the checkout
+
+status: active
+
+patch: `vendor/patches/portable-pty/0004-fingerprint-checkout.patch`
+
+vendored base: `portable-pty 0.9.0`
+
+local files:
+
+- `vendor/portable-pty/src/lib.rs`
+
+reason: Cargo intentionally reuses path dependency fingerprints across checkout
+paths. Reading the checkout marker makes Cargo invalidate this local crate when
+another checkout uses the same target directory.
+
+remove when: Cargo can safely distinguish these local dependency inputs across
+checkouts without the marker, or Bus no longer shares build targets.
+
+verification:
+
+```sh
+python3 -m pytest -q tools/tests/shared_target_provenance_test.py
+python3 -m unittest tools.tests.vendor_portable_pty_test
+```
