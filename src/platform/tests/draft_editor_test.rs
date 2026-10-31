@@ -87,6 +87,24 @@ fn a_live_exchange_never_quarantines_its_recovery_file() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn kimi_persistent_cancelled_handoff_does_not_block_later_exchange() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-draft-cancelled-handoff");
+    let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
+    exchange.save_recovery("still recoverable").unwrap();
+    exchange.request_capture().unwrap();
+    let saved = exchange.recovery().to_owned();
+    drop(exchange);
+    let next = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
+    assert!(!saved.exists());
+    assert_eq!(
+        fs::read_to_string(saved.with_extension("recovered")).unwrap(),
+        "still recoverable"
+    );
+    drop(next);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn exchange_files_and_directory_are_private() {

@@ -319,6 +319,27 @@ fn kimi_trusted_turn_does_not_stall_on_transient_idle() {
 }
 
 #[test]
+fn kimi_persistent_invalidation_still_reports_session_invalidated() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let request = submit_text(&mut state, room, agent, "run task");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .agents
+        .get_mut(&agent)
+        .unwrap()
+        .session_binding_invalidated = true;
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 21)
+        .unwrap();
+    let progress = state.request(request).unwrap().progress_at_ms.unwrap();
+    assert_eq!(
+        stall_at(&state, request, progress.max(21) + DELIVERED_STALL_MS).as_deref(),
+        Some("session_invalidated")
+    );
+}
+
+#[test]
 fn uncertain_submission_cannot_end_from_unrelated_status_activity() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let request = submit_text(&mut state, room, agent, "first");

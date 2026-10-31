@@ -273,7 +273,10 @@ impl BusState {
                 {
                     return None;
                 }
-                if agent.provider == super::Provider::Kimi && lead.trusted_start_bound {
+                if agent.provider == super::Provider::Kimi
+                    && lead.trusted_start_bound
+                    && !invalidated
+                {
                     return None;
                 }
                 Some(

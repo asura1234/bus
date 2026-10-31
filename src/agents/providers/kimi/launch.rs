@@ -268,12 +268,43 @@ fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBu
     let bytes = toml::to_string(&config).map_err(|e| e.to_string())?;
     hook_json::atomic_write(&home.join("config.toml"), bytes.as_bytes())
         .map_err(|e| e.to_string())?;
-    hook_json::atomic_write(
-        &home.join("tui.toml"),
-        b"cache_expiry_hint = false\n\n[upgrade]\nauto_install = false\n",
-    )
-    .map_err(|e| e.to_string())?;
+    write_tui_settings(&home)?;
     Ok(home)
+}
+
+fn write_tui_settings(home: &Path) -> Result<bool, String> {
+    let path = home.join("tui.toml");
+    if std::fs::symlink_metadata(&path).is_ok_and(|meta| {
+        !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 2 * 1024 * 1024
+    }) {
+        return Err("Kimi private TUI config is missing or invalid".into());
+    }
+    let mut config: toml::Value = match std::fs::read_to_string(&path) {
+        Ok(text) => toml::from_str(&text).map_err(|_| "Kimi private TUI config is invalid")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            toml::Value::Table(toml::map::Map::new())
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let table = config
+        .as_table_mut()
+        .ok_or("Kimi private TUI config root is not a table")?;
+    let mut changed = table
+        .insert("cache_expiry_hint".into(), toml::Value::Boolean(false))
+        .is_none_or(|value| value != toml::Value::Boolean(false));
+    let upgrade = table
+        .entry("upgrade")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or("Kimi private upgrade config is not a table")?;
+    changed |= upgrade
+        .insert("auto_install".into(), toml::Value::Boolean(false))
+        .is_none_or(|value| value != toml::Value::Boolean(false));
+    if changed {
+        let bytes = toml::to_string(&config).map_err(|e| e.to_string())?;
+        hook_json::atomic_write(&path, bytes.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    Ok(changed)
 }
 
 fn hook_command(hooks: &HookContext) -> String {
@@ -324,6 +355,7 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
         let bytes = toml::to_string(&config).map_err(|e| e.to_string())?;
         hook_json::atomic_write(&path, bytes.as_bytes()).map_err(|e| e.to_string())?;
     }
+    changed |= write_tui_settings(&home)?;
     Ok(changed)
 }
 
@@ -610,6 +642,36 @@ mod tests {
                 }
             }
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn kimi_persistent_home_disables_cache_expiry_hint() {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-rebind-cache-hint");
+        let source = root.join("source");
+        let spool = root.join("callbacks/launch");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("config.toml"), b"").unwrap();
+        let hooks = HookContext {
+            binary: std::env::current_exe().unwrap(),
+            spool,
+            launch_id: "launch".into(),
+        };
+        let home = private_home(&source, &root, &hooks).unwrap();
+        hook_json::atomic_write(
+            &hooks.spool.join(HOME_FILE),
+            &serde_json::to_vec(&home_record(&home, &source).unwrap()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("tui.toml"),
+            "cache_expiry_hint = true\ntheme = \"dark\"\n",
+        )
+        .unwrap();
+        rebind_hooks(&hooks).unwrap();
+        let tui = std::fs::read_to_string(home.join("tui.toml")).unwrap();
+        assert!(tui.contains("cache_expiry_hint = false"), "{tui}");
+        assert!(tui.contains("theme = \"dark\""), "{tui}");
         std::fs::remove_dir_all(root).unwrap();
     }
 

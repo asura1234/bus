@@ -126,9 +126,17 @@ impl Exchange {
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
         }
         let _lock = lock(&dir)?;
+        let orphaned = fs::read_dir(&dir)?.any(|entry| {
+            entry.is_ok_and(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("draft-") && name.ends_with(".txt")
+            })
+        });
         if read_request(&dir)?.is_some_and(|request| {
-            request.expires_ms > crate::utils::time::now_ms()
-                || request.operation != Operation::Idle && !has_ack(&dir, &request)
+            (request.operation != Operation::Cancelled || !orphaned)
+                && (request.expires_ms > crate::utils::time::now_ms()
+                    || request.operation != Operation::Idle && !has_ack(&dir, &request))
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
