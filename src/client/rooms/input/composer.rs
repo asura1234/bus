@@ -162,6 +162,13 @@ impl BusUi {
         match code {
             KeyCode::Esc => self.rename = None,
             KeyCode::Enter => {
+                if self
+                    .rename
+                    .as_ref()
+                    .is_some_and(|rename| rename.error.is_some())
+                {
+                    return;
+                }
                 if let Some(rename) = self.rename.take() {
                     let cmd = match rename.target {
                         RenameTarget::Room(id) => BusCommand::RenameRoom(id, rename.editor.text),
@@ -448,21 +455,19 @@ impl BusUi {
         };
         if let Some(error) = super::super::thumbnails::image_data_error(bytes) {
             tracing::warn!(event = "bus.attach.image_refused", %error);
-            self.show_alert(
-                "Could not attach the clipboard image".into(),
-                format!("The clipboard image is not a readable image, so it was not attached.\n\n{error}"),
-            );
             return;
         }
         let Some(root) = root else {
-            self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
+            tracing::warn!(
+                event = "bus.paste_image.no_data_dir",
+                "Clipboard image was not saved: no Bus data directory"
+            );
             return;
         };
         let path = match save_pasted_image(&root, room, bytes, extension) {
             Ok(path) => path,
             Err(error) => {
                 tracing::warn!(event = "bus.paste_image.write_failed", %error);
-                self.error = Some("Could not write the clipboard image.".into());
                 return;
             }
         };

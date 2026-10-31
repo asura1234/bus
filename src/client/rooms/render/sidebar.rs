@@ -244,7 +244,7 @@ impl BusUi {
         static COMPUTE_VIEW: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.compute_view");
         let _timer = COMPUTE_VIEW.start();
-        self.sync_toast();
+        self.sync_agent_notices();
         let key = super::super::ViewKey {
             room: self.room,
             terminal: self.terminal,
@@ -278,14 +278,6 @@ impl BusUi {
                 None,
                 true,
             );
-            if let Some(error) = self.visible_error() {
-                view.lines(
-                    Rect::new(main.x + 2, 6, main.width.saturating_sub(4), 8),
-                    error,
-                    None,
-                    false,
-                );
-            }
         }
         if self.deletion.is_some() {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
@@ -293,10 +285,8 @@ impl BusUi {
         if self.alert.is_some() {
             self.alert_view(&mut view, Rect::new(0, 0, cols, rows));
         }
-        // Kitty images draw above text, so hide them under anything that can
-        // cover the history. A notice is not one: the room view shows it on
-        // its own status line under the composer, and the other screens that
-        // show it are covers already.
+        // Kitty images draw above text, so hide them under forms, dialogs,
+        // agent terminals, and the inline rename field.
         if view.dialog.width > 0
             || self.form.is_some()
             || self.deletion.is_some()
@@ -355,6 +345,11 @@ impl BusUi {
             .count();
         let divider_row = rooms_header + 2 + work_rooms;
         let agents_header = divider_row + 1;
+        if self.storage_is_paused() {
+            let marker = Rect::new(1, 0, sw, 1);
+            view.row(marker, "Storage paused", None, false, false);
+            view.color_last_row(marker, BLOCKED_BRIGHT);
+        }
         self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
         view.sidebar_divider = viewport.at(1, divider_row, sw);
         self.sidebar_agent_rows(view, viewport, agents, agents_header);
@@ -461,6 +456,9 @@ impl BusUi {
                 .filter(|r| r.target == RenameTarget::Room(room.id))
             {
                 view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
+                if let Some(error) = &rename.error {
+                    view.row(viewport.at(1, row + 1, sw), error, None, false, false);
+                }
             } else {
                 view.row(
                     rect,

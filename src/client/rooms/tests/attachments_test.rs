@@ -379,19 +379,21 @@ fn corrupt_image_path_pasted_into_the_composer_is_refused_with_a_dialog() {
 }
 
 #[test]
-fn corrupt_pasted_image_data_is_refused_with_a_dialog_and_never_saved() {
+fn corrupt_pasted_image_data_is_logged_without_a_dialog_and_never_saved() {
     let dir = thumbnail_dir("data-corrupt");
     let bytes = std::fs::read(corrupt_png(&dir, "source.png")).unwrap();
     let root = dir.join("data");
     let (mut ui, _, _) = fixture();
-    ui.attach_image_data(Some(root.clone()), &bytes, "png");
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.attach_image_data(Some(root.clone()), &bytes, "png"));
     assert_eq!(attached_paths(&ui), Vec::<String>::new());
+    assert!(ui.alert.is_none());
+    assert!(ui.visible_error().is_none());
+    assert!(capture.text().contains("bus.attach.image_refused"), "{}", capture.text());
     let screen = room_screen(&mut ui, 100, 30);
-    assert!(screen.contains("Could not attach the clipboard image"), "{screen}");
-    assert!(screen.contains("not a readable image"), "{screen}");
+    assert!(!screen.contains("Could not attach the clipboard image"), "{screen}");
+    assert!(!screen.contains("not a readable image"), "{screen}");
     assert!(!root.join("attachments").exists(), "a corrupt paste leaves no file behind");
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(!room_screen(&mut ui, 100, 30).contains("Could not attach"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

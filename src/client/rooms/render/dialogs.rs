@@ -54,7 +54,9 @@ impl BusUi {
         };
         let text_width = dialog_text_width(area);
         let mut body = wrap(dialog.error.as_ref().map_or(message.as_str(), |error| {
-            if error.contains("server") {
+            if matches!(dialog.target, DeleteTarget::Room(id) if self.is_master_room(id)) {
+                error.as_str()
+            } else if error.contains("server") {
                 "Bus server needs an update before deletion can finish. Session data was kept."
             } else {
                 "Deletion did not finish. Session data was kept. Check the terminal before trying again."
@@ -245,6 +247,10 @@ impl BusUi {
                     false,
                 );
             }
+            if let Some(error) = self.form_errors.get(&index) {
+                view.row(Rect::new(x, y + 1, width, 1), error, None, false, false);
+                y += 1;
+            }
             y += gap;
         }
 
@@ -292,6 +298,13 @@ impl BusUi {
                 *field == super::super::forms::ORCHESTRATES_FIELD,
                 false,
             );
+            if let Some(error) = self
+                .form_errors
+                .get(&super::super::forms::ORCHESTRATES_FIELD)
+            {
+                view.row(Rect::new(x, y + 1, width, 1), error, None, false, false);
+                y += 1;
+            }
             y += gap;
         }
         if let Some(prompt) = prompt {
@@ -305,7 +318,8 @@ impl BusUi {
             );
             y += 1;
             // Leave room for the buttons, validation error and a short PWD list.
-            let mut below = if self.visible_error().is_some() { 7 } else { 3 };
+            let error = self.form_errors.get(&index);
+            let mut below = if error.is_some() { 7 } else { 3 };
             let suggestions = self.suggestions.entries.len().min(3) as u16;
             if suggestions > 0 {
                 below += 2 + suggestions;
@@ -318,6 +332,10 @@ impl BusUi {
                 *field == index,
             );
             y += height + 1;
+            if let Some(error) = error {
+                view.row(Rect::new(x, y, width, 1), error, None, false, false);
+                y += 1;
+            }
         }
 
         y
@@ -345,7 +363,10 @@ impl BusUi {
             false,
         );
         y += 2;
-        if let Some(error) = self.visible_error() {
+        if let Some(error) = self
+            .visible_error()
+            .filter(|_| !matches!(form, Form::Agent { .. }))
+        {
             view.lines(Rect::new(x, y, width, 3), error, None, false);
             y += 4;
         }

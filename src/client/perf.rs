@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 /// One UI loop iteration: handling an input, server message, resize or timer event.
 pub(super) static UI_LOOP: LoopWatch = LoopWatch::new("client.ui_loop");
-/// How late the UI timer (animations, toasts, autoscroll) fired past its deadline.
+/// How late the UI timer (animations and autoscroll) fired past its deadline.
 pub(super) static TIMER_LAG: Timer = Timer::new("client.timer_lag");
 /// Events already queued behind the one being handled.
 pub(super) static EVENT_QUEUE: Gauge = Gauge::new("client.event_queue");

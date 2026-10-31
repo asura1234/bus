@@ -467,11 +467,10 @@ fn add_agent_rejects_each_missing_required_field_and_keeps_the_form_open() {
                 .all(|pending| !matches!(pending.command, BusCommand::AddAgent(_))),
             "{missing}"
         );
+        let screen = room_screen(&mut ui, 100, 40);
         assert!(
-            ui.visible_error()
-                .is_some_and(|error| error.contains(missing)),
-            "{missing}: {:?}",
-            ui.visible_error()
+            screen.contains(&format!("{missing} is required.")),
+            "{missing}: {screen}"
         );
     }
 }

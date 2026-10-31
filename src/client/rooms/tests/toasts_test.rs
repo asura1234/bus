@@ -1,65 +1,7 @@
 use super::*;
 
 #[test]
-fn toast_defaults_to_fifteen_seconds_and_accepts_an_explicit_duration() {
-    let (mut ui, _, _) = fixture();
-
-    ui.show_toast("Saved");
-    let started_at = ui.toast.as_ref().expect("default toast").started_at;
-    assert_eq!(
-        ui.toast_text_at(started_at + std::time::Duration::from_secs(14), 20)
-            .as_deref(),
-        Some("Saved")
-    );
-    assert!(ui
-        .toast_text_at(started_at + std::time::Duration::from_secs(15), 20)
-        .is_none());
-
-    ui.show_toast_for("Brief", std::time::Duration::from_secs(2));
-    let started_at = ui.toast.as_ref().expect("explicit toast").started_at;
-    assert_eq!(
-        ui.toast_text_at(started_at + std::time::Duration::from_millis(1_999), 20)
-            .as_deref(),
-        Some("Brief")
-    );
-    assert!(ui
-        .toast_text_at(started_at + std::time::Duration::from_secs(2), 20)
-        .is_none());
-}
-
-#[test]
-fn long_toast_pauses_then_scrolls_at_eight_characters_per_second() {
-    let (mut ui, _, _) = fixture();
-    ui.show_toast_for("abcdefghijklmnop", std::time::Duration::from_secs(30));
-    let started_at = ui.toast.as_ref().expect("long toast").started_at;
-    let text_at = |ui: &BusUi, millis| {
-        ui.toast_text_at(started_at + std::time::Duration::from_millis(millis), 8)
-            .expect("visible toast")
-    };
-
-    assert_eq!(text_at(&ui, 999), "abcdefgh");
-    assert_eq!(text_at(&ui, 1_125), "bcdefghi");
-    assert_eq!(text_at(&ui, 2_000), "ijklmnop");
-    assert_eq!(text_at(&ui, 2_999), "ijklmnop");
-    assert_eq!(text_at(&ui, 3_000), "abcdefgh");
-}
-
-#[test]
-fn active_toast_tick_repaints_for_scrolling_and_expiration() {
-    let (mut ui, _, _) = fixture();
-    ui.show_toast_for("abcdefghijklmnop", std::time::Duration::from_secs(15));
-    ui.toast_animation_last_tick =
-        Some(std::time::Instant::now() - std::time::Duration::from_millis(125));
-    assert!(ui.tick(), "scrolling toast needs a new rendered frame");
-
-    ui.toast.as_mut().expect("toast before expiry").started_at -=
-        std::time::Duration::from_secs(15);
-    assert!(ui.tick(), "toast expiry needs a frame that removes its row");
-    assert!(ui.toast.is_none());
-}
-
-#[test]
-fn agent_errors_are_logged_once_each_and_never_toasted() {
+fn agent_errors_are_logged_once_each_and_never_shown_as_room_notices() {
     let (mut ui, _, agent) = fixture();
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
@@ -80,50 +22,44 @@ fn agent_errors_are_logged_once_each_and_never_toasted() {
     let logs = capture.text();
     assert_eq!(logs.matches("bus.agent.notice").count(), 2, "{logs}");
     assert!(logs.contains("author: Hook setup needs approval"), "{logs}");
-    assert!(ui.toast.is_none());
+    assert!(!room_screen(&mut ui, 100, 30).contains("Hook setup needs approval"));
 }
 
 #[test]
-fn expired_coordinator_toast_stays_in_diagnostics_without_reappearing() {
+fn coordinator_errors_never_title_the_composer() {
     let (mut ui, _, _) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.error = Some("Coordinator storage failed".into());
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
-    let started_at = ui.toast.as_ref().expect("coordinator toast").started_at;
 
-    assert!(ui
-        .toast_text_at(started_at + std::time::Duration::from_secs(15), 80)
-        .is_none());
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("Coordinator storage failed"), "{screen}");
     assert_eq!(
         ui.snapshot.error.as_deref(),
         Some("Coordinator storage failed")
     );
-
-    let mut repeated = (*ui.snapshot).clone();
-    repeated.revision += 1;
-    ui.receive_snapshot(Arc::new(repeated));
-    assert_eq!(ui.toast.as_ref().unwrap().started_at, started_at);
 }
 
 #[test]
-fn a_wide_character_toast_scrolls_far_enough_to_render_its_tail() {
+fn storage_pause_is_a_persistent_sidebar_marker_and_recovery_is_silent() {
     let (mut ui, _, _) = fixture();
-    ui.show_toast_for(
-        "一二三四五六七八九十甲乙丙丁戊己庚辛",
-        std::time::Duration::from_secs(30),
-    );
-    let mut rendered = String::new();
-    for elapsed_ms in (0..15_000).step_by(125) {
-        ui.toast.as_mut().unwrap().started_at =
-            std::time::Instant::now() - std::time::Duration::from_millis(elapsed_ms);
-        ui.compute_view(36, 30);
-        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 36, 30));
-        ui.render(&mut buffer);
-        rendered.extend(buffer.content.iter().flat_map(|cell| cell.symbol().chars()));
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.error = Some("Storage paused; retrying".into());
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    for _ in 0..2 {
+        let screen = room_screen(&mut ui, 100, 30);
+        assert!(screen.contains("Storage paused"), "{screen}");
+        assert!(!screen.contains("Storage recovered"), "{screen}");
     }
-    assert!(
-        rendered.contains('辛'),
-        "the notice's final character must become visible before expiration"
-    );
+
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.error = None;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.receive_event(BusEvent::StorageRecovered);
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("Storage paused"), "{screen}");
+    assert!(!screen.contains("Storage recovered"), "{screen}");
 }

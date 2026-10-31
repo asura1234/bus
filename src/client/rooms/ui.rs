@@ -1,6 +1,5 @@
 pub(super) use super::drafts::{ComposerSize, LocalRoom, Recalled};
 use super::editor::Editor;
-pub(super) use super::toast::Toast;
 use super::{
     forms::{Form, Rename, Suggestions},
     render::View,
@@ -68,11 +67,9 @@ pub(in crate::client) struct BusUi {
     pub(super) send_queued: bool,
     pub error: Option<String>,
     pub(super) dismissed_snapshot_error: Option<String>,
-    pub(super) toast: Option<Toast>,
-    pub(super) observed_notice: Option<String>,
+    pub(super) form_errors: BTreeMap<usize, String>,
     /// Agent notices last written to the client log, so each is logged once.
     pub(super) observed_agent_notices: Option<String>,
-    pub(super) toast_animation_last_tick: Option<std::time::Instant>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
@@ -191,10 +188,8 @@ impl BusUi {
             recovered_storage_failures: BTreeSet::new(),
             error: None,
             dismissed_snapshot_error: None,
-            toast: None,
-            observed_notice: None,
+            form_errors: BTreeMap::new(),
             observed_agent_notices: None,
-            toast_animation_last_tick: None,
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -326,7 +321,6 @@ impl BusUi {
         self.settings_field = self.feishu_field();
         // Normalize a legacy saved off value when this informational row is activated.
         self.queue(BusCommand::SetFeishuNotifications(true), Effect::None);
-        self.show_toast("Developer notifications are always on");
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -504,7 +498,6 @@ impl BusUi {
         {
             self.queue(BusCommand::FocusTerminal(agent), Effect::None);
         }
-        self.show_toast("Storage recovered");
     }
 
     fn retry_storage_failure(&mut self, pending: Pending) {
@@ -558,7 +551,7 @@ impl BusUi {
             }
         }
         self.reconcile_deleted_targets(&previous.state);
-        self.sync_toast();
+        self.sync_agent_notices();
     }
     pub fn settle(&mut self) {
         while self
@@ -728,7 +721,6 @@ impl BusUi {
             }
         }
         changed |= self.tick_status_animation(std::time::Instant::now());
-        changed |= self.tick_toast(std::time::Instant::now());
         changed |= self.thumbnails.stale();
         changed |= self.link_paths.poll();
         changed
@@ -921,7 +913,6 @@ mod tests {
         assert!(ui.pending.iter().any(|pending| {
             matches!(&pending.command, BusCommand::FocusTerminal(id) if *id == agent)
         }));
-        assert_eq!(ui.toast.as_ref().unwrap().message, "Storage recovered");
     }
     #[test]
     fn delivery_logs_receipt_once_when_reply_snapshot_reaches_room() {

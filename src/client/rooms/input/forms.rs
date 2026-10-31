@@ -7,7 +7,7 @@ use super::super::{
 };
 use crate::messaging::{
     coordinator::{agents::AddAgent, BusCommand},
-    model::{ModelError, RoomId, RoomKind},
+    model::{RoomId, RoomKind},
     orchestration::OrchestratorSpec,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -52,12 +52,12 @@ impl BusUi {
     }
 
     pub(super) fn start_rename(&mut self, target: RenameTarget) {
-        if let RenameTarget::Room(id) = target {
-            if self.is_master_room(id) {
-                self.error = Some(ModelError::MasterRoomFixed.to_string());
-                return;
+        let error = match target {
+            RenameTarget::Room(id) if self.is_master_room(id) => {
+                Some("The MASTER room is fixed".into())
             }
-        }
+            _ => None,
+        };
         let name = match target {
             RenameTarget::Room(id) => self.snapshot.state.room(id).map(|r| r.name.clone()),
             RenameTarget::Agent(id) => self.snapshot.state.agent(id).map(|a| a.name.clone()),
@@ -66,12 +66,14 @@ impl BusUi {
             self.rename = Some(Rename {
                 target,
                 editor: Editor::new(name),
+                error,
             });
         }
     }
 
     pub(super) fn open_form(&mut self, form: Form) {
         self.clear_selection();
+        self.form_errors.clear();
         if self.failed.is_empty() {
             // Dismiss only a handled UI operation's matching snapshot copy,
             // not unrelated background/runtime failures or unsaved drafts.
@@ -392,29 +394,29 @@ impl BusUi {
         else {
             return;
         };
-        let mut missing = Vec::new();
-        if name.text.trim().is_empty() {
-            missing.push("Name");
+        self.form_errors.clear();
+        for (field, missing) in [
+            (0, name.text.trim().is_empty()),
+            (1, provider.is_none()),
+            (2, cwd.text.trim().is_empty()),
+        ] {
+            if missing {
+                let label = match field {
+                    0 => "Name",
+                    1 => "Model",
+                    2 => "PWD",
+                    _ => unreachable!(),
+                };
+                self.form_errors
+                    .insert(field, format!("{label} is required."));
+            }
         }
-        if provider.is_none() {
-            missing.push("Model");
-        }
-        if cwd.text.trim().is_empty() {
-            missing.push("PWD");
-        }
-        if !missing.is_empty() {
-            self.error = Some(match missing.as_slice() {
-                [field] => format!("{field} is required."),
-                [first, second] => format!("{first} and {second} are required."),
-                [first, second, third] => {
-                    format!("{first}, {second}, and {third} are required.")
-                }
-                _ => unreachable!(),
-            });
+        if !self.form_errors.is_empty() {
             return;
         }
         if orchestrates.is_some_and(|choice| choice.0.is_none()) {
-            self.error = Some(
+            self.form_errors.insert(
+                ORCHESTRATES_FIELD,
                 "Orchestrates room is required: create a work room without an orchestrator first."
                     .into(),
             );
@@ -424,7 +426,7 @@ impl BusUi {
         // the coordinator, which refuses it too, in step.
         if let (Some(_), Some(provider)) = (orchestrates, provider) {
             if let Err(error) = crate::messaging::orchestration::check_new_orchestrator(provider) {
-                self.error = Some(error);
+                self.form_errors.insert(1, error);
                 return;
             }
         }
@@ -433,7 +435,8 @@ impl BusUi {
             .as_ref()
             .is_some_and(|text| text.trim().is_empty())
         {
-            self.error = Some("System prompt is required.".into());
+            self.form_errors
+                .insert(PROMPT_FIELD, "System prompt is required.".into());
             return;
         }
         self.error = None;

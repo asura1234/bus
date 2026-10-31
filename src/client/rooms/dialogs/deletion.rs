@@ -23,21 +23,21 @@ pub(super) struct DeleteDialog {
 
 impl BusUi {
     pub(super) fn start_delete(&mut self, target: DeleteTarget) {
-        if let DeleteTarget::Room(id) = target {
-            if self.is_master_room(id) {
-                self.error = Some(ModelError::MasterRoomFixed.to_string());
-                return;
-            }
-        }
         let exists = match target {
             DeleteTarget::Room(id) => self.snapshot.state.room(id).is_some(),
             DeleteTarget::Agent(id) => self.snapshot.state.agent(id).is_some(),
         };
         if exists && self.deletion.is_none() {
+            let error = match target {
+                DeleteTarget::Room(id) if self.is_master_room(id) => {
+                    Some(ModelError::MasterRoomFixed.to_string())
+                }
+                _ => None,
+            };
             self.deletion = Some(DeleteDialog {
                 target,
                 command_id: None,
-                error: None,
+                error,
             });
             self.last_click = None;
         }

@@ -450,15 +450,25 @@ fn master_room_cannot_be_deleted_from_the_ui() {
     let (mut ui, master, _, _, _) = master_fixture();
     ui.open_room(master);
     ui.start_delete(super::deletion::DeleteTarget::Room(master));
-    assert!(ui.deletion.is_none());
-    assert_eq!(
-        ui.error.as_deref(),
-        Some("The MASTER room cannot be renamed or deleted")
-    );
+    assert!(ui.deletion.is_some());
+    assert!(room_screen(&mut ui, 100, 30).contains("The MASTER room cannot be renamed or deleted"));
     assert!(!ui
         .pending
         .iter()
         .any(|p| matches!(p.command, BusCommand::DeleteRoom(_))));
+}
+
+#[test]
+fn master_room_rename_error_stays_beside_the_name_field() {
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    key(&mut ui, KeyCode::F(2), KeyModifiers::NONE);
+    assert!(ui.rename.is_some());
+    assert!(room_screen(&mut ui, 100, 30).contains("The MASTER room is fixed"));
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::RenameRoom(_, _))));
 }
 
 #[test]
@@ -480,7 +490,6 @@ fn repeated_master_navigation_then_opening_agent_never_raises_rename_error() {
         "navigation must not try to rename MASTER"
     );
     assert!(!screen.contains("The MASTER room cannot"));
-    assert!(ui.toast.is_none());
 }
 
 #[test]
@@ -533,10 +542,7 @@ fn a_master_agent_cannot_be_added_without_a_free_work_room() {
     }
     ui.action(render::Action::Provider(Provider::Codex));
     ui.action(render::Action::Add);
-    assert!(ui
-        .error
-        .as_deref()
-        .is_some_and(|error| error.contains("Orchestrates room is required")));
+    assert!(room_screen(&mut ui, 100, 30).contains("Orchestrates room is required"));
     assert!(!ui.pending.iter().any(|p| matches!(
         p.command,
         BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(_)
@@ -756,10 +762,47 @@ fn master_agent_form_validation_errors_are_visible_in_a_24_row_terminal() {
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Add);
     let screen = room_screen(&mut ui, 100, 24);
-    assert!(
-        screen.contains("Name and Model are required."),
-        "validation must explain why Add did not submit in a 24-row terminal: {screen}"
-    );
+    for expected in ["Name is required.", "Model is required."] {
+        assert!(
+            screen.contains(expected),
+            "validation must explain why Add did not submit in a 24-row terminal: {screen}"
+        );
+    }
+}
+
+#[test]
+fn system_prompt_validation_is_inline_with_the_prompt_field() {
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+    if let Some(forms::Form::Agent {
+        name, cwd, prompt, ..
+    }) = &mut ui.form
+    {
+        name.insert("orch");
+        *cwd = editor::Editor::new("/repo".into());
+        prompt.as_mut().unwrap().editor.text.clear();
+    }
+    ui.action(render::Action::Add);
+    ui.compute_view(100, 40);
+    let prompt_bottom = ui
+        .view
+        .hits
+        .iter()
+        .filter(|hit| hit.action == render::Action::Field(forms::PROMPT_FIELD))
+        .map(|hit| hit.rect.bottom())
+        .max()
+        .unwrap();
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
+    ui.render(&mut buffer);
+    let error_row = (0..40)
+        .find(|&y| {
+            let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+            row.contains("System prompt is required.")
+        })
+        .expect("inline system prompt error");
+    assert!(error_row >= prompt_bottom && error_row <= prompt_bottom + 1);
 }
 
 /// Columns where `name` is drawn on the first screen row containing `marker`,

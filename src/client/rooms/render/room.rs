@@ -50,9 +50,9 @@ impl BusUi {
             return;
         };
         let width = main.width.saturating_sub(4);
-        // Nothing is ever drawn below the composer. A toast, or the Ctrl+R
-        // recall search, titles the composer's top border instead.
-        let title = self.composer_title(room.id, width.saturating_sub(2));
+        // Nothing is ever drawn below the composer. Only the Ctrl+R recall
+        // search titles the composer's top border.
+        let title = self.composer_title(room.id);
         let recipients = super::super::recipients::layout(
             local.recipients.iter().filter_map(|id| {
                 self.snapshot
@@ -141,20 +141,13 @@ impl BusUi {
         self.recipient_menu_view(view, room, local);
     }
 
-    /// The active toast, else the Ctrl+R recall search, which has no panel
-    /// of its own. Request and agent notices go to the client log instead.
-    fn composer_title(&self, room: RoomId, width: u16) -> String {
-        self.toast_text_at(std::time::Instant::now(), width)
-            .or_else(|| {
-                let search = self.history_search.as_ref()?;
-                let total = self.filtered_history(room, &search.query).len().max(1);
-                Some(format!(
-                    "search {}  {}/{total}",
-                    search.query,
-                    search.selected + 1
-                ))
-            })
-            .unwrap_or_default()
+    /// The Ctrl+R recall search, which has no panel of its own.
+    fn composer_title(&self, room: RoomId) -> String {
+        let Some(search) = self.history_search.as_ref() else {
+            return String::new();
+        };
+        let total = self.filtered_history(room, &search.query).len().max(1);
+        format!("search {}  {}/{total}", search.query, search.selected + 1)
     }
 
     fn composer_layout(

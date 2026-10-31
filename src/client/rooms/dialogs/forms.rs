@@ -191,4 +191,5 @@ pub(super) enum RenameTarget {
 pub(super) struct Rename {
     pub target: RenameTarget,
     pub editor: Editor,
+    pub error: Option<String>,
 }

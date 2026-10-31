@@ -200,7 +200,7 @@ fn native_focus_errors_apply_only_to_the_current_navigation_even_for_the_same_ag
             assert!(ui.visible_error().is_none());
         } else {
             assert!(ui.target_pane.is_none());
-            assert_eq!(ui.visible_error(), Some("Agent terminal no longer exists"));
+            assert!(ui.visible_error().is_none());
         }
     }
 }

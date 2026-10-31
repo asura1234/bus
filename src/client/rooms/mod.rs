@@ -12,6 +12,7 @@ mod help;
 mod history;
 mod input;
 mod links;
+mod notices;
 mod quit;
 #[path = "widgets/recipients.rs"]
 mod recipients;
@@ -22,7 +23,6 @@ mod selection;
 mod state;
 #[path = "render/thumbnails.rs"]
 mod thumbnails;
-mod toast;
 pub(super) use render::layout;
 pub(super) use state::*;
 
@@ -128,7 +128,6 @@ impl crate::client::compositor::ClientShellState {
         }
         bus.tick();
         if std::env::var_os("BUS_DEV_EXISTING_SERVER").is_some() {
-            bus.error = Some(crate::messaging::diagnostics::EXISTING_SERVER_NOTICE.into());
             tracing::warn!(
                 event = "bus.dev.existing_server",
                 "{}",
@@ -201,7 +200,7 @@ impl crate::client::compositor::ClientShellState {
             return false;
         };
         bus.target_pane = None;
-        bus.error = Some(error);
+        tracing::warn!(event = "bus.terminal.focus_failed", %error, pane_id, navigation);
         true
     }
     pub(crate) fn bus_exit_ready(&self) -> bool {
@@ -215,7 +214,7 @@ impl crate::client::compositor::ClientShellState {
         match bus.edit_in_external_editor() {
             Ok(()) => Ok(()),
             Err(error) => {
-                bus.error = Some(error.clone());
+                tracing::warn!(event = "bus.composer.external_edit_failed", %error);
                 Err(error)
             }
         }

@@ -193,6 +193,7 @@ fn feishu_settings_row_is_always_on_then_pending_and_cannot_toggle() {
         .pending
         .iter()
         .any(|pending| matches!(pending.command, BusCommand::SetFeishuNotifications(false))));
+    assert!(!room_screen(&mut ui, 100, 40).contains("Developer notifications are always on"));
 }
 
 #[test]
