@@ -1038,7 +1038,7 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
         BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(..)
     )));
     assert_eq!(
-        ui.error.as_deref(),
+        ui.form_errors.get(&1).map(String::as_str),
         Some(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED)
     );
     assert!(
