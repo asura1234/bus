@@ -94,6 +94,15 @@ fn read_server_status() -> io::Result<Option<crate::protocol::api::RuntimeStatus
     )
 }
 
+/// `--yolo` of the server that is still up, when its status API answers.
+pub(crate) fn running_server_yolo() -> Option<bool> {
+    read_server_status()
+        .ok()
+        .flatten()
+        .and_then(|status| status.capabilities)
+        .map(|capabilities| capabilities.yolo)
+}
+
 #[cfg(windows)]
 fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
     if !socket_path.exists() {
@@ -156,7 +165,10 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     if capabilities.is_some_and(|capabilities| capabilities.yolo)
         != crate::utils::env::yolo_enabled()
     {
-        return Err(io::Error::other("This Bus server was started with a different --yolo setting. Quit its UI or run `bus stop`, then resume with the desired --yolo setting."));
+        let server_yolo = capabilities.is_some_and(|capabilities| capabilities.yolo);
+        return Err(io::Error::other(
+            crate::utils::restart_record::yolo_mismatch_message(server_yolo),
+        ));
     }
     let endpoint_generation =
         capabilities.and_then(|capabilities| capabilities.endpoint_protocol_generation);

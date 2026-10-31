@@ -35,6 +35,21 @@ fn yolo_attach_requires_the_same_run_mode_as_the_server() {
             want_ok,
             "requested={requested}, serving={serving}: {result:?}"
         );
+        if !want_ok {
+            let text = result.unwrap_err().to_string();
+            assert!(
+                text.contains("To keep the running server's --yolo setting"),
+                "{text}"
+            );
+            if serving {
+                assert!(text.contains("was started with --yolo"), "{text}");
+                assert!(text.contains("rerun this command with --yolo"), "{text}");
+            } else {
+                assert!(text.contains("was started without --yolo"), "{text}");
+                assert!(text.contains("rerun this command without --yolo"), "{text}");
+                assert!(!text.contains("rerun this command with --yolo"), "{text}");
+            }
+        }
     }
     std::env::remove_var("BUS_YOLO");
     std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);

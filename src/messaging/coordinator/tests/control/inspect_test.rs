@@ -720,6 +720,14 @@ fn state_reports_how_the_running_bus_was_built() {
         state.result["build"]["binary"],
         json!(std::env::current_exe().unwrap())
     );
+    assert_eq!(
+        state.result["launch"]["yolo"],
+        json!(crate::utils::env::yolo_enabled())
+    );
+    assert_eq!(
+        state.result["launch"]["dev"],
+        json!(std::env::var_os("BUS_DEV").is_some_and(|value| value == "1"))
+    );
 }
 
 #[test]
