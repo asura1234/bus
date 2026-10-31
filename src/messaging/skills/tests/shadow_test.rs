@@ -104,6 +104,38 @@ fn a_repo_that_never_shadowed_stays_silent() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+#[test]
+fn unchanged_provider_set_stays_silent_after_the_other_provider_posts() {
+    let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow-providers");
+    let repo = home.join("repo");
+    write_scoped(&home, &repo, ".claude/skills", "skill-claude");
+    write_scoped(&home, &repo, ".agents/skills", "skill-codex");
+    git_init(&repo);
+
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let claude = launch_agent(&mut state, room, "claude", Provider::ClaudeCode, &repo);
+    let codex = launch_agent(&mut state, room, "codex", Provider::Codex, &repo);
+
+    super::post_warnings_at(&mut state, &claude, &home).unwrap();
+    super::post_warnings_at(&mut state, &codex, &home).unwrap();
+    assert_eq!(
+        notice_texts(&state, room).len(),
+        2,
+        "each provider posts one digest for the same repo"
+    );
+
+    super::post_warnings_at(&mut state, &claude, &home).unwrap();
+    super::post_warnings_at(&mut state, &codex, &home).unwrap();
+    assert_eq!(
+        notice_texts(&state, room).len(),
+        2,
+        "a later launch posts nothing while that provider's shadowed set is unchanged"
+    );
+
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 fn write_collisions(home: &Path, repo: &Path, indexes: impl Iterator<Item = u32>) {
     for index in indexes {
         let name = format!("skill-{index:02}");
@@ -129,6 +161,26 @@ fn git_init(repo: &Path) {
         "git init: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn write_scoped(home: &Path, repo: &Path, scope: &str, name: &str) {
+    for directory in [home.join(scope).join(name), repo.join(scope).join(name)] {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("SKILL.md"), "skill").unwrap();
+    }
+}
+
+fn launch_agent(
+    state: &mut BusState,
+    room: RoomId,
+    name: &str,
+    provider: Provider,
+    repo: &Path,
+) -> crate::messaging::model::RoomAgent {
+    let agent_id = state
+        .create_agent(room, name, provider, repo.to_path_buf(), None)
+        .unwrap();
+    state.agent(agent_id).unwrap().clone()
 }
 
 fn notice_texts(state: &BusState, room: RoomId) -> Vec<String> {

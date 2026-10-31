@@ -73,18 +73,25 @@ fn shadow_behavior(provider: ProviderKind) -> &'static str {
     }
 }
 
-/// One digest for this launch's repo. A later launch in the same room posts
-/// again only when that repo's shadowed set changes, including when the set
-/// becomes empty and across restart, because the previous digest stays in
-/// room history. A repo that has never shadowed stays silent.
+/// Marker for this repo and provider. Claude and Codex keep separate digests,
+/// so one provider's notice is not the other's remembered set.
+fn shadow_marker(repo: &Path, provider: ProviderKind) -> String {
+    format!("Skill shadow in {} ({}):", repo.display(), provider.label())
+}
+
+/// One digest for this launch's repo and provider. A later launch in the same
+/// room posts again only when that provider's shadowed set changes, including
+/// when the set becomes empty and across restart, because that provider's
+/// previous digest stays in room history. A provider that has never shadowed
+/// this repo stays silent.
 fn shadow_digest(repo: &Path, provider: ProviderKind, messages: &[String]) -> String {
     let mut lines = messages.to_vec();
     lines.sort();
     let behavior = shadow_behavior(provider);
     let noun = if lines.len() == 1 { "skill" } else { "skills" };
     let mut text = format!(
-        "Skill shadow in {}: {} same-name {noun}. {behavior}.",
-        repo.display(),
+        "{} {} same-name {noun}. {behavior}.",
+        shadow_marker(repo, provider),
         lines.len(),
     );
     for line in &lines {
@@ -137,7 +144,7 @@ fn post_warnings_at(
         .map_err(|error| error.to_string())?;
     let repo = launch::project_root(&cwd);
     let digest = shadow_digest(&repo, provider, &messages);
-    let marker = format!("Skill shadow in {}:", repo.display());
+    let marker = shadow_marker(&repo, provider);
     let previous = state
         .notices(agent.room_id)
         .rev()
@@ -146,8 +153,8 @@ fn post_warnings_at(
     if previous.as_ref() == Some(&digest) {
         return Ok(());
     }
-    // An empty set is a real change only after this repo has posted a digest.
-    // The first look at a repo with no collisions stays silent.
+    // An empty set is a real change only after this provider has posted a
+    // digest for this repo. The first look with no collisions stays silent.
     if messages.is_empty() && previous.is_none() {
         return Ok(());
     }
