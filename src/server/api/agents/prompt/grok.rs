@@ -149,10 +149,15 @@ pub(super) fn input(screen: &str) -> Option<String> {
     }
 }
 
-/// Grok 1.0.70 collapses multiline bracketed paste into a chip. The shared
-/// submission runtime rejects any pre-existing matching chip, then holds an
-/// exclusive input lease from its empty preflight through Enter. Require the
-/// native chip's entire summary to match the text Bus just pasted.
+/// Grok 1.0.70 collapses a bracketed paste into a chip. The shared submission
+/// runtime rejects any pre-existing matching chip, then holds an exclusive
+/// input lease from its empty preflight through Enter. Require the native
+/// chip's entire summary to match the text Bus just pasted.
+///
+/// Captured 1.0.70 screens: a paste of more than 10000 UTF-8 bytes is labelled
+/// `floor(byte_len / 1000) KB` (truncating decimal kilobytes, not 1024 and not
+/// rounded). At or below 10000 bytes a multiline paste is labelled with
+/// `split('\n').count()` lines. This checks the label Grok already drew.
 fn native_paste_summary(body: &str, expected: &str) -> bool {
     let Some(label) = body
         .strip_prefix("[Pasted: ")
@@ -168,7 +173,7 @@ fn native_paste_summary(body: &str, expected: &str) -> bool {
     if let Some(kib) = label.strip_suffix(" KB") {
         return kib
             .parse::<usize>()
-            .is_ok_and(|kib| kib > 0 && kib == expected.len() / 1024);
+            .is_ok_and(|kib| kib > 0 && kib == expected.len() / 1000);
     }
     false
 }
@@ -221,6 +226,39 @@ mod tests {
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-scrolled.txt");
     const NATIVE_1070_WRAPPED: &str =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-wrapped.txt");
+    const PASTE_9350: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-9350-lines.txt"
+    );
+    const PASTE_10000: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-10000-lines.txt"
+    );
+    const PASTE_10001: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-10001-10kb.txt"
+    );
+    const PASTE_16000: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-16000-16kb.txt"
+    );
+    const PASTE_20480: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-20480-20kb.txt"
+    );
+    const PASTE_20999: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-20999-20kb.txt"
+    );
+    const PASTE_21000: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-21000-21kb.txt"
+    );
+    const PASTE_21217: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-21217-21kb.txt"
+    );
+    const PASTE_21504: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-21504-21kb.txt"
+    );
+    const PASTE_22000: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-22000-22kb.txt"
+    );
+    const PASTE_UNICODE_20000: &str = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-paste-unicode-20000-20kb.txt"
+    );
 
     const NATIVE_1070_WELCOME: &str =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-welcome.txt");
@@ -292,6 +330,66 @@ mod tests {
             observe(&large, &"x".repeat(20 * 1024)),
             InputObservation::Unavailable
         );
+    }
+
+    /// Same bytes the capture driver pasted: 78 `x`s and a newline, then a short tail.
+    fn captured_multiline_paste(bytes: usize) -> String {
+        let full = bytes / 79;
+        let rem = bytes % 79;
+        let mut payload = String::with_capacity(bytes);
+        for _ in 0..full {
+            payload.push_str(&"x".repeat(78));
+            payload.push('\n');
+        }
+        payload.push_str(&"x".repeat(rem));
+        assert_eq!(payload.len(), bytes);
+        payload
+    }
+
+    #[test]
+    fn grok_1070_captured_paste_labels_match_the_pasted_bytes() {
+        // Screens from Grok 1.0.70. The chip is what that build drew for these
+        // exact payloads. A KB label is floor(byte_len / 1000) once the paste
+        // is longer than 10000 bytes; shorter multiline pastes stay line counts.
+        let cases = [
+            (PASTE_9350, 9350_usize, "[Pasted: 119 lines]", false),
+            (PASTE_10000, 10000, "[Pasted: 127 lines]", false),
+            (PASTE_10001, 10001, "[Pasted: 10 KB]", false),
+            (PASTE_16000, 16000, "[Pasted: 16 KB]", false),
+            (PASTE_20480, 20480, "[Pasted: 20 KB]", false),
+            (PASTE_20999, 20999, "[Pasted: 20 KB]", false),
+            (PASTE_21000, 21000, "[Pasted: 21 KB]", false),
+            (PASTE_21217, 21217, "[Pasted: 21 KB]", false),
+            (PASTE_21504, 21504, "[Pasted: 21 KB]", false),
+            (PASTE_22000, 22000, "[Pasted: 22 KB]", false),
+            (PASTE_UNICODE_20000, 20000, "[Pasted: 20 KB]", true),
+        ];
+        for (screen, bytes, chip, unicode) in cases {
+            let payload = if unicode {
+                "é".repeat(bytes / 2)
+            } else {
+                captured_multiline_paste(bytes)
+            };
+            assert_eq!(payload.len(), bytes, "{chip}");
+            assert_eq!(input(screen).as_deref(), Some(chip), "{bytes}");
+            assert_eq!(
+                observe(screen, &payload),
+                InputObservation::Pending,
+                "{chip} for {bytes} bytes"
+            );
+            let neighbor = if chip.ends_with(" lines]") {
+                captured_multiline_paste(bytes - 79)
+            } else if unicode {
+                "é".repeat(bytes / 2 - 1)
+            } else {
+                captured_multiline_paste(bytes / 1000 * 1000 - 1)
+            };
+            assert_eq!(
+                observe(screen, &neighbor),
+                InputObservation::Unavailable,
+                "{chip} must reject {bytes}"
+            );
+        }
     }
 
     #[test]
