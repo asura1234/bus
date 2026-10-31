@@ -324,7 +324,7 @@ fn kimi_process_exit_settles_confirmed_submission_before_start_hook() {
 }
 
 #[test]
-fn kimi_trusted_turn_does_not_stall_on_transient_idle() {
+fn kimi_trusted_turn_has_no_recovery_reason_on_transient_idle() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
     let request = submit_text(&mut state, room, agent, "run task");
@@ -334,7 +334,7 @@ fn kimi_trusted_turn_does_not_stall_on_transient_idle() {
         .unwrap();
     let progress = state.request(request).unwrap().progress_at_ms.unwrap();
     assert_eq!(
-        stall_at(&state, request, progress.max(21) + DELIVERED_STALL_MS),
+        recovery_at(&state, request, progress.max(21) + DELIVERED_STALL_MS),
         None
     );
 }
@@ -355,7 +355,7 @@ fn kimi_persistent_invalidation_still_reports_session_invalidated() {
         .unwrap();
     let progress = state.request(request).unwrap().progress_at_ms.unwrap();
     assert_eq!(
-        stall_at(&state, request, progress.max(21) + DELIVERED_STALL_MS).as_deref(),
+        recovery_at(&state, request, progress.max(21) + DELIVERED_STALL_MS).as_deref(),
         Some("session_invalidated")
     );
 }
@@ -390,7 +390,7 @@ fn uncertain_submission_cannot_end_from_unrelated_status_activity() {
 }
 
 #[test]
-fn a_queued_message_refused_by_the_input_box_stalls_with_that_reason() {
+fn a_queued_message_refused_by_the_input_box_recovers_with_that_reason() {
     let (mut state, agent, request) = idle_with_queued(1_000, "go");
     state.begin_submission(request, "launch-codex", 5).unwrap();
     state
@@ -406,9 +406,12 @@ fn a_queued_message_refused_by_the_input_box_stalls_with_that_reason() {
         state.agent(agent).unwrap().delivery_rejection.as_deref(),
         Some("input_box_not_empty")
     );
-    assert_eq!(stall_at(&state, request, 1_000 + QUEUED_STALL_MS - 1), None);
     assert_eq!(
-        stall_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),
+        recovery_at(&state, request, 1_000 + QUEUED_STALL_MS - 1),
+        None
+    );
+    assert_eq!(
+        recovery_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),
         Some("input_box_not_empty")
     );
     // A confirmed submission clears the refusal.
@@ -426,7 +429,7 @@ fn a_queued_message_refused_by_the_input_box_stalls_with_that_reason() {
 }
 
 #[test]
-fn a_queued_message_without_a_refusal_stalls_with_the_wait_reason() {
+fn a_queued_message_without_a_refusal_recovers_with_the_wait_reason() {
     let (state, agent, request) = idle_with_queued(1_000, "go");
     let expected = state
         .agent(agent)
@@ -434,13 +437,50 @@ fn a_queued_message_without_a_refusal_stalls_with_the_wait_reason() {
         .wait_reason()
         .unwrap_or("not_submitted");
     assert_eq!(
-        stall_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),
+        recovery_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),
         Some(expected)
     );
 }
 
 #[test]
-fn typed_messages_stall_by_how_far_they_got_while_the_agent_idles() {
+fn requests_do_not_report_a_stalled_state() {
+    let (mut state, agent, request) = idle_with_queued(1_000, "go");
+    assert_eq!(
+        state.stall_reason(state.request(request).unwrap(), 1_000 + QUEUED_STALL_MS),
+        None
+    );
+
+    submit_request(&mut state, request, "launch-codex", 5);
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 2_000)
+        .unwrap();
+    assert_eq!(
+        state.stall_reason(state.request(request).unwrap(), 1_000 + DELIVERED_STALL_MS),
+        None
+    );
+
+    state
+        .requests
+        .get_mut(&request)
+        .unwrap()
+        .trusted_start_bound = true;
+    assert_eq!(
+        state.stall_reason(state.request(request).unwrap(), 1_000 + DELIVERED_STALL_MS),
+        None
+    );
+
+    state.invalidate_agent_session(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
+        .unwrap();
+    assert_eq!(
+        state.stall_reason(state.request(request).unwrap(), 3_000 + DELIVERED_STALL_MS),
+        None
+    );
+}
+
+#[test]
+fn typed_messages_get_recovery_reasons_by_how_far_they_got_while_the_agent_idles() {
     // Typed with no response yet. The clock starts at the poll before
     // the submission (1_000), not at later idle polls.
     let (mut state, agent, submitting) = idle_with_queued(1_000, "a");
@@ -451,11 +491,11 @@ fn typed_messages_stall_by_how_far_they_got_while_the_agent_idles() {
         .observe_status(agent, RuntimeStatus::Idle, 2_000)
         .unwrap();
     assert_eq!(
-        stall_at(&state, submitting, 1_000 + DELIVERED_STALL_MS - 1),
+        recovery_at(&state, submitting, 1_000 + DELIVERED_STALL_MS - 1),
         None
     );
     assert_eq!(
-        stall_at(&state, submitting, 1_000 + DELIVERED_STALL_MS).as_deref(),
+        recovery_at(&state, submitting, 1_000 + DELIVERED_STALL_MS).as_deref(),
         Some("submission_unconfirmed")
     );
 
@@ -466,7 +506,7 @@ fn typed_messages_stall_by_how_far_they_got_while_the_agent_idles() {
         .observe_status(agent, RuntimeStatus::Idle, 2_000)
         .unwrap();
     assert_eq!(
-        stall_at(&state, unstarted, 1_000 + DELIVERED_STALL_MS).as_deref(),
+        recovery_at(&state, unstarted, 1_000 + DELIVERED_STALL_MS).as_deref(),
         Some("no_start_hook")
     );
 
@@ -478,35 +518,35 @@ fn typed_messages_stall_by_how_far_they_got_while_the_agent_idles() {
         .unwrap();
     let progress = state.request(started).unwrap().progress_at_ms.unwrap();
     assert_eq!(
-        stall_at(&state, started, progress.max(2_000) + DELIVERED_STALL_MS).as_deref(),
+        recovery_at(&state, started, progress.max(2_000) + DELIVERED_STALL_MS).as_deref(),
         Some("transcript_unmatched")
     );
     // A later hook event restarts the clock.
     state.requests.get_mut(&started).unwrap().progress_at_ms = Some(500_000);
     assert_eq!(
-        stall_at(&state, started, 500_000 + DELIVERED_STALL_MS - 1),
+        recovery_at(&state, started, 500_000 + DELIVERED_STALL_MS - 1),
         None
     );
 }
 
 #[test]
-fn a_long_working_turn_never_stalls_and_a_long_block_is_reported_not_stalled() {
+fn a_long_working_turn_has_no_recovery_reason_and_a_long_block_is_reported() {
     let (mut state, agent, request) = idle_with_queued(1_000, "go");
     start_request(&mut state, request, "launch-codex", 5);
     state
         .observe_status(agent, RuntimeStatus::Working, 2_000)
         .unwrap();
     let hour = 60 * 60 * 1000;
-    assert_eq!(stall_at(&state, request, 2_000 + hour), None);
+    assert_eq!(recovery_at(&state, request, 2_000 + hour), None);
     assert!(!state.blocked_unanswered(state.request(request).unwrap(), 2_000 + hour));
 
     state
         .observe_status(agent, RuntimeStatus::Blocked, 3_000)
         .unwrap();
     assert_eq!(
-        stall_at(&state, request, 3_000 + hour),
+        recovery_at(&state, request, 3_000 + hour),
         None,
-        "blocked is not stalled"
+        "blocked needs no recovery"
     );
     let blocked = |now| state.blocked_unanswered(state.request(request).unwrap(), now);
     assert!(!blocked(3_000 + BLOCKED_STALL_MS - 1));
@@ -605,7 +645,7 @@ fn recovery_abandons_only_an_idle_current_request_and_releases_its_agent() {
 }
 
 #[test]
-fn invalidated_unavailable_turn_and_joined_member_stall_after_grace() {
+fn invalidated_unavailable_turn_and_joined_member_get_recovery_reason_after_grace() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state
         .observe_status(agent, RuntimeStatus::Idle, 1_000)
@@ -631,11 +671,11 @@ fn invalidated_unavailable_turn_and_joined_member_stall_after_grace() {
         .unwrap();
     for request in [lead, member] {
         assert_eq!(
-            stall_at(&state, request, 3_000 + DELIVERED_STALL_MS - 1),
+            recovery_at(&state, request, 3_000 + DELIVERED_STALL_MS - 1),
             None
         );
         assert_eq!(
-            stall_at(&state, request, 3_000 + DELIVERED_STALL_MS).as_deref(),
+            recovery_at(&state, request, 3_000 + DELIVERED_STALL_MS).as_deref(),
             Some("session_invalidated")
         );
         assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
@@ -645,14 +685,14 @@ fn invalidated_unavailable_turn_and_joined_member_stall_after_grace() {
 }
 
 #[test]
-fn transient_unavailable_turn_does_not_stall_without_session_invalidation() {
+fn transient_unavailable_turn_has_no_recovery_reason_without_session_invalidation() {
     let (mut state, agent, request) = idle_with_queued(1_000, "go");
     start_request(&mut state, request, "launch-codex", 5);
     state
         .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
         .unwrap();
     assert_eq!(
-        stall_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
+        recovery_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
         None
     );
 }
@@ -671,7 +711,7 @@ fn invalidated_typed_requests_preserve_live_status_and_progress_grace() {
         ] {
             state.observe_status(agent, status, 3_000).unwrap();
             assert_eq!(
-                stall_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
+                recovery_at(&state, request, 3_000 + DELIVERED_STALL_MS * 10),
                 None
             );
         }
@@ -680,16 +720,16 @@ fn invalidated_typed_requests_preserve_live_status_and_progress_grace() {
             .unwrap();
         state.requests.get_mut(&request).unwrap().progress_at_ms = Some(10_000);
         assert_eq!(
-            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS - 1),
+            recovery_at(&state, request, 10_000 + DELIVERED_STALL_MS - 1),
             None
         );
         assert_eq!(
-            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS).as_deref(),
+            recovery_at(&state, request, 10_000 + DELIVERED_STALL_MS).as_deref(),
             Some("session_invalidated")
         );
         state.agents.get_mut(&agent).unwrap().dialog = true;
         assert_eq!(
-            stall_at(&state, request, 10_000 + DELIVERED_STALL_MS * 10),
+            recovery_at(&state, request, 10_000 + DELIVERED_STALL_MS * 10),
             None
         );
     }

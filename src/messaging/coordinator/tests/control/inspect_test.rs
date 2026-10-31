@@ -757,7 +757,7 @@ fn message_status_reports_whether_each_recipient_turn_ended() {
 }
 
 #[test]
-fn message_status_shows_a_stalled_stage_with_its_reason() {
+fn message_status_keeps_the_real_stage_with_its_wait_reason() {
     let (mut worker, _room, codex, dir) = fixture();
     let sent = call(
         &mut worker,
@@ -778,14 +778,11 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
     assert!(fresh["stalled_from"].is_null());
 
     let later = now + crate::messaging::model::QUEUED_STALL_MS;
-    let stalled = request(&worker.control_message_at(message, later).unwrap());
-    assert_eq!(stalled["stage"], "stalled", "{stalled}");
-    assert_eq!(stalled["stalled_from"], "queued");
+    let queued = request(&worker.control_message_at(message, later).unwrap());
+    assert_eq!(queued["stage"], "queued", "{queued}");
+    assert!(queued["stalled_from"].is_null());
     let expected = crate::messaging::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
-    assert_eq!(
-        stalled["reason"],
-        json!(expected.unwrap_or("not_submitted"))
-    );
+    assert_eq!(queued["reason"], json!(expected.unwrap_or("not_submitted")));
 
     // A blocked agent is reported, not stalled.
     worker

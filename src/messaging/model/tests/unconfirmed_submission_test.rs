@@ -49,7 +49,7 @@ fn a_failed_unconfirmed_write_preserves_its_unknown_outcome_without_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let (typed, _, bound) = uncertain_write(&mut state, room, agent);
 
-    // Recording a stall does not close or retry an uncertain write.
+    // Recording recovery state does not close or retry an uncertain write.
     let mut open = state.clone();
     open.record_stalled_errors(bound).unwrap();
     assert_eq!(open.request(typed).unwrap().phase, RequestPhase::Submitting);
@@ -73,12 +73,12 @@ fn a_failed_unconfirmed_write_preserves_its_unknown_outcome_without_chat() {
 }
 
 #[test]
-fn recording_an_unconfirmed_stall_preserves_the_later_failure_without_chat() {
+fn recording_an_unconfirmed_recovery_reason_preserves_the_later_failure_without_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let (typed, behind, bound) = uncertain_write(&mut state, room, agent);
     state.record_stalled_errors(bound).unwrap();
     assert_eq!(
-        stall_at(&state, typed, bound).as_deref(),
+        recovery_at(&state, typed, bound).as_deref(),
         Some("submission_unconfirmed")
     );
     assert_eq!(tagged_master_notices(&mut state), 0);

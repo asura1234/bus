@@ -253,7 +253,7 @@ fn a_shutdown_received_during_poll_still_prevents_delivery() {
 }
 
 #[test]
-fn a_stalled_queued_message_is_closed_and_never_fires_after_readiness_returns() {
+fn an_expired_queued_message_is_closed_and_never_fires_after_readiness_returns() {
     let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
     worker.dev_enabled = true;
     let request = stalled_queue(&mut worker, agent, room);
@@ -261,7 +261,7 @@ fn a_stalled_queued_message_is_closed_and_never_fires_after_readiness_returns() 
     let message = worker.state.request(request).unwrap().prompt.id;
     assert_eq!(
         worker.control_message_at(message, now).unwrap()["requests"][0]["stage"],
-        "stalled"
+        "queued"
     );
     worker.submit_ready().unwrap();
     assert_eq!(

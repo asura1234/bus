@@ -187,13 +187,18 @@ impl BusState {
             .unwrap_or(0)
     }
 
-    /// Why `request` is stuck, once it has made no progress for a grace
+    /// Requests have no stalled state. Recovery deadlines stay internal.
+    pub(crate) fn stall_reason(&self, _request: &Request, _now_ms: u64) -> Option<String> {
+        None
+    }
+
+    /// Why `request` needs recovery once it has made no progress for a grace
     /// period, or `None`. Unattempted work waits through Working/Blocked:
     /// a long turn is normal, and a blocked one waits on an answer (see
-    /// `blocked_unanswered`). This only reports; the coordinator closes queued
-    /// stalls before delivery, while typed work needs explicit recovery.
+    /// `blocked_unanswered`). The coordinator closes expired queued requests
+    /// before delivery, while typed work needs explicit recovery.
     /// Definitely rejected queued work has its own fixed deadline.
-    pub(crate) fn stall_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
+    pub(crate) fn recovery_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
         if request.settled() {
             return None;
         }
@@ -419,7 +424,7 @@ impl BusState {
             .filter_map(|agent| self.unbound_request(*agent))
             .filter(|request| request.phase == RequestPhase::Submitting)
             .filter(|request| {
-                self.stall_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
+                self.recovery_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
             })
             .map(|request| (request.id, request.agent_id, request.prompt.id))
             .collect();
