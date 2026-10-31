@@ -113,6 +113,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     }
     let text = lines[header..first]
         .iter()
+        .filter(|line| !(line.trim_start().starts_with('◆') && line.contains("[stop]")))
         .map(|line| {
             line.trim()
                 .trim_start_matches("◆ ")
@@ -122,12 +123,22 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    // Preserve all scope, question, row/check/focus/input and style observations.
-    let fingerprint_context = format!(
-        "{}\0{:?}",
-        lines[header..=end].join("\n"),
-        styles.get(header..=end)
-    );
+    // Preserve scope, question, row/check/focus/input and style observations.
+    // The live 1.0.70 status line (`◆ … 3m44s … [stop]`) ticks every frame.
+    // Leaving it in the digest makes `agent choose` stale before the key is sent.
+    let fingerprint_context = {
+        let mut text_lines = Vec::new();
+        let mut style_rows = Vec::new();
+        for index in header..=end {
+            let line = lines[index];
+            if line.trim_start().starts_with('◆') && line.contains("[stop]") {
+                continue;
+            }
+            text_lines.push(line);
+            style_rows.push(styles.get(index).map(Vec::as_slice).unwrap_or(&[]));
+        }
+        format!("{}\0{:?}", text_lines.join("\n"), style_rows)
+    };
     if editing {
         let selected = rows.get(focused?)?;
         if selected.selector != 'z' || parked {
@@ -564,6 +575,10 @@ mod tests {
             .any(|option| option.selected && option.label.contains("Yes, proceed")));
         assert_eq!(dialog.keys_for(3), Some(vec!["enter"]));
         assert!(super::super::parse(APPROVAL).is_some());
+        let later = APPROVAL.replace("3m44s", "9m01s").replace("4m2s", "12s");
+        assert_eq!(dialog.digest(), card(&later).unwrap().digest());
+        let other = APPROVAL.replace("bus send --reply-to 4", "sleep 35");
+        assert_ne!(dialog.digest(), card(&other).unwrap().digest());
         let detected = detected(APPROVAL, "grok");
         assert_eq!(detected.state, AgentState::Blocked, "{detected:?}");
         assert!(detected.visible_blocker, "{detected:?}");
