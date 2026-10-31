@@ -13,11 +13,10 @@ struct Transcript {
 }
 impl Transcript {
     fn new(contents: &[u8]) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "bus-grok-b-{}-{}",
-            std::process::id(),
-            crate::utils::time::now_ms()
-        ));
+        // pid plus the millisecond clock collide when cargo test runs these
+        // fixtures on several threads; the loser then deletes the winner's
+        // directory and both Drops abort the process.
+        let root = crate::utils::test_temp::unique_temp_path("bus-grok-b");
         let dir = root.join("synthetic-session");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("updates.jsonl");
@@ -32,7 +31,9 @@ impl Transcript {
 }
 impl Drop for Transcript {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+        // A missing directory is the other thread's cleanup, not a test failure.
+        // Unwrapping here aborts the process when it happens during unwind.
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -431,7 +432,7 @@ impl NativeFixture {
 
 impl Drop for NativeFixture {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
