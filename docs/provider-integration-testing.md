@@ -637,14 +637,19 @@ run `bus` or `bus --dev` from a real `HOME` without the private data dir.
 `bus resume` cannot be combined with `BUS_DATA_DIR`. It exits with
 `BUS_DATA_DIR cannot be combined with bus resume`. Cold resume is the
 isolated relaunch already in Clear, restart and isolation: Ctrl+Q, then
-`sbus --dev` again on the same private root. Confirm `sbus --paths` still
-names `$scratch/data`, not `~/.local/share/bus`. Do not call `sbus resume` or
-`bus resume` in this test.
+`sbus --dev` again on the same private root. Confirm `sbus --paths`, the
+same check as Scratch setup: `data` equals `$scratch/data`. `logs` is
+`$scratch/data/herdr-config/sessions/bus`, `config` is
+`$scratch/data/herdr-config`, and `state` is `$scratch/data/herdr-state`.
+`session_base` is expected to show the default registry,
+`~/.local/share/bus`. A `BUS_DATA_DIR` run does not write it, and
+`--paths` creates no session. Do not stop because `session_base` names
+that default. Do not call `sbus resume` or `bus resume` in this test.
 
 Check the provider recalls the prior marker and replies to a new task. Both
-terminals must use `sbus`. If any Bus path leaves the private data dir, stop.
-Repeat with `--yolo` on both launches for a run-scoped bypass. This relaunch
-does not rescue an interrupted run.
+terminals must use `sbus`. Stop if `data`, `logs`, `config`, or `state`
+leaves the private root. Repeat with `--yolo` on both launches for a
+run-scoped bypass. This relaunch does not rescue an interrupted run.
 
 ## Gate, review and mandatory live smoke
 
@@ -707,7 +712,9 @@ idle then deliver, and an approval card without `--yolo`.
 - **2026-10-31 — real HOME:** Symptom: acceptance on a scratch `HOME` never
   logs in. Cause: that home has no provider logins, and copying credentials is
   forbidden. Test: real `HOME` plus a private mode-0700 `BUS_DATA_DIR`; `sbus
-  --paths` stays on that directory. Rule: never copy credentials and never use
+  --paths` `data` equals that directory, and `logs`, `config`, and `state`
+  stay under it. `session_base` shows `~/.local/share/bus` and is not written.
+  Rule: never copy credentials and never use
   the live Bus data dir. `bus resume` cannot be combined with `BUS_DATA_DIR`;
   relaunch with `sbus --dev` on that private root.
 - **2026-10-31 — Grok welcome composer:** Symptom: `prompt_not_shown`, status
