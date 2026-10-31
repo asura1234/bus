@@ -96,9 +96,9 @@ when the developer must act.
 ## Bootstrap, resume and evidence limits
 
 Bus supplies these instructions with the full authored room prompt as the
-first bootstrap message. Read them, keep them for the session and reply briefly
-that you are ready. This applies to a fresh or adopted conversation without
-replacing Grok's default system prompt. When resuming, retain the conversation's
+first bootstrap message. Read them and keep them for the session. This applies
+to a fresh or adopted conversation without replacing Grok's default system
+prompt. When resuming, retain the conversation's
 instructions, reconcile durable Bus state and pending bootstrap delivery, and
 do not replay tasks merely because launch or bootstrap happened again.
 Conversation resume does not resurrect operating-system background processes.

@@ -597,10 +597,13 @@ fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
 
 #[test]
 fn prompt_message_carries_the_prompt_text_without_requesting_an_acknowledgement() {
+    let message = prompt_message("Be brief.");
     assert_eq!(
-        prompt_message("Be brief."),
+        message,
         "Bus: this is your system prompt; Bus could not set it at launch for this provider or session. Follow it for the rest of this session.\n\nBe brief."
     );
+    assert!(message.ends_with("\n\nBe brief."));
+    assert!(!message.contains("reply briefly that you are ready"));
 }
 
 #[test]
