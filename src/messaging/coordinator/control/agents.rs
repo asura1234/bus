@@ -161,10 +161,13 @@ impl Worker {
     /// message. Clear starts a fresh context, so that text has to be queued
     /// again. Cursor and Grok never take launch arguments. An adopted Codex
     /// session replays its original developer instructions and took the same
-    /// first-message path. Claude, and a Codex session Bus started, keep the
-    /// form in their prompt arguments.
+    /// first-message path. Claude, Kimi, and a Codex session Bus started keep
+    /// the form in their prompt arguments.
     fn requeue_first_message_instructions(&mut self, id: AgentId) -> Result<(), String> {
         let agent = self.state.agent(id).ok_or("Unknown agent")?.clone();
+        if agent.provider == Provider::Kimi {
+            return Ok(());
+        }
         let adopted = agent
             .runtime_identity
             .launch_id
