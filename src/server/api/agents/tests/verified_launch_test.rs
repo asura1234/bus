@@ -41,6 +41,7 @@ async fn verified_launch_corrects_first_byte_loss_after_slow_precmd() {
             timeout_ms: None,
             executable: None,
             grok_home: None,
+            kimi_home: None,
         })
         .unwrap_or_else(|error| panic!("{:?}", app.agent_start_error_body(error)));
         wait_for_launch_input(prompt_runtime(&app)).await;
@@ -341,6 +342,7 @@ async fn verified_launch_fish_preserves_prompt_function_arguments_and_shell() {
         timeout_ms: None,
         executable: None,
         grok_home: None,
+        kimi_home: None,
     })
     .unwrap_or_else(|error| {
         panic!(

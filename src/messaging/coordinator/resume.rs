@@ -24,14 +24,14 @@ pub(crate) fn unstarted_codex_plan(
     if !args.is_empty() {
         if kind == "kimi" {
             if args.first().map(String::as_str) == Some("/usr/bin/env") {
-                args.remove(0);
-                if args
-                    .first()
-                    .is_none_or(|arg| !arg.starts_with("KIMI_CODE_HOME="))
+                if args.get(1).map(String::as_str) != Some("KIMI_DISABLE_OAUTH_LOCK=0")
+                    || args
+                        .get(2)
+                        .is_none_or(|arg| !arg.starts_with("KIMI_CODE_HOME="))
                 {
                     return None;
                 }
-                args.remove(0);
+                args.drain(0..3);
             }
             let executable = args.first()?;
             if std::path::Path::new(executable)

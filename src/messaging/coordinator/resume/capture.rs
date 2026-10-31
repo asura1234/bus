@@ -129,6 +129,9 @@ pub(crate) fn load(
         identity::provider_kind(agent.provider),
         &mut args,
     );
+    if agent.provider == ProviderKind::Kimi {
+        crate::agents::providers::kimi::launch::validate_run_permissions(&args)?;
+    }
     let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),

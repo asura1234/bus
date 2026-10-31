@@ -1,5 +1,6 @@
 //! Kimi 2.4.0's private wire is the completion witness. Stop is only a wake.
 use serde_json::Value;
+use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
 const MAX_WIRE_BYTES: u64 = 32 * 1024 * 1024;
@@ -20,15 +21,28 @@ pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<
     }
 }
 
+#[cfg(test)]
 pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Option<Outcome> {
+    committed_outcome_lines(wire.lines().map(|line| Ok(line.to_owned())), turn_id, prompt)
+}
+
+fn committed_outcome_lines(
+    lines: impl IntoIterator<Item = Result<String, String>>,
+    turn_id: u64,
+    prompt: &str,
+) -> Option<Outcome> {
     let mut owned = false;
     let mut prompt_id = String::new();
     let mut answer = None;
     let mut agent_outcome = None;
     let mut agent_error = None;
     let mut turn_reason = None;
-    for line in wire.lines() {
-        let value: Value = serde_json::from_str(line).ok()?;
+    for line in lines {
+        let line = line.ok()?;
+        if line.len() as u64 > MAX_WIRE_BYTES {
+            return None;
+        }
+        let value: Value = serde_json::from_str(&line).ok()?;
         match value.get("type")?.as_str()? {
             "turn.prompt" => {
                 if owned {
@@ -40,9 +54,21 @@ pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Optio
                     continue;
                 }
                 let input = value.get("input")?.as_array()?;
+                let normalize = |value: &str| {
+                    value
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n")
+                        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+                        .to_owned()
+                };
                 if input.len() != 1
                     || input[0].get("type").and_then(Value::as_str) != Some("text")
-                    || input[0].get("text").and_then(Value::as_str) != Some(prompt)
+                    || input[0]
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(normalize)
+                        .as_deref()
+                        != Some(normalize(prompt).as_str())
                 {
                     return None;
                 }
@@ -207,16 +233,15 @@ pub(crate) fn resolve_outcome(
     if std::fs::symlink_metadata(&wire).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Err("Kimi wire is a symlink".into());
     }
-    let bytes = match std::fs::metadata(&wire) {
-        Ok(meta) if meta.len() <= MAX_WIRE_BYTES => {
-            std::fs::read(&wire).map_err(|e| e.to_string())?
-        }
-        Ok(_) => return Err("Kimi wire is oversized".into()),
+    let file = match std::fs::File::open(&wire) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.to_string()),
     };
-    let wire = String::from_utf8(bytes).map_err(|_| "Kimi wire is not UTF-8")?;
-    Ok(committed_outcome(&wire, turn_id, prompt))
+    let lines = std::io::BufReader::new(file)
+        .lines()
+        .map(|line| line.map_err(|error| error.to_string()));
+    Ok(committed_outcome_lines(lines, turn_id, prompt))
 }
 
 #[cfg(test)]
@@ -303,6 +328,54 @@ mod tests {
             None
         );
         assert!(resolve(&root, &root, session, "7", "Bus task").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn committed_final_uses_the_start_hook_trailing_whitespace_contract() {
+        let wire = concat!(
+            "{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":7,\"promptId\":\"p7\",\"input\":[{\"type\":\"text\",\"text\":\"Bus task\"}]}\n",
+            "{\"type\":\"agent.message.appended\",\"message\":{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done\"}],\"toolCalls\":[]},\"meta\":{\"source\":\"llm\"}}}\n",
+            "{\"type\":\"agent.turn.ended\",\"turnId\":7,\"outcome\":\"done\"}\n",
+            "{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":7,\"reason\":\"completed\"}\n",
+            "{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p7\",\"reason\":\"completed\"}\n",
+        );
+        assert_eq!(
+            committed_outcome(wire, 7, "Bus task\n"),
+            Some(Outcome::Final("Done".into())),
+            "the start hook and committed wire must accept the same trailing newline normalization"
+        );
+    }
+
+    #[test]
+    fn committed_final_is_found_after_benign_history_exceeds_storage_cap() {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-wire-long-history");
+        let cwd = root.join("project");
+        let session = "session_long";
+        let directory = root.join("sessions/wd_project/session_long");
+        crate::platform::fs::private_dir(&cwd).unwrap();
+        crate::platform::fs::private_dir(&directory.join("agents/main")).unwrap();
+        let index = serde_json::json!({
+            "sessionId": session,
+            "workDir": cwd,
+            "sessionDir": directory,
+        });
+        std::fs::write(root.join("session_index.jsonl"), format!("{index}\n")).unwrap();
+        let mut wire = concat!(
+            "{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":7,\"promptId\":\"p7\",\"input\":[{\"type\":\"text\",\"text\":\"Bus task\"}]}\n",
+            "{\"type\":\"agent.message.appended\",\"message\":{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done\"}],\"toolCalls\":[]},\"meta\":{\"source\":\"llm\"}}}\n",
+            "{\"type\":\"agent.turn.ended\",\"turnId\":7,\"outcome\":\"done\"}\n",
+            "{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":7,\"reason\":\"completed\"}\n",
+            "{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p7\",\"reason\":\"completed\"}\n",
+        )
+        .to_owned();
+        wire.push_str(&" ".repeat(MAX_WIRE_BYTES as usize + 1));
+        std::fs::write(directory.join("agents/main/wire.jsonl"), wire).unwrap();
+        assert_eq!(
+            resolve(&root, &cwd, session, "7", "Bus task").unwrap(),
+            Some("Done".into()),
+            "older history must not disable this committed turn's reply"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

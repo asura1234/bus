@@ -100,3 +100,27 @@ fn assistant_text_after_turn_end_cannot_replace_the_final() {
     );
     assert_eq!(committed_final(wire, 9, "Task").as_deref(), Some("Correct"));
 }
+
+#[test]
+fn resume_rejects_saved_auto_with_bus_yolo() {
+    struct Restore(Option<std::ffi::OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("BUS_YOLO", value),
+                None => std::env::remove_var("BUS_YOLO"),
+            }
+        }
+    }
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let restore = Restore(std::env::var_os("BUS_YOLO"));
+    std::env::set_var("BUS_YOLO", "1");
+    let saved = vec!["--auto".to_owned()];
+    let mut args = super::kimi::launch::resumable_options(&saved);
+    launch::apply_run_permissions(ProviderKind::Kimi, &mut args);
+    assert!(
+        super::kimi::launch::validate_run_permissions(&args).is_err(),
+        "resume constructed Kimi's rejected permission combination: {args:?}"
+    );
+    drop(restore);
+}

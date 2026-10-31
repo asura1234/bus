@@ -575,6 +575,22 @@ fn resume_does_not_duplicate_an_explicit_private_runtime_option() {
 }
 
 #[test]
+fn unstarted_kimi_resume_accepts_bus_bound_home_argv() {
+    let facts = NativeResumeFacts {
+        agent_name: Some("bus-r1-a2".into()),
+        managed_agent: Some("kimi".into()),
+        session: None,
+    };
+    let argv = crate::agents::providers::kimi::launch::bind_home(
+        vec!["/bin/kimi".into(), "--yolo".into()],
+        Path::new("/private/kimi-home"),
+    )
+    .unwrap();
+    let plan = crate::messaging::coordinator::resume::unstarted_codex_plan(&facts, Some(&argv));
+    assert!(plan.is_some(), "saved Bus argv was rejected: {argv:?}");
+}
+
+#[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
     let mut identity = fixture
