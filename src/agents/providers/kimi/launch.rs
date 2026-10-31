@@ -371,6 +371,14 @@ pub(crate) fn option_arity(name: &str) -> Option<usize> {
     }
 }
 
+/// Fresh launch and sessionless resume share this check. Attached
+/// `-S<session>` / `-p<text>` and an external session selector are not an
+/// interactive Bus-owned launch.
+pub(crate) fn validate_owned_launch(args: &[String]) -> Result<Option<String>, String> {
+    validate_args(args)?;
+    take_adopted_session(args)
+}
+
 pub(crate) fn validate_args(args: &[String]) -> Result<(), String> {
     if args.iter().any(|arg| arg.contains('\0')) {
         return Err("Kimi launch arguments contain NUL".into());
@@ -548,8 +556,7 @@ pub(crate) fn prepare(
 ) -> Result<PreparedLaunch, String> {
     let cwd = common::canonical_directory(&spec.cwd)?;
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
-    validate_args(&options)?;
-    let adopted_session = take_adopted_session(&options)?;
+    let adopted_session = validate_owned_launch(&options)?;
     validate_run_permissions(&options)?;
     if crate::utils::env::yolo_enabled() && options.iter().any(|arg| arg == "--auto") {
         return Err("Bus --yolo conflicts with Kimi --auto; choose one permission mode".into());

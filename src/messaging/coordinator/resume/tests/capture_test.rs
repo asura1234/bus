@@ -597,6 +597,36 @@ fn unstarted_kimi_resume_accepts_bus_bound_home_argv() {
 }
 
 #[test]
+fn unstarted_kimi_resume_rejects_attached_session_and_prompt_options() {
+    let facts = NativeResumeFacts {
+        agent_name: Some("bus-r1-a2".into()),
+        managed_agent: Some("kimi".into()),
+        session: None,
+    };
+    for option in [
+        "-Sexternal-session",
+        "-punowned task",
+        "--session",
+        "-S",
+        "--session=external-session",
+        "--continue",
+        "-c",
+        "--prompt",
+        "-p",
+    ] {
+        let argv = crate::agents::providers::kimi::launch::bind_home(
+            vec!["/bin/kimi".into(), option.into()],
+            Path::new("/private/kimi-home"),
+        )
+        .unwrap();
+        assert!(
+            crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&argv)).is_none(),
+            "an unowned provider turn must not become a fresh unstarted resume: {argv:?}"
+        );
+    }
+}
+
+#[test]
 fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     let mut fixture = Fixture::new(Provider::Codex);
     let mut identity = fixture

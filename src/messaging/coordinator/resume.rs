@@ -7,8 +7,10 @@ mod capture;
 pub(crate) use capture::load;
 pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, NativeResumeFacts};
 
-/// Codex or Kimi can show a prompt before creating a conversation. Keep that
-/// empty launch across restore; never turn an adopted session into a new one.
+/// Sessionless Codex and Kimi keep the empty launch across restore.
+/// Snapshot argv must pass that provider's launch-argument check, so Kimi
+/// attached `-S<session>` and `-p<text>` cannot become a fresh plan.
+/// Never turn an adopted session into a new one.
 pub(crate) fn unstarted_plan(
     facts: &NativeResumeFacts,
     argv: Option<&[String]>,
@@ -42,12 +44,7 @@ pub(crate) fn unstarted_plan(
                 return None;
             }
             args.remove(0);
-            if args.iter().any(|arg| {
-                matches!(
-                    arg.as_str(),
-                    "--session" | "-S" | "--continue" | "-c" | "--prompt" | "-p"
-                ) || arg.starts_with("--session=")
-            }) {
+            if crate::agents::providers::kimi::launch::validate_owned_launch(&args).is_err() {
                 return None;
             }
             return Some(crate::agents::resume::catalog::AgentResumePlan {
@@ -85,6 +82,8 @@ pub(crate) fn unstarted_plan(
     })
 }
 
+/// Shared Codex/Kimi sessionless contract: no provider session yet, and no
+/// request has reached provider input.
 fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
     matches!(
         agent.provider,
