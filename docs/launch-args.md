@@ -33,13 +33,16 @@ The startup flag can precede `resume` or follow its selector.
 | Claude Code | `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | Codex | `--yolo` | `--yolo`, `--dangerously-bypass-approvals-and-sandbox` |
 | Cursor | `--force` | `--force`, `--yolo`, `-f` |
+| Kimi | `--yolo` | `--yolo`, `-y` |
 
 Evidence checked locally on 2026-10-16: Claude Code 2.1.301 `--help` describes
 `--dangerously-skip-permissions` as bypassing permission checks. Codex 0.163.0
 `--help` documents `--dangerously-bypass-approvals-and-sandbox`; its hidden
 `--yolo` alias is accepted by `codex --yolo --version`. Cursor
 2026.10.14-0f9edde `--help` documents `-f, --force` as allowing commands unless
-explicitly denied and `--yolo` as its alias.
+explicitly denied and `--yolo` as its alias. Kimi's Bus bypass flag is
+`--yolo`; an existing `--yolo` or `-y` suppresses that added copy. `--auto`
+cannot be combined with either flag or with a Bus `--yolo` run.
 
 The existing restriction on adding new Codex orchestrators still applies;
 saved Codex MASTER agents receive the bypass flag when resumed with `--yolo`.
@@ -64,8 +67,12 @@ Bus disables provider self-updates on fresh room launches and saved-session
 resumes: Codex gets `-c check_for_update_on_startup=false`, Cursor gets
 `--disable-auto-update`, and Claude gets `DISABLE_AUTOUPDATER=1` when that
 environment setting is absent. An explicit inherited Claude setting is retained;
-Claude user/project settings can override the inherited environment. Bus does
-not modify user configuration or the shared provider installation.
+Claude user/project settings can override the inherited environment. Kimi gets
+`cache_expiry_hint = false` and `[upgrade] auto_install = false` in `tui.toml`
+inside that agent's Bus-owned home (`KIMI_CODE_HOME`, the callback spool's
+`kimi-home`). `cache_expiry_hint = false` also disables Kimi's "Cache expired"
+chooser. Bus does not modify the developer's `~/.kimi-code`, user configuration,
+or the shared provider installation.
 
 Update providers outside Bus after closing their panes. An update chooser
 remains blocked for an operator; Bus never selects “Update now”, interrupts an
@@ -83,6 +90,7 @@ For example:
 codex:  -c 'model_reasoning_effort="high"' --sandbox workspace-write --ask-for-approval on-request
 claude: --dangerously-skip-permissions --permission-mode bypassPermissions
 cursor: --yolo --force --sandbox disabled --approve-mcps
+kimi:   -m MODEL --skills-dir PATH
 ```
 
 Bus saves the original user tokens in the launch's `launch-options.json` and
@@ -92,6 +100,24 @@ already consumed its initial prompt and native session selector, so those one-ti
 sent again. Options after an initial prompt are retained. An unstarted launch
 retains all initial input. Unknown option arity preserves the remaining tokens
 without guessing which of them are values or one-time input.
+
+Kimi's new session receives Bus's system prompt as `--agent-file`, written to
+`kimi-agent.md` in the callback spool. Kimi keeps that file for the session, so
+resume does not pass `--agent-file` again. After Bus owns the conversation it
+resumes with `--session <id>`. A user `--session` or `-S` is rejected; adopting
+an external Kimi session is unsupported. Resume replays the saved user options,
+drops a saved `--agent-file` or `--session`, and then adds Bus's own `--session`.
+An explicit `--yolo` or `-y` in those saved options is replayed. The generated
+Bus `--yolo` flag is not written into `launch-options.json`.
+
+An unstarted Kimi pane has no session yet. Its saved argv is `/usr/bin/env`,
+`KIMI_DISABLE_OAUTH_LOCK=0`, `KIMI_CODE_HOME=<absolute private home>`, then the
+`kimi` executable and any user options. Restore accepts that prefix, requires
+the executable to be named `kimi`, and refuses `--session`, `-S`, `--continue`,
+`-c`, `--prompt`, and `-p` on that unstarted argv. User options remain owned by
+`launch-options.json`. The private home is the per-agent directory Bus created
+under the callback spool. It is never the developer's `~/.kimi-code`.
+
 Bus separately supplies its capture arguments (`--no-daemon` for Codex and
 `--settings <capture-file>` for Claude) and the saved conversation selector.
 When the user supplies Codex `--no-daemon`, Bus omits its generated copy:
@@ -116,6 +142,8 @@ command/option position:
 | Claude | `-p`, `--print`, `--bg`, `--background` | Print mode exits; background mode returns immediately, leaving Bus without its interactive worker. |
 | Claude | `--bare`, `--safe-mode` | These explicitly disable hooks required for session ownership and request completion. |
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
+| Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, and a leading positional | These select a one-shot prompt, a non-Bus agent file, continue/plan mode, or help/version exit instead of the interactive terminal Bus drives. |
+| Kimi | `--session`, `-S` | Adopting an external Kimi session is unsupported. Bus supplies `--session` itself after it owns the conversation. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`
