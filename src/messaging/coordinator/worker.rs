@@ -1,9 +1,9 @@
 //! Coordinator worker ownership.
 use super::storage::remove_spooled;
 use super::{
-    AgentId, Arc, BTreeMap, BTreeSet, BusCommand, BusEvent, BusSnapshot, BusState,
-    CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId, RequestPhase, RuntimeStatus,
-    StoragePause, Transport, control_dispatch, diagnostics, io, mpsc, usage,
+    control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
+    BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
+    RequestId, RequestPhase, RuntimeStatus, StoragePause, Transport,
 };
 use crate::agents::providers::spool;
 use crate::messaging::perf;
@@ -651,7 +651,7 @@ fn recorded_codex_end(
     request: &crate::messaging::model::Request,
 ) -> Option<crate::messaging::model::RecordedTurnEnd> {
     use crate::agents::providers::codex::usage::{
-        CodexTurnEnd, PromptTurn, codex_prompt_turn, codex_turn_prompts, read_codex_turn_end,
+        codex_prompt_turn, codex_turn_prompts, read_codex_turn_end, CodexTurnEnd, PromptTurn,
     };
     use crate::messaging::model::RecordedTurnEnd;
     let unreadable = |error: &std::io::Error| {
