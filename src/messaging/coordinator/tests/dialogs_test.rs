@@ -1452,3 +1452,506 @@ fn a_persistently_unreadable_open_dialog_still_gets_a_bounded_developer_fallback
     assert!(messages[1].1.contains("The dialog state could not be read"));
     assert!(messages[1].1.contains("may still be blocked"));
 }
+
+/// Stay clear of the clock-minute boundary so a same-minute check is stable.
+fn settled_now() -> u64 {
+    let now = crate::messaging::storage::io::now_ms();
+    let into_minute = now % 60_000;
+    if into_minute <= 55_000 {
+        return now;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(60_000 - into_minute + 50));
+    crate::messaging::storage::io::now_ms()
+}
+
+fn queue_message(
+    worker: &mut Worker,
+    room: RoomId,
+    recipient: AgentId,
+    author: Author,
+    text: &str,
+    at_ms: u64,
+) -> crate::messaging::model::RequestId {
+    let mut state = worker.state.clone();
+    let ids = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: text.into(),
+                files: Vec::new(),
+                recipient_ids: [recipient].into(),
+            },
+            author,
+            at_ms,
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    ids[0]
+}
+
+/// A completed answer whose task was submitted in the previous clock minute.
+fn start_active_task(worker: &mut Worker, room: RoomId, agent: AgentId, text: &str, at_ms: u64) {
+    let request = queue_message(worker, room, agent, Author::Developer, text, at_ms);
+    let mut state = worker.state.clone();
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+}
+
+fn answer_previous_minute(worker: &mut Worker, room: RoomId, agent: AgentId, now: u64) {
+    let request = queue_message(
+        worker,
+        room,
+        agent,
+        Author::Developer,
+        "finish the job",
+        now.saturating_sub(60_000),
+    );
+    let mut state = worker.state.clone();
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "done".into(), now)
+        .unwrap();
+    worker.save(state).unwrap();
+}
+
+fn restart_log(at_ms: u64) -> crate::utils::restart_record::RestartLog {
+    crate::utils::restart_record::RestartLog {
+        at_ms,
+        who: "test".into(),
+        old_sha: "a".repeat(40),
+        new_sha: "b".repeat(40),
+        old_binary: "old".into(),
+        new_binary: "new".into(),
+        outcome: "restarted".into(),
+        reason: String::new(),
+    }
+}
+
+fn write_restart_marker(worker: &Worker) {
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::marker_path(&worker.data_dir),
+        &crate::utils::restart_record::RestartMarker {
+            binary: "bus".into(),
+            session_id: None,
+            explicit_data_dir: true,
+            data_dir: worker.data_dir.display().to_string(),
+            dev: true,
+            yolo: false,
+        },
+    )
+    .unwrap();
+}
+
+fn write_restart_outcome(worker: &Worker, at_ms: u64) {
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::outcome_path(&worker.data_dir),
+        &restart_log(at_ms),
+    )
+    .unwrap();
+}
+
+fn record_restart_shaped_exit(worker: &mut Worker, agent: AgentId, at_ms: u64) {
+    let mut state = worker.state.clone();
+    state
+        .record_exit_snapshot(
+            agent,
+            crate::messaging::model::ExitSnapshot {
+                launch_id: Some("launch".into()),
+                terminal_id: "terminal".into(),
+                path: None,
+                error: Some("pane closed during restart".into()),
+                tail: "restart".into(),
+                at_ms,
+                terminal_closed: Some(false),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    crate::utils::restart_record::append_log(
+        &crate::utils::restart_record::log_path(&worker.data_dir),
+        &restart_log(at_ms),
+    )
+    .unwrap();
+}
+
+fn open_dialog(screen: &std::sync::Arc<std::sync::Mutex<Screen>>) {
+    screen.lock().unwrap().dialog = true;
+}
+
+#[test]
+fn a_same_minute_task_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    queue_message(
+        &mut worker,
+        room,
+        agent,
+        Author::Developer,
+        "new task this minute",
+        now,
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a task submitted to this agent in the same minute is not a dialog a person must answer"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_in_flight_same_minute_task_still_posts_one_steady_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    start_active_task(
+        &mut worker,
+        room,
+        agent,
+        "the turn that is showing the dialog",
+        settled_now(),
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], expected_blocked(&worker, agent))]
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_same_minute_result_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    answer_previous_minute(&mut worker, room, agent, now);
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a result completed this minute suppresses the notice even when the task is older"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_message_this_agent_sent_this_minute_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let master = worker.state.master_room().unwrap().id;
+    let now = settled_now();
+    queue_message(
+        &mut worker,
+        master,
+        orchestrator,
+        Author::Agent(agent),
+        "still sending",
+        now,
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "an agent still sending this minute is not blocked on a person"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_restart_in_progress_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    write_restart_marker(&worker);
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a restart flap must not post Blocked"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_restart_outcome_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    write_restart_outcome(&worker, settled_now());
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a recorded restart outcome must not post Blocked"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_restart_shaped_exit_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    record_restart_shaped_exit(&mut worker, agent, now);
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "an exit in the same minute as a restart log is the flap, not a dialog"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_older_task_still_posts_one_steady_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let now = settled_now();
+    queue_message(
+        &mut worker,
+        room,
+        agent,
+        Author::Developer,
+        "older task",
+        now.saturating_sub(60_000),
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], expected_blocked(&worker, agent))]
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_same_minute_task_for_someone_else_still_posts_the_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let master = worker.state.master_room().unwrap().id;
+    queue_message(
+        &mut worker,
+        master,
+        orchestrator,
+        Author::Developer,
+        "task for the orchestrator",
+        settled_now(),
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], expected_blocked(&worker, agent))]
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_restart_log_from_another_minute_still_posts_one_steady_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let now = settled_now();
+    record_restart_shaped_exit(&mut worker, agent, now.saturating_sub(60_000));
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], expected_blocked(&worker, agent))]
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn removing_a_restart_marker_posts_one_steady_dialog() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    write_restart_marker(&worker);
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "the flap itself posts nothing"
+    );
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    std::fs::remove_file(crate::utils::restart_record::marker_path(&worker.data_dir)).unwrap();
+    polls(&mut worker, 2);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(vec![orchestrator], expected_blocked(&worker, agent))]
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_bus_generated_result_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    let mut state = worker.state.clone();
+    let request = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "initial task".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            now,
+            false,
+        )
+        .unwrap()[0];
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "done".into(), now)
+        .unwrap();
+    worker.save(state).unwrap();
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a real first-turn result must suppress Blocked even when Bus generated the request"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_task_quoting_the_blocked_sentence_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    queue_message(
+        &mut worker,
+        room,
+        agent,
+        Author::Developer,
+        "Investigate why Bus reported: Blocked, needs help to continue.",
+        settled_now(),
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "quoting a notice must not hide a real new task from activity suppression"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_result_spooled_before_the_decisive_poll_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    let request = queue_message(
+        &mut worker,
+        room,
+        agent,
+        Author::Developer,
+        "finish before the next poll",
+        now,
+    );
+    let mut state = worker.state.clone();
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let prompt = state.render_request_payload(request).unwrap();
+    worker.save(state).unwrap();
+    let spool = worker.data_dir.join("callbacks").join("launch");
+    crate::agents::providers::spool::initialize(
+        &spool,
+        &crate::agents::providers::spool::Manifest {
+            routing_key: crate::agents::providers::spool::RoutingKey(agent.0),
+            provider: Provider::ClaudeCode,
+            launch_id: "launch".into(),
+        },
+    )
+    .unwrap();
+    crate::agents::providers::spool::append(
+        &spool,
+        "launch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"session",
+            "turn_id":"turn", "prompt_id":"turn", "prompt":prompt}),
+        &[],
+        false,
+    )
+    .unwrap();
+    worker.consume_callbacks(agent, &spool).unwrap();
+    open_dialog(&screen);
+    worker.poll().unwrap();
+    crate::agents::providers::spool::append(
+        &spool,
+        "launch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"Stop", "session_id":"session", "turn_id":"turn",
+            "prompt_id":"turn", "last_assistant_message":"done"}),
+        &[],
+        false,
+    )
+    .unwrap();
+    worker.tick().unwrap();
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a result already spooled before the decisive poll must not post Blocked first"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_stale_restart_marker_does_not_suppress_a_real_dialog_forever() {
+    let (worker, agent, _, _, _, dir) = worker(true);
+    write_restart_marker(&worker);
+    let much_later = settled_now().saturating_add(86_400_000);
+    assert!(
+        !restart_suppresses(&worker, agent, much_later),
+        "a marker left by an interrupted restart must not hide a real dialog a day later"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
