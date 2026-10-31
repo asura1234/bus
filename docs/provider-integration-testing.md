@@ -144,17 +144,27 @@ build actually supports it. Preserve the private root until evidence is saved.
   and ordinary permission prompts must surface as actionable Bus dialogs for
   every provider under test. Grok 1.0.70's "Do you trust the contents of this
   directory?" must be `dialog` true and status blocked before any delivery.
-  Answer with `y` or `n` and no Enter; `y` only for the agent's own cwd.
+  Answer Grok with `y` or `n` and no Enter; `y` only for the agent's own cwd.
   `session_hook_missing` with `dialog` false on that screen fails. Kimi 2.4.0's
-  "Trust this folder?" screen is the same check. An agent left "launching",
-  with messages abandoned as `agent_launching`, fails. After trust is chosen,
-  Claude Code 2.1.309's untouched `Try "..."` placeholder (no SGR, cursor on
-  the first cell) is an empty composer. The first message must deliver with no
-  manual key. `composer_busy` on that placeholder fails. The same glyphs are a
-  draft after any real keystroke or after Bus has pasted; do not paste over
-  them. Observe `sbus agent dialog AGENT` and `sbus agent read AGENT --source
-  visible`; choose only an authorized option using its fresh fingerprint.
-  Re-observe after a stale fingerprint.
+  "Trust this folder?" is not that `y`/`n` check. On the branch that lands
+  Kimi, PR #233 (`feat/kimi-provider`, `src/agents/dialog/kimi.rs`), it is a
+  choice dialog: the marked "Trust and continue" is chosen with Enter, and
+  "Exit" is Down then Enter. There is no `y`/`n` key. The hint is
+  `↑↓ navigate · Enter select · Esc exit`. Answer only through
+  `sbus agent dialog` and `sbus agent choose`, and only when
+  `agent add --help` lists `kimi`. Enter on an empty composer is not this
+  check. An agent left "launching", with messages abandoned as
+  `agent_launching`, fails. After trust is chosen, this master has no
+  `Try "..."` composer match, so Claude Code 2.1.309's untouched placeholder
+  is not an empty composer here. After #239 merges, that untouched
+  `Try "..."` placeholder (no SGR, cursor on the first cell) is an empty
+  composer. The first message must deliver with no manual key.
+  `composer_busy` on that placeholder fails. The same glyphs are a draft
+  after any real keystroke or after Bus has pasted; do not paste over them.
+  Until that merge, do not score the placeholder rule as current master
+  behaviour. Observe `sbus agent dialog AGENT` and `sbus agent read AGENT
+  --source visible`; choose only an authorized option using its fresh
+  fingerprint. Re-observe after a stale fingerprint.
 - [ ] While the welcome card is still above the composer, send the first
   message through Bus. After resolving any dialog through Bus, it must reach
   the model and get the unique marker back without a manual terminal keypress.
@@ -365,23 +375,30 @@ edited draft was not submitted. Grok 1.0.70 labels a paste longer than 10000
 bytes as `floor(UTF-8 bytes / 1000)` KB. A 21217-byte bootstrap is
 `[Pasted: 21 KB]`, not 20. Bus must press Enter on that chip. Withholding
 Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
-label with that same KB chip must stay rejected. At or below 10000 bytes, match the newline line
-count. Do not shorten the stock bootstrap to dodge the chip. On Kimi, a long
-multi-line paste left in the composer with footer `shift+enter: newline` is
-`submission_unconfirmed` and fails: Enter inserts a newline there. The full
-text has to be submitted by the editor handoff. A one-line pointer does not
-prove the long paste. Mark every unrun cell explicitly.
+  label with that same KB chip must stay rejected. At or below 10000 bytes a
+  multiline paste is labelled with `split('\n').count()` lines, and that count
+  must be greater than 1. A single line stays inline: there is no
+  `[Pasted: …]` chip, and a `[Pasted: 1 lines]` chip must stay rejected. Do
+  not shorten the stock bootstrap to dodge the chip. On Kimi, a long
+  multi-line paste left in the composer with footer `shift+enter: newline` is
+  `submission_unconfirmed` and fails: Enter inserts a newline there. The full
+  text has to be submitted by the editor handoff. A one-line pointer does not
+  prove the long paste. Mark every unrun cell explicitly.
 
 - [ ] Busy-then-idle delivery. A turn, a tool, or a background row is busy even
-  when Bus status says idle. Busy frames include Grok `[stop]`, `◎ … still
-  running`, `◎ waiting · send a message to interrupt`, `Queued N` or `N queued`
-  with N at least 1, and Kimi `[N tasks running]`, `Running a command`, or
-  `Working…`. Bus must submit the message or keep it queued, and must not leave
-  its text in the composer. A `Queued N` prompt is accepted: wait for that
-  turn. Closing it as `reply_not_captured` fails. A suggestion ghost
-  (`Tab/→:accept suggestion`) is not a draft. Do not Tab-accept it.
-  `prompt_not_shown` on that ghost fails. After the busy work ends, deliver a
-  second marker. `prompt_not_shown` until a person clears the box fails.
+  when Bus status says idle. On this master, `osc_title_idle` matches a bare
+  `grok` title and has no `Queued`, still-running, or suggestion exclusion, so
+  that title can win over those frames. Busy frames to record include Grok
+  `[stop]`, `◎ … still running`, `◎ waiting · send a message to interrupt`,
+  `Queued N` or `N queued` with N at least 1, and Kimi `[N tasks running]`,
+  `Running a command`, or `Working…` (Kimi only when `agent add --help` lists
+  `kimi`). Bus must submit the message or keep it queued, and must not leave
+  its text in the composer. After #237 merges, a `Queued N` prompt is accepted:
+  wait for that turn, and closing it as `reply_not_captured` fails. A
+  suggestion ghost (`Tab/→:accept suggestion`) is not a draft. Do not
+  Tab-accept it. `prompt_not_shown` on that ghost fails. Until that merge, do
+  not treat those two pass rules as current. After the busy work ends, deliver
+  a second marker. `prompt_not_shown` until a person clears the box fails.
   `composer_busy` against an empty composer means a preserved `draft-*.txt`
   from a failed editor handoff. That reason starts no queued stall clock, so a
   "No reply" notice will not fire. Fail the cell. Do not delete live-session
@@ -454,18 +471,21 @@ prove the long paste. Mark every unrun cell explicitly.
   alongside it. If the provider's format cannot be unambiguously extracted,
   stop and ask for a verified procedure rather than substituting a preview.
 - [ ] Interrupt, then deliver. Start a long turn and run
-  `sbus agent interrupt AGENT`, without Bus `--yolo`. Grok 1.0.70's cancel key
-  is Ctrl+C (`Ctrl+c:cancel`). Esc leaves the turn running: `outcome` `failed`
-  and "still working 15s after esc" is not a pass. Claude and Codex stop on
-  Esc; Cursor stops on Ctrl+C. On success, interrupt `outcome` is `stopped`.
-  Read `sbus message status MESSAGE_ID` (`ok: true`). When no final was
-  captured before the stop, expect `complete: true`, `requests[].stage`
-  `abandoned`, `reason` `interrupted`, and `reply` null. A reply captured
-  before the stop stays `replied`. Then read the visible composer. Ctrl+C on
+  `sbus agent interrupt AGENT`, without Bus `--yolo`. On this master that
+  command sends Esc for Claude, Codex, and Grok, and Ctrl+C for Cursor. On
+  success, interrupt `outcome` is `stopped`. Read `sbus message status
+  MESSAGE_ID` (`ok: true`). When no final was captured before the stop, expect
+  `complete: true`, `requests[].stage` `abandoned`, `reason` `interrupted`,
+  and `reply` null. A reply captured before the stop stays `replied`. Then
+  read the visible composer. A Ctrl+C typed in the pane on
   `Waiting for response…` can put Bus's own prompt back in the idle composer,
   and the next delivery is `NotSubmitted`. Withdraw that owned text before
   sending. Deliver a new marker and require `stage: replied` with no draft
-  left behind. Interrupt `outcome` is not the output of `sbus stop`.
+  left behind. Interrupt `outcome` is not the output of `sbus stop`. After
+  #237 merges, Grok's cancel key is Ctrl+C (`Ctrl+c:cancel`), and Esc leaving
+  the turn running (`outcome` `failed`, "still working 15s after esc") is not
+  a pass. Until that merge, do not score the cell as if Bus already sent
+  Ctrl+C.
 - [ ] Run the fixture filters below with `just test-one FILTER`. Each one is a
   cargo nextest run and follows the slot, disk, and clean-first rules above.
   Do not edit a live transcript or session file to manufacture a negative case.
@@ -569,10 +589,10 @@ prove the long paste. Mark every unrun cell explicitly.
   `sbus --dev` on that private root. `bus --dev restart --binary PATH --confirm`
   swaps the running server and is not a step in this scratch test. Do not point
   it at the live session. Before any such live restart, commit and push, stop
-  builds and tests, and release slot locks. Use the separate isolated
-  registry procedure below. Machine sleep or Bus restart ends in-flight turns
-  as `reply_not_captured`; rerun acceptance from a fresh scratch instance, never
-  resume the interrupted run as a pass.
+  builds and tests, and release slot locks. The real-HOME section below is
+  that same private-root relaunch, not `bus resume`. Machine sleep or Bus
+  restart ends in-flight turns as `reply_not_captured`; rerun acceptance
+  from a fresh scratch instance, never resume the interrupted run as a pass.
 - [ ] Test provider flags through `agent add --args`: Claude
   `--dangerously-skip-permissions`, Codex `--yolo`, Cursor `--force`, Grok
   `--always-approve`, Kimi `--yolo` (when supported). Check saved launch options
@@ -581,11 +601,15 @@ prove the long paste. Mark every unrun cell explicitly.
   must be supplied again on relaunch. Record the generated provider flag and
   check routine work; an attach with a different Bus yolo setting is refused.
   Also run one worker with neither Bus `--yolo` nor the provider's
-  skip-permissions flag. Grok 1.0.70's tool-approval card (a selected `●`, a
-  trailing `┃`, footer `Ctrl+c:cancel`, no `◆` header) must be returned by
-  `sbus agent dialog` with status blocked. `dialog` false while that card is
-  up fails. Do not press Enter. Yes is a permission decision; choose only an
-  authorized option with a fresh fingerprint.
+  skip-permissions flag. On this master the approval-card parser requires a
+  `◆ ` header. Grok 1.0.70's tool-approval card (a selected `●`, a trailing
+  `┃`, footer `Ctrl+c:cancel`, no `◆` header) is not returned by
+  `sbus agent dialog`. `dialog` false on that card is current parser
+  behaviour. Do not press Enter. Yes is a permission decision. After #237
+  merges, that card must be returned by `sbus agent dialog` with status
+  blocked, and `dialog` false while it is up fails. Choose only an authorized
+  option with a fresh fingerprint. Until that merge, do not fail the cell for
+  the missing header.
 - [ ] `git -C "$scratch/project" status --short` may list `?? .codex/` and
   `?? .cursor/` after a consented Codex or Cursor add (`.codex/hooks.json` and
   `.cursor/hooks.json`). Grok writes `.grok/hooks/bus.json` and
@@ -596,49 +620,31 @@ prove the long paste. Mark every unrun cell explicitly.
   credential copies. Stop only the scratch server with `sbus stop` and require
   `{"stopped":true}`. Retain only authorized, redacted evidence.
 
-### Separate registry-based cold resume
+### Real-HOME cold resume
 
-Use the real `HOME` for provider logins and a private XDG root for a new Bus
-registry. A scratch `HOME` has no logins. Do not set `BUS_DATA_DIR` for this
-test, and do not copy credentials. The wrapper below is a template with the
-**same approved provider PATH and login variables** as `sbus`; stop and ask if
-they are unavailable. It creates its own registry, not an entry in the
-developer's registry:
+Every real-HOME run sets a private mode-0700 `BUS_DATA_DIR`. The `sbus`
+wrapper in Scratch setup does that (`BUS_DATA_DIR="$root/data"`). Provider
+logins are read from the real `HOME`. A scratch `HOME` has no logins. Never
+copy credentials.
 
-```sh
-mkdir -m 700 "$scratch/registry-xdg"
-cat > "$scratch/bin/rbus" <<'WRAPPER'
-#!/bin/sh
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 1
-# Add the same approved provider PATH and login variables as sbus here.
-if [ -z "${HOME:-}" ]; then
-  echo "HOME must be the real login home; a scratch HOME has no logins" >&2
-  exit 1
-fi
-exec env -i HOME="$HOME" XDG_DATA_HOME="$root/registry-xdg" \
-  XDG_CONFIG_HOME="$root/registry-xdg" XDG_STATE_HOME="$root/registry-xdg" \
-  PATH="$root/bin:/usr/bin:/bin" TERM="${TERM:-xterm-256color}" \
-  "$root/bin/bus" "$@"
-WRAPPER
-chmod 700 "$scratch/bin/rbus"
-alias rbus="$scratch/bin/rbus"
-rbus --paths                    # Bus paths must stay under the scratch XDG root
-rbus --dev                      # start a new registry session in the UI terminal
-# In the second terminal, same rbus wrapper:
-rbus sessions                   # record this new session's exact ID
-rbus --paths                    # confirm its root is under scratch
-rbus state                      # verify binary, agents and saved provider session
-# After Ctrl+Q, in the UI terminal:
-rbus resume SESSION_ID --dev
-# In the control terminal, recheck paths, state and the earlier message status.
-```
+`XDG_DATA_HOME` is not the session registry. The registry base is
+`home_dir()/.local/share/bus`. With `BUS_DATA_DIR` unset, `bus` and
+`bus --dev` call `registry.create()`, which writes `sessions/<id>` and moves
+the last-session pointer in that live registry. A wrapper that sets the real
+`HOME` and `XDG_*` but not `BUS_DATA_DIR` does that. Do not paste one. Do not
+run `bus` or `bus --dev` from a real `HOME` without the private data dir.
+
+`bus resume` cannot be combined with `BUS_DATA_DIR`. It exits with
+`BUS_DATA_DIR cannot be combined with bus resume`. Cold resume is the
+isolated relaunch already in Clear, restart and isolation: Ctrl+Q, then
+`sbus --dev` again on the same private root. Confirm `sbus --paths` still
+names `$scratch/data`, not `~/.local/share/bus`. Do not call `sbus resume` or
+`bus resume` in this test.
 
 Check the provider recalls the prior marker and replies to a new task. Both
-terminals must use `rbus`. Provider login files stay in the real `HOME` and are
-not copied. If any Bus path or setting escapes the scratch XDG root, stop.
-Repeat with `--yolo` on both launches for a run-scoped bypass. This registry
-test is separate from the explicit-root relaunch and does not rescue an
-interrupted run.
+terminals must use `sbus`. If any Bus path leaves the private data dir, stop.
+Repeat with `--yolo` on both launches for a run-scoped bypass. This relaunch
+does not rescue an interrupted run.
 
 ## Gate, review and mandatory live smoke
 
@@ -702,7 +708,8 @@ idle then deliver, and an approval card without `--yolo`.
   logs in. Cause: that home has no provider logins, and copying credentials is
   forbidden. Test: real `HOME` plus a private mode-0700 `BUS_DATA_DIR`; `sbus
   --paths` stays on that directory. Rule: never copy credentials and never use
-  the live Bus data dir.
+  the live Bus data dir. `bus resume` cannot be combined with `BUS_DATA_DIR`;
+  relaunch with `sbus --dev` on that private root.
 - **2026-10-31 — Grok welcome composer:** Symptom: `prompt_not_shown`, status
   idle, `dialog` false, welcome card above a real `❯` composer. Cause: the
   1.0.70 frame ends on the model-labelled border and was not a composer Bus
@@ -721,7 +728,9 @@ idle then deliver, and an approval card without `--yolo`.
   Bus expected `floor(bytes/1024)` (20) and withheld Enter. Test: long paste
   at the stock bootstrap size, and a neighbor length of the same chip. Rule:
   press Enter only when the chip matches `floor(bytes/1000)`. At or below
-  10000 bytes, keep the newline line-count match. Do not shorten the bootstrap.
+  10000 bytes, a multiline paste keeps the newline line-count match and the
+  count must be greater than 1. A single line stays inline. Do not shorten
+  the bootstrap.
 - **2026-10-31 — slim reply header:** Symptom: a long per-message reply hint
   inflated prompts and was repeated on notices that need no reply. Cause: the
   hint belongs in the system prompt and `bus send --help`. Test: a deliverable
@@ -734,35 +743,46 @@ idle then deliver, and an approval card without `--yolo`.
   mid-turn. A ghost line `Tab/→:accept suggestion` also abandoned as
   `prompt_not_shown`. Cause: Bus treated `[stop]`, `◎ … still running`,
   `Queued N`, and the suggestion ghost as an empty idle composer and typed
-  into it. Test: busy-then-idle delivery. Rule: those markers mean working. A
-  `Queued N` prompt (N at least 1) is accepted; wait, and do not close
-  `reply_not_captured`. The ghost is not a draft; do not Tab-accept it. If
-  submit is unconfirmed, Bus must withdraw its own text. The next idle send
-  must not be `prompt_not_shown`.
+  into it. On this master, `osc_title_idle` still matches a bare `grok` title
+  and has no `Queued`, still-running, or suggestion rule, so that idle title
+  wins over those frames. Test: busy-then-idle delivery. After #237 merges,
+  those markers mean working: a `Queued N` prompt (N at least 1) is accepted
+  (wait; do not close `reply_not_captured`), and the ghost is not a draft
+  (do not Tab-accept it). Until that merge, do not score those two pass rules
+  as current. If submit is unconfirmed, Bus must withdraw its own text. The
+  next idle send must not be `prompt_not_shown`.
 - **2026-10-31 — Grok interrupt:** Symptom: `interrupt_failed`, "still working
-  15s after esc". Cause: Grok 1.0.70's cancel key is Ctrl+C, and Esc does
-  nothing. Ctrl+C on `Waiting for response…` can also drop `[stop]` and put
-  the Bus prompt back in the composer, so the next delivery is `NotSubmitted`.
-  Test: interrupt-then-deliver, without `--yolo`. Rule: stop with Ctrl+C, read
-  the composer, withdraw Bus's own restored text, then require `stage:
-  replied`. An Esc failure is not a pass.
+  15s after esc". The live 1.0.70 cancel hint is Ctrl+C, and Esc left the turn
+  running. A Ctrl+C typed on `Waiting for response…` can also drop `[stop]`
+  and put the Bus prompt back in the composer, so the next delivery is
+  `NotSubmitted`. On this master, `sbus agent interrupt` still sends Esc for
+  Grok, the same as Claude and Codex. Cursor is Ctrl+C. Test:
+  interrupt-then-deliver, without `--yolo`, and record the key Bus actually
+  sent. After #237 merges, the rule is: stop with Ctrl+C, read the composer,
+  withdraw Bus's own restored text, then require `stage: replied`. An Esc
+  failure is not a pass. Until that merge, do not treat Ctrl+C as the key
+  Bus sends.
 - **2026-10-31 — Grok approval card:** Symptom: a worker without
   `--always-approve` sat on the tool-approval card, `agent dialog` was null,
   and no reply was sent. Cause: the card has a selected `●`, a trailing `┃`,
-  and `Ctrl+c:cancel`, and no `◆` header, so it was not parsed. Test: approval
-  card without Bus `--yolo` and without the provider skip-permissions flag.
-  Rule: the card must be a blocked dialog. Do not press Enter. Yes is a
-  permission decision.
+  and `Ctrl+c:cancel`, and no `◆` header. On this master the parser requires
+  a `◆ ` header, so that card is not a dialog. Test: approval card without
+  Bus `--yolo` and without the provider skip-permissions flag. Do not press
+  Enter. Yes is a permission decision. After #237 merges, the card must be a
+  blocked dialog. Until that merge, `dialog` false on the no-`◆` card is
+  current behaviour, not a failed cell.
 - **2026-10-31 — Claude `Try "..."` placeholder:** Symptom: `composer_busy` on
   a fresh Claude Code 2.1.309 worker, so no agent-to-agent message arrived. One
   manual key was required, and the welcome ghost survived a key plus a
   backspace. An older Claude head had taken the first message with no prime.
   Cause: the placeholder has no SGR and the cursor sits on the first cell, so
-  it was stashed as a developer draft. Test: fresh first launch in an untrusted
+  it was stashed as a developer draft. This master has no `Try "..."` match
+  under `src/server/api/agents/prompt`. Test: fresh first launch in an untrusted
   directory, trust answered only through `agent dialog` / `agent choose`, no
-  manual key. Rule: that untouched placeholder is empty. After a real key or a
-  Bus paste, the same text is a draft. Do not treat an unrecognised composer
-  as empty.
+  manual key. After #239 merges, that untouched placeholder is empty, and
+  after a real key or a Bus paste the same text is a draft. Do not treat an
+  unrecognised composer as empty. Until that merge, do not score the empty
+  placeholder rule as current master behaviour.
 - **2026-10-31 — Kimi turn end:** Symptom: `stage: replied` with `turn_ended`
   false left the request current, so later sends were `prompt_not_shown` or
   `prior_request_active` on an empty idle composer. Long turns were
@@ -797,8 +817,11 @@ idle then deliver, and an approval card without `--yolo`.
 - **2026-10-31 — Kimi trust:** Symptom: `agent_launching` (and sometimes
   `prompt_not_shown`) on a fresh agent, status still launching. Cause: "Trust
   this folder?" was not a Bus dialog. Test: fresh first launch in an untrusted
-  directory. Rule: the prompt must be a dialog before any send. Enter is safe
-  only when the composer box is empty. An agent left launching fails the case.
+  directory, only when `agent add --help` lists `kimi`. Rule, on the branch
+  that lands Kimi (PR #233, `feat/kimi-provider`, `src/agents/dialog/kimi.rs`):
+  the prompt must be a dialog before any send. The marked "Trust and continue"
+  is chosen with Enter; "Exit" is Down then Enter. There is no `y`/`n` key.
+  Do not press Enter on the composer. An agent left launching fails the case.
 - **2026-10-31 — scratch relaunch is not `bus --dev restart`:** Symptom: an
   in-flight turn ended `reply_not_captured` when the server was swapped.
   Cause: `bus --dev restart --binary PATH --confirm` stops the running server,
