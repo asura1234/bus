@@ -772,6 +772,7 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("read /bus-docs/bus-communication-guide.md"));
     assert!(text.contains("send only what changes the receiver's next step"));
     assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
+    assert!(text.contains("Any agent can message any agent by name or ID"));
     assert!(text.contains("One copy of each result"));
     assert!(text.contains("A turn with no new information sends nothing"));
     assert!(text.contains("Agents are only Idle, Working, Blocked or Unavailable"));

@@ -163,7 +163,7 @@ pub(crate) fn agent_onboarding(
          One copy of each result. A turn with no new information sends nothing: no still-working, no-change, or duplicate posts. \
          Agents are only Idle, Working, Blocked or Unavailable. Do not reply Ready merely to acknowledge a launch prompt; Ready as a review verdict is fine. No new toasts or popup errors. \
          Read {}/how-to-bus-cli.md for the mental model and workflows; run bus <cmd> --help for command details. \
-         Use --as {} when sending messages. --to orchestrator names your home room's bound orchestrator. \
+         Use --as {} when sending messages. Any agent can message any agent by name or ID. --to orchestrator names your home room's bound orchestrator. \
          [waiting-on-you] pages the developer on Feishu: use it only for a hard blocker only the developer can clear, and state the action needed (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
