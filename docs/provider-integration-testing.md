@@ -542,10 +542,23 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   just test-one cursor_final_reply_waits_for_completed_matching_turn
   ```
 
-  Kimi is not a provider in this build and has no provider fixture directory.
-  There is no Kimi `just test-one` filter to run. When `sbus agent add --help`
-  lists `kimi`, run the Kimi live cases in this guide on that head. When it
-  does not, leave those cases unrun and say so.
+  Kimi has focused fixtures in `src/agents/providers/kimi/` and the shared
+  request/resume suites. Run:
+
+  ```sh
+  just test-one kimi_
+  just test-one committed_final_survives_an_oversized_line_before_the_turn
+  just test-one malformed_wire_is_an_error_not_pending_evidence
+  just test-one kimi_successful_silent_turn_completes_without_a_reply
+  just test-one launch_rejects_attached_session_and_prompt_short_options
+  just test-one launch_rejects_positional_input_after_the_option_terminator
+  just test-one identity_includes_every_supported_provider
+  ```
+
+  These cover committed ownership, long and malformed wires, silent success,
+  launch ownership, and restart identity. Run the Kimi live cases in this guide
+  whenever `sbus agent add --help` lists `kimi`; otherwise leave them unrun and
+  say so.
 
   The `just test-one` filters above are the required proof for a torn
   transcript, a wrong session, a cancelled record, and `provider_error`.

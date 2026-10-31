@@ -24,6 +24,7 @@ pub(crate) struct EditorSubmission {
     pub(crate) directory: PathBuf,
     pub(crate) key: Bytes,
     pub(crate) backspace: Bytes,
+    pub(crate) verification_error: Option<&'static str>,
 }
 
 impl ObservedSubmission {
@@ -373,15 +374,16 @@ impl ObservedSubmission {
             })?;
             self.wait_transfer(|| exchange.acknowledged())?;
             let first = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
-
-            // Kimi reads the native editor buffer a second time. Verify every
-            // byte, including offscreen rows, before permitting Enter.
-            exchange.request_verify()?;
-            self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
-                self.inspect.editor_frame_unchanged(&first, screen)
-            })?;
-            self.wait_transfer(|| exchange.acknowledged())?;
-            let verified = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
+            let verified = if editor.verification_error.is_some() {
+                exchange.request_verify()?;
+                self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
+                    self.inspect.editor_frame_unchanged(&first, screen)
+                })?;
+                self.wait_transfer(|| exchange.acknowledged())?;
+                self.checked_editor_marker(&exchange, &editor.backspace, lease)?
+            } else {
+                first
+            };
             self.reset_confirmation(delay);
             self.check_deadline()?;
             self.guarded_editor_key(self.enter.clone(), lease, true, |screen| {
@@ -399,7 +401,9 @@ impl ObservedSubmission {
                 if self.check_deadline().is_err() {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "Kimi submission may have run; inspect the transcript before resending",
+                        editor.verification_error.unwrap_or(
+                            "Provider submission may have run; inspect the transcript before resending",
+                        ),
                     ));
                 }
                 Ok(false)

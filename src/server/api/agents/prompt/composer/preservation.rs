@@ -129,6 +129,9 @@ impl SubmissionInspector for PreservingComposer {
             directory: self.directory.clone(),
             key: self.keys[1].clone(),
             backspace: self.keys[2].clone(),
+            verification_error: Some(
+                "Kimi submission may have run; inspect the transcript before resending",
+            ),
         })
     }
 

@@ -94,7 +94,7 @@ pub(crate) fn load(
         })?
         .ok_or("Bus resume state is missing")?;
     let (agent, corrected) = if facts.session.is_none() {
-        if super::unstarted_codex_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
+        if super::unstarted_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
             return Err("Bus resume has no saved provider session".into());
         }
         (ownership::unstarted_owner(&state, facts)?, None)

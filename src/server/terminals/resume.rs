@@ -30,7 +30,7 @@ pub(crate) fn unstarted_restore_plan(
             .map(str::to_owned),
         session: None,
     };
-    crate::messaging::coordinator::resume::unstarted_codex_plan(&facts, argv)
+    crate::messaging::coordinator::resume::unstarted_plan(&facts, argv)
 }
 
 fn for_native_resume(

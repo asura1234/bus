@@ -7,9 +7,9 @@ mod capture;
 pub(crate) use capture::load;
 pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, NativeResumeFacts};
 
-/// A Codex prompt screen can exist before Codex creates a conversation. Keep
-/// that empty launch across restore; never turn an adopted session into a new one.
-pub(crate) fn unstarted_codex_plan(
+/// Codex or Kimi can show a prompt before creating a conversation. Keep that
+/// empty launch across restore; never turn an adopted session into a new one.
+pub(crate) fn unstarted_plan(
     facts: &NativeResumeFacts,
     argv: Option<&[String]>,
 ) -> Option<crate::agents::resume::catalog::AgentResumePlan> {
@@ -85,7 +85,7 @@ pub(crate) fn unstarted_codex_plan(
     })
 }
 
-fn is_unstarted_codex(state: &BusState, agent: &RoomAgent) -> bool {
+fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
     matches!(
         agent.provider,
         super::Provider::Codex | super::Provider::Kimi
@@ -133,7 +133,7 @@ pub(super) fn restored_agent<'a>(
         .session_id
         .as_deref()
         .filter(|s| !s.is_empty());
-    if session.is_none() && !is_unstarted_codex(state, agent) {
+    if session.is_none() && !is_unstarted(state, agent) {
         return None;
     }
     agent
