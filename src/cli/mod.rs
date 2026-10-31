@@ -149,12 +149,88 @@ fn restart_command_overrides_data_dir(
         return false;
     };
     if data_dir == server_root {
-        return match session_id {
-            Some(id) if !id.is_empty() => false,
-            _ => true,
-        };
+        return !matches!(session_id, Some(id) if !id.is_empty());
     }
     true
+}
+
+fn restart_session(
+    explicit_root: Option<&std::path::Path>,
+    fallback: impl FnOnce() -> io::Result<(std::path::PathBuf, String)>,
+) -> io::Result<(std::path::PathBuf, Option<String>, bool)> {
+    let (root, registry_session) = match explicit_root {
+        Some(root) => (root.to_path_buf(), None),
+        None => {
+            let (root, id) = fallback()?;
+            (root, Some(id))
+        }
+    };
+    let session_id = std::env::var("BUS_SESSION_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .or(registry_session);
+    let explicit = restart_command_overrides_data_dir(explicit_root, session_id.as_deref(), &root);
+    let kept = if explicit { None } else { session_id };
+    Ok((root, kept, explicit))
+}
+
+fn session_root(
+    invocation: &session_pick::Invocation,
+    explicit_root: Option<std::path::PathBuf>,
+    base: &std::path::Path,
+    registry: &LocalSessionRegistry,
+    restart_explicit_data_dir: &mut bool,
+) -> io::Result<Option<(std::path::PathBuf, Option<String>)>> {
+    let located = match &invocation.action {
+        Action::Run => match explicit_root {
+            Some(root) => (root, None),
+            None => {
+                let session = registry.create().map_err(io::Error::other)?;
+                (session.root, Some(session.id))
+            }
+        },
+        Action::Resume(target) => {
+            if explicit_root.is_some() {
+                return Err(io::Error::other(
+                    "BUS_DATA_DIR cannot be combined with bus resume",
+                ));
+            }
+            let session = registry.resume(target.clone()).map_err(io::Error::other)?;
+            (session.root, Some(session.id))
+        }
+        // With no session ever recorded there is no server to stop.
+        Action::Stop
+            if explicit_root.is_none()
+                && matches!(
+                    std::fs::symlink_metadata(base.join("last-session")),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                ) =>
+        {
+            help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
+            return Ok(None);
+        }
+        // Stop targets the same session as control commands.
+        Action::Control(_) | Action::Stop => match explicit_root.clone() {
+            Some(root) => (root, None),
+            None => {
+                let session = last_session(registry, &invocation.action)?;
+                (session.root, Some(session.id))
+            }
+        },
+        // An inherited BUS_DATA_DIR names this server. It is not an override
+        // while the server's session id is still in the environment.
+        Action::Restart(_) => {
+            let (root, session, explicit) = restart_session(explicit_root.as_deref(), || {
+                let session = last_session(registry, &invocation.action)?;
+                Ok((session.root, session.id))
+            })?;
+            *restart_explicit_data_dir = explicit;
+            (root, session)
+        }
+        Action::Paths => (explicit_root.unwrap_or_else(|| base.to_path_buf()), None),
+        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+    };
+    Ok(Some(located))
 }
 
 fn bind_session_env(root: &std::path::Path, session_id: Option<&str>) -> io::Result<()> {
@@ -203,70 +279,15 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         }
         return Ok(());
     }
-    let (root, local_session_id) = match &invocation.action {
-        Action::Run => match explicit_root {
-            Some(root) => (root, None),
-            None => {
-                let session = registry.create().map_err(io::Error::other)?;
-                (session.root, Some(session.id))
-            }
-        },
-        Action::Resume(target) => {
-            if explicit_root.is_some() {
-                return Err(io::Error::other(
-                    "BUS_DATA_DIR cannot be combined with bus resume",
-                ));
-            }
-            let session = registry.resume(target.clone()).map_err(io::Error::other)?;
-            (session.root, Some(session.id))
-        }
-        // With no session ever recorded there is no server to stop.
-        Action::Stop
-            if explicit_root.is_none()
-                && matches!(
-                    std::fs::symlink_metadata(base.join("last-session")),
-                    Err(error) if error.kind() == io::ErrorKind::NotFound
-                ) =>
-        {
-            help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
-            return Ok(());
-        }
-        // Stop targets the same session as control commands.
-        Action::Control(_) | Action::Stop => match explicit_root.clone() {
-            Some(root) => (root, None),
-            None => {
-                let session = last_session(&registry, &invocation.action)?;
-                (session.root, Some(session.id))
-            }
-        },
-        // An inherited BUS_DATA_DIR names this server. It is not an override
-        // while the server's session id is still in the environment.
-        Action::Restart(_) => {
-            let (root, registry_session) = match explicit_root.clone() {
-                Some(root) => (root, None),
-                None => {
-                    let session = last_session(&registry, &invocation.action)?;
-                    (session.root, Some(session.id))
-                }
-            };
-            let session_id = std::env::var("BUS_SESSION_ID")
-                .ok()
-                .filter(|id| !id.is_empty())
-                .or(registry_session);
-            restart_explicit_data_dir = restart_command_overrides_data_dir(
-                explicit_root.as_deref(),
-                session_id.as_deref(),
-                &root,
-            );
-            let kept_session = if restart_explicit_data_dir {
-                None
-            } else {
-                session_id
-            };
-            (root, kept_session)
-        }
-        Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+    let Some((root, local_session_id)) = session_root(
+        &invocation,
+        explicit_root,
+        &base,
+        &registry,
+        &mut restart_explicit_data_dir,
+    )?
+    else {
+        return Ok(());
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
