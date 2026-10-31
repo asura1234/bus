@@ -13,6 +13,20 @@ pub(crate) enum Outcome {
     Failed(String),
 }
 
+/// One Kimi session read for the turn Bus bound, plus a steered submission
+/// inside that turn and a later non-Bus continuation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SessionCapture {
+    /// The bound turn's outcome for its original prompt. A final that belongs
+    /// to a mid-turn steer is absent here, not reused as this prompt's answer.
+    pub lead: Option<Outcome>,
+    /// `(typed prompt, assistant text)` for each steer the bound turn committed.
+    pub steered: Vec<(String, String)>,
+    /// `(turn id, assistant text)` when a later turn, not a Bus message, is
+    /// the original prompt's own answer.
+    pub continuation: Option<(u64, String)>,
+}
+
 #[cfg(test)]
 pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<String> {
     match committed_outcome(wire, turn_id, prompt)? {
@@ -40,23 +54,7 @@ fn normalized_prompt(value: &str) -> String {
         .to_owned()
 }
 
-fn owned_prompt_id(value: &Value, prompt: &str) -> Option<String> {
-    let input = value.get("input")?.as_array()?;
-    if input.len() != 1
-        || input[0].get("type").and_then(Value::as_str) != Some("text")
-        || input[0]
-            .get("text")
-            .and_then(Value::as_str)
-            .map(normalized_prompt)
-            .as_deref()
-            != Some(normalized_prompt(prompt).as_str())
-    {
-        return None;
-    }
-    let id = value.get("promptId")?.as_str()?;
-    (!id.is_empty()).then(|| id.to_owned())
-}
-
+#[cfg(test)]
 fn committed_outcome_lines(
     lines: impl IntoIterator<Item = Result<String, String>>,
     turn_id: u64,
@@ -81,108 +79,310 @@ fn committed_outcome_lines(
             },
         }
     });
-    let outcome = scan_committed_outcome(checked, turn_id, prompt);
+    let outcome =
+        session_capture_lines_inner(checked, turn_id, prompt).and_then(|capture| capture.lead);
     if let Some(error) = invalid {
         return Err(error);
     }
     Ok(outcome)
 }
 
-fn scan_committed_outcome(
+pub(crate) fn session_capture_lines(
     lines: impl IntoIterator<Item = Result<String, String>>,
     turn_id: u64,
     prompt: &str,
-) -> Option<Outcome> {
-    let mut owned = false;
-    let mut prompt_id = String::new();
-    let mut answer = None;
-    let mut agent_outcome = None;
-    let mut agent_error = None;
-    let mut turn_reason = None;
+) -> Result<Option<SessionCapture>, String> {
+    let mut lines = lines.into_iter();
+    let mut invalid = None;
+    let checked = std::iter::from_fn(|| {
+        let line = lines.next()?;
+        match line {
+            Err(error) => {
+                invalid = Some(error);
+                None
+            }
+            Ok(line) if line.len() as u64 > MAX_WIRE_BYTES => Some(Ok(line)),
+            Ok(line) => match serde_json::from_str::<Value>(&line) {
+                Ok(_) => Some(Ok(line)),
+                Err(_) => {
+                    invalid = Some("Kimi wire contains malformed JSON".into());
+                    None
+                }
+            },
+        }
+    });
+    let capture = session_capture_lines_inner(checked, turn_id, prompt);
+    if let Some(error) = invalid {
+        return Err(error);
+    }
+    Ok(capture)
+}
+
+struct OpenTurn {
+    id: u64,
+    prompt_text: String,
+    prompt_id: String,
+    lead_answer: Option<String>,
+    after_steer: bool,
+    steer_prompt: Option<String>,
+    steer_answer: Option<String>,
+    steers: Vec<(String, String)>,
+    agent_outcome: Option<String>,
+    agent_error: Option<String>,
+    turn_reason: Option<String>,
+    prompt_reason: Option<String>,
+}
+
+fn assistant_text(value: &Value) -> Option<(bool, String)> {
+    let message = value.get("message")?.get("message")?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant")
+        || value
+            .pointer("/message/meta/source")
+            .and_then(Value::as_str)
+            != Some("llm")
+    {
+        return None;
+    }
+    let tool_call = message
+        .get("toolCalls")
+        .and_then(Value::as_array)
+        .is_some_and(|calls| !calls.is_empty());
+    if tool_call {
+        return Some((true, String::new()));
+    }
+    let text = message
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+        .map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Option<Vec<_>>>()?
+        .concat();
+    Some((false, text))
+}
+
+fn steer_text(value: &Value) -> Option<String> {
+    let parts = value
+        .get("input")
+        .or_else(|| value.get("content"))?
+        .as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    (!text.is_empty()).then_some(text)
+}
+
+fn note_steer(turn: &mut OpenTurn, text: String) {
+    if turn.steer_prompt.as_ref() == Some(&text) {
+        turn.after_steer = true;
+        return;
+    }
+    if let (Some(prompt), Some(answer)) = (turn.steer_prompt.take(), turn.steer_answer.take()) {
+        if !answer.is_empty() {
+            turn.steers.push((prompt, answer));
+        }
+    }
+    turn.steer_prompt = Some(text);
+    turn.steer_answer = None;
+    turn.after_steer = true;
+}
+
+fn finish_turn(turn: &mut OpenTurn) {
+    if let (Some(prompt), Some(answer)) = (turn.steer_prompt.take(), turn.steer_answer.take()) {
+        if !answer.is_empty() {
+            turn.steers.push((prompt, answer));
+        }
+    }
+}
+
+fn continuation_text(turn: &OpenTurn) -> Option<String> {
+    if turn.prompt_text.contains("[Bus message") {
+        return None;
+    }
+    if turn.agent_outcome.as_deref() == Some("done")
+        && turn.turn_reason.as_deref() == Some("completed")
+    {
+        turn.lead_answer.clone().filter(|text| !text.is_empty())
+    } else {
+        None
+    }
+}
+
+fn session_capture_lines_inner(
+    lines: impl IntoIterator<Item = Result<String, String>>,
+    turn_id: u64,
+    prompt: &str,
+) -> Option<SessionCapture> {
+    let mut open: Option<OpenTurn> = None;
+    let mut done: Vec<OpenTurn> = Vec::new();
     for line in lines {
-        let line = line.ok()?;
-        // One oversized historical line must not hide a later committed turn.
+        let Ok(line) = line else {
+            continue;
+        };
         if line.len() as u64 > MAX_WIRE_BYTES {
             continue;
         }
-        let value: Value = serde_json::from_str(&line).ok()?;
-        match value.get("type")?.as_str()? {
-            "turn.prompt" => {
-                if owned {
-                    return None;
-                }
-                if value.get("agentId").and_then(Value::as_str) != Some("main")
-                    || value.get("turnId").and_then(Value::as_u64) != Some(turn_id)
-                {
-                    continue;
-                }
-                prompt_id = owned_prompt_id(&value, prompt)?;
-                owned = true;
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(kind) = value.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if kind == "turn.prompt" {
+            if let Some(mut previous) = open.take() {
+                finish_turn(&mut previous);
+                done.push(previous);
             }
-            "agent.message.appended" if owned && agent_outcome.is_none() => {
-                let message = value.get("message")?.get("message")?;
-                if message.get("role").and_then(Value::as_str) != Some("assistant")
-                    || value
-                        .pointer("/message/meta/source")
-                        .and_then(Value::as_str)
-                        != Some("llm")
+            if value.get("agentId").and_then(Value::as_str) != Some("main") {
+                continue;
+            }
+            let Some(id) = value.get("turnId").and_then(Value::as_u64) else {
+                continue;
+            };
+            let Some(input) = value.get("input").and_then(Value::as_array) else {
+                continue;
+            };
+            if input.len() != 1 {
+                continue;
+            }
+            let Some(text) = input
+                .first()
+                .and_then(|part| part.get("text"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            open = Some(OpenTurn {
+                id,
+                prompt_text: text.to_owned(),
+                prompt_id: value
+                    .get("promptId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                lead_answer: None,
+                after_steer: false,
+                steer_prompt: None,
+                steer_answer: None,
+                steers: Vec::new(),
+                agent_outcome: None,
+                agent_error: None,
+                turn_reason: None,
+                prompt_reason: None,
+            });
+            continue;
+        }
+        let Some(turn) = open.as_mut() else {
+            continue;
+        };
+        match kind {
+            "prompt.steered" | "turn.steer" => {
+                if value
+                    .get("turnId")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|id| id != turn.id)
                 {
                     continue;
                 }
-                if message
-                    .get("toolCalls")
-                    .and_then(Value::as_array)
-                    .is_some_and(|calls| !calls.is_empty())
-                {
-                    answer = None;
-                    continue;
-                }
-                let text = message
-                    .get("content")?
-                    .as_array()?
-                    .iter()
-                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-                    .map(|part| part.get("text").and_then(Value::as_str))
-                    .collect::<Option<Vec<_>>>()?
-                    .concat();
-                if !text.is_empty() {
-                    answer = Some(text);
+                if let Some(text) = steer_text(&value) {
+                    note_steer(turn, text);
                 }
             }
-            "agent.turn.ended" if owned => {
-                if value.get("turnId").and_then(Value::as_u64) == Some(turn_id) {
-                    agent_outcome = Some(value.get("outcome")?.as_str()?.to_owned());
-                    agent_error = value
+            "agent.message.appended" if turn.agent_outcome.is_none() => {
+                let Some((tool_call, text)) = assistant_text(&value) else {
+                    continue;
+                };
+                if tool_call {
+                    if turn.after_steer {
+                        turn.steer_answer = None;
+                    } else {
+                        turn.lead_answer = None;
+                    }
+                } else if !text.is_empty() {
+                    if turn.after_steer {
+                        turn.steer_answer = Some(text);
+                    } else {
+                        turn.lead_answer = Some(text);
+                    }
+                }
+            }
+            "agent.turn.ended" if value.get("turnId").and_then(Value::as_u64) == Some(turn.id) => {
+                if let Some(outcome) = value.get("outcome").and_then(Value::as_str) {
+                    turn.agent_outcome = Some(outcome.to_owned());
+                    turn.agent_error = value
                         .get("errorMessage")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
                 }
             }
-            "turn.ended" if owned => {
+            "turn.ended"
                 if value.get("agentId").and_then(Value::as_str) == Some("main")
-                    && value.get("turnId").and_then(Value::as_u64) == Some(turn_id)
-                {
-                    agent_outcome.as_ref()?;
-                    turn_reason = Some(value.get("reason")?.as_str()?.to_owned());
+                    && value.get("turnId").and_then(Value::as_u64) == Some(turn.id)
+                    && turn.agent_outcome.is_some() =>
+            {
+                if let Some(reason) = value.get("reason").and_then(Value::as_str) {
+                    turn.turn_reason = Some(reason.to_owned());
                 }
             }
             "prompt.completed"
-                if owned
-                    && value.get("agentId").and_then(Value::as_str) == Some("main")
-                    && value.get("promptId").and_then(Value::as_str) == Some(&prompt_id) =>
+                if value.get("agentId").and_then(Value::as_str) == Some("main")
+                    && value.get("promptId").and_then(Value::as_str) == Some(&turn.prompt_id) =>
             {
-                return terminal_outcome(
-                    agent_outcome.as_deref(),
-                    turn_reason.as_deref(),
-                    value.get("reason")?.as_str()?,
-                    answer,
-                    agent_error,
-                );
+                if let Some(reason) = value.get("reason").and_then(Value::as_str) {
+                    turn.prompt_reason = Some(reason.to_owned());
+                }
             }
             _ => {}
         }
     }
-    None
+    if let Some(mut previous) = open.take() {
+        finish_turn(&mut previous);
+        done.push(previous);
+    }
+    let bound = done.iter().find(|turn| {
+        turn.id == turn_id && normalized_prompt(&turn.prompt_text) == normalized_prompt(prompt)
+    })?;
+    // prompt.completed is the bound turn's commit. A steer answer or a later
+    // continuation is not evidence until that chain is a recognized terminal.
+    if bound.prompt_reason.is_none() {
+        return Some(SessionCapture {
+            lead: None,
+            steered: Vec::new(),
+            continuation: None,
+        });
+    }
+    let Some(lead_outcome) = terminal_outcome(
+        bound.agent_outcome.as_deref(),
+        bound.turn_reason.as_deref(),
+        bound.prompt_reason.as_deref().unwrap_or(""),
+        bound.lead_answer.clone(),
+        bound.agent_error.clone(),
+    ) else {
+        return Some(SessionCapture {
+            lead: None,
+            steered: Vec::new(),
+            continuation: None,
+        });
+    };
+    let steered = bound.steers.clone();
+    // NoReply here means the bound turn's own text was only a steer. Leave the
+    // lead open for a later non-Bus turn instead of completing the group silent.
+    let (lead, continuation) = match lead_outcome {
+        Outcome::NoReply if !steered.is_empty() => {
+            let continuation = done
+                .iter()
+                .filter(|turn| turn.id > turn_id)
+                .find_map(|turn| continuation_text(turn).map(|text| (turn.id, text)));
+            (None, continuation)
+        }
+        other => (Some(other), None),
+    };
+    Some(SessionCapture {
+        lead,
+        steered,
+        continuation,
+    })
 }
 
 fn terminal_outcome(
@@ -220,6 +420,7 @@ pub(crate) fn resolve(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_outcome(
     home: &Path,
     cwd: &Path,
@@ -227,6 +428,16 @@ pub(crate) fn resolve_outcome(
     turn: &str,
     prompt: &str,
 ) -> Result<Option<Outcome>, String> {
+    Ok(resolve_capture(home, cwd, session, turn, prompt)?.and_then(|capture| capture.lead))
+}
+
+pub(crate) fn resolve_capture(
+    home: &Path,
+    cwd: &Path,
+    session: &str,
+    turn: &str,
+    prompt: &str,
+) -> Result<Option<SessionCapture>, String> {
     let turn_id = turn.parse::<u64>().map_err(|_| "Invalid Kimi turn id")?;
     let root = home.canonicalize().map_err(|e| e.to_string())?;
     let index = home.join("session_index.jsonl");
@@ -283,7 +494,7 @@ pub(crate) fn resolve_outcome(
     let lines = std::io::BufReader::new(file)
         .lines()
         .map(|line| line.map_err(|error| error.to_string()));
-    committed_outcome_lines(lines, turn_id, prompt)
+    session_capture_lines(lines, turn_id, prompt)
 }
 
 #[cfg(test)]
@@ -451,6 +662,47 @@ mod tests {
             "older history must not disable this committed turn's reply"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn kimi_steered_reply_is_not_the_lead_final() {
+        let original = "[Bus message 5 from you]\nRun sleep 45 and reply KIMI-BUSY-DONE-32299.";
+        let steered = "[Bus message 8 from you]\nReply with exactly KIMI-QUEUED-32299.";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"working\"}}],\"toolCalls\":[{{\"name\":\"bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"prompt.steered\",\"agentId\":\"main\",\"content\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
+                "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"KIMI-QUEUED-32299\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":\"<notification id=\\\"task:done\\\" />\"}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"KIMI-BUSY-DONE-32299\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            steered = serde_json::to_string(steered).unwrap(),
+        );
+        assert_eq!(
+            committed_outcome(&wire, 0, original),
+            None,
+            "the steered assistant text is not the original prompt's final"
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 0, original)
+                .unwrap()
+                .expect("bound turn completed");
+        assert_eq!(
+            capture.steered,
+            vec![(steered.to_owned(), "KIMI-QUEUED-32299".to_owned())]
+        );
+        assert_eq!(
+            capture.continuation,
+            Some((1, "KIMI-BUSY-DONE-32299".to_owned()))
+        );
     }
 
     #[test]

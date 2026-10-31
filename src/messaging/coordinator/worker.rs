@@ -597,14 +597,29 @@ impl Worker {
         let mut settled_groups = Vec::new();
         for (agent, observed_at_ms) in agents {
             let rollout = self.codex_rollouts.get(&agent);
-            let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
+            let kimi_evidence = recorded_kimi_end(&self.data_dir, &mut state, agent)
                 .unwrap_or_else(|error| {
                     if state.record_error_episode(format!("kimi-evidence:{}:{error}", agent.0)) {
                         tracing::warn!(event = "bus.kimi.evidence_failed", agent_id = agent.0, %error, "Kimi completion evidence failed; closing the request with an actionable error");
                     }
-                    Some(crate::messaging::model::RecordedTurnEnd::Error(error))
+                    kimi_settlement::KimiEvidence {
+                        end: Some(crate::messaging::model::RecordedTurnEnd::Error(error)),
+                        steer_turn: String::new(),
+                        steered: Vec::new(),
+                    }
                 });
-            let kimi_recorded = &kimi_recorded;
+            let mut steered_delivered = false;
+            for (prompt, text) in &kimi_evidence.steered {
+                steered_delivered |= state.complete_kimi_steered_reply(
+                    agent,
+                    prompt,
+                    text,
+                    &kimi_evidence.steer_turn,
+                    observed_at_ms,
+                );
+            }
+            changed |= steered_delivered;
+            let kimi_recorded = &kimi_evidence.end;
             let recorded_end = |request: &crate::messaging::model::Request| {
                 if state_provider_is_kimi(&self.state, request.agent_id) {
                     (*kimi_recorded).clone()

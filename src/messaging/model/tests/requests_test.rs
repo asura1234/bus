@@ -280,6 +280,77 @@ fn kimi_completed_wire_recovers_one_final_reply_after_intermediate_idle() {
 }
 
 #[test]
+fn kimi_steered_reply_stays_with_its_request_when_the_lead_continues() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let lead = submit_text(
+        &mut state,
+        room,
+        agent,
+        "Run sleep 45 and reply KIMI-BUSY-DONE-32299.",
+    );
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    let follow = submit_text(
+        &mut state,
+        room,
+        agent,
+        "Reply with exactly KIMI-QUEUED-32299.",
+    );
+    let steered_prompt = state
+        .render_request_payload(follow)
+        .expect("steered payload");
+    let lead_prompt = state.render_request_payload(lead).expect("lead payload");
+    state.begin_steering(follow, lead).unwrap();
+    state
+        .record_steering(
+            follow,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 30)
+        .unwrap();
+
+    assert!(state.complete_kimi_steered_reply(
+        agent,
+        &steered_prompt,
+        "KIMI-QUEUED-32299",
+        "0",
+        40,
+    ));
+    let record = RecordedTurnEnd::Final {
+        turn_id: "1".into(),
+        text: "KIMI-BUSY-DONE-32299".into(),
+        prompts: vec![lead_prompt],
+    };
+    assert_eq!(
+        state.settle_ended_request(agent, 40, |_| Some(record)),
+        Some(lead)
+    );
+
+    let steered = state.request(follow).unwrap();
+    assert_eq!(steered.phase, RequestPhase::Completed);
+    assert_eq!(
+        steered.reply().map(|reply| reply.text.as_str()),
+        Some("KIMI-QUEUED-32299")
+    );
+    assert!(steered.failure_reason.is_none());
+    assert!(steered.group.is_none());
+    let lead_state = state.request(lead).unwrap();
+    assert_eq!(lead_state.phase, RequestPhase::Completed);
+    assert_eq!(
+        lead_state.reply().map(|reply| reply.text.as_str()),
+        Some("KIMI-BUSY-DONE-32299")
+    );
+}
+
+#[test]
 fn kimi_process_exit_settles_confirmed_submission_before_start_hook() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;

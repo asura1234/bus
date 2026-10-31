@@ -347,6 +347,72 @@ impl BusState {
         )
     }
 
+    /// Give a Kimi steer the assistant text the wire recorded for that typed
+    /// prompt. The lead does not keep this copy.
+    pub(crate) fn complete_kimi_steered_reply(
+        &mut self,
+        agent: AgentId,
+        prompt: &str,
+        text: &str,
+        turn_id: &str,
+        now_ms: u64,
+    ) -> bool {
+        if text.trim().is_empty() {
+            return false;
+        }
+        let Some(lead) = self
+            .agents
+            .get(&agent)
+            .and_then(|owner| owner.current_request)
+        else {
+            return false;
+        };
+        let mut members = self.group_members(lead);
+        members.retain(|id| *id != lead);
+        let Some(id) = members.into_iter().find(|id| {
+            self.requests.get(id).is_some_and(|request| {
+                request.steered && !request.settled() && request.matches_callback_payload(prompt)
+            })
+        }) else {
+            return false;
+        };
+        let (room_id, agent_id) = {
+            let Some(request) = self.requests.get_mut(&id) else {
+                return false;
+            };
+            let session_id = request.provider_session_id.clone();
+            request.group = None;
+            request.phase = RequestPhase::Completed;
+            request.failure_reason = None;
+            request.completed_at_ms = Some(now_ms);
+            request.provider_turn_id = Some(turn_id.to_owned());
+            request.completed_reply = Some(super::types::CompletedReply {
+                content: PendingFinal {
+                    callback_id: format!("kimi-steer:{turn_id}:{}", id.0),
+                    text: text.to_owned(),
+                    received_at_ms: now_ms,
+                    provider_session_id: session_id,
+                    provider_turn_id: Some(turn_id.to_owned()),
+                },
+                group: None,
+            });
+            (request.room_id, request.agent_id)
+        };
+        let Some(room) = self.rooms.get_mut(&room_id) else {
+            return true;
+        };
+        room.latest_replies.insert(
+            agent_id,
+            super::Reply {
+                request_id: id,
+                agent_id,
+                text: text.to_owned(),
+                received_at_ms: now_ms,
+            },
+        );
+        true
+    }
+
     /// Kimi's idle frame is not a turn boundary. Close only after an owned
     /// terminal wire record, or a confirmed process exit with its grace window.
     fn settle_kimi_ended_request(
