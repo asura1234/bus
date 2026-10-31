@@ -398,8 +398,7 @@ impl BusState {
         if !matches!(
             request.phase,
             RequestPhase::Submitting | RequestPhase::Active
-        ) || !request.trusted_start_bound
-            || request.awaiting_background
+        ) || request.awaiting_background
             || request.pending_final.is_some()
         {
             return None;
@@ -410,6 +409,9 @@ impl BusState {
                 snapshot.launch_id == request.expected_launch_id
                     && now_ms >= snapshot.at_ms.saturating_add(TURN_SETTLE_MS)
             });
+        if !request.trusted_start_bound && !(exited && request.phase == RequestPhase::Active) {
+            return None;
+        }
         let recorded = recorded_end(request);
         if recorded.is_none() && !exited {
             return None;

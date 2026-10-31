@@ -262,6 +262,9 @@ fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> Runtime
         if agent.session_binding_invalidated || agent.deletion_pending {
             return RuntimeStatus::Unavailable;
         }
+        if info.agent_status == schema::AgentStatus::Blocked {
+            return RuntimeStatus::Blocked;
+        }
         if info.launch_pending {
             return RuntimeStatus::Launching;
         }

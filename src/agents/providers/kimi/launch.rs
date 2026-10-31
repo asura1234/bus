@@ -268,8 +268,11 @@ fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBu
     let bytes = toml::to_string(&config).map_err(|e| e.to_string())?;
     hook_json::atomic_write(&home.join("config.toml"), bytes.as_bytes())
         .map_err(|e| e.to_string())?;
-    hook_json::atomic_write(&home.join("tui.toml"), b"[upgrade]\nauto_install = false\n")
-        .map_err(|e| e.to_string())?;
+    hook_json::atomic_write(
+        &home.join("tui.toml"),
+        b"cache_expiry_hint = false\n\n[upgrade]\nauto_install = false\n",
+    )
+    .map_err(|e| e.to_string())?;
     Ok(home)
 }
 
@@ -480,6 +483,17 @@ fn environment_for(
     Ok(env)
 }
 
+pub(crate) fn validate_run_permissions(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|arg| arg == "--auto")
+        && args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
+    {
+        return Err("Kimi --auto and --yolo cannot be combined".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn prepare(
     spec: &LaunchSpec,
     initialize: impl FnOnce(&HookContext) -> Result<(), String>,
@@ -488,16 +502,11 @@ pub(crate) fn prepare(
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
     validate_args(&options)?;
     let adopted_session = take_adopted_session(&options)?;
-    if options.iter().any(|arg| arg == "--auto")
-        && options
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
-        return Err("Kimi --auto and --yolo cannot be combined".into());
-    }
+    validate_run_permissions(&options)?;
     if crate::utils::env::yolo_enabled() && options.iter().any(|arg| arg == "--auto") {
         return Err("Bus --yolo conflicts with Kimi --auto; choose one permission mode".into());
     }
+    let saved_options = options.clone();
     if crate::utils::env::yolo_enabled()
         && !options
             .iter()
@@ -521,7 +530,7 @@ pub(crate) fn prepare(
         ),
         (
             "launch-options.json",
-            serde_json::to_vec(&options).map_err(|e| e.to_string())?,
+            serde_json::to_vec(&saved_options).map_err(|e| e.to_string())?,
         ),
     ] {
         hook_json::atomic_write(&spec.hooks.spool.join(name), &bytes).map_err(|e| e.to_string())?;
