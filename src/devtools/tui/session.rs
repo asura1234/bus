@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) use crate::utils::paths::find_bus_checkout;
 
@@ -30,6 +30,11 @@ pub(super) const OWNER_ENV: &str = "BUS_TUI_OWNER";
 /// Moves the driver root, so test suites never share the cap with other
 /// drivers on the machine. Must be absolute and short (sockets live under it).
 pub(super) const ROOT_ENV: &str = "BUS_TUI_ROOT";
+/// Set by a test on the short-lived `tui start` process. The host inherits it
+/// (start does not clear the environment) and reaps the scratch Bus when that
+/// pid is gone. Unset for a developer session. Not `Claim.claimant`: that pid
+/// is the `tui start` process, which exits on purpose as soon as the host is up.
+pub(super) const REAP_WITH_ENV: &str = "BUS_TUI_REAP_WITH";
 
 /// Variables that name another Bus or its sockets. They are never passed to
 /// the spawned instance, and refused outright when they point at the target.
@@ -482,6 +487,106 @@ pub(super) fn pids_holding(dir: &Path) -> Vec<u32> {
     {
         let _ = dir;
         Vec::new()
+    }
+}
+
+pub(super) fn kill_pid(pid: u32) {
+    if pid <= 1 || pid == std::process::id() {
+        return;
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    terminate(pid);
+}
+
+/// Ends this process without running destructors. The reap watcher uses it
+/// after the scratch children are already signaled, so a dead test cannot
+/// leave the detached host behind.
+pub(super) fn kill_self() -> ! {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(std::process::id() as libc::pid_t, libc::SIGKILL);
+    }
+    std::process::abort();
+}
+
+/// SIGTERM, then SIGKILL whatever is still alive after `grace`.
+pub(super) fn reap_pids(pids: &[u32], grace: Duration) {
+    let pids: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|pid| *pid > 1 && *pid != std::process::id())
+        .collect();
+    if pids.is_empty() {
+        return;
+    }
+    for pid in &pids {
+        terminate(*pid);
+    }
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline && pids.iter().any(|pid| process_alive(*pid)) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for pid in &pids {
+        if process_alive(*pid) {
+            kill_pid(*pid);
+        }
+    }
+}
+
+/// Token holders plus anything else with a file open under `dir`.
+pub(super) fn session_pids(dir: &Path, token: &str) -> Vec<u32> {
+    let mut pids = if token.is_empty() {
+        Vec::new()
+    } else {
+        pids_owned(dir, token)
+    };
+    for pid in pids_holding(dir) {
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+/// Kills the host, the scratch Bus, and every process still attached to `dir`.
+pub(super) fn reap_session_tree(
+    dir: &Path,
+    token: &str,
+    host_pid: Option<u32>,
+    bus_pid: Option<u32>,
+) {
+    let mut pids = session_pids(dir, token);
+    for pid in [host_pid, bus_pid].into_iter().flatten() {
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+    reap_pids(&pids, Duration::from_millis(200));
+}
+
+/// Blocks until `observer` is gone, then kills this session's processes.
+/// `observer` is the test process named by [`REAP_WITH_ENV`]. A zombie still
+/// counts as alive, which matches `kill(pid, 0)` until the runner waits it.
+pub(super) fn watch_until_observer_exits(observer: u32, paths: SessionPaths, token: String) {
+    while process_alive(observer) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let info = paths.read_info();
+    reap_session_tree(
+        &paths.dir,
+        &token,
+        info.as_ref().map(|info| info.host_pid),
+        info.as_ref().and_then(|info| info.bus_pid),
+    );
+    // Test sessions use a private root (`/tmp/bti-…`). Processes whose cwd is
+    // that root, rather than the session directory, still show up here. This
+    // watcher runs only when a test set [`REAP_WITH_ENV`].
+    if let Some(root) = paths.dir.parent() {
+        reap_pids(&pids_holding(root), Duration::from_millis(50));
     }
 }
 

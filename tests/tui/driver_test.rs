@@ -61,6 +61,9 @@ fn bus(name: &str) -> Command {
     // cargo builds the driver into target/debug; allow it for this suite only.
     command.env("BUS_TUI_ALLOW_TARGET_DEBUG", "1");
     command.env("BUS_TUI_ROOT", root(name));
+    // The host inherits this. A runner SIGKILL never runs Drop or the panic
+    // hook; the host reaps the scratch Bus when this pid is gone.
+    command.env("BUS_TUI_REAP_WITH", std::process::id().to_string());
     for key in [
         "BUS_DATA_DIR",
         "BUS_SESSION_ID",
@@ -108,12 +111,124 @@ fn parse(output: Output) -> (i32, Value) {
 /// Stops the session even when an assertion fails mid-test.
 struct Session(String);
 
+thread_local! {
+    static SESSIONS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn install_reap_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // Only this thread's sessions. A process-wide sweep would kill
+            // scratch Buses that other tests still own.
+            let names = SESSIONS.with(|slot| slot.borrow().clone());
+            for name in &names {
+                force_reap(name);
+            }
+            previous(info);
+        }));
+    });
+}
+
+fn kill_pid(pid: u32) {
+    if pid <= 1 || pid == std::process::id() {
+        return;
+    }
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+fn pids_under(dir: &Path) -> Vec<u32> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let Ok(output) = Command::new("lsof")
+        .args(["-t", "+D"])
+        .arg(dir)
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let me = std::process::id();
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter_map(|pid| pid.parse().ok())
+        .filter(|pid| *pid > 1 && *pid != me)
+        .collect()
+}
+
+fn recorded_pids(name: &str) -> Vec<u32> {
+    let Ok(text) = std::fs::read_to_string(session_dir(name).join("session.json")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let mut pids = Vec::new();
+    if let Some(pid) = value.get("host_pid").and_then(Value::as_u64) {
+        pids.push(pid as u32);
+    }
+    if let Some(pid) = value.get("bus_pid").and_then(Value::as_u64) {
+        pids.push(pid as u32);
+    }
+    pids
+}
+
+/// SIGKILL the host, the scratch Bus, and anything still using the private root.
+/// Used when `tui stop` did not return and from the panic hook, which runs
+/// before destructors.
+fn force_reap(name: &str) {
+    for pid in recorded_pids(name) {
+        kill_pid(pid);
+    }
+    for dir in [root(name), session_dir(name)] {
+        for pid in pids_under(&dir) {
+            kill_pid(pid);
+        }
+    }
+}
+
+fn stop_bounded(name: &str) {
+    let mut command = bus(name);
+    command.args(["--dev", "tui", "stop", "--name", name]);
+    let Ok(mut child) = command.spawn() else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+}
+
 impl Session {
+    /// Register before the start command returns, so a later assert still reaps.
+    fn hold(name: String) -> Self {
+        install_reap_hook();
+        SESSIONS.with(|slot| slot.borrow_mut().push(name.clone()));
+        Self(name)
+    }
+
     fn start(tag: &str) -> Self {
-        let name = session_name(tag);
+        let session = Self::hold(session_name(tag));
         let runs = run_dir();
         let (code, status) = tui(
-            &name,
+            &session.0,
             &[
                 "start",
                 "--size",
@@ -124,7 +239,7 @@ impl Session {
         );
         assert_eq!(code, 0, "start failed: {status}");
         assert_eq!(status["alive"], true);
-        Self(name)
+        session
     }
 
     fn ok(&self, args: &[&str]) -> Value {
@@ -136,11 +251,140 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = tui(&self.0, &["stop"]);
+        stop_bounded(&self.0);
+        force_reap(&self.0);
+        let name = self.0.clone();
+        SESSIONS.with(|slot| slot.borrow_mut().retain(|registered| registered != &name));
         // A stopped session leaves no root behind.
         let _ = std::fs::remove_file(root(&self.0).join(".start.lock"));
         let _ = std::fs::remove_dir(root(&self.0));
     }
+}
+
+fn process_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+fn wait_child(child: &mut std::process::Child, limit: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    child.try_wait().ok().flatten().is_some()
+}
+
+#[test]
+fn a_panic_kills_only_that_threads_scratch_process() {
+    let kept_name = session_name("keep");
+    let kept_dir = session_dir(&kept_name);
+    std::fs::create_dir_all(&kept_dir).expect("kept dir");
+    let mut kept = Command::new("/bin/sleep")
+        .arg("30")
+        .current_dir(&kept_dir)
+        .spawn()
+        .expect("kept sleep");
+    let kept_pid = kept.id();
+    let kept_session = Session::hold(kept_name);
+
+    let doomed_name = session_name("doom");
+    let doomed_dir = session_dir(&doomed_name);
+    std::fs::create_dir_all(&doomed_dir).expect("doomed dir");
+    let joined = std::thread::spawn(move || {
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .current_dir(&doomed_dir)
+            .spawn()
+            .expect("doomed sleep");
+        let pid = child.id();
+        let _session = Session::hold(doomed_name);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pids_under(&doomed_dir).contains(&pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            pids_under(&doomed_dir).contains(&pid),
+            "lsof missed the scratch process"
+        );
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("injected scratch leak");
+        }));
+        let exited = wait_child(&mut child, std::time::Duration::from_secs(2));
+        (caught.is_err(), exited)
+    })
+    .join()
+    .expect("panic thread");
+    assert!(joined.0, "panic was not raised");
+    assert!(joined.1, "panic left the scratch process running");
+    assert!(
+        process_alive(kept_pid),
+        "a panic on another thread killed this thread's scratch process"
+    );
+    let _ = kept.kill();
+    let _ = kept.wait();
+    drop(kept_session);
+}
+
+#[test]
+fn stop_kills_processes_left_after_the_host_dies() {
+    let session = Session::start("reap");
+    let dir = session_dir(&session.0);
+    let claim: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("bus-tui-session")).expect("claim"),
+    )
+    .expect("claim json");
+    let token = claim["token"].as_str().expect("token").to_owned();
+    let info: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("session.json")).expect("session info"),
+    )
+    .expect("session info json");
+    let host_pid = info["host_pid"].as_u64().expect("host pid") as u32;
+    let bus_pid = info["bus_pid"].as_u64().expect("bus pid") as u32;
+    let mut orphan = Command::new("/bin/sleep")
+        .arg("60")
+        .current_dir(&dir)
+        .env("BUS_TUI_OWNER", &token)
+        .spawn()
+        .expect("orphan");
+    let seen = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !pids_under(&dir).contains(&orphan.id()) && std::time::Instant::now() < seen {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        pids_under(&dir).contains(&orphan.id()),
+        "lsof missed the orphan"
+    );
+    kill_pid(host_pid);
+    let host_gone = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process_alive(host_pid) && std::time::Instant::now() < host_gone {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut stop = bus(&session.0);
+    stop.args(["--dev", "tui", "stop", "--name", &session.0]);
+    let mut stop = stop.spawn().expect("spawn stop");
+    let stop_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while stop.try_wait().ok().flatten().is_none() && std::time::Instant::now() < stop_deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if stop.try_wait().ok().flatten().is_none() {
+        let _ = stop.kill();
+        let _ = stop.wait();
+        panic!("tui stop did not return after the host was killed");
+    }
+    assert!(
+        wait_child(&mut orphan, std::time::Duration::from_secs(2)),
+        "stop left a scratch process behind"
+    );
+    let bus_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process_alive(bus_pid) && std::time::Instant::now() < bus_deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        !process_alive(bus_pid),
+        "scratch bus {bus_pid} survived the host"
+    );
 }
 
 fn bus_state(session: &Session) -> Value {
@@ -152,6 +396,7 @@ fn bus_state(session: &Session) -> Value {
 #[test]
 fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() {
     let name = session_name("dot");
+    let session = Session::hold(name.clone());
     let (code, started) = parse(tui_raw(
         &name,
         &[
@@ -164,7 +409,6 @@ fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() 
         &[("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")],
     ));
     assert_eq!(code, 0, "{started}");
-    let session = Session(name);
     let original = session.ok(&["status"]);
     let work = session_dir(&session.0).join("work");
     let (code, _) = parse(scratch_bus(
@@ -671,16 +915,16 @@ fn exit_codes_follow_the_contract() {
 #[test]
 fn stop_from_the_work_dir_keeps_a_relative_run_dir() {
     let name = session_name("rel");
+    let session = Session::hold(name);
     let caller = std::env::temp_dir().join(format!("bus-tui-it-cwd-{}", std::process::id()));
     std::fs::create_dir_all(&caller).unwrap();
     let caller = caller.canonicalize().unwrap();
-    let started = bus(&name)
+    let started = bus(&session.0)
         .current_dir(&caller)
-        .args(["--dev", "tui", "start", "--name", &name, "--size", "80x24"])
+        .args(["--dev", "tui", "start", "--name", &session.0, "--size", "80x24"])
         .args(["--run-dir", "runs"])
         .output()
         .unwrap();
-    let session = Session(name);
     let (code, status) = parse(started);
     assert_eq!(code, 0, "{status}");
     // `stop` run from inside the session, as an agent there would.
@@ -953,6 +1197,7 @@ fn the_scratch_bus_lists_its_own_home_not_the_developers() {
 #[test]
 fn start_takes_the_graphics_identity_and_refuses_unknown_ones() {
     let name = session_name("gfx");
+    let session = Session::hold(name.clone());
     let runs = run_dir();
     let (code, status) = tui(
         &name,
@@ -966,7 +1211,6 @@ fn start_takes_the_graphics_identity_and_refuses_unknown_ones() {
             runs.to_str().unwrap(),
         ],
     );
-    let session = Session(name);
     assert_eq!(code, 0, "{status}");
     assert_eq!(session.ok(&["status"])["graphics"], "none");
     let (code, refused) = tui(&session_name("gfx2"), &["start", "--graphics", "iterm2"]);
@@ -990,6 +1234,7 @@ fn caller_home_stays_out_of_file_suggestions_and_agent_settings() {
     }
 
     let name = session_name("prefs");
+    let session = Session::hold(name.clone());
     let runs = run_dir();
     let caller_home = runs.join("caller-home-homeprefs");
     std::fs::create_dir_all(caller_home.join(".claude")).unwrap();
@@ -1008,7 +1253,6 @@ fn caller_home_stays_out_of_file_suggestions_and_agent_settings() {
     start.args(["--dev", "tui", "start", "--name", &name, "--run-dir"]);
     start.arg(&runs);
     let (code, status) = parse(start.output().unwrap());
-    let session = Session(name);
     assert_eq!(code, 0, "{status}");
     let scratch_home = session_dir(&session.0).join("home");
     assert_eq!(status["home"], scratch_home.to_str().unwrap());

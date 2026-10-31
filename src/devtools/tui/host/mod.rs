@@ -81,6 +81,9 @@ pub(super) fn run(root: &Path, options: HostOptions) -> i32 {
             return 1;
         }
     };
+    // Tests set BUS_TUI_REAP_WITH to their own pid. A runner SIGKILL skips
+    // Drop and panic hooks; this thread is what still kills the scratch Bus.
+    spawn_test_reaper(&paths, &options.token);
     let failed = |error: String| {
         let _ = std::fs::write(paths.dir.join("host.error"), &error);
         eprintln!("bus tui host: {error}");
@@ -98,6 +101,24 @@ pub(super) fn run(root: &Path, options: HostOptions) -> i32 {
             failed(error)
         }
     }
+}
+
+fn spawn_test_reaper(paths: &SessionPaths, token: &str) {
+    let Ok(raw) = std::env::var(super::session::REAP_WITH_ENV) else {
+        return;
+    };
+    let Ok(observer) = raw.parse::<u32>() else {
+        return;
+    };
+    if observer <= 1 || observer == std::process::id() {
+        return;
+    }
+    let paths = paths.clone();
+    let token = token.to_owned();
+    std::thread::spawn(move || {
+        super::session::watch_until_observer_exits(observer, paths, token);
+        super::session::kill_self();
+    });
 }
 
 fn start(

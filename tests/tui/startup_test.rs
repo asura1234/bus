@@ -37,7 +37,7 @@ fn bound_socket(path: &Path) -> OwnedFd {
 #[test]
 fn failed_start_removes_host_and_scratch_state_when_driver_cannot_listen() {
     let name = session_name("bindfail");
-    let cleanup = Session(name.clone());
+    let cleanup = Session::hold(name.clone());
     let mut start = bus(&name);
     start
         .args(["--dev", "tui", "start", "--name", &name, "--run-dir"])
@@ -98,7 +98,7 @@ fn failed_start_removes_host_and_scratch_state_when_driver_cannot_listen() {
 
 fn repeated_starts(tag: &str) {
     for attempt in 0..10 {
-        let session = Session(session_name(tag));
+        let session = Session::hold(session_name(tag));
         let (code, response) = tui(
             &session.0,
             &["start", "--run-dir", run_dir().to_str().unwrap()],
