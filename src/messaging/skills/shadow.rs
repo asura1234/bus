@@ -10,10 +10,8 @@ pub(crate) fn warnings_for_launch(
     cwd: &Path,
     home: &Path,
 ) -> io::Result<Vec<String>> {
-    let (repo_scope, user_scope) = match provider {
-        ProviderKind::ClaudeCode => (".claude/skills", ".claude/skills"),
-        ProviderKind::Codex => (".agents/skills", ".agents/skills"),
-        ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => return Ok(Vec::new()),
+    let Some((repo_scope, user_scope)) = skill_shadow_scopes(provider) else {
+        return Ok(Vec::new());
     };
     let user = home.join(user_scope);
     let canonical_user = user.canonicalize().ok();
@@ -58,6 +56,14 @@ pub(crate) fn warnings_for_launch(
     Ok(warnings)
 }
 
+fn skill_shadow_scopes(provider: ProviderKind) -> Option<(&'static str, &'static str)> {
+    match provider {
+        ProviderKind::ClaudeCode => Some((".claude/skills", ".claude/skills")),
+        ProviderKind::Codex => Some((".agents/skills", ".agents/skills")),
+        ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => None,
+    }
+}
+
 fn shadow_behavior(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::ClaudeCode => "Claude Code gives the user copy precedence",
@@ -68,8 +74,9 @@ fn shadow_behavior(provider: ProviderKind) -> &'static str {
 }
 
 /// One digest for this launch's repo. A later launch in the same room posts
-/// again only when that repo's shadowed set changes, including across restart,
-/// because the previous digest stays in room history.
+/// again only when that repo's shadowed set changes, including when the set
+/// becomes empty and across restart, because the previous digest stays in
+/// room history. A repo that has never shadowed stays silent.
 fn shadow_digest(repo: &Path, provider: ProviderKind, messages: &[String]) -> String {
     let mut lines = messages.to_vec();
     lines.sort();
@@ -104,11 +111,11 @@ fn post_warnings_at(
     home: &Path,
 ) -> Result<(), String> {
     let provider = crate::messaging::identity::provider_kind(agent.provider);
-    let messages = warnings_for_launch(provider, Path::new(&agent.cwd), home)
-        .unwrap_or_else(|error| vec![format!("Could not inspect skill shadowing: {error}")]);
-    if messages.is_empty() {
+    if skill_shadow_scopes(provider).is_none() {
         return Ok(());
     }
+    let messages = warnings_for_launch(provider, Path::new(&agent.cwd), home)
+        .unwrap_or_else(|error| vec![format!("Could not inspect skill shadowing: {error}")]);
     if messages
         .iter()
         .any(|message| message.starts_with("Could not inspect skill shadowing:"))
@@ -131,12 +138,17 @@ fn post_warnings_at(
     let repo = launch::project_root(&cwd);
     let digest = shadow_digest(&repo, provider, &messages);
     let marker = format!("Skill shadow in {}:", repo.display());
-    let unchanged = state
+    let previous = state
         .notices(agent.room_id)
         .rev()
         .find(|notice| notice.text.starts_with(&marker))
-        .is_some_and(|notice| notice.text == digest);
-    if unchanged {
+        .map(|notice| notice.text.clone());
+    if previous.as_ref() == Some(&digest) {
+        return Ok(());
+    }
+    // An empty set is a real change only after this repo has posted a digest.
+    // The first look at a repo with no collisions stays silent.
+    if messages.is_empty() && previous.is_none() {
         return Ok(());
     }
     state

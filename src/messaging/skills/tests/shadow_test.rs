@@ -49,6 +49,61 @@ fn one_digest_per_repo_until_the_shadowed_set_changes() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+#[test]
+fn removing_and_restoring_the_last_collision_each_post_one_digest() {
+    let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow-empty");
+    let repo = home.join("repo");
+    write_collisions(&home, &repo, 1..=1);
+    git_init(&repo);
+
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let agent_id = state
+        .create_agent(room, "shadow", Provider::ClaudeCode, repo.clone(), None)
+        .unwrap();
+    let agent = state.agent(agent_id).unwrap().clone();
+
+    super::post_warnings_at(&mut state, &agent, &home).unwrap();
+    std::fs::remove_dir_all(repo.join(".claude/skills/skill-01")).unwrap();
+    super::post_warnings_at(&mut state, &agent, &home).unwrap();
+    write_collisions(&home, &repo, 1..=1);
+    super::post_warnings_at(&mut state, &agent, &home).unwrap();
+    let notices = notice_texts(&state, room);
+    assert_eq!(
+        notices.len(),
+        3,
+        "removing the final collision and restoring it each post one new digest"
+    );
+    assert!(notices[1].contains("0 same-name skills"));
+    assert!(notices[2].contains("1 same-name skill"));
+
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn a_repo_that_never_shadowed_stays_silent() {
+    let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow-quiet");
+    let repo = home.join("repo");
+    git_init(&repo);
+
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let agent_id = state
+        .create_agent(room, "quiet", Provider::ClaudeCode, repo, None)
+        .unwrap();
+    let agent = state.agent(agent_id).unwrap().clone();
+
+    super::post_warnings_at(&mut state, &agent, &home).unwrap();
+    super::post_warnings_at(&mut state, &agent, &home).unwrap();
+    assert_eq!(
+        notice_texts(&state, room).len(),
+        0,
+        "a repo with no collisions and no prior digest stays silent"
+    );
+
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 fn write_collisions(home: &Path, repo: &Path, indexes: impl Iterator<Item = u32>) {
     for index in indexes {
         let name = format!("skill-{index:02}");
