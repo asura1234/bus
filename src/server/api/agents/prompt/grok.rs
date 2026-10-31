@@ -157,7 +157,8 @@ pub(super) fn input(screen: &str) -> Option<String> {
 /// Captured 1.0.70 screens: a paste of more than 10000 UTF-8 bytes is labelled
 /// `floor(byte_len / 1000) KB` (truncating decimal kilobytes, not 1024 and not
 /// rounded). At or below 10000 bytes a multiline paste is labelled with
-/// `split('\n').count()` lines. This checks the label Grok already drew.
+/// `split('\n').count()` lines, and a single line stays inline. Accept only
+/// that label. The other chip across the boundary is not this paste.
 fn native_paste_summary(body: &str, expected: &str) -> bool {
     let Some(label) = body
         .strip_prefix("[Pasted: ")
@@ -166,14 +167,16 @@ fn native_paste_summary(body: &str, expected: &str) -> bool {
         return false;
     };
     if let Some(lines) = label.strip_suffix(" lines") {
-        return lines
-            .parse::<usize>()
-            .is_ok_and(|lines| lines > 1 && lines == expected.split('\n').count());
+        return expected.len() <= 10_000
+            && lines
+                .parse::<usize>()
+                .is_ok_and(|lines| lines > 1 && lines == expected.split('\n').count());
     }
     if let Some(kib) = label.strip_suffix(" KB") {
-        return kib
-            .parse::<usize>()
-            .is_ok_and(|kib| kib > 0 && kib == expected.len() / 1000);
+        return expected.len() > 10_000
+            && kib
+                .parse::<usize>()
+                .is_ok_and(|kib| kib > 0 && kib == expected.len() / 1000);
     }
     false
 }
@@ -390,6 +393,25 @@ mod tests {
                 "{chip} must reject {bytes}"
             );
         }
+    }
+
+    #[test]
+    fn grok_1070_paste_chip_rejects_the_other_label_across_10000_bytes() {
+        let at_limit = captured_multiline_paste(10_000);
+        let over_limit = captured_multiline_paste(10_001);
+        assert_eq!(at_limit.split('\n').count(), over_limit.split('\n').count());
+        let kb_for_limit = observe(PASTE_10001, &at_limit);
+        let lines_for_over = observe(PASTE_10000, &over_limit);
+        let kb_for_single_line = observe(PASTE_10001, &"x".repeat(10_000));
+        assert_eq!(
+            (kb_for_limit, lines_for_over, kb_for_single_line),
+            (
+                InputObservation::Unavailable,
+                InputObservation::Unavailable,
+                InputObservation::Unavailable,
+            ),
+            "the other label across 10000 bytes must not authorize Enter"
+        );
     }
 
     #[test]
