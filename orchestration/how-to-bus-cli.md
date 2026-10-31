@@ -128,7 +128,7 @@ See `bus send --help` for first-answer conflicts and uncertain retry handling.
 `wait --async` follows an existing ID but stops for a dialog. Bounded waits
 need replies; async waits also accept abandonment specifically as reply_not_captured.
 Read `bus wait --help` and `bus message status --help` for polling, stages,
-stall windows, provider failures, retained last status and exit codes.
+outcome windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain
 submission, inspect transcript and composer before resending; effects may exist.
 See [agent launch arguments](../docs/launch-args.md#interactive-provider-launch) for command input and launch failure behavior.
@@ -138,28 +138,26 @@ run_in_background; Cursor: background shell with timeout 0), then inspect the
 combined output when woken. Codex cannot wake on background command completion;
 new Codex MASTER orchestrators are refused, but saved ones still resume.
 
-Worker events wake the work-room orchestrator through ordinary agent messages:
-its captured replies/late finals, autonomous finals, stalled/no-reply outcomes,
-and confirmed exits with open orchestrator requests. Worker-to-worker replies
-reach their author only. Interrupt/delete outcomes do not generate these notices.
-There are no idle-worker/request nudges, room monitors or required self-timers.
-Events coalesce per worker for two seconds; long previews point to full status/history.
+Worker events wake the work-room orchestrator through ordinary agent messages.
+A wake is only the one real notice: an explicit result not already delivered, or
+an actionable final outcome (startup failure, session limit, unsent submission).
+Working means the request is in progress; a stuck screen is Blocked; a dead launch
+is Unavailable; an Idle agent without a captured reply gets one final outcome.
+Agents are only Idle, Working, Blocked or Unavailable. Results already in the room
+are not repeated, and Bus does not wrap results or post process-exit messages to
+MASTER. Worker-to-worker replies reach their author only. Interrupt/delete outcomes
+do not generate notices. There are no idle-worker/request nudges or room monitors.
 
-Author waiters defer only their own reply/outcome wakes while leased and mark
-only flushed output seen. Status/anonymous waits never suppress delivery; use
-`message seen` only after reading. A killed waiter loses its lease. Autonomous
-results, exits and unrelated events remain eligible. stdout and native injection
-have no shared transaction, so a late waiter can print an already-delivered wake.
+Author waiters defer only their own wakes and mark only flushed output seen; use
+`message seen` only after reading. A killed waiter loses its lease. stdout and
+native injection can expose an already-delivered wake.
 
-Event decisions, pending sources and batches persist together; callbacks spooled
-while down recover without duplicate allocation. Repeated callbacks/polls/restarts
-are not new events; later outcomes/turns are. Pending sources/full-text targets
-stay until delivery. Definite rejection retains the queue ID and pauses retries
-after its queued stall window until new work/identity/status/restart, not idle
-polls. Uncertain submissions are never replayed. Post-flush acknowledgements
-remove only their components from queued mixed batches; empty batches abandon.
-Payloads freeze once native submission starts. Failed acknowledgements preserve
-fallback. First upgrade backfills retained eligible replies/outcomes once;
+Event decisions, pending sources and batches persist together. Repeated callbacks,
+polls and restarts are not new events; later outcomes/turns are. Definite rejection
+retains the queue ID and pauses retries after its queued outcome window until new
+work/identity/status/restart, not idle polls. Uncertain submissions are never
+replayed. Payloads freeze once native submission starts. Failed acknowledgements
+preserve fallback. First upgrade backfills retained eligible replies/outcomes once;
 expired history stays expired, while rollback discarding routing state can repeat recovery.
 
 ## Diagnose, recover and answer dialogs
@@ -173,8 +171,8 @@ terminal may already be closed. Exit snapshots preserve viewport/200 recent line
 notices preview 20 nonblank lines (160 characters each, 1600 total). Work-room
 terminals close after a saved snapshot; MASTER terminals stay open. A failed
 snapshot leaves the terminal open. Quoted blocker markers cannot page the developer.
-For every unrequested post-startup exit, MASTER gets Agent process exited: NAME
-(agent ID), even without an open request. A later send gets the same exit notice.
+Unrequested post-startup exits stay in lifecycle state and logs; MASTER does not
+receive a process-exit chat message. A later send gets the saved exit outcome.
 Update shared provider installations separately while their agents are stopped.
 
 Blocked agents generate one room notice after about a second, addressed to its

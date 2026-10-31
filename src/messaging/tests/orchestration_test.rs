@@ -480,6 +480,40 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
 }
 
 #[test]
+fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
+    let data = temp_root("communication-rules");
+    let root = write_docs(&data).unwrap();
+    let communication =
+        flat(&std::fs::read_to_string(root.join("bus-communication-guide.md")).unwrap());
+    for phrase in [
+        "No message without new information.",
+        "One copy of each result.",
+        "No \"still working\" posts.",
+        "Bus does not wrap a result.",
+        "The orchestrator does not narrate.",
+        "One developer post per review round.",
+        "No new toasts or popup errors.",
+        "Agents are only Idle, Working, Blocked or Unavailable.",
+    ] {
+        assert!(communication.contains(phrase), "missing {phrase}");
+    }
+    assert!(!communication.contains("ends with one short line"));
+    assert!(!communication.contains(" stalled "));
+
+    let rules = flat(&std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap());
+    let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
+    for text in [&rules, &cli] {
+        assert!(
+            text.contains("A wake is only the one real notice"),
+            "{text}"
+        );
+        assert!(!text.contains("Agent process exited: NAME"), "{text}");
+        assert!(!text.contains(" stalled "), "{text}");
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
 fn each_provider_gets_its_own_prompt_delivery() {
     let spool = temp_root("args");
     private_dir(&spool).unwrap();
@@ -555,8 +589,11 @@ fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
 }
 
 #[test]
-fn prompt_message_carries_the_prompt_text() {
-    assert!(prompt_message("Be brief.").ends_with("\n\nBe brief."));
+fn prompt_message_carries_the_prompt_text_without_requesting_an_acknowledgement() {
+    assert_eq!(
+        prompt_message("Be brief."),
+        "Bus: this is your system prompt; Bus could not set it at launch for this provider or session. Follow it for the rest of this session.\n\nBe brief."
+    );
 }
 
 #[test]
