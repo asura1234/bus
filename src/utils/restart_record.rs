@@ -38,6 +38,36 @@ pub(crate) struct RestartMarker {
     pub(crate) yolo: bool,
 }
 
+/// How the running server was started. Restart reuses this instead of the
+/// restart command's defaults.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LaunchFlags {
+    pub(crate) dev: bool,
+    pub(crate) yolo: bool,
+    pub(crate) explicit_data_dir: bool,
+    pub(crate) session_id: Option<String>,
+}
+
+/// Fields present in `restarts/build.json`. Missing keys stay unknown so an
+/// older record is not treated as `--yolo` off.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecordedLaunch {
+    pub(crate) dev: Option<bool>,
+    pub(crate) yolo: Option<bool>,
+    pub(crate) explicit_data_dir: Option<bool>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) session_known: bool,
+}
+
+/// Flags the restart command itself set. `None` means inherit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LaunchOverride {
+    pub(crate) yolo: Option<bool>,
+    pub(crate) explicit_data_dir: bool,
+    pub(crate) cli_dev: bool,
+    pub(crate) cli_session_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LivePid {
     pub(crate) pid: u32,
@@ -307,9 +337,131 @@ pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
     let binary = std::env::current_exe()
         .map(|exe| exe.display().to_string())
         .unwrap_or_default();
-    if let Err(error) = write_json(&path, &serde_json::json!({ "sha": sha, "binary": binary })) {
+    let launch = current_launch_flags();
+    if let Err(error) = write_json(
+        &path,
+        &serde_json::json!({
+            "sha": sha,
+            "binary": binary,
+            "dev": launch.dev,
+            "yolo": launch.yolo,
+            "explicit_data_dir": launch.explicit_data_dir,
+            "session_id": launch.session_id,
+        }),
+    ) {
         tracing::warn!(path = %path.display(), %error, "could not record the server build");
     }
+}
+
+/// Launch flags visible to this process. The server records them; a later
+/// restart reads that record rather than the restart command's defaults.
+pub(crate) fn current_launch_flags() -> LaunchFlags {
+    let session_id = std::env::var("BUS_SESSION_ID")
+        .ok()
+        .filter(|id| !id.is_empty());
+    LaunchFlags {
+        dev: std::env::var_os("BUS_DEV").is_some_and(|value| value == "1"),
+        yolo: crate::utils::env::yolo_enabled(),
+        explicit_data_dir: crate::utils::env::bus_data_dir().is_some() && session_id.is_none(),
+        session_id,
+    }
+}
+
+pub(crate) fn read_recorded_launch(path: &Path) -> Result<RecordedLaunch, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("restart build record is invalid: {error}"))?;
+    let flag = |name: &str| -> Result<Option<bool>, String> {
+        match value.get(name) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::Bool(bit)) => Ok(Some(*bit)),
+            Some(_) => Err(format!(
+                "restart build record has an invalid {name} setting"
+            )),
+        }
+    };
+    let session_known = value.get("session_id").is_some();
+    let session_id = match value.get("session_id") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(id)) if !id.is_empty() => Some(id.clone()),
+        Some(serde_json::Value::String(_)) => None,
+        Some(_) => {
+            return Err("restart build record has an invalid session_id".to_owned());
+        }
+    };
+    Ok(RecordedLaunch {
+        dev: flag("dev")?,
+        yolo: flag("yolo")?,
+        explicit_data_dir: flag("explicit_data_dir")?,
+        session_id,
+        session_known,
+    })
+}
+
+/// Names which `--yolo` side differs and the command that keeps the server's.
+pub(crate) fn yolo_mismatch_message(server_yolo: bool) -> String {
+    let (server, command, keep) = if server_yolo {
+        (
+            "with --yolo",
+            "without --yolo",
+            "rerun this command with --yolo",
+        )
+    } else {
+        (
+            "without --yolo",
+            "with --yolo",
+            "rerun this command without --yolo",
+        )
+    };
+    format!(
+        "This Bus server was started {server}, but this command was started {command}. To keep the running server's --yolo setting, {keep}. To change it, quit its UI or run `bus stop`, then resume with the desired --yolo setting."
+    )
+}
+
+pub(crate) fn yolo_unrecorded_message() -> String {
+    "The running server has no recorded --yolo setting and its status API did not report one. To keep that setting, restart only after the server has recorded it at startup, or pass --yolo when the server is already in yolo mode. To change it, quit its UI or run `bus stop`, then resume with the desired --yolo setting.".to_owned()
+}
+
+/// Recorded flags win. A flag passed to `restart` overrides only that setting.
+/// `--dev` on the restart command unlocks the dev tool and does not replace a
+/// recorded dev mode. `BUS_DATA_DIR` replaces the data directory and session.
+pub(crate) fn resolve_restart_launch(
+    recorded: &RecordedLaunch,
+    status_yolo: Option<bool>,
+    over: &LaunchOverride,
+) -> Result<LaunchFlags, String> {
+    let yolo = if let Some(value) = over.yolo {
+        value
+    } else if let Some(value) = recorded.yolo {
+        value
+    } else if let Some(value) = status_yolo {
+        value
+    } else {
+        return Err(yolo_unrecorded_message());
+    };
+    let dev = recorded.dev.unwrap_or(over.cli_dev);
+    if over.explicit_data_dir {
+        return Ok(LaunchFlags {
+            dev,
+            yolo,
+            explicit_data_dir: true,
+            session_id: None,
+        });
+    }
+    let explicit_data_dir = recorded.explicit_data_dir.unwrap_or(false);
+    let session_id = if explicit_data_dir {
+        None
+    } else if recorded.session_known {
+        recorded.session_id.clone()
+    } else {
+        over.cli_session_id.clone()
+    };
+    Ok(LaunchFlags {
+        dev,
+        yolo,
+        explicit_data_dir,
+        session_id,
+    })
 }
 
 pub(crate) fn read_live_pid(path: &Path) -> Option<LivePid> {
@@ -475,5 +627,115 @@ mod tests {
         write_json(&outcome_path(&root), &record).unwrap();
         assert_eq!(read_outcome(&outcome_path(&root)).unwrap(), Some(record));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn recorded_yolo_server() -> RecordedLaunch {
+        RecordedLaunch {
+            dev: Some(true),
+            yolo: Some(true),
+            explicit_data_dir: Some(false),
+            session_id: Some("abc".into()),
+            session_known: true,
+        }
+    }
+
+    fn inherit_override() -> LaunchOverride {
+        LaunchOverride {
+            yolo: None,
+            explicit_data_dir: false,
+            cli_dev: true,
+            cli_session_id: Some("other".into()),
+        }
+    }
+
+    #[test]
+    fn restart_keeps_recorded_yolo_unless_the_command_overrides_it() {
+        let recorded = recorded_yolo_server();
+        let inherit = inherit_override();
+        let kept = resolve_restart_launch(&recorded, None, &inherit).unwrap();
+        assert!(kept.yolo, "omitted --yolo keeps the running server's yolo");
+        assert!(kept.dev);
+        assert!(!kept.explicit_data_dir);
+        assert_eq!(kept.session_id.as_deref(), Some("abc"));
+
+        let forced = resolve_restart_launch(
+            &RecordedLaunch {
+                yolo: Some(false),
+                ..recorded.clone()
+            },
+            Some(false),
+            &LaunchOverride {
+                yolo: Some(true),
+                ..inherit.clone()
+            },
+        )
+        .unwrap();
+        assert!(forced.yolo, "explicit --yolo turns yolo on");
+        assert!(forced.dev, "the yolo override does not change dev");
+        assert_eq!(forced.session_id.as_deref(), Some("abc"));
+
+        let quiet = resolve_restart_launch(
+            &RecordedLaunch {
+                dev: Some(false),
+                yolo: Some(false),
+                ..recorded
+            },
+            None,
+            &inherit,
+        )
+        .unwrap();
+        assert!(
+            !quiet.dev,
+            "the required --dev tool gate does not replace recorded dev"
+        );
+        assert!(!quiet.yolo);
+
+        let directory = resolve_restart_launch(
+            &recorded_yolo_server(),
+            None,
+            &LaunchOverride {
+                explicit_data_dir: true,
+                ..inherit_override()
+            },
+        )
+        .unwrap();
+        assert!(directory.yolo);
+        assert!(directory.explicit_data_dir);
+        assert!(directory.session_id.is_none());
+
+        let legacy = RecordedLaunch {
+            dev: None,
+            yolo: None,
+            explicit_data_dir: None,
+            session_id: None,
+            session_known: false,
+        };
+        let from_status = resolve_restart_launch(&legacy, Some(true), &inherit_override()).unwrap();
+        assert!(
+            from_status.yolo,
+            "a legacy record uses the live status yolo"
+        );
+        assert!(from_status.dev);
+        assert_eq!(from_status.session_id.as_deref(), Some("other"));
+
+        let missing = resolve_restart_launch(&legacy, None, &inherit_override()).unwrap_err();
+        assert!(missing.contains("--yolo"), "{missing}");
+        assert!(missing.contains("To keep that setting"), "{missing}");
+    }
+
+    #[test]
+    fn yolo_mismatch_names_the_side_that_differs_and_how_to_keep_it() {
+        let on = yolo_mismatch_message(true);
+        assert!(on.contains("started with --yolo"), "{on}");
+        assert!(on.contains("started without --yolo"), "{on}");
+        assert!(on.contains("rerun this command with --yolo"), "{on}");
+        assert!(
+            on.contains("To keep the running server's --yolo setting"),
+            "{on}"
+        );
+        let off = yolo_mismatch_message(false);
+        assert!(off.contains("started without --yolo"), "{off}");
+        assert!(off.contains("rerun this command without --yolo"), "{off}");
+        assert!(!off.contains("rerun this command with --yolo"), "{off}");
     }
 }

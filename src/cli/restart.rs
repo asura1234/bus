@@ -36,11 +36,11 @@ pub(crate) struct HandoffPlan {
 
 pub(crate) trait HandoffIo {
     fn stop(&mut self) -> Result<(), String>;
-    fn start(&mut self, binary: &Path) -> Result<u32, String>;
+    fn start(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<u32, String>;
     fn healthy(&mut self, pid: u32, expected_sha: &str) -> Result<(), String>;
     fn kill(&mut self, pid: u32);
     fn control_socket_up(&mut self) -> bool;
-    fn spawn_coordinator(&mut self, binary: &Path) -> Result<(), String>;
+    fn spawn_coordinator(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<(), String>;
     fn now_ms(&self) -> u64;
 }
 
@@ -304,9 +304,9 @@ pub(crate) fn execute_handoff(plan: &HandoffPlan, effects: &mut impl HandoffIo) 
             format!("could not stop the server: {error}"),
         );
     }
-    match effects.start(&plan.new_binary) {
+    match effects.start(&plan.new_binary, plan) {
         Ok(pid) => match effects.healthy(pid, &plan.new_sha) {
-            Ok(()) => match ensure_coordinator(effects, &plan.new_binary) {
+            Ok(()) => match ensure_coordinator(effects, plan, &plan.new_binary) {
                 Ok(()) => finish(plan, effects, "restarted", &plan.new_binary, String::new()),
                 Err(error) => rollback(plan, effects, pid, format!("coordinator: {error}")),
             },
@@ -326,7 +326,7 @@ fn rollback(
         effects.kill(failed_pid);
     }
     let _ = effects.stop();
-    match effects.start(&plan.old_binary) {
+    match effects.start(&plan.old_binary, plan) {
         Ok(pid) => match effects.healthy(pid, &plan.old_sha) {
             Ok(()) => finish(plan, effects, "rolled_back", &plan.old_binary, reason),
             Err(rollback_reason) => {
@@ -350,11 +350,15 @@ fn rollback(
     }
 }
 
-fn ensure_coordinator(effects: &mut impl HandoffIo, binary: &Path) -> Result<(), String> {
+fn ensure_coordinator(
+    effects: &mut impl HandoffIo,
+    plan: &HandoffPlan,
+    binary: &Path,
+) -> Result<(), String> {
     if effects.control_socket_up() {
         return Ok(());
     }
-    match effects.spawn_coordinator(binary) {
+    match effects.spawn_coordinator(binary, plan) {
         Ok(()) => Ok(()),
         Err(error)
             if error.contains("Another Bus coordinator owns this data directory")
@@ -374,7 +378,7 @@ fn finish(
     mut reason: String,
 ) -> RestartLog {
     if matches!(outcome, "restarted" | "rolled_back" | "rollback_failed") {
-        if let Err(error) = ensure_coordinator(effects, serving) {
+        if let Err(error) = ensure_coordinator(effects, plan, serving) {
             if outcome != "restarted" {
                 reason = if reason.is_empty() {
                     format!("coordinator: {error}")
@@ -463,9 +467,9 @@ impl HandoffIo for LiveHandoff {
         )
     }
 
-    fn start(&mut self, binary: &Path) -> Result<u32, String> {
+    fn start(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<u32, String> {
         let _ = std::fs::remove_file(crate::utils::paths::server_startup_error_path());
-        let mut command = server_command(binary);
+        let mut command = server_command(binary, plan);
         command.arg("server");
         spawn_detached(&mut command).map_err(|error| {
             format!(
@@ -522,8 +526,8 @@ impl HandoffIo for LiveHandoff {
         crate::platform::ipc::connect_local_stream(&root.join("control.sock")).is_ok()
     }
 
-    fn spawn_coordinator(&mut self, binary: &Path) -> Result<(), String> {
-        let mut command = server_command(binary);
+    fn spawn_coordinator(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<(), String> {
+        let mut command = server_command(binary, plan);
         command.arg("--session-coordinator");
         let pid = spawn_detached(&mut command)
             .map_err(|error| format!("could not start the coordinator: {error}"))?;
@@ -548,7 +552,7 @@ impl HandoffIo for LiveHandoff {
     }
 }
 
-fn server_command(binary: &Path) -> Command {
+fn server_command(binary: &Path, plan: &HandoffPlan) -> Command {
     let mut command = Command::new(binary);
     command
         .env_remove(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR)
@@ -564,8 +568,35 @@ fn server_command(binary: &Path) -> Command {
     if let Ok(cwd) = std::env::current_dir() {
         command.env(crate::utils::env::STARTUP_CWD_ENV_VAR, cwd);
     }
+    apply_recorded_launch(&mut command, plan);
     detach(&mut command);
     command
+}
+
+/// The helper inherits the restart command's environment. Put the resolved
+/// launch flags on the child explicitly, or a missing `--yolo` on the restart
+/// command clears the mode the running server recorded.
+fn apply_recorded_launch(command: &mut Command, plan: &HandoffPlan) {
+    command.env("BUS_DATA_DIR", &plan.root);
+    if plan.explicit_data_dir {
+        command.env_remove("BUS_SESSION_ID");
+    } else if let Some(session_id) = &plan.session_id {
+        command.env("BUS_SESSION_ID", session_id);
+    } else {
+        command.env_remove("BUS_SESSION_ID");
+    }
+    if plan.dev {
+        command.env("BUS_DEV", "1");
+        command.env("BUS_LOG", crate::utils::logging::DEV_FILTER);
+    } else {
+        command.env_remove("BUS_DEV");
+        command.env_remove("BUS_LOG");
+    }
+    if plan.yolo {
+        command.env(crate::utils::env::YOLO_ENV_VAR, "1");
+    } else {
+        command.env_remove(crate::utils::env::YOLO_ENV_VAR);
+    }
 }
 
 fn detach(command: &mut Command) {
@@ -606,6 +637,7 @@ fn kill_pid(pid: u32) {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::process::Command;
 
     fn sha(byte: u8) -> String {
         format!("{byte:02x}").repeat(20)
@@ -643,7 +675,7 @@ mod tests {
         fn stop(&mut self) -> Result<(), String> {
             self.stop.clone()
         }
-        fn start(&mut self, binary: &Path) -> Result<u32, String> {
+        fn start(&mut self, binary: &Path, _plan: &HandoffPlan) -> Result<u32, String> {
             self.started.push(binary.to_path_buf());
             self.starts
                 .pop_front()
@@ -662,7 +694,7 @@ mod tests {
         fn control_socket_up(&mut self) -> bool {
             self.control_up
         }
-        fn spawn_coordinator(&mut self, binary: &Path) -> Result<(), String> {
+        fn spawn_coordinator(&mut self, binary: &Path, _plan: &HandoffPlan) -> Result<(), String> {
             self.coordinators.push(binary.to_path_buf());
             if let Some(error) = self.coordinator_error.clone() {
                 if error.contains("Another Bus coordinator owns this data directory") {
@@ -1117,6 +1149,74 @@ mod tests {
         assert!(text.contains("not serving"), "{text}");
         assert!(text.contains("refused before any stop"), "{text}");
         assert!(text.contains("still serving"), "{text}");
+        assert!(text.contains("Omit --yolo to keep"), "{text}");
+        assert!(
+            text.contains("does not change a recorded --dev mode"),
+            "{text}"
+        );
+        let restart = crate::cli::control::command_tree(true)
+            .find_subcommand("restart")
+            .unwrap()
+            .clone();
+        let yolo_help = restart
+            .get_arguments()
+            .find(|arg| arg.get_id() == "yolo")
+            .unwrap()
+            .get_help()
+            .unwrap()
+            .to_string();
+        assert!(
+            yolo_help.contains("Omit to keep the running server's --yolo setting"),
+            "{yolo_help}"
+        );
         assert!(crate::cli::help::DEV_HELP.contains("bus --dev restart"));
+    }
+
+    #[test]
+    fn server_command_applies_recorded_yolo_when_this_process_has_none() {
+        let mut kept = plan(Path::new("/tmp/bus-restart-flags"));
+        kept.yolo = true;
+        kept.dev = true;
+        kept.explicit_data_dir = false;
+        kept.session_id = Some("abc".into());
+        let command = server_command(Path::new("/tmp/bus"), &kept);
+        let env = command_env(&command);
+        assert_eq!(env_var(&env, "BUS_YOLO"), Some("1"));
+        assert_eq!(env_var(&env, "BUS_DEV"), Some("1"));
+        assert_eq!(env_var(&env, "BUS_SESSION_ID"), Some("abc"));
+
+        let mut cleared = kept.clone();
+        cleared.yolo = false;
+        cleared.dev = false;
+        cleared.explicit_data_dir = true;
+        cleared.session_id = Some("abc".into());
+        let command = server_command(Path::new("/tmp/bus"), &cleared);
+        let env = command_env(&command);
+        assert_eq!(env_var(&env, "BUS_YOLO"), None);
+        assert_eq!(env_var(&env, "BUS_DEV"), None);
+        assert_eq!(env_var(&env, "BUS_SESSION_ID"), None);
+        assert_eq!(
+            env_var(&env, "BUS_DATA_DIR"),
+            Some("/tmp/bus-restart-flags")
+        );
+    }
+
+    fn env_var<'a>(
+        env: &'a std::collections::BTreeMap<String, Option<String>>,
+        key: &str,
+    ) -> Option<&'a str> {
+        env.get(key).and_then(|value| value.as_deref())
+    }
+
+    fn command_env(command: &Command) -> std::collections::BTreeMap<String, Option<String>> {
+        command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
     }
 }
