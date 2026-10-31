@@ -31,8 +31,8 @@ impl Transcript {
 }
 impl Drop for Transcript {
     fn drop(&mut self) {
-        // A missing directory is the other thread's cleanup, not a test failure.
-        // Unwrapping here aborts the process when it happens during unwind.
+        // unique_temp_path gives this fixture its own directory. Ignore a
+        // cleanup error so Drop cannot abort the test process.
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
