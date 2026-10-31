@@ -112,7 +112,7 @@ Bus returns the turn's final only to requests that are still outstanding.
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 
-**One copy of each result.** `bus send --reply-to MESSAGE_ID` is that copy. Do not also post the body to the room, and do not send it again because reply capture failed. If `--reply-to` did not land, one explicit send to the orchestrator is the delivery. A later note that says "reply-to failed, the result is in message N" is not a new fact.
+**One copy of each result.** `bus send --reply-to MESSAGE_ID` is that copy. Do not also post the body to the room, and do not send it again because reply capture failed. If `--reply-to` did not land, one explicit send to the intended recipient is the delivery. A later note that says "reply-to failed, the result is in message N" is not a new fact.
 
 **No "still working" posts.** A turn that changed nothing sends nothing. Do not send "still in progress", "nothing changed", "already handled", "still paused", "still waiting", or an acknowledgement of a rule or of a late copy. A background job whose head and result are unchanged sends nothing, including when the job exits; a new verdict, finding, blocker, or question is still sent once.
 

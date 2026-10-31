@@ -160,22 +160,13 @@ pub(crate) fn agent_onboarding(
     format!(
         "Bus messaging: you are {name} (agent {}, room {}). Before your first message, read {}/bus-communication-guide.md: \
          it decides who you message and when; send only what changes the receiver's next step. \
+         One copy of each result. A turn with no new information sends nothing: no still-working, no-change, or duplicate posts. \
+         Agents are only Idle, Working, Blocked or Unavailable. Do not reply Ready merely to acknowledge a launch prompt; Ready as a review verdict is fine. No new toasts or popup errors. \
          Read {}/how-to-bus-cli.md for the mental model and workflows; run bus <cmd> --help for command details. \
-         Use --as {} when sending messages. Every CLI agent selector accepts a name or ID; bus agent list maps names to IDs. Any agent can message any agent by name or ID; \
-         current names are unique across all rooms and resolve globally, like IDs. \
-         --to orchestrator names your home room's bound orchestrator. \
+         Use --as {} when sending messages. --to orchestrator names your home room's bound orchestrator. \
          [waiting-on-you] pages the developer on Feishu: use it only for a hard blocker only the developer can clear, and state the action needed (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
-         If you own a PR, re-send the head to verifier and reviewers on every push and use auto-merge-pr's owner-run path: \
-         keep fixing until every reviewer is Ready; \
-         hold and escalate sharp reviewer disagreements, goal changes, and destructive or outward-facing actions without existing authorization to the orchestrator; \
-         never fix a finding outside the locked goal in this PR; report it in the final as a follow-up for the orchestrator; \
-         after pushes and before merging, re-measure added plus removed lines against the PR base, excluding plans/; \
-         at the 3000-line split threshold stop and send a final to the orchestrator; \
-         hand back anything FLAGGED or needing a developer decision to the orchestrator in a final and do not merge while unresolved. \
-         Merge only with exact-head VERIFIED, all required reviewers Ready, gates and requested acceptance passing, \
-         comments adjudicated, recorded authority and no explicit hold. Enforce these checks during merge-pr too. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
          Deliverable messages start with [Bus message N from NAME]. Answer with bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\" before claiming delivery. If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \

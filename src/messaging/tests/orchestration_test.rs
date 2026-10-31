@@ -499,6 +499,7 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         "a new verdict, finding, blocker, or question is still sent once",
         "`[waiting-on-you]` is for a new hard blocker",
         "Do not reply Ready merely to acknowledge that prompt.",
+        "one explicit send to the intended recipient is the delivery.",
     ] {
         assert!(communication.contains(phrase), "missing {phrase}");
     }
@@ -771,9 +772,11 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("read /bus-docs/bus-communication-guide.md"));
     assert!(text.contains("send only what changes the receiver's next step"));
     assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
-    assert!(text.contains("keep fixing until every reviewer is Ready"));
-    assert!(text.contains("escalate sharp reviewer disagreements, goal changes"));
-    assert!(text.contains("destructive or outward-facing actions without existing authorization"));
+    assert!(text.contains("One copy of each result"));
+    assert!(text.contains("A turn with no new information sends nothing"));
+    assert!(text.contains("Agents are only Idle, Working, Blocked or Unavailable"));
+    assert!(text.contains("No new toasts or popup errors"));
+    assert!(text.contains("Do not reply Ready merely to acknowledge a launch prompt"));
     assert!(text.contains("Send only the body"));
     assert!(text.contains("use it only for a hard blocker only the developer can clear"));
     assert!(text.contains("[Bus message N from NAME]"));
