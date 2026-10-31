@@ -28,6 +28,8 @@ pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Optio
         turn_id,
         prompt,
     )
+    .ok()
+    .flatten()
 }
 
 fn normalized_prompt(value: &str) -> String {
@@ -56,6 +58,37 @@ fn owned_prompt_id(value: &Value, prompt: &str) -> Option<String> {
 }
 
 fn committed_outcome_lines(
+    lines: impl IntoIterator<Item = Result<String, String>>,
+    turn_id: u64,
+    prompt: &str,
+) -> Result<Option<Outcome>, String> {
+    let mut lines = lines.into_iter();
+    let mut invalid = None;
+    let checked = std::iter::from_fn(|| {
+        let line = lines.next()?;
+        match line {
+            Err(error) => {
+                invalid = Some(error);
+                None
+            }
+            Ok(line) if line.len() as u64 > MAX_WIRE_BYTES => Some(Ok(line)),
+            Ok(line) => match serde_json::from_str::<Value>(&line) {
+                Ok(_) => Some(Ok(line)),
+                Err(_) => {
+                    invalid = Some("Kimi wire contains malformed JSON".into());
+                    None
+                }
+            },
+        }
+    });
+    let outcome = scan_committed_outcome(checked, turn_id, prompt);
+    if let Some(error) = invalid {
+        return Err(error);
+    }
+    Ok(outcome)
+}
+
+fn scan_committed_outcome(
     lines: impl IntoIterator<Item = Result<String, String>>,
     turn_id: u64,
     prompt: &str,
@@ -250,7 +283,7 @@ pub(crate) fn resolve_outcome(
     let lines = std::io::BufReader::new(file)
         .lines()
         .map(|line| line.map_err(|error| error.to_string()));
-    Ok(committed_outcome_lines(lines, turn_id, prompt))
+    committed_outcome_lines(lines, turn_id, prompt)
 }
 
 #[cfg(test)]
@@ -418,5 +451,14 @@ mod tests {
             "older history must not disable this committed turn's reply"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_wire_is_an_error_not_pending_evidence() {
+        let lines = ["{not json".to_owned()];
+        assert!(
+            committed_outcome_lines(lines.map(Ok), 7, "Bus task").is_err(),
+            "malformed evidence must not be mistaken for a running turn"
+        );
     }
 }

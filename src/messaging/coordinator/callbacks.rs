@@ -372,6 +372,15 @@ impl Worker {
             Parsed::CompletionCandidate { session, turn } => {
                 return self.grok_completion_callback(id, state, path, record, session, Some(turn));
             }
+            Parsed::ReconcileSession { session: _ }
+                if record.manifest.provider == ProviderKind::Kimi =>
+            {
+                return Ok(ControlFlow::Continue((
+                    state,
+                    None,
+                    vec![path.to_path_buf()],
+                )));
+            }
             Parsed::ReconcileSession { session } => {
                 return self.grok_completion_callback(id, state, path, record, session, None);
             }
@@ -511,7 +520,7 @@ impl Worker {
         parsed: &Parsed,
         mut state: BusState,
     ) -> Result<ControlFlow<CallbackFlow, BusState>, String> {
-        if self.retire_superseded_grok_observation(id, dir, path, record, parsed)? {
+        if self.retire_superseded_observation(id, dir, path, record, parsed)? {
             return Ok(ControlFlow::Break(CallbackFlow::Next));
         }
         let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
