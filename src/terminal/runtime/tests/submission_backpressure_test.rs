@@ -75,6 +75,7 @@ fn backpressured_cleanup(master: OwnedFd, peer: OwnedFd) {
         withdraw_grace: Duration::from_secs(1),
         clock: SubmissionClock::default(),
         diagnostics: Default::default(),
+        startup_suggestion_open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
     let result =
         submission.withdraw_pending(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed Enter"));

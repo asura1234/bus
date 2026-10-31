@@ -305,10 +305,17 @@ fn claude_fresh_startup_suggestion_is_not_a_developer_draft() {
     // Claude Code 2.1.309 after folder trust, before any keypress.
     // bus.composer.ownership: cursor (2, 41), faint_chars 0, body
     // `Try "refactor <filepath>"`. The raw PTY paints that line with no SGR.
+    // Colour does not separate this placeholder from a typed draft, so the
+    // empty reading requires the pane to still be untouched since launch.
     let captured = include_str!("fixtures/claude_2_1_309_startup_suggestion.txt");
     assert_eq!(
-        observe_with_cursor(AgentKind::Claude, captured, "from bus", Some((2, 41))),
+        observe_since_launch(AgentKind::Claude, captured, "from bus", Some((2, 41)), true),
         InputObservation::Empty
+    );
+    assert_ne!(
+        observe_with_cursor(AgentKind::Claude, captured, "from bus", Some((2, 41))),
+        InputObservation::Empty,
+        "the same screen is a draft until launch history says it is untouched"
     );
     assert_ne!(
         observe(AgentKind::Claude, captured, "from bus"),
@@ -326,13 +333,14 @@ fn claude_fresh_startup_suggestion_is_not_a_developer_draft() {
         "Try \"fix lint errors\"",
         "Try \"edit <filepath> to...\"",
     ] {
+        let painted = screen(&format!("❯\u{a0}{suggestion}"));
         assert_eq!(
-            observe_with_cursor(
-                AgentKind::Claude,
-                &screen(&format!("❯\u{a0}{suggestion}")),
-                "from bus",
-                start,
-            ),
+            observe_since_launch(AgentKind::Claude, &painted, "from bus", start, true),
+            InputObservation::Empty,
+            "{suggestion}"
+        );
+        assert_ne!(
+            observe_with_cursor(AgentKind::Claude, &painted, "from bus", start),
             InputObservation::Empty,
             "{suggestion}"
         );
@@ -341,11 +349,12 @@ fn claude_fresh_startup_suggestion_is_not_a_developer_draft() {
     let accepted = screen("❯\u{a0}Try \"fix typecheck errors\"");
     let end = 2 + u16::try_from("Try \"fix typecheck errors\"".chars().count()).unwrap();
     assert_ne!(
-        observe_with_cursor(
+        observe_since_launch(
             AgentKind::Claude,
             &accepted,
             "from bus",
-            Some((end, prompt_row))
+            Some((end, prompt_row)),
+            true
         ),
         InputObservation::Empty
     );
@@ -355,11 +364,23 @@ fn claude_fresh_startup_suggestion_is_not_a_developer_draft() {
         "❯\u{a0}master is where I coordinate",
     ] {
         assert_ne!(
-            observe_with_cursor(AgentKind::Claude, &screen(typed), "from bus", start),
+            observe_since_launch(AgentKind::Claude, &screen(typed), "from bus", start, true),
             InputObservation::Empty,
             "{typed}"
         );
     }
+}
+
+#[test]
+fn claude_suggestion_shaped_developer_draft_at_start_is_not_empty() {
+    let rule = "─".repeat(20);
+    let draft = "Try \"fix typecheck errors\"";
+    let screen = format!("● done\n\n{rule}\n❯\u{a0}{draft}\n{rule}\n  ⏵⏵ auto mode on");
+    assert_eq!(
+        observe_with_cursor(AgentKind::Claude, &screen, "from bus", Some((2, 3))),
+        InputObservation::Other,
+        "a developer can type this exact draft and move the cursor home with Ctrl+A"
+    );
 }
 
 #[test]

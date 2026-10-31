@@ -39,6 +39,16 @@ pub(super) fn observe_with_cursor(
     expected: &str,
     cursor: Option<(u16, u16)>,
 ) -> InputObservation {
+    observe_since_launch(kind, screen, expected, cursor, false)
+}
+
+pub(super) fn observe_since_launch(
+    kind: AgentKind,
+    screen: &str,
+    expected: &str,
+    cursor: Option<(u16, u16)>,
+    pristine: bool,
+) -> InputObservation {
     if kind == AgentKind::Grok {
         return super::grok::observe(screen, expected);
     }
@@ -68,7 +78,7 @@ pub(super) fn observe_with_cursor(
     {
         return InputObservation::Unavailable;
     }
-    let Some(body) = input_with_cursor(kind, screen, cursor) else {
+    let Some(body) = input_since_launch(kind, screen, cursor, pristine) else {
         return if detection.visible_working {
             InputObservation::Accepted
         } else {
@@ -225,6 +235,15 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
 }
 
 fn input_with_cursor(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
+    input_since_launch(kind, screen, cursor, false)
+}
+
+fn input_since_launch(
+    kind: AgentKind,
+    screen: &str,
+    cursor: Option<(u16, u16)>,
+    pristine: bool,
+) -> Option<String> {
     if kind == AgentKind::Grok {
         return super::grok::input(screen);
     }
@@ -307,12 +326,14 @@ fn input_with_cursor(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) 
         body.clear();
     }
     // Claude Code 2.1.309 paints a fresh-launch placeholder as the entire
-    // composer line `Try "..."`. The raw PTY has no SGR, so faint-stripping
-    // leaves it, and Enter does not submit it. The cursor sits on the first
-    // character. The same text with the cursor anywhere else is a draft:
-    // Tab accepts the placeholder into the buffer and parks the cursor at
-    // the end. Do not paste over that.
-    if kind == AgentKind::Claude
+    // composer line `Try "..."`, cursor on the first content cell, and Enter
+    // does not submit it. Captured raw PTY bytes for that placeholder, a
+    // Tab-accepted draft, and a literally typed `Try "fix typecheck errors"`
+    // then Ctrl+A all contain zero SGR, so colour cannot separate them.
+    // Clear the line only while this pane is still untouched since launch.
+    // The same shape after a developer key or a Bus paste is a draft.
+    if pristine
+        && kind == AgentKind::Claude
         && claude_startup_suggestion(&body)
         && cursor_on_claude_suggestion(screen, cursor)
     {

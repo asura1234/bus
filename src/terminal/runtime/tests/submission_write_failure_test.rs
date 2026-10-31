@@ -181,6 +181,7 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
         withdraw_grace: reserve,
         clock,
         diagnostics: Default::default(),
+        startup_suggestion_open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let writer = std::thread::spawn(move || {

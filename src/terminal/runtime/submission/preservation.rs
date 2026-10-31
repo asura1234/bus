@@ -40,7 +40,12 @@ impl ObservedSubmission {
             .terminal
             .cursor_state()
             .map(|cursor| (cursor.x, cursor.y));
-        let preservation = self.inspect.draft_preservation_with_cursor(&screen, cursor);
+        let pristine = self
+            .startup_suggestion_open
+            .load(std::sync::atomic::Ordering::Acquire);
+        let preservation = self
+            .inspect
+            .draft_preservation_since_launch(&screen, cursor, pristine);
         match initial {
             InputObservation::Empty if preservation.is_none() => {
                 let result = self.run(text, delay);

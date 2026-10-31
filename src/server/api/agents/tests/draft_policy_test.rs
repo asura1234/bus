@@ -68,6 +68,29 @@ fn each_supported_provider_selects_its_verified_draft_preservation_path() {
 }
 
 #[test]
+fn claude_accepted_suggestion_with_cursor_at_start_is_preserved() {
+    let observer = inspector(AgentKind::Claude);
+    let accepted = screen(AgentKind::Claude, "Try \"fix typecheck errors\"");
+    // Tab accepts the native suggestion into a real draft; Ctrl+A then moves
+    // its cursor back to the first content cell. Literal text reaches the
+    // same state and must receive the same preservation treatment.
+    assert_eq!(
+        observer.observe_with_cursor(&accepted, Some((2, 1))),
+        InputObservation::Other
+    );
+    assert!(observer
+        .draft_preservation_with_cursor(&accepted, Some((2, 1)))
+        .is_some());
+    assert_eq!(
+        observer.observe_with_launch(&accepted, Some((2, 1)), true),
+        InputObservation::Empty
+    );
+    assert!(observer
+        .draft_preservation_since_launch(&accepted, Some((2, 1)), true)
+        .is_none());
+}
+
+#[test]
 fn an_existing_native_stash_and_an_unconfigured_binding_are_left_untouched() {
     let observer = inspector(AgentKind::Claude);
     let occupied_slot = format!(

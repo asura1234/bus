@@ -134,6 +134,42 @@ async fn follow_cwd_falls_back_to_reported_pane_cwd_without_foreground_group() {
 }
 
 #[tokio::test]
+async fn developer_keys_close_the_startup_suggestion_and_launch_reopens_it() {
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel(80, 24);
+    assert!(runtime
+        .startup_suggestion_open
+        .load(std::sync::atomic::Ordering::Acquire));
+    runtime
+        .try_send_bytes(Bytes::from_static(b"\x1b[B"))
+        .unwrap();
+    runtime
+        .queue_user_input_submission(
+            Bytes::new(),
+            Bytes::from_static(b"\r"),
+            std::time::Duration::ZERO,
+            None,
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .startup_suggestion_open
+            .load(std::sync::atomic::Ordering::Acquire),
+        "dialog automation is not developer input"
+    );
+    runtime
+        .try_send_developer_bytes(Bytes::from_static(b"T"))
+        .unwrap();
+    assert!(!runtime
+        .startup_suggestion_open
+        .load(std::sync::atomic::Ordering::Acquire));
+    let _ = writes.recv().await;
+    runtime.mark_agent_launch();
+    assert!(runtime
+        .startup_suggestion_open
+        .load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn focus_events_are_forwarded_when_enabled() {
     let (tx, mut rx) = mpsc::channel(4);
     let (resize_tx, _resize_rx) = watch::channel((80, 24, 0, 0));
@@ -168,6 +204,7 @@ async fn focus_events_are_forwarded_when_enabled() {
         preserve_processes_on_drop: true,
         shell_integration: None,
         launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+        startup_suggestion_open: Arc::new(AtomicBool::new(true)),
         launch_input_error: Arc::new(Mutex::new(None)),
         launch_input_submitted: Arc::new(AtomicBool::new(false)),
         compression,
@@ -210,6 +247,7 @@ async fn focus_events_are_suppressed_when_disabled() {
         preserve_processes_on_drop: true,
         shell_integration: None,
         launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+        startup_suggestion_open: Arc::new(AtomicBool::new(true)),
         launch_input_error: Arc::new(Mutex::new(None)),
         launch_input_submitted: Arc::new(AtomicBool::new(false)),
         compression,

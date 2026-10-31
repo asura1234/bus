@@ -191,6 +191,9 @@ impl TerminalRuntime {
         &self,
         bytes: Bytes,
     ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        // Flip before the send. A failed write still means the developer
+        // tried to type, and the screen can no longer prove the placeholder.
+        self.startup_suggestion_open.store(false, Ordering::Release);
         self.invalidate_shell_prompt();
         super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
     }

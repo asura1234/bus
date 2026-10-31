@@ -14,7 +14,10 @@ use crate::terminal::pty::actor::{InputCompletion, InputScope};
 use bytes::Bytes;
 use std::{
     io,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -77,6 +80,14 @@ pub(crate) trait SubmissionInspector: Send {
         let _ = cursor;
         self.observe(screen)
     }
+    fn observe_with_launch(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        _pristine: bool,
+    ) -> InputObservation {
+        self.observe_with_cursor(screen, cursor)
+    }
     /// Called once when this attempt is refused, outside the render lock.
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
@@ -95,6 +106,14 @@ pub(crate) trait SubmissionInspector: Send {
         _cursor: Option<(u16, u16)>,
     ) -> Option<DraftPreservation> {
         self.draft_preservation(screen)
+    }
+    fn draft_preservation_since_launch(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        _pristine: bool,
+    ) -> Option<DraftPreservation> {
+        self.draft_preservation_with_cursor(screen, cursor)
     }
     fn native_stash_visible(&self, _screen: &str) -> bool {
         true
@@ -141,6 +160,7 @@ struct ObservedSubmission {
     withdraw_grace: Duration,
     clock: SubmissionClock,
     diagnostics: diagnostics::Diagnostics,
+    startup_suggestion_open: Arc<AtomicBool>,
 }
 
 impl TerminalRuntime {
@@ -197,6 +217,7 @@ impl TerminalRuntime {
             withdraw_grace,
             clock,
             diagnostics: diagnostics::Diagnostics::default(),
+            startup_suggestion_open: self.startup_suggestion_open.clone(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
         let span = tracing::Span::current();
@@ -264,7 +285,8 @@ impl ObservedSubmission {
             .terminal
             .cursor_state()
             .map(|cursor| (cursor.x, cursor.y));
-        let observation = self.inspect.observe_with_cursor(&screen, cursor);
+        let pristine = self.startup_suggestion_open.load(Ordering::Acquire);
+        let observation = self.inspect.observe_with_launch(&screen, cursor, pristine);
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
         Some(observation)
@@ -351,6 +373,12 @@ impl ObservedSubmission {
             .recv_timeout(self.clock.remaining(self.deadline.get()))
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
             .and_then(|result| result);
+        if result.is_ok() {
+            // The placeholder is no longer the only thing Bus might overwrite.
+            // A failed paste leaves the flag open so the next attempt can
+            // still deliver into an untouched composer.
+            self.startup_suggestion_open.store(false, Ordering::Release);
+        }
         self.diagnostics.pasted(&result, self.clock.now());
         result
     }

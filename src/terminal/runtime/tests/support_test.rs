@@ -225,6 +225,7 @@ impl TerminalRuntime {
                 preserve_processes_on_drop: true,
                 shell_integration: None,
                 launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+                startup_suggestion_open: Arc::new(AtomicBool::new(true)),
                 launch_input_error: Arc::new(Mutex::new(None)),
                 launch_input_submitted: Arc::new(AtomicBool::new(false)),
                 compression,
