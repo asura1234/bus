@@ -164,10 +164,7 @@ fn kimi_tasks_running_footer_is_working() {
         assert_eq!(detection.state, AgentState::Working, "{tasks}");
         assert!(detection.visible_working, "{tasks}");
         assert_eq!(
-            detection
-                .matched_rule
-                .as_ref()
-                .map(|rule| rule.id.as_str()),
+            detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("footer_tasks_running_working"),
             "{tasks}"
         );
