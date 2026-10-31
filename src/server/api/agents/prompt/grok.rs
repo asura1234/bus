@@ -115,6 +115,7 @@ fn positive_count(count: &str) -> bool {
 /// Ctrl+C on `Waiting for response… [stop]` unsends Bus's prompt into the
 /// composer and drops `[stop]`. That body is still Bus's submission. A
 /// developer draft does not start with the Bus envelope.
+#[cfg(test)]
 pub(super) fn restored_bus_prompt(screen: &str) -> bool {
     crate::agents::grok_surface::restored_prompt_clear_keys(screen).is_some()
 }
