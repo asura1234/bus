@@ -120,6 +120,7 @@ impl BusState {
             files: Vec::new(),
             recipient_ids: Default::default(),
             submitted_at_ms: now_ms,
+            idle_agent_ids: Default::default(),
             attention_origin: Some(origin),
         };
         room.latest_prompt = Some(prompt.clone());

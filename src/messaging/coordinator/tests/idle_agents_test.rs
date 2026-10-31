@@ -546,3 +546,146 @@ fn an_unavailable_flicker_of_still_idle_workers_does_not_repeat_the_reminder() {
     }
     cleanup(r);
 }
+
+/// A reply_not_captured agent is not spare. Once the spare count is back at the
+/// limit, a different spare roster has to alert.
+#[test]
+fn a_reply_not_captured_idle_agent_rearms_for_a_different_spare_roster() {
+    let mut r = setup(true, 4);
+    limit(&mut r.worker, 2);
+    observe(&mut r.worker, &r.workers[3..], RuntimeStatus::Working, 0);
+    idle(&mut r.worker, &r.workers[..3]);
+    refresh(&mut r.worker);
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
+
+    staff(
+        &mut r.worker,
+        r.workers[2],
+        180_000,
+        Some("reply_not_captured"),
+    );
+    refresh(&mut r.worker);
+    assert!(
+        !r.worker.idle_alerted_rooms.contains(&r.room),
+        "spare count at the limit rearms"
+    );
+
+    idle(&mut r.worker, &r.workers[3..]);
+    refresh(&mut r.worker);
+    let posted = alerts(&r.worker, r.room);
+    assert_eq!(
+        posted.len(),
+        2,
+        "a different spare roster alerts after rearm"
+    );
+    assert!(posted[1].text.contains("w3"), "{}", posted[1].text);
+    assert!(!posted[1].text.contains("w2"), "{}", posted[1].text);
+    cleanup(r);
+}
+
+/// The saved alert records structured agent IDs even when a label contains a comma.
+#[test]
+fn a_roster_label_containing_a_comma_does_not_alert_twice() {
+    let mut r = setup(true, 2);
+    limit(&mut r.worker, 1);
+    let mut value = serde_json::to_value(&r.worker.state).unwrap();
+    value["agents"][r.workers[0].0.to_string()]["name"] = json!("a, b");
+    r.worker
+        .save(serde_json::from_value(value).unwrap())
+        .unwrap();
+    idle(&mut r.worker, &r.workers);
+    refresh(&mut r.worker);
+    let posted = alerts(&r.worker, r.room);
+    assert_eq!(posted.len(), 1);
+    assert_eq!(
+        posted[0].idle_agent_ids,
+        r.workers.iter().copied().collect()
+    );
+    observe(&mut r.worker, &r.workers, RuntimeStatus::Working, 0);
+    refresh(&mut r.worker);
+    r = reopen(r);
+    idle(&mut r.worker, &r.workers);
+    refresh(&mut r.worker);
+    assert_eq!(
+        alerts(&r.worker, r.room).len(),
+        1,
+        "the same agent IDs do not alert twice"
+    );
+    cleanup(r);
+}
+
+/// Agents still launching are inside the creation window, so they are not spare.
+/// Once the previous spare agents are working, a roster that later clears the
+/// window has to alert.
+#[test]
+fn launching_agents_do_not_keep_a_new_spare_roster_from_alerting() {
+    let mut r = setup(true, 2);
+    limit(&mut r.worker, 1);
+    idle(&mut r.worker, &r.workers);
+    refresh(&mut r.worker);
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
+
+    let mut state = r.worker.state.clone();
+    let created: Vec<_> = (0..2)
+        .map(|index| {
+            state
+                .create_agent(
+                    r.room,
+                    &format!("new{index}"),
+                    Provider::ClaudeCode,
+                    r.dir.clone(),
+                    None,
+                )
+                .unwrap()
+        })
+        .collect();
+    r.worker.save(state).unwrap();
+    observe(&mut r.worker, &r.workers, RuntimeStatus::Working, 0);
+    refresh(&mut r.worker);
+
+    observe(
+        &mut r.worker,
+        &created,
+        RuntimeStatus::Idle,
+        2 * MIN_IDLE_FOR_ALERT_MS,
+    );
+    refresh(&mut r.worker);
+    let posted = alerts(&r.worker, r.room);
+    assert_eq!(
+        posted.len(),
+        2,
+        "a spare roster that clears the creation window alerts once"
+    );
+    assert!(
+        posted[1].text.contains(": new0, new1."),
+        "{}",
+        posted[1].text
+    );
+    cleanup(r);
+}
+
+/// A worker staffed moments ago is not spare, even if its runtime status stays
+/// idle. A different roster that is over the limit has to alert.
+#[test]
+fn a_worker_staffed_inside_two_minutes_does_not_block_a_different_spare_roster() {
+    let mut r = setup(true, 4);
+    limit(&mut r.worker, 2);
+    observe(&mut r.worker, &r.workers[3..], RuntimeStatus::Working, 0);
+    idle(&mut r.worker, &r.workers[..3]);
+    refresh(&mut r.worker);
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
+
+    staff(&mut r.worker, r.workers[2], 0, None);
+    refresh(&mut r.worker);
+    idle(&mut r.worker, &r.workers[3..]);
+    refresh(&mut r.worker);
+    let posted = alerts(&r.worker, r.room);
+    assert_eq!(
+        posted.len(),
+        2,
+        "a different spare roster alerts after a recent staffing returns the spare count to the limit"
+    );
+    assert!(posted[1].text.contains("w3"), "{}", posted[1].text);
+    assert!(!posted[1].text.contains("w2"), "{}", posted[1].text);
+    cleanup(r);
+}

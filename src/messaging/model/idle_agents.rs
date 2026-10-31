@@ -1,5 +1,5 @@
 //! Edge-triggered idle-worker reminders, with durable roster dedupe.
-use super::{Author, BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
+use super::{AgentId, Author, BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 use std::collections::BTreeSet;
 
 /// Preserve the original alert's minimum idle interval.
@@ -26,9 +26,11 @@ impl BusState {
         let mut changed = false;
         for room in rooms {
             if alerted.contains(&room) {
-                // A lost status or a reset idle clock is not evidence of new work.
-                // Preserve the original alert's conservative rearming rule.
-                if self.idle_workers(room, may_be_idle).len() <= limit as usize {
+                if self
+                    .idle_workers(room, |agent| self.finished(agent, now_ms))
+                    .len()
+                    <= limit as usize
+                {
                     alerted.remove(&room);
                 }
                 continue;
@@ -45,22 +47,33 @@ impl BusState {
             if self.idle_alerted_before(room, &idle) {
                 continue;
             }
+            let labels = idle
+                .iter()
+                .map(|id| self.agent_message_label(*id))
+                .collect::<Vec<_>>()
+                .join(", ");
             let text = format!(
                 "{} agents in room {} are idle (limit {}): {}{}",
                 idle.len(),
                 room.0,
                 limit,
-                idle.join(", "),
+                labels,
                 IDLE_ALERT_ACTION
             );
-            self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
+            let prompt_id = self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
+            let request = self
+                .requests
+                .values_mut()
+                .find(|request| request.prompt.id == prompt_id)
+                .ok_or(ModelError::InvalidTransition)?;
+            request.prompt.idle_agent_ids = idle.into_iter().collect();
             changed = true;
         }
         Ok(changed)
     }
 
     /// Qualified workers in creation order, excluding the orchestrator and pending work.
-    fn idle_workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<String> {
+    fn idle_workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<AgentId> {
         self.agents
             .values()
             .filter(|agent| {
@@ -71,7 +84,7 @@ impl BusState {
                     && self.queued_requests(agent.id).is_empty()
                     && test(agent)
             })
-            .map(|agent| self.agent_message_label(agent.id))
+            .map(|agent| agent.id)
             .collect()
     }
 
@@ -91,28 +104,12 @@ impl BusState {
         })
     }
 
-    fn idle_alerted_before(&self, room: RoomId, idle: &[String]) -> bool {
-        let idle = idle.iter().cloned().collect::<BTreeSet<_>>();
+    fn idle_alerted_before(&self, room: RoomId, idle: &[AgentId]) -> bool {
+        let idle = idle.iter().copied().collect::<BTreeSet<_>>();
         self.requests().any(|request| {
             request.room_id == room
                 && request.prompt.author == Author::Bus
-                && idle_alert_names(&request.prompt.text).is_some_and(|names| names == idle)
+                && request.prompt.idle_agent_ids == idle
         })
     }
-}
-
-fn idle_alert_names(text: &str) -> Option<BTreeSet<String>> {
-    let head = text.strip_suffix(IDLE_ALERT_ACTION)?;
-    if !head.contains(" agents in room ") || !head.contains(" are idle (limit ") {
-        return None;
-    }
-    let (_, names) = head.rsplit_once(": ")?;
-    Some(names.split(", ").map(str::to_owned).collect())
-}
-
-fn may_be_idle(agent: &RoomAgent) -> bool {
-    matches!(
-        agent.shown_status(),
-        RuntimeStatus::Idle | RuntimeStatus::Unavailable | RuntimeStatus::Launching
-    )
 }

@@ -424,6 +424,7 @@ fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespac
             files: vec![PathBuf::from("/tmp/a.png")],
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: 0,
+            idle_agent_ids: Default::default(),
             attention_origin: None,
         };
         // Whether the hook keeps the trailing space or not, the lifted image

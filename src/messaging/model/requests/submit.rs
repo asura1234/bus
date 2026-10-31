@@ -120,6 +120,7 @@ impl BusState {
             files: draft.files,
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
+            idle_agent_ids: Default::default(),
             attention_origin: None,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
