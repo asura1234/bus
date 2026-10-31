@@ -78,96 +78,95 @@ IF host == codeup:
 
 IF host == github:
 
-Run:
-  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" reviews --pr <pr>
+  Run:
+    python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" reviews --pr <pr>
 
-WHILE `everReviewed` AND NOT `coveredAtHead` AND waited < max_wait:
-  Sleep poll_seconds and rerun.
--- The semantics of the three signals and why the wait condition must be `NOT coveredAtHead` are in guide.md "The two
---   signals of review coverage". `everReviewed == false` does not wait here (machine review may not be wired at all); report it as is.
+  WHILE `everReviewed` AND NOT `coveredAtHead` AND waited < max_wait:
+    Sleep poll_seconds and rerun.
+  -- The semantics of the three signals and why the wait condition must be `NOT coveredAtHead` are in guide.md "The two
+  --   signals of review coverage". `everReviewed == false` does not wait here (machine review may not be wired at all); report it as is.
 
-IF waited >= max_wait AND NOT `coveredAtHead`
-  **STOP**, and say which signal was not met: if `pendingReviewers` is nonempty, report the commit each one stopped at;
-  if it is empty and `headHasReview` is false, report "no review event on the current HEAD" with `reviewedOnceAt`.
-  Continue only after the developer explicitly confirms; it must truly stop.
+  IF waited >= max_wait AND NOT `coveredAtHead`
+    **STOP**, and say which signal was not met: if `pendingReviewers` is nonempty, report the commit each one stopped at;
+    if it is empty and `headHasReview` is false, report "no review event on the current HEAD" with `reviewedOnceAt`.
+    Continue only after the developer explicitly confirms; it must truly stop.
 
-Invoke `address-review-comments pr --github --pr <pr>`
+  Invoke `address-review-comments pr --github --pr <pr>`
 
-Fetching comments, determining rounds, adjudicating, fixing, landing and posting the ledger **all belong to it**; this skill does none of those steps for it.
-The reason `--github` uses only this one lane is in guide.md "Why only the github lane".
+  Fetching comments, determining rounds, adjudicating, fixing, landing and posting the ledger **all belong to it**; this skill does none of those steps for it.
+  The reason `--github` uses only this one lane is in guide.md "Why only the github lane".
 
-Handle its return in four ways:
-  FLAG                         → STOP and relay verbatim. By definition a FLAG needs the developer's call.
-  landed fixes                 → return to section 1 and retake the signals (HEAD changed, CI must rerun).
-  STOP because anchor is not the current HEAD → relay verbatim and wait for the review of the latest HEAD; never treat an old round as reviewed.
-  `no-comments`                → nothing to do in this section; continue. A clean review is not a reason to stop.
+  Handle its return in four ways:
+    FLAG                         → STOP and relay verbatim. By definition a FLAG needs the developer's call.
+    landed fixes                 → return to section 1 and retake the signals (HEAD changed, CI must rerun).
+    STOP because anchor is not the current HEAD → relay verbatim and wait for the review of the latest HEAD; never treat an old round as reviewed.
+    `no-comments`                → nothing to do in this section; continue. A clean review is not a reason to stop.
 
-Finishing one round **does not mean** the reviewer agreed. `triaged` is a marker in the local ledger meaning the author did the homework; whether the reviewer
-agrees depends on its own verdict. Run:
+  Finishing one round **does not mean** the reviewer agreed. `triaged` is a marker in the local ledger meaning the author did the homework; whether the reviewer
+  agrees depends on its own verdict. Run:
 
-  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" verdict --pr <pr>
+    python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" verdict --pr <pr>
 
-The `verdict` output is **informational only**, not a release condition: author and reviewer are peers, and a rejection with first-hand counter-evidence is an equally valid
-final outcome. The convergence criterion is "the author has adjudicated every point the reviewer made on the current HEAD", judged by `fetch` — true when no new
-round is opened.
+  The `verdict` output is **informational only**, not a release condition: author and reviewer are peers, and a rejection with first-hand counter-evidence is an equally valid
+  final outcome. The convergence criterion is "the author has adjudicated every point the reviewer made on the current HEAD", judged by `fetch` — true when no new
+  round is opened.
 
   - This round landed fixes → return to section 1. The push triggers a re-review; the next verdict is the conclusion on the new tree.
   - This round was all REJECT (each with first-hand counter-evidence in the ledger) → continue. A verdict sitting at 🟡 / 🔵 is the **expected result**, not a blocker.
   - An unhandled FLAG → STOP. That is the kind the author cannot converge on and explicitly needs the developer's call; it has nothing to do with rejection.
--- Why 🟢 cannot be a release condition, and why this path does not need `--admin`, are in guide.md
---   "The merge gate is 'the author adjudicated', not 'the reviewer agreed'".
+  -- Why 🟢 cannot be a release condition, and why this path does not need `--admin`, are in guide.md
+  --   "The merge gate is 'the author adjudicated', not 'the reviewer agreed'".
 
--- Sections 2/5 advance HEAD and therefore loop; continue until the merge conditions in section 6 hold, with no round cap. Hold and escalate sharp reviewer disagreements, goal changes, or destructive or outward-facing actions without existing authorization.
--- **The convergence criterion is "nothing left to handle", not "someone reviewed"**; the loop must include one `fetch` (guide.md).
+  -- Sections 2/5 advance HEAD and therefore loop; continue until the merge conditions in section 6 hold, with no round cap. Hold and escalate sharp reviewer disagreements, goal changes, or destructive or outward-facing actions without existing authorization.
+  -- **The convergence criterion is "nothing left to handle", not "someone reviewed"**; the loop must include one `fetch` (guide.md).
 
 ========== 3. Wait for CI to converge (wait last) ==========
 
 IF host == codeup:
-  Record `checks` without waiting, attribution, or local gate reruns; `checkCount == 0`, pending, failed, and other are
-  neither merge blockers nor CI passes. Skip sections 3-5 and continue to section 6.
-Otherwise sections 3-5 wait on GitHub CI of **the tree that will be merged**.
+  Record `checks` without waiting, attribution, or local gate reruns; zero, pending, failed, and other are neither blockers nor passes. Skip to section 6.
+IF host == github:
+  Wait on CI of **the tree that will be merged**.
+  WHILE (`checkCount == 0` OR pending is nonempty) AND waited < max_wait:
+    Sleep poll_seconds and rerun `checks`.
+    -- Do not change the repository while waiting: once the tree moves, the running checks no longer verify the tree to be merged.
 
-WHILE (`checkCount == 0` OR pending is nonempty) AND waited < max_wait:
-  Sleep poll_seconds and rerun `checks`.
-  -- Do not change the repository while waiting: once the tree moves, the running checks no longer verify the tree to be merged.
+  -- The convergence condition is "`checkCount > 0` **and** pending is empty"; both are required.
+  --   **Zero checks is not all green; it is no signal**; measurements in guide.md "CI convergence criterion".
 
--- The convergence condition is "`checkCount > 0` **and** pending is empty"; both are required.
---   **Zero checks is not all green; it is no signal**; measurements in guide.md "CI convergence criterion".
-
-IF waited >= max_wait AND pending is still nonempty
-  STOP and report the jobs still running. Do not treat "not finished yet" as green.
-IF waited >= max_wait AND `checkCount == 0`
-  STOP: no check registered even by timeout means this PR never triggered the gates, which needs the developer's look.
+  IF waited >= max_wait AND pending is still nonempty
+    STOP and report the jobs still running. Do not treat "not finished yet" as green.
+  IF waited >= max_wait AND `checkCount == 0`
+    STOP: no check registered even by timeout means this PR never triggered the gates, which needs the developer's look.
 
 ========== 4. Attribute each red CI check ==========
+IF host == github:
+  Every entry in `failed` and `other` must go through this section. `other` holds conclusions that "completed but are neither SUCCESS nor on the failure
+  list" (cancelled / skipped / neutral / stale…): not green, just not shaped like red.
 
-Every entry in `failed` and `other` must go through this section. `other` holds conclusions that "completed but are neither SUCCESS nor on the failure
-list" (cancelled / skipped / neutral / stale…): not green, just not shaped like red.
-
-FOR EACH job IN failed + other:
-  a. Take that check's history (`--job` takes the **per-check name** from `checks`, not the workflow name):
-       python3 "<skill_dir>/scripts/pr_signals.py" history --pr <pr> --job "<name>"
-     Green earlier, red now → **strong hint this PR caused it**; go straight to (c), do not look for environmental excuses first.
-  b. Take the failure evidence: use `failed[].logCommand`. **The log may be truncated before the real failure** (see guide).
-  c. Decide per guide "Three acceptable kinds of evidence"; each red check lands in exactly one class: IN-SCOPE (caused by this PR, must fix) /
-     PRE-EXISTING / FLAKY / ENVIRONMENT. Anything undecidable is IN-SCOPE; never release by default.
-  d. When FLAKY is suspected, **rerun** instead of reasoning: `pr_host rerun --run-id <runId>`, then return to section 2 to wait for convergence.
+  FOR EACH job IN failed + other:
+    a. Take that check's history (`--job` takes the **per-check name** from `checks`, not the workflow name):
+         python3 "<skill_dir>/scripts/pr_signals.py" history --pr <pr> --job "<name>"
+       Green earlier, red now → **strong hint this PR caused it**; go straight to (c), do not look for environmental excuses first.
+    b. Take the failure evidence: use `failed[].logCommand`. **The log may be truncated before the real failure** (see guide).
+    c. Decide per guide "Three acceptable kinds of evidence"; each red check lands in exactly one class: IN-SCOPE (caused by this PR, must fix) /
+       PRE-EXISTING / FLAKY / ENVIRONMENT. Anything undecidable is IN-SCOPE; never release by default.
+    d. When FLAKY is suspected, **rerun** instead of reasoning: `pr_host rerun --run-id <runId>`, then return to section 2 to wait for convergence.
 
 ========== 5. Fix IN-SCOPE red checks ==========
+IF host == github:
+  IF any IN-SCOPE red check exists:
+    The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to
+    `commit-and-push` to land it, or let the developer deal with it.
 
-IF any IN-SCOPE red check exists:
-  The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to
-  `commit-and-push` to land it, or let the developer deal with it.
+    Invoke `gate-and-fix --base <merge-base> --command "<policy.gate_command>"` (omit `--command` when null). **This is the only thing entitled to claim "the gates are green"** —
+    hand-running a few scoped commands does not count (reasons in guide.md "Why attribution must gather evidence mechanically").
 
-  Invoke `gate-and-fix --base <merge-base> --command "<policy.gate_command>"` (omit `--command` when null). **This is the only thing entitled to claim "the gates are green"** —
-  hand-running a few scoped commands does not count (reasons in guide.md "Why attribution must gather evidence mechanically").
+    IF gate-and-fix STOPs or cannot converge
+      STOP and report the artifact and blocker.
+    IF the fix exceeds this PR's locked goal
+      STOP and hand it to the developer to rule; do not widen scope to turn CI green.
 
-  IF gate-and-fix STOPs or cannot converge
-    STOP and report the artifact and blocker.
-  IF the fix exceeds this PR's locked goal
-    STOP and hand it to the developer to rule; do not widen scope to turn CI green.
-
-  Return to section 1 and retake the signals (HEAD has changed; review must cover it again).
+    Return to section 1 and retake the signals (HEAD has changed; review must cover it again).
 
 ========== 6. Merge ==========
 
@@ -210,13 +209,14 @@ IF --hold-before-merge
   Report "ready to merge at <merge_head>, holding for developer verification" and the state summary (guide.md "Holding before merge"), STOP. Do not merge.
 
 IF host == codeup:
-  `pr_host merge --pr <pr> --head <merge_head> --note-file <file>`; record-only CI never selects `--admin`.
-ELSE IF failed and other are both empty:
-  `pr_host merge --pr <pr> --head <merge_head>`.
-ELSE:
-  -- Only PRE-EXISTING / FLAKY / ENVIRONMENT remain; state the release basis for each one,
-  --   no unnamed summaries like "the rest are environment issues".
-  `pr_host merge --pr <pr> --head <merge_head> --admin`.
+  `pr_host merge --pr <pr> --head <merge_head> --note-file <file>`; the note records the per-check release basis.
+IF host == github:
+  IF failed and other are both empty:
+    `pr_host merge --pr <pr> --head <merge_head>`.
+  ELSE:
+    -- Only PRE-EXISTING / FLAKY / ENVIRONMENT remain; state the release basis for each one,
+    --   no unnamed summaries like "the rest are environment issues".
+    `pr_host merge --pr <pr> --head <merge_head> --admin`.
 
 -- `--match-head-commit` is not optional: without it a push after the signals were taken merges a tree that was never verified.
 

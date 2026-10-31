@@ -1,6 +1,6 @@
 ---
 name: pr
-description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/master, then create or refresh an English Draft PR and its body. It does not run gates or dead-code cleanup; the orchestrator sequences gate-and-fix and delete-dead-code itself and may hand their results to pr as optional --verification input. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
+description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/<base_branch>, then create or refresh an English Draft PR and its body. It does not run gates or dead-code cleanup; the orchestrator sequences gate-and-fix and delete-dead-code itself and may hand their results to pr as optional --verification input. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
 ---
 
 # PR
@@ -41,8 +41,6 @@ verification = optional Markdown file of `- [x] ` lines, each naming verificatio
 
 repo = `git rev-parse --show-toplevel`
 branch = `git branch --show-current`
-base_branch = `git symbolic-ref --short refs/remotes/origin/HEAD` without `origin/`; if unset, resolve the
-remote default with `git ls-remote --symref origin HEAD`, and stop if it is unavailable.
 
 IF repo missing
   ERROR "The current directory is not a Git repository."
@@ -54,6 +52,8 @@ IF verification given AND the file is missing or contains a line that is not a `
 Run:
   git status --short
   git fetch origin
+  python3 "$SKILL_DIR/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>" --refresh-default
+base_branch = the refreshed `refs/remotes/origin/HEAD` branch name without `origin/`; stop if it is unavailable.
 Assert `origin/<base_branch>` resolves.
 
 working_changed = tracked + untracked files in the current worktree
@@ -61,7 +61,7 @@ committed_changed = `git diff --name-only origin/<base_branch>...HEAD`
 ahead = `git rev-list --count origin/<base_branch>..HEAD`
 
 IF NOT lock-only AND working_changed empty AND committed_changed empty AND ahead == 0
-  ERROR "The current branch has no work to commit or publish relative to origin/master."
+  ERROR "The current branch has no work to commit or publish relative to origin/<base_branch>."
 
 Inspect the complete current diff, untracked files, and commits. Confirm they describe one coherent
 PR purpose. Do not silently discard, stash, rewrite, or absorb unrelated developer changes.
@@ -150,7 +150,7 @@ IF verification given AND any line names a commit other than `head`:
 Read(`$SKILL_DIR/../_bus/docs/pr-template.md`) and Read(`$SKILL_DIR/../_bus/docs/pull-request-template.md`)
 Write the English title and narrative under one hard constraint: **the narrative may come only from the
 immutable `copy_diff` / `copy_commits`; goal and non-goals come only from GOAL_CONTEXT_FILE.** Never re-derive
-from the live worktree, live `HEAD`, or the mutable `origin/master`.
+from the live worktree, live `HEAD`, or the mutable `origin/<base_branch>`.
 
 Fill every section of the GitHub template, in its order:
 - Insert the full `## 目标` and `## 非目标` sections of GOAL_CONTEXT_FILE verbatim; never add source labels,
