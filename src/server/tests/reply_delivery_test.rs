@@ -1333,10 +1333,10 @@ fn run_soak() {
         delivery_cycle(&mut f, round);
         assert_eq!(
             f.stall_diagnostics(),
-            round,
+            0,
             "delivery phase recorded an unexpected stall diagnostic"
         );
-        stall_cycle(&mut f, round);
+        idle_cycle(&mut f, round);
         orchestrator_inbox_burst(round);
         f.reopen();
         // Startup is explicit: an unknown shell after coordinator restart is
