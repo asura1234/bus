@@ -167,9 +167,10 @@ pub struct TerminalRuntime {
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_prompt_generation: Arc<AtomicU64>,
-    /// True until a developer key reaches this pane, or Bus successfully
-    /// pastes a prompt, since the last agent launch. Dialog automation does
-    /// not clear it. Only then is Claude's `Try "..."` shape a placeholder.
+    /// True until accepted developer or API input reaches this pane, or Bus
+    /// successfully pastes a prompt, since the last agent launch. Dialog
+    /// automation, mouse, and focus do not clear it. A rejected send leaves
+    /// it set. Only then is Claude's `Try "..."` shape a placeholder.
     startup_suggestion_open: Arc<AtomicBool>,
     launch_input_error: Arc<Mutex<Option<(String, bool)>>>,
     #[cfg(test)]

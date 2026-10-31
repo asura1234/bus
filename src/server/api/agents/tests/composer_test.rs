@@ -426,6 +426,115 @@ fn typed_try_quote_at_first_cell_stays_occupied() {
     );
 }
 
+fn paint_try_quote_at_cursor_start(runtime: &crate::terminal::TerminalRuntime, draft: &str) {
+    let rule = "─".repeat(20);
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(format!("{rule}\r\n❯\u{a0}{draft}").as_bytes());
+    // 1-based row 2, column 3 is the 'T' (❯ and NBSP are each one cell).
+    runtime.test_process_pty_bytes(b"\x1b[2;3H");
+}
+
+async fn queued_prompt_bytes(
+    runtime: &crate::terminal::TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>,
+) -> (Vec<bytes::Bytes>, std::io::Result<()>) {
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            bytes::Bytes::from_static(b"from bus"),
+            bytes::Bytes::from_static(b"\r"),
+            vec![bytes::Bytes::from_static(b"\x01")],
+            std::time::Duration::ZERO,
+            // confirmation_budget is 2s and withdrawal_budget is 1s, so a shorter
+            // caller deadline is already in the past by the time the paste is queued.
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(4)),
+            Box::new(observer(AgentKind::Claude, "from bus".into())),
+        )
+        .unwrap();
+    let result = completion
+        .recv_timeout(std::time::Duration::from_secs(6))
+        .unwrap_or_else(|error| Err(std::io::Error::other(error)));
+    let mut queued = Vec::new();
+    while let Ok(bytes) = writes.try_recv() {
+        queued.push(bytes);
+    }
+    (queued, result)
+}
+
+fn pasted_over(queued: &[bytes::Bytes]) -> bool {
+    queued.iter().any(|bytes| bytes.as_ref() == b"from bus")
+}
+
+#[tokio::test]
+async fn launch_window_only_forwarded_keys_protect_a_try_quote_draft() {
+    let draft = "Try \"fix typecheck errors\"";
+    let mut failures = Vec::new();
+
+    // Control: an untouched placeholder must still be pasted. If this fails, the screen or cursor is wrong.
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 12, 8);
+    paint_try_quote_at_cursor_start(&runtime, draft);
+    let (queued, result) = queued_prompt_bytes(&runtime, &mut writes).await;
+    if !pasted_over(&queued) {
+        failures.push(format!(
+            "harness: untouched placeholder was not pasted: {queued:?} {result:?} screen={:?}",
+            runtime.visible_ansi()
+        ));
+    }
+
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 12, 8);
+    paint_try_quote_at_cursor_start(&runtime, draft);
+    runtime
+        .try_send_developer_bytes(bytes::Bytes::from_static(b"\x01"))
+        .unwrap();
+    let _ = writes.recv().await;
+    let (queued, result) = queued_prompt_bytes(&runtime, &mut writes).await;
+    if pasted_over(&queued) {
+        failures.push(format!(
+            "harness: a forwarded Ctrl+A still let delivery paste over {draft:?}: {queued:?} {result:?} screen={:?}",
+            runtime.visible_ansi()
+        ));
+    }
+
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 12, 8);
+    paint_try_quote_at_cursor_start(&runtime, draft);
+    // pane send-text, pane send-input, pane send-keys, and agent send-keys
+    // use the same accepted-input path as a forwarded key.
+    runtime
+        .try_send_developer_bytes(bytes::Bytes::copy_from_slice(draft.as_bytes()))
+        .unwrap();
+    while writes.try_recv().is_ok() {}
+    let (queued, result) = queued_prompt_bytes(&runtime, &mut writes).await;
+    if pasted_over(&queued) {
+        failures.push(format!(
+            "text injected without developer forwarding was pasted over: {queued:?} {result:?} screen={:?}",
+            runtime.visible_ansi()
+        ));
+    }
+
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 12, 1);
+    paint_try_quote_at_cursor_start(&runtime, draft);
+    runtime
+        .try_send_bytes(bytes::Bytes::from_static(b"x"))
+        .unwrap();
+    let rejected = runtime.try_send_developer_bytes(bytes::Bytes::from_static(b"T"));
+    if rejected.is_ok() {
+        failures.push("harness: developer key was accepted on a full channel".to_owned());
+    }
+    let _ = writes.try_recv();
+    let (queued, result) = queued_prompt_bytes(&runtime, &mut writes).await;
+    if !pasted_over(&queued) {
+        failures.push(format!(
+            "a developer key that never reached the pane left the placeholder undeliverable: {queued:?} {result:?} screen={:?}",
+            runtime.visible_ansi()
+        ));
+    }
+
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 #[test]
 fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
     let rule = "─".repeat(20);

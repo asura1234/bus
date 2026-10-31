@@ -185,17 +185,22 @@ impl PaneRuntimeIo {
 }
 
 impl TerminalRuntime {
-    /// Only developer key/text/paste events use this path; terminal replies,
-    /// focus reports and Bus automation do not count as typing.
+    /// Developer key/text/paste events, and pane or agent API input, use this
+    /// path. Terminal replies, focus reports, mouse, and Bus dialog automation
+    /// do not count as typing.
     pub(crate) fn try_send_developer_bytes(
         &self,
         bytes: Bytes,
     ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
-        // Flip before the send. A failed write still means the developer
-        // tried to type, and the screen can no longer prove the placeholder.
-        self.startup_suggestion_open.store(false, Ordering::Release);
         self.invalidate_shell_prompt();
-        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
+        let result = super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes);
+        if result.is_ok() {
+            // An Ok that only buffers for a preservation lease still counts:
+            // the bytes were accepted. A full channel leaves the placeholder
+            // deliverable because the screen did not change.
+            self.startup_suggestion_open.store(false, Ordering::Release);
+        }
+        result
     }
     pub(crate) fn try_send_developer_paste(
         &self,

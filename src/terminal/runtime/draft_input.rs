@@ -46,14 +46,20 @@ impl DraftInput {
         bytes: Bytes,
     ) -> Result<(), tokio::sync::mpsc::error::TrySendError<Bytes>> {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-        state.last_key = Some(io.submission_clock().now());
-        state.revision = state.revision.wrapping_add(1);
-        state.pending = None;
-        if let Some(buffered) = &mut state.buffered {
+        // A full channel returns the bytes. They never reached the pane, so
+        // they must not start the quiet window or cancel a launch placeholder.
+        let result = if let Some(buffered) = &mut state.buffered {
             buffered.extend_from_slice(&bytes);
-            return Ok(());
+            Ok(())
+        } else {
+            io.try_send_bytes(bytes)
+        };
+        if result.is_ok() {
+            state.last_key = Some(io.submission_clock().now());
+            state.revision = state.revision.wrapping_add(1);
+            state.pending = None;
         }
-        io.try_send_bytes(bytes)
+        result
     }
 
     pub(super) fn acquire(
