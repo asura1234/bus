@@ -104,7 +104,9 @@ line_regex = ['(?i)\[[1-9][0-9]*\s+tasks?\s+running\]']
 id = "footer_running_command_working"
 state = "working"
 priority = 84
-region = "bottom_non_empty_lines(5)"
+# The live bullet sits above the composer. Bottom-five lines are the box,
+# the effort footer (`thinking: high`, also shown when idle), and context.
+region = "whole_recent"
 visible_working = true
 line_regex = ['(?i)\brunning a command\b']
 

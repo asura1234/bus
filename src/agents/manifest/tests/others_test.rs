@@ -146,6 +146,45 @@ fn kimi_live_tracking_running_a_command_is_working() {
 }
 
 #[test]
+fn kimi_live_tracking_running_command_above_composer_is_working() {
+    let screen = "\
+● Running a command · $ sleep 45\n\
+╭──────────────────────────────────────────────────╮\n\
+│ >                                                │\n\
+╰──────────────────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 3% (24.4k/1M)";
+    let detection = kimi_detection(screen);
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_effort_footer_without_busy_marker_stays_idle() {
+    for footer in [
+        "K3.1 Pro thinking: high  …/tmp/project  master",
+        "● Ran a command · $ sleep 45\nK3.1 Pro thinking: high  …/tmp/project  master",
+    ] {
+        let detection = kimi_detection(&kimi_frame(footer));
+        assert_eq!(
+            detection.state,
+            AgentState::Idle,
+            "{footer:?} matched {:?}",
+            detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+        );
+        assert!(detection.visible_idle, "{footer:?}");
+    }
+}
+
+#[test]
 fn kimi_tasks_running_footer_is_working() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
