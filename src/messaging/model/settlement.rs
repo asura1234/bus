@@ -430,7 +430,8 @@ impl BusState {
                 None
             }
             Some(RecordedTurnEnd::Error(message)) => Some(message),
-            Some(RecordedTurnEnd::NoReply) | None => None,
+            Some(RecordedTurnEnd::NoReply) => return self.complete_silent_turn(agent, id, now_ms),
+            None => None,
         };
         let (reason, error) = match provider_error {
             Some(message) => provider_error_outcome(&message),
@@ -440,6 +441,31 @@ impl BusState {
         let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
         if let Some(owner) = self.agents.get_mut(&agent) {
             owner.actionable_error = closed.then_some(error);
+        }
+        Some(id)
+    }
+
+    fn complete_silent_turn(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+    ) -> Option<RequestId> {
+        let mut completed = self.group_members(id);
+        completed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
+        if self.request(id).is_some_and(|request| !request.settled()) {
+            completed.push(id);
+        }
+        self.abandon_current_request(id, now_ms).ok()?;
+        for member in completed {
+            if let Some(request) = self.requests.get_mut(&member) {
+                request.phase = RequestPhase::Completed;
+                request.failure_reason = None;
+                request.pending_final = None;
+            }
+        }
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            owner.actionable_error = None;
         }
         Some(id)
     }

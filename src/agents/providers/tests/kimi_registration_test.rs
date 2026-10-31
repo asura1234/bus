@@ -124,3 +124,29 @@ fn resume_rejects_saved_auto_with_bus_yolo() {
     );
     drop(restore);
 }
+
+#[test]
+fn launch_rejects_positional_input_after_the_option_terminator() {
+    let args = vec!["--".to_owned(), "unowned task".to_owned()];
+    assert!(
+        super::kimi::launch::validate_args(&args).is_err(),
+        "a positional provider prompt must not bypass Bus ownership: {args:?}"
+    );
+}
+
+#[test]
+fn launch_rejects_attached_session_and_prompt_short_options() {
+    for arg in ["-Sexternal-session", "-punowned task"] {
+        let args = vec![arg.to_owned()];
+        assert!(
+            super::kimi::launch::validate_args(&args).is_err(),
+            "Kimi accepts this attached short option; Bus must reject it: {arg}"
+        );
+        if arg.starts_with("-S") {
+            assert!(
+                super::kimi::launch::take_adopted_session(&args).is_err(),
+                "an attached session selector must not bypass adoption refusal: {arg}"
+            );
+        }
+    }
+}

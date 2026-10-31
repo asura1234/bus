@@ -13,14 +13,6 @@ use std::{
 
 const HOME_FILE: &str = "kimi-home.json";
 const EXECUTABLE_FILE: &str = "kimi-executable.json";
-const HOOK_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "TurnStarted",
-    "Stop",
-    "StopFailure",
-    "Interrupt",
-];
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 struct Stamp {
@@ -254,7 +246,8 @@ fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBu
         .ok_or("Kimi config root is not a table")?;
     table.remove("hooks"); // Never execute inherited global hooks in a Bus pane.
     let command = hook_command(hooks);
-    let entries = HOOK_EVENTS
+    let entries = hook_json::HookContract::for_provider(ProviderKind::Kimi)
+        .events
         .iter()
         .copied()
         .map(|event| {
@@ -327,12 +320,21 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
         .and_then(|table| table.get_mut("hooks"))
         .and_then(toml::Value::as_array_mut)
         .ok_or("Kimi private hooks are missing")?;
-    if hooks_table.len() != HOOK_EVENTS.len() {
+    if hooks_table.len()
+        != hook_json::HookContract::for_provider(ProviderKind::Kimi)
+            .events
+            .len()
+    {
         return Err("Kimi private hooks changed; relaunch required".into());
     }
     let current = hook_command(hooks);
     let mut changed = false;
-    for (entry, event) in hooks_table.iter_mut().zip(HOOK_EVENTS.iter().copied()) {
+    for (entry, event) in hooks_table.iter_mut().zip(
+        hook_json::HookContract::for_provider(ProviderKind::Kimi)
+            .events
+            .iter()
+            .copied(),
+    ) {
         let table = entry
             .as_table_mut()
             .ok_or("Kimi private hook entry is invalid")?;
@@ -373,6 +375,19 @@ pub(crate) fn validate_args(args: &[String]) -> Result<(), String> {
     if args.iter().any(|arg| arg.contains('\0')) {
         return Err("Kimi launch arguments contain NUL".into());
     }
+    if let Some(index) = args.iter().position(|arg| arg == "--") {
+        if index + 1 < args.len() {
+            return Err("Kimi positional input conflicts with Bus interactive capture".into());
+        }
+    }
+    if args
+        .iter()
+        .any(|arg| (arg.starts_with("-S") || arg.starts_with("-p")) && arg.len() > 2)
+    {
+        return Err(
+            "Kimi attached session or prompt input conflicts with Bus interactive capture".into(),
+        );
+    }
     for index in common::argument_positions(ProviderKind::Kimi, args) {
         let arg = &args[index];
         let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
@@ -406,6 +421,7 @@ pub(crate) fn take_adopted_session(args: &[String]) -> Result<Option<String>, St
             matches!(args[i].as_str(), "--session" | "-S")
                 || args[i].starts_with("--session=")
                 || args[i].starts_with("-S=")
+                || args[i].starts_with("-S") && args[i].len() > 2
         })
     {
         return Err(
