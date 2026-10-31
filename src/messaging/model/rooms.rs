@@ -438,6 +438,7 @@ impl BusState {
             files,
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: now_ms,
+            idle_agent_ids: BTreeSet::new(),
             attention_origin: None,
         };
         // The latest prompt is what rings and what the composer recalls, as

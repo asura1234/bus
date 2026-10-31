@@ -1,13 +1,15 @@
-//! Edge-triggered idle-worker reminders, with episode state owned by the coordinator.
-use super::{BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
+//! Edge-triggered idle-worker reminders, with durable roster dedupe.
+use super::{AgentId, Author, BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 use std::collections::BTreeSet;
 
-/// Preserve the original alert's definition of an idle worker.
+/// Preserve the original alert's minimum idle interval.
 pub(crate) const MIN_IDLE_FOR_ALERT_MS: u64 = 60_000;
+const STAFFING_GRACE_MS: u64 = 2 * MIN_IDLE_FOR_ALERT_MS;
+const IDLE_ALERT_ACTION: &str = ". Give them parallel work or delete the ones you no longer need (bus agent delete NAME --confirm).";
 
 impl BusState {
     /// Remind only a room's bound orchestrator on a strict crossing above the limit.
-    /// The caller keeps `alerted` in memory and commits it after saving any notices.
+    /// The caller keeps the crossing in memory; saved notices dedupe rosters across restarts.
     pub(crate) fn notify_idle_agents(
         &mut self,
         limit: u32,
@@ -24,14 +26,16 @@ impl BusState {
         let mut changed = false;
         for room in rooms {
             if alerted.contains(&room) {
-                // A lost status or a reset idle clock is not evidence of new work.
-                // Preserve the original alert's conservative rearming rule.
-                if self.idle_workers(room, may_be_idle).len() <= limit as usize {
+                if self
+                    .idle_workers(room, |agent| self.finished(agent, now_ms))
+                    .len()
+                    <= limit as usize
+                {
                     alerted.remove(&room);
                 }
                 continue;
             }
-            let idle = self.idle_workers(room, |agent| finished(agent, now_ms));
+            let idle = self.idle_workers(room, |agent| self.finished(agent, now_ms));
             if idle.len() <= limit as usize {
                 continue;
             }
@@ -39,23 +43,37 @@ impl BusState {
             let Some(orchestrator) = self.notice_orchestrator(room, None) else {
                 continue;
             };
+            alerted.insert(room);
+            if self.idle_alerted_before(room, &idle) {
+                continue;
+            }
+            let labels = idle
+                .iter()
+                .map(|id| self.agent_message_label(*id))
+                .collect::<Vec<_>>()
+                .join(", ");
             let text = format!(
-                "{} agents in room {} are idle (limit {}): {}. Give them parallel work \
-                 or delete the ones you no longer need (bus agent delete NAME --confirm).",
+                "{} agents in room {} are idle (limit {}): {}{}",
                 idle.len(),
                 room.0,
                 limit,
-                idle.join(", ")
+                labels,
+                IDLE_ALERT_ACTION
             );
-            self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
-            alerted.insert(room);
+            let prompt_id = self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
+            let request = self
+                .requests
+                .values_mut()
+                .find(|request| request.prompt.id == prompt_id)
+                .ok_or(ModelError::InvalidTransition)?;
+            request.prompt.idle_agent_ids = idle.into_iter().collect();
             changed = true;
         }
         Ok(changed)
     }
 
     /// Qualified workers in creation order, excluding the orchestrator and pending work.
-    fn idle_workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<String> {
+    fn idle_workers(&self, room: RoomId, test: impl Fn(&RoomAgent) -> bool) -> Vec<AgentId> {
         self.agents
             .values()
             .filter(|agent| {
@@ -66,19 +84,32 @@ impl BusState {
                     && self.queued_requests(agent.id).is_empty()
                     && test(agent)
             })
-            .map(|agent| self.agent_message_label(agent.id))
+            .map(|agent| agent.id)
             .collect()
     }
-}
 
-fn finished(agent: &RoomAgent, now_ms: u64) -> bool {
-    agent.shown_status() == RuntimeStatus::Idle
-        && now_ms.saturating_sub(agent.status_since_ms) >= MIN_IDLE_FOR_ALERT_MS
-}
+    fn finished(&self, agent: &RoomAgent, now_ms: u64) -> bool {
+        if agent.shown_status() != RuntimeStatus::Idle
+            || now_ms.saturating_sub(agent.status_since_ms) < STAFFING_GRACE_MS
+        {
+            return false;
+        }
+        let last = self
+            .requests()
+            .filter(|request| request.agent_id == agent.id)
+            .last();
+        last.is_none_or(|request| {
+            request.failure_reason.as_deref() != Some("reply_not_captured")
+                && now_ms.saturating_sub(request.prompt.submitted_at_ms) >= STAFFING_GRACE_MS
+        })
+    }
 
-fn may_be_idle(agent: &RoomAgent) -> bool {
-    matches!(
-        agent.shown_status(),
-        RuntimeStatus::Idle | RuntimeStatus::Unavailable | RuntimeStatus::Launching
-    )
+    fn idle_alerted_before(&self, room: RoomId, idle: &[AgentId]) -> bool {
+        let idle = idle.iter().copied().collect::<BTreeSet<_>>();
+        self.requests().any(|request| {
+            request.room_id == room
+                && request.prompt.author == Author::Bus
+                && request.prompt.idle_agent_ids == idle
+        })
+    }
 }

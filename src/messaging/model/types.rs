@@ -172,6 +172,8 @@ pub(crate) struct Prompt {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) idle_agent_ids: BTreeSet<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
 }
