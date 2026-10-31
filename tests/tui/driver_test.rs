@@ -1438,7 +1438,9 @@ fn scriptable_fake_replies_to_a_room_message_without_provider_configuration() {
     assert_eq!(code, 0, "{sent}");
     let id = sent["result"]["message_id"].to_string();
     let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
-    assert!(result.to_string().contains("REPLY_7"), "{result}");
+    let request = &result["message"]["result"]["requests"][0];
+    assert_eq!(request["stage"], "replied", "{result}");
+    assert_eq!(request["reply"]["text"], "REPLY_7", "{result}");
     assert!(!work.join(".claude").exists());
     assert!(!work.join(".codex").exists());
     assert!(!work.join(".cursor").exists());
@@ -1449,7 +1451,7 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     let session = Session::start("f-dialog");
     let work = session_dir(&session.0).join("work");
     let script = work.join("dialog.json");
-    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_DIALOG_7","actions":[{"type":"sleep","ms":1500},{"type":"dialog","title":"Choose a path","options":["A","B"]},{"type":"reply","text":"selected {{choice}}"}]}]}"#).unwrap();
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_DIALOG_7","actions":[{"type":"dialog","title":"Choose a path","options":["A","B"]},{"type":"reply","text":"selected {{choice}}"}]}]}"#).unwrap();
     let args = format!("--script {}", script.display());
     let (code, added) = parse(scratch_bus(
         &session,
@@ -1486,17 +1488,18 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     session.ok(&[
         "wait",
         "--state",
-        "agents.*.status == working",
-        "--timeout",
-        "20s",
-    ]);
-    session.ok(&[
-        "wait",
-        "--state",
         "agents.*.status == blocked",
         "--timeout",
         "20s",
     ]);
+    let (code, status) = parse(scratch_bus(&session, &["message", "status", &id]));
+    assert_eq!(code, 0, "{status}");
+    let request = &status["result"]["requests"][0];
+    assert_eq!(request["start_bound"], true, "{status}");
+    assert!(
+        request["turn_id"].as_str().is_some_and(|turn| !turn.is_empty()),
+        "{status}"
+    );
     let (code, observed) = parse(scratch_bus(&session, &["agent", "dialog", "dialog-worker"]));
     assert_eq!(code, 0, "{observed}");
     let dialog = &observed["result"];
@@ -1519,7 +1522,9 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     ));
     assert_eq!(code, 0, "{selected}");
     let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
-    assert!(result.to_string().contains("selected B"), "{result}");
+    let request = &result["message"]["result"]["requests"][0];
+    assert_eq!(request["stage"], "replied", "{result}");
+    assert_eq!(request["reply"]["text"], "selected B", "{result}");
 }
 
 #[test]
