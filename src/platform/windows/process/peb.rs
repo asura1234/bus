@@ -187,7 +187,7 @@ pub(in crate::platform::windows) fn command_uses_git_bash(
     let search_path = command
         .get_env("PATH")
         .map(OsStr::to_os_string)
-        .or_else(|| std::env::var_os("PATH"));
+        .or_else(|| crate::utils::env::path_var());
     search_path.is_some_and(|search_path| {
         std::env::split_paths(&search_path)
             .map(|directory| directory.join(candidate_name))

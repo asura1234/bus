@@ -12,6 +12,7 @@ use std::{
 struct Fixture {
     root: PathBuf,
     previous: Vec<(&'static str, Option<OsString>)>,
+    _path: crate::utils::env::PathOverride,
 }
 
 impl Fixture {
@@ -22,17 +23,21 @@ impl Fixture {
         for binary in ["codex", "claude", "cursor-agent"] {
             std::fs::write(root.join("bin").join(binary), "fixture").unwrap();
         }
-        let previous = ["CODEX_HOME", "PATH"]
+        let previous = ["CODEX_HOME"]
             .into_iter()
             .map(|key| (key, std::env::var_os(key)))
             .collect();
         let mut paths = vec![root.join("bin")];
         paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
+            &crate::utils::env::path_var().unwrap_or_default(),
         ));
-        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+        let path = crate::utils::env::PathOverride::set(std::env::join_paths(paths).unwrap());
         std::env::set_var("CODEX_HOME", root.join("home"));
-        Self { root, previous }
+        Self {
+            root,
+            previous,
+            _path: path,
+        }
     }
 
     fn project(&self, name: &str, git: bool) -> PathBuf {

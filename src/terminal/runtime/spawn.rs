@@ -281,7 +281,7 @@ pub(super) fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
             });
     }
 
-    std::env::var_os("PATH")
+    crate::utils::env::path_var()
         .and_then(|path| {
             std::env::split_paths(&path)
                 .map(|dir| dir.join(shell))

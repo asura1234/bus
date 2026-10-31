@@ -919,8 +919,8 @@ fn live_sound_reload_updates_bus_room_playback() {
         warmed.success(),
         "fake audio player warm-up failed: {warmed}"
     );
+    let _path = crate::utils::env::PathOverride::set(&bin);
     unsafe {
-        std::env::set_var("PATH", &bin);
         std::env::set_var("BUS_SOUND_RELOAD_TEST_LOG", &log);
         std::env::set_var("BUS_DATA_DIR", &root);
         std::env::set_var("HERDR_SOCKET_PATH", root.join("absent-api.sock"));

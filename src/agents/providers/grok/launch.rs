@@ -184,7 +184,7 @@ fn resolve_identity() -> Result<identity::SavedExecutable, String> {
     if let Some(home) = std::env::home_dir() {
         candidates.push(home.join(".grok/bin/grok"));
     }
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = crate::utils::env::path_var() {
         for directory in std::env::split_paths(&path) {
             let directory = if directory.is_absolute() {
                 directory
@@ -262,7 +262,7 @@ fn environment_for(
         .parent()
         .ok_or("Grok Build executable has no directory")?;
     let mut paths = vec![directory.to_path_buf()];
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = crate::utils::env::path_var() {
         paths.extend(std::env::split_paths(&path).filter(|path| path != directory));
     }
     let path = std::env::join_paths(paths)

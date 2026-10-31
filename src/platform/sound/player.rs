@@ -38,7 +38,9 @@ pub(crate) fn play_developer(name: Option<&str>) {
         return;
     }
     let name = name.map(str::to_owned);
+    let inherited = crate::utils::env::capture_path_override();
     std::thread::spawn(move || {
+        let _path = inherited.install();
         let sounds = system_sounds();
         let mut paths: Vec<_> = resolve_developer_sound(name.as_deref(), &sounds)
             .into_iter()
@@ -80,7 +82,9 @@ pub fn play(sound: Sound, config: &crate::utils::config::SoundConfig) {
     }
 
     let custom_path = config.path_for(sound);
+    let inherited = crate::utils::env::capture_path_override();
     std::thread::spawn(move || {
+        let _path = inherited.install();
         if let Some(path) = custom_path {
             match play_file(&path) {
                 Ok(()) => return,
@@ -148,7 +152,7 @@ pub(super) fn run_player(path: &Path) -> Result<Output, String> {
 
 #[cfg(target_os = "macos")]
 pub(super) fn run_player(path: &Path) -> Result<Output, String> {
-    Command::new("afplay")
+    crate::utils::env::command_on_path("afplay")
         .arg(path)
         .output()
         .map_err(|e| format!("no audio player available: {e}"))
@@ -240,7 +244,7 @@ impl AudioPlayer {
         path: &Path,
         timeout: Duration,
     ) -> std::io::Result<Output> {
-        let mut child = Command::new(self.program)
+        let mut child = crate::utils::env::command_on_path(self.program)
             .args(self.args)
             .arg(path)
             .stdin(std::process::Stdio::null())
@@ -398,7 +402,9 @@ pub fn play_named(name: Option<&str>, config: &crate::utils::config::SoundConfig
         return;
     };
     let config = config.clone();
+    let inherited = crate::utils::env::capture_path_override();
     std::thread::spawn(move || {
+        let _path = inherited.install();
         if let Err(err) = play_file(&path) {
             warn!(path = %path.display(), err = %err, "system sound playback failed, playing the default ding");
             play(Sound::Done, &config);

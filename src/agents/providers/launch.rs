@@ -367,7 +367,7 @@ pub(crate) fn binary_available(provider: ProviderKind) -> bool {
 }
 
 pub(crate) fn executable_available(binary: &str) -> bool {
-    std::env::var_os("PATH")
+    crate::utils::env::path_var()
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()))
 }
 

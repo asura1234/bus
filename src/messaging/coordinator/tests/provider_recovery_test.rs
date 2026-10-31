@@ -425,13 +425,9 @@ fn binary_outage_recovery_abandons_queued_work_when_startup_fails() {
 fn refused_add_does_not_create_an_unheld_room_blocker() {
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let (worker, _, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
-    let old = std::env::var_os("PATH");
-    std::env::set_var("PATH", &dir);
+    let _path = crate::utils::env::PathOverride::set(&dir);
     let result = worker.ensure_provider_binary(room, Provider::Codex);
-    match old {
-        Some(v) => std::env::set_var("PATH", v),
-        None => std::env::remove_var("PATH"),
-    }
+    drop(_path);
     assert!(result.unwrap_err().contains("codex"));
     assert!(worker
         .state
@@ -455,13 +451,9 @@ fn room_resume_keeps_the_saved_pane_while_the_provider_binary_is_missing() {
     state.block_missing_binary(agent, "codex", 100).unwrap();
     worker.save(state).unwrap();
     worker.transport = Box::new(MissingNative);
-    let old = std::env::var_os("PATH");
-    std::env::set_var("PATH", &dir);
+    let _path = crate::utils::env::PathOverride::set(&dir);
     let result = worker.resume_room(room);
-    match old {
-        Some(v) => std::env::set_var("PATH", v),
-        None => std::env::remove_var("PATH"),
-    }
+    drop(_path);
     let result = result.unwrap();
     assert_eq!(result["agents"][0]["outcome"], "blocked");
     assert!(
@@ -631,22 +623,12 @@ impl Transport for RecoveredProviderExit {
 #[test]
 fn recovered_provider_records_and_closes_its_next_exit() {
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
-    struct RestorePath(Option<std::ffi::OsString>);
-    impl Drop for RestorePath {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
-    let _restore = RestorePath(std::env::var_os("PATH"));
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::write(bin.join("codex"), "fixture executable").unwrap();
-    std::env::set_var("PATH", &bin);
+    let _path = crate::utils::env::PathOverride::set(&bin);
     let old_snapshot = dir.join("previous-exit.txt");
     std::fs::write(&old_snapshot, "previous provider exit").unwrap();
     let hooks = dir.join(".codex/hooks.json");

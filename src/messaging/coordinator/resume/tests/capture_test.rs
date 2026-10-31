@@ -167,7 +167,6 @@ fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
     use crate::agents::providers::{hook_json::HookContext, launch};
     let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
     let old = std::env::var_os("BUS_YOLO");
-    let old_path = std::env::var_os("PATH");
     let mut failures = Vec::new();
     for (provider, flag, aliases) in [
         (
@@ -189,7 +188,7 @@ fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
             let bin = fixture.root.join("bin");
             std::fs::create_dir_all(&bin).unwrap();
             std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
-            std::env::set_var("PATH", &bin);
+            let _path = crate::utils::env::PathOverride::set(&bin);
             std::env::set_var("BUS_YOLO", "1");
             let prepared = launch::prepare(
                 &launch::LaunchSpec {
@@ -249,11 +248,6 @@ fn yolo_applies_to_new_and_resumed_agents_without_persisting_or_duplicating() {
     }
     if let Some(old) = old {
         std::env::set_var("BUS_YOLO", old);
-    }
-    if let Some(old_path) = old_path {
-        std::env::set_var("PATH", old_path);
-    } else {
-        std::env::remove_var("PATH");
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -470,8 +464,7 @@ fn resumed_launch_preserves_original_options_without_adding_bypass_flags() {
             let bin = fixture.root.join("bin");
             std::fs::create_dir_all(&bin).unwrap();
             std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
-            let previous = std::env::var_os("PATH");
-            std::env::set_var("PATH", &bin);
+            let _path = crate::utils::env::PathOverride::set(&bin);
             let prepared = launch::prepare(&launch::LaunchSpec {
                 provider: kind,
                 cwd: fixture.project.display().to_string(),
@@ -483,11 +476,7 @@ fn resumed_launch_preserves_original_options_without_adding_bypass_flags() {
                     launch_id: "owned-launch".into(),
                 },
             }, |_| Ok(()));
-            if let Some(previous) = previous {
-                std::env::set_var("PATH", previous);
-            } else {
-                std::env::remove_var("PATH");
-            }
+            drop(_path);
             let mut prepared = prepared.unwrap();
             launch::take_adopted_session(kind, &mut prepared.args).unwrap();
             let resumed = fixture.load().unwrap();
@@ -1102,8 +1091,7 @@ fn resume_of_a_started_conversation_does_not_replay_its_initial_prompt_or_select
         let bin = fixture.root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(bin.join(launch::executable(kind)), "test executable").unwrap();
-        let previous = std::env::var_os("PATH");
-        std::env::set_var("PATH", &bin);
+        let _path = crate::utils::env::PathOverride::set(&bin);
         let prepared = launch::prepare(
             &launch::LaunchSpec {
                 provider: kind,
@@ -1118,11 +1106,7 @@ fn resume_of_a_started_conversation_does_not_replay_its_initial_prompt_or_select
             },
             |_| Ok(()),
         );
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
+        drop(_path);
         prepared.unwrap();
         // The saved conversation already received this prompt or was chosen by
         // this selector; the resume plan names the conversation itself.

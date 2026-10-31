@@ -452,7 +452,7 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
     let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
     let cleanup = Cleanup {
         root: crate::utils::test_temp::unique_temp_path("codex-fresh-yolo-options"),
-        env: ["BUS_YOLO", "PATH"]
+        env: ["BUS_YOLO"]
             .into_iter()
             .map(|key| (key, std::env::var_os(key)))
             .collect(),
@@ -462,7 +462,7 @@ fn yolo_codex_fresh_launch_saves_approval_options_before_applying_bypass() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::write(bin.join("codex"), "fixture executable").unwrap();
-    std::env::set_var("PATH", &bin);
+    let _path = crate::utils::env::PathOverride::set(&bin);
     let spec = LaunchSpec {
         provider: Provider::Codex,
         cwd: project.display().to_string(),
