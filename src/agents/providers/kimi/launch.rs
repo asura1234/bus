@@ -760,4 +760,36 @@ mod tests {
         assert!(saved_home(&hooks).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn private_home_disables_cache_expiry_hint_only_in_the_bus_home() {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-cache-hint");
+        let source = root.join("developer-kimi-code");
+        let spool = root.join("callbacks/launch");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("config.toml"), b"model = \"kimi\"\n").unwrap();
+        std::fs::write(source.join("tui.toml"), b"cache_expiry_hint = true\n").unwrap();
+        let hooks = HookContext {
+            binary: std::env::current_exe().unwrap(),
+            spool: spool.clone(),
+            launch_id: "launch".into(),
+        };
+        let home = private_home(&source, &root, &hooks).unwrap();
+        assert_eq!(home, spool.join("kimi-home"));
+        let written = std::fs::read_to_string(home.join("tui.toml")).unwrap();
+        assert!(
+            written.contains("cache_expiry_hint = false"),
+            "bus home tui.toml = {written}"
+        );
+        assert!(
+            written.contains("auto_install = false"),
+            "bus home tui.toml = {written}"
+        );
+        assert_eq!(
+            std::fs::read(source.join("tui.toml")).unwrap(),
+            b"cache_expiry_hint = true\n",
+            "Bus must not write the developer Kimi home"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
