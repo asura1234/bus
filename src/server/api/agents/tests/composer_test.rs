@@ -384,6 +384,49 @@ fn claude_suggestion_shaped_developer_draft_at_start_is_not_empty() {
 }
 
 #[test]
+fn typed_try_quote_at_first_cell_stays_occupied() {
+    let rule = "─".repeat(20);
+    let prompt_row = 3u16;
+    let start = Some((2, prompt_row));
+    let frame = |body: &str| format!("● done\n\n{rule}\n{body}\n{rule}\n  ⏵⏵ auto mode on");
+    let mut wiped = Vec::new();
+    for (label, screen) in [
+        (
+            "single-line typed draft",
+            frame("❯\u{a0}Try \"ship the fix\""),
+        ),
+        (
+            "captured 2.1.309 layout with a typed draft",
+            include_str!("fixtures/claude_2_1_309_startup_suggestion.txt")
+                .replace("Try \"refactor <filepath>\"", "Try \"ship the fix\""),
+        ),
+        (
+            "multi-line typed draft",
+            frame("❯\u{a0}Try \"ship the fix\nthen land it\""),
+        ),
+        (
+            "narrow wrapped typed draft",
+            frame("❯\u{a0}Try \"ship the\nfix\""),
+        ),
+    ] {
+        let cursor = if label == "captured 2.1.309 layout with a typed draft" {
+            Some((2, 41))
+        } else {
+            start
+        };
+        if observe_with_cursor(AgentKind::Claude, &screen, "from bus", cursor)
+            == InputObservation::Empty
+        {
+            wiped.push(label);
+        }
+    }
+    assert!(
+        wiped.is_empty(),
+        "developer drafts cleared because they match Try \"...\" with the cursor on the first cell: {wiped:?}"
+    );
+}
+
+#[test]
 fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
     let rule = "─".repeat(20);
     let screen = |input: &str| format!("● done\n\n{rule}\n{input}\n{rule}\n  ⏵⏵ auto mode on");
