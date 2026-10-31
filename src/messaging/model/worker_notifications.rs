@@ -28,6 +28,7 @@ impl BusState {
         waited: &BTreeSet<PromptId>,
     ) -> Result<bool, ModelError> {
         let mut changed = self.retain_worker_outcomes(now_ms);
+        changed |= self.drop_duplicate_reply_wakes();
         let mut batches: BTreeMap<AgentId, Vec<Part>> = BTreeMap::new();
         for part in self
             .notification_parts(None, waited)
@@ -86,6 +87,33 @@ impl BusState {
             changed = true;
         }
         Ok(changed)
+    }
+
+    /// A captured reply whose text is already a room message is not posted again
+    /// as `Reply to message`. The route is seen so the next tick does not retry it.
+    fn drop_duplicate_reply_wakes(&mut self) -> bool {
+        let stored: Vec<_> = self
+            .requests()
+            .filter(|request| self.reply_needs_ack(request))
+            .filter(|request| {
+                request.reply().is_some_and(|reply| {
+                    self.result_already_in_room(request.room_id, request.agent_id, &reply.text)
+                })
+            })
+            .map(reply_key)
+            .collect();
+        let mut changed = false;
+        for key in stored {
+            if self
+                .reply_routes
+                .get(&key)
+                .is_none_or(|route| *route == ReplyRoute::Pending)
+            {
+                self.reply_routes.insert(key, ReplyRoute::Seen);
+                changed = true;
+            }
+        }
+        changed
     }
 
     fn notification_parts(
