@@ -335,44 +335,16 @@ impl BusState {
         if now_ms < since.saturating_add(TURN_SETTLE_MS) {
             return None;
         }
-        let provider_error = match recorded_end(request) {
-            Some(RecordedTurnEnd::Final {
-                turn_id,
-                text,
-                prompts,
-            }) => {
-                let answer = PendingFinal {
-                    callback_id: format!("rollout:{turn_id}"),
-                    text,
-                    received_at_ms: now_ms,
-                    provider_session_id: None,
-                    provider_turn_id: Some(turn_id),
-                };
-                if let Some(id) = self.deliver_recorded_final(agent, id, answer, &prompts, now_ms) {
-                    return Some(id);
-                }
-                None
-            }
-            Some(RecordedTurnEnd::Error(message)) => Some(message),
-            Some(RecordedTurnEnd::NoReply) => None,
-            None => None,
-        };
-        let (reason, error) = match &provider_error {
-            Some(message) => provider_error_outcome(message),
-            None if unavailable => (
-                AGENT_UNAVAILABLE.to_owned(),
-                "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.".to_owned(),
-            ),
-            None => (
-                "reply_not_captured".to_owned(),
-                "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.".to_owned(),
-            ),
-        };
-        let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
-        if let Some(agent) = self.agents.get_mut(&agent) {
-            agent.actionable_error = closed.then_some(error);
-        }
-        Some(id)
+        self.consume_recorded_end(
+            agent,
+            id,
+            now_ms,
+            recorded_end(request),
+            "rollout",
+            unavailable,
+            "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.",
+            "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.",
+        )
     }
 
     /// Kimi's idle frame is not a turn boundary. Close only after an owned
@@ -416,6 +388,29 @@ impl BusState {
         if recorded.is_none() && !exited {
             return None;
         }
+        self.consume_recorded_end(
+            agent,
+            id,
+            now_ms,
+            recorded,
+            "kimi-wire",
+            exited,
+            "Kimi process exited without a captured reply; inspect its terminal.",
+            "Kimi completed without a captured reply; inspect its terminal.",
+        )
+    }
+
+    fn consume_recorded_end(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+        recorded: Option<RecordedTurnEnd>,
+        callback_prefix: &str,
+        unavailable: bool,
+        unavailable_error: &str,
+        no_reply_error: &str,
+    ) -> Option<RequestId> {
         let provider_error = match recorded {
             Some(RecordedTurnEnd::Final {
                 turn_id,
@@ -423,7 +418,7 @@ impl BusState {
                 prompts,
             }) => {
                 let answer = PendingFinal {
-                    callback_id: format!("kimi-wire:{turn_id}"),
+                    callback_id: format!("{callback_prefix}:{turn_id}"),
                     text,
                     received_at_ms: now_ms,
                     provider_session_id: None,
@@ -432,21 +427,15 @@ impl BusState {
                 if let Some(id) = self.deliver_recorded_final(agent, id, answer, &prompts, now_ms) {
                     return Some(id);
                 }
-                return None;
+                None
             }
             Some(RecordedTurnEnd::Error(message)) => Some(message),
             Some(RecordedTurnEnd::NoReply) | None => None,
         };
         let (reason, error) = match provider_error {
             Some(message) => provider_error_outcome(&message),
-            None if exited => (
-                AGENT_UNAVAILABLE.to_owned(),
-                "Kimi process exited without a captured reply; inspect its terminal.".to_owned(),
-            ),
-            None => (
-                "reply_not_captured".to_owned(),
-                "Kimi completed without a captured reply; inspect its terminal.".to_owned(),
-            ),
+            None if unavailable => (AGENT_UNAVAILABLE.to_owned(), unavailable_error.to_owned()),
+            None => ("reply_not_captured".to_owned(), no_reply_error.to_owned()),
         };
         let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
         if let Some(owner) = self.agents.get_mut(&agent) {
