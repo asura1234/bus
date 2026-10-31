@@ -45,18 +45,20 @@ def test_shared_target_switches_checkout_identity_and_local_dependency(tmp_path:
         '[dependencies]\nportable-pty={package="provenance-probe-pty",path="vendor/portable-pty"}\n'
     )
     (repo / "src/main.rs").write_text(
-        'fn main() { println!("{}|{}|{}", env!("CARGO_MANIFEST_DIR"), '
-        'env!("BUS_BUILD_SHA"), portable_pty::provenance_probe()); }\n'
+        'fn main() { println!("{}|{}|{}|{}", env!("CARGO_MANIFEST_DIR"), '
+        'env!("BUS_BUILD_SHA"), portable_pty::provenance_probe(), env!("PROVENANCE_BUILD_SCRIPT")); }\n'
     )
     (repo / "build.rs").write_text(
         f'include!({json.dumps((ROOT / "build_identity.rs").as_posix())});\n'
-        'fn main() { record_build_identity(); }\n'
+        'fn main() { record_build_identity(); println!("cargo:rustc-env=PROVENANCE_BUILD_SCRIPT=A"); }\n'
     )
     git("add", ".cargo/config.toml", "Cargo.toml", "src", "vendor", "build.rs")
     git("commit", "-qm", "fixture A")
     sha_a = git("rev-parse", "HEAD")
     source.write_text(source.read_text().replace(' { "A" }', ' { "B" }'))
-    git("add", "vendor/portable-pty/src/lib.rs")
+    build_script = repo / "build.rs"
+    build_script.write_text(build_script.read_text().replace('PROVENANCE_BUILD_SCRIPT=A', 'PROVENANCE_BUILD_SCRIPT=B'))
+    git("add", "vendor/portable-pty/src/lib.rs", "build.rs")
     git("commit", "-qm", "fixture B")
     sha_b = git("rev-parse", "HEAD")
     a, b = tmp_path / "a", tmp_path / "b"
@@ -78,7 +80,7 @@ def test_shared_target_switches_checkout_identity_and_local_dependency(tmp_path:
                         if '"compiler-artifact"' in line and '"bus_provenance_regression_29280"' in line
                         and '"bin"' in line)
         actual = subprocess.check_output([str(binary)], text=True).strip()
-        assert actual == f"{checkout}|{sha}|{value}"
+        assert actual == f"{checkout}|{sha}|{value}|{value}"
         return artifact["fresh"]
 
     build(a, sha_a, "A")

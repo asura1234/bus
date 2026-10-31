@@ -2,6 +2,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+// Cargo must recompile this build script when another checkout uses the target.
+const _: Option<&str> = option_env!("BUS_CHECKOUT_ROOT");
+
 const VENDORED_INPUTS: &[&str] = &[
     "build.zig",
     "build.zig.zon",
