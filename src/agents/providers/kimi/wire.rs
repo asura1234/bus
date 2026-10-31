@@ -13,14 +13,15 @@ pub(crate) enum Outcome {
     Failed(String),
 }
 
-/// One Kimi session read for the turn Bus bound, plus a steered submission
-/// inside that turn and a later non-Bus continuation.
+/// One Kimi session read for the prompt Bus bound, plus steered submissions
+/// and a later non-Bus continuation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionCapture {
-    /// The bound turn's outcome for its original prompt. A final that belongs
-    /// to a mid-turn steer is absent here, not reused as this prompt's answer.
+    /// The original prompt's outcome. A final that belongs to a mid-turn steer
+    /// is absent here, not reused as this prompt's answer.
     pub lead: Option<Outcome>,
-    /// `(typed prompt, assistant text)` for each steer the bound turn committed.
+    /// `(typed prompt, assistant text)` for a steer inside the bound turn, or
+    /// for a later Bus turn that carried that typed prompt on its own.
     pub steered: Vec<(String, String)>,
     /// `(turn id, assistant text)` when a later turn, not a Bus message, is
     /// the original prompt's own answer.
@@ -306,18 +307,55 @@ fn apply_wire_event(turn: &mut OpenTurn, kind: &str, value: &Value) {
     }
 }
 
+fn prompt_matches(turn: &OpenTurn, prompt: &str) -> bool {
+    normalized_prompt(&turn.prompt_text) == normalized_prompt(prompt)
+}
+
+fn find_bound<'a>(done: &'a [OpenTurn], turn_id: u64, prompt: &str) -> Option<&'a OpenTurn> {
+    done.iter()
+        .find(|turn| turn.id == turn_id && prompt_matches(turn, prompt))
+        .or_else(|| done.iter().find(|turn| prompt_matches(turn, prompt)))
+}
+
+fn empty_capture() -> SessionCapture {
+    SessionCapture {
+        lead: None,
+        steered: Vec::new(),
+        continuation: None,
+    }
+}
+
+fn own_turn_final(turn: &OpenTurn) -> Option<String> {
+    if turn.prompt_reason.as_deref() != Some("completed")
+        || turn.agent_outcome.as_deref() != Some("done")
+        || turn.turn_reason.as_deref() != Some("completed")
+    {
+        return None;
+    }
+    turn.lead_answer.clone().filter(|text| !text.is_empty())
+}
+
+/// A later `turn.prompt` that is itself a Bus message belongs to that message,
+/// not to the original prompt. An open one means its answer is not committed.
+fn later_bus_answer(turn: &OpenTurn, lead_prompt: &str) -> Option<(String, String)> {
+    if prompt_matches(turn, lead_prompt) || !turn.prompt_text.contains("[Bus message") {
+        return None;
+    }
+    own_turn_final(turn).map(|text| (turn.prompt_text.clone(), text))
+}
+
+fn later_bus_open(turn: &OpenTurn, lead_prompt: &str) -> bool {
+    !prompt_matches(turn, lead_prompt)
+        && turn.prompt_text.contains("[Bus message")
+        && turn.prompt_reason.is_none()
+}
+
 fn capture_bound(done: &[OpenTurn], turn_id: u64, prompt: &str) -> Option<SessionCapture> {
-    let bound = done.iter().find(|turn| {
-        turn.id == turn_id && normalized_prompt(&turn.prompt_text) == normalized_prompt(prompt)
-    })?;
+    let bound = find_bound(done, turn_id, prompt)?;
     // prompt.completed is the bound turn's commit. A steer answer or a later
     // continuation is not evidence until that chain is a recognized terminal.
     if bound.prompt_reason.is_none() {
-        return Some(SessionCapture {
-            lead: None,
-            steered: Vec::new(),
-            continuation: None,
-        });
+        return Some(empty_capture());
     }
     let Some(lead_outcome) = terminal_outcome(
         bound.agent_outcome.as_deref(),
@@ -326,20 +364,32 @@ fn capture_bound(done: &[OpenTurn], turn_id: u64, prompt: &str) -> Option<Sessio
         bound.lead_answer.clone(),
         bound.agent_error.clone(),
     ) else {
+        return Some(empty_capture());
+    };
+    let mut steered = bound.steers.clone();
+    // The follow-up started a turn of its own. Hold the original prompt until
+    // that turn commits, then give the follow-up its own text.
+    if done.iter().any(|turn| later_bus_open(turn, prompt)) {
         return Some(SessionCapture {
             lead: None,
-            steered: Vec::new(),
+            steered,
             continuation: None,
         });
-    };
-    let steered = bound.steers.clone();
+    }
+    for turn in done {
+        if let Some(pair) = later_bus_answer(turn, prompt) {
+            if !steered.iter().any(|(existing, _)| existing == &pair.0) {
+                steered.push(pair);
+            }
+        }
+    }
     // NoReply here means the bound turn's own text was only a steer. Leave the
     // lead open for a later non-Bus turn instead of completing the group silent.
     let (lead, continuation) = match lead_outcome {
         Outcome::NoReply if !steered.is_empty() => {
             let continuation = done
                 .iter()
-                .filter(|turn| turn.id > turn_id)
+                .filter(|turn| turn.id > bound.id)
                 .find_map(|turn| continuation_text(turn).map(|text| (turn.id, text)));
             (None, continuation)
         }
@@ -709,6 +759,66 @@ mod tests {
             capture.continuation,
             Some((1, "KIMI-BUSY-DONE-32299".to_owned()))
         );
+    }
+
+    #[test]
+    fn kimi_follow_up_on_its_own_turn_is_not_the_lead_reply() {
+        let original = "[Bus message 5 from you]\nRun sleep 45 and reply KIMI-BUSY-DONE-32299.";
+        let follow = "[Bus message 8 from you]\nReply with exactly KIMI-QUEUED-32299.";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"\"}}],\"toolCalls\":[{{\"name\":\"bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"KIMI-BUSY-DONE-32299\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":{follow}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"KIMI-QUEUED-32299\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p1\",\"reason\":\"completed\"}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            follow = serde_json::to_string(follow).unwrap(),
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 1, original)
+                .unwrap()
+                .expect("both turns completed");
+        assert_eq!(
+            capture.lead,
+            Some(Outcome::Final("KIMI-BUSY-DONE-32299".into()))
+        );
+        assert_eq!(
+            capture.steered,
+            vec![(follow.to_owned(), "KIMI-QUEUED-32299".to_owned())]
+        );
+        assert_eq!(capture.continuation, None);
+    }
+
+    #[test]
+    fn kimi_open_follow_up_turn_holds_the_lead() {
+        let original = "[Bus message 5 from you]\nRun sleep 45 and reply KIMI-BUSY-DONE-32299.";
+        let follow = "[Bus message 8 from you]\nReply with exactly KIMI-QUEUED-32299.";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"KIMI-BUSY-DONE-32299\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":{follow}}}]}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            follow = serde_json::to_string(follow).unwrap(),
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 0, original)
+                .unwrap()
+                .expect("lead turn completed");
+        assert_eq!(capture.lead, None);
+        assert!(capture.steered.is_empty());
     }
 
     #[test]
