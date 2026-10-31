@@ -1249,6 +1249,80 @@ fn ctrl_c_restored_bus_prompt_is_not_left_on_an_idle_composer() {
     );
 }
 
+/// Ctrl+C restores every visible row of Bus's prompt. A cap that stops
+/// before the last row leaves that continuation, which no longer starts
+/// with the Bus envelope, on a composer the idle OSC title will accept.
+#[test]
+fn restored_bus_prompt_past_eight_rows_is_fully_withdrawn() {
+    let screen = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
+    );
+    let mut lines: Vec<String> = screen.lines().map(str::to_owned).collect();
+    let bottom = lines
+        .iter()
+        .rposition(|line| line.contains('╰') && line.contains("Grok"))
+        .expect("composer bottom");
+    let continuation = lines[bottom - 1].clone();
+    assert!(
+        continuation.trim_start().starts_with('│') && !continuation.contains("[Bus message"),
+        "{continuation:?}"
+    );
+    for _ in 0..5 {
+        lines.insert(bottom, continuation.clone());
+    }
+    let long = lines.join("\n");
+    let rows = long
+        .lines()
+        .skip_while(|line| !(line.contains('╭') && line.contains('╮')))
+        .skip(1)
+        .take_while(|line| !(line.contains('╰') && line.contains("Grok")))
+        .count();
+    assert!(rows > 8, "constructed rows: {rows}");
+    let held = crate::agents::manifest::detect_with_osc(
+        AgentKind::Grok,
+        crate::agents::manifest::DetectionInput {
+            screen: &long,
+            osc_title: "grok",
+            osc_progress: "4;0;0",
+        },
+    );
+    assert_eq!(
+        held.state,
+        crate::agents::AgentState::Working,
+        "the tall restored prompt must stay working until it is withdrawn: {held:?}"
+    );
+    let keys =
+        crate::agents::grok_surface::restored_prompt_clear_keys(&long).expect("owned prompt");
+    let mut tail_lines: Vec<String> = screen.lines().map(str::to_owned).collect();
+    let top = tail_lines
+        .iter()
+        .rposition(|line| line.contains('╭') && line.contains('╮'))
+        .expect("composer top");
+    let tail_bottom = tail_lines
+        .iter()
+        .rposition(|line| line.contains('╰') && line.contains("Grok"))
+        .expect("composer bottom");
+    tail_lines.drain(top + 1..tail_bottom);
+    tail_lines.insert(top + 1, continuation.replacen("│   ", "│ ❯ ", 1));
+    let tail = tail_lines.join("\n");
+    let tail_detection = crate::agents::manifest::detect_with_osc(
+        AgentKind::Grok,
+        crate::agents::manifest::DetectionInput {
+            screen: &tail,
+            osc_title: "grok",
+            osc_progress: "4;0;0",
+        },
+    );
+    let tail_observation = observe(AgentKind::Grok, &tail, "NEXT");
+    assert_eq!(
+        keys.len(),
+        rows * 3,
+        "line-kills cover {rows} visible rows, got {} keys; remainder state={:?} observation={tail_observation:?}",
+        keys.len(),
+        tail_detection.state
+    );
+}
+
 #[test]
 fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
     use crate::terminal::runtime::SubmissionInspector;

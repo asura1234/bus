@@ -1,7 +1,9 @@
 //! Version-bound Grok composer framing shared by input and dialog observers.
-/// One owned line-kill per composer line when Ctrl+C has put Bus's prompt
-/// back. `[stop]` means the turn is still cancelling. A developer draft does
-/// not start with the Bus envelope.
+/// One owned line-kill per visible composer row when Ctrl+C has put Bus's
+/// prompt back. The count is the whole framed body. Capping it deletes the
+/// envelope and leaves the continuation, which no longer starts with
+/// `[Bus message `, on an idle composer. `[stop]` means the turn is still
+/// cancelling. A developer draft does not start with the Bus envelope.
 pub(crate) fn restored_prompt_clear_keys(screen: &str) -> Option<Vec<String>> {
     if screen.contains("[stop]") {
         return None;
@@ -24,7 +26,6 @@ pub(crate) fn restored_prompt_clear_keys(screen: &str) -> Option<Vec<String>> {
         framed_content(line)?;
         count += 1;
     }
-    let count = count.clamp(1, 8);
     let mut keys = Vec::with_capacity(count * 3);
     for _ in 0..count {
         keys.extend(["ctrl+a", "ctrl+k", "ctrl+u"].map(str::to_owned));
