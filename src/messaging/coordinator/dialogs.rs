@@ -128,6 +128,13 @@ impl Worker {
             if wait.as_deref() == Some(BLOCKED) && notice.is_some() {
                 continue;
             }
+            // A restart flap, or a result or task for this agent in the same
+            // clock minute, is not a dialog a person must answer. Leave the
+            // episode unlatched so a dialog that stays open can post once
+            // that minute or the restart file is gone.
+            if notice_suppressed(self, id) {
+                continue;
+            }
             let mut state = self.state.clone();
             let to = post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
             state
@@ -202,6 +209,77 @@ pub(super) fn post_dialog_notice(
             .map(|_| Some(DialogNoticeTo::Developer)),
     }
     .map_err(|error| error.to_string())
+}
+
+const MINUTE_MS: u64 = 60_000;
+
+fn same_minute(left: u64, right: u64) -> bool {
+    left / MINUTE_MS == right / MINUTE_MS
+}
+
+/// A restart file, a restart-shaped exit, or same-minute traffic for `id`.
+fn notice_suppressed(worker: &Worker, id: AgentId) -> bool {
+    let now = crate::messaging::storage::io::now_ms();
+    restart_suppresses(worker, id, now) || same_minute_activity(worker, id, now)
+}
+
+fn restart_suppresses(worker: &Worker, id: AgentId, now: u64) -> bool {
+    let root = &worker.data_dir;
+    if crate::utils::restart_record::marker_path(root).exists()
+        || crate::utils::restart_record::outcome_path(root).exists()
+    {
+        return true;
+    }
+    let Some(snapshot) = worker
+        .state
+        .agent(id)
+        .and_then(|agent| agent.exit_snapshot.as_ref())
+    else {
+        return false;
+    };
+    // A snapshot stays until relaunch. Suppress while a restart log falls in
+    // this clock minute, including a snapshot saved on this poll.
+    restart_logged_same_minute(root, snapshot.at_ms.max(now))
+}
+
+fn restart_logged_same_minute(root: &std::path::Path, stamp: u64) -> bool {
+    let Ok(text) = std::fs::read_to_string(crate::utils::restart_record::log_path(root)) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty()
+            && serde_json::from_str::<crate::utils::restart_record::RestartLog>(line)
+                .is_ok_and(|record| same_minute(record.at_ms, stamp))
+    })
+}
+
+fn same_minute_activity(worker: &Worker, id: AgentId, now: u64) -> bool {
+    let current = worker
+        .state
+        .agent(id)
+        .and_then(|agent| agent.current_request);
+    worker.state.requests().any(|request| {
+        // The blocked notice itself is Bus traffic. It must not hide a later
+        // episode, and it must not count as the agent still sending.
+        if request.bus_generated || request.prompt.text.contains(BLOCKED_MESSAGE) {
+            return false;
+        }
+        let submitted = same_minute(request.prompt.submitted_at_ms, now);
+        // The turn already on screen is the dialog's own work. A task that is
+        // still queued, or any other prompt submitted this minute, is new work.
+        let task = request.agent_id == id
+            && request.prompt.author != Author::Bus
+            && submitted
+            && Some(request.id) != current;
+        let sent = request.prompt.author == Author::Agent(id) && submitted;
+        let result = request.agent_id == id
+            && request.reply().is_some()
+            && request
+                .completed_at_ms
+                .is_some_and(|at| same_minute(at, now));
+        task || sent || result
+    })
 }
 
 #[cfg(test)]
