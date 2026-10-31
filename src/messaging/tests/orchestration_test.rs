@@ -784,7 +784,7 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("run it in the foreground"));
     assert!(text.contains("ok:true and stage:\"replied\" before claiming delivery"));
     assert!(text.contains("check the existing answer with bus message status N before resending"));
-    assert!(text.contains("Blocked/needs help, No reply/abandoned, idle-agent notices"));
+    assert!(text.contains("a final no-reply outcome, Blocked, idle, disk, compaction, restart"));
     assert!(text
         .contains("bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\""));
     assert_eq!(state.requests().count(), 0);
