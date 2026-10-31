@@ -409,7 +409,7 @@ impl BusState {
                 snapshot.launch_id == request.expected_launch_id
                     && now_ms >= snapshot.at_ms.saturating_add(TURN_SETTLE_MS)
             });
-        if !request.trusted_start_bound && !(exited && request.phase == RequestPhase::Active) {
+        if !(request.trusted_start_bound || exited && request.phase == RequestPhase::Active) {
             return None;
         }
         let recorded = recorded_end(request);

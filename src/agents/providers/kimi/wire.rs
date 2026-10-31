@@ -30,6 +30,31 @@ pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Optio
     )
 }
 
+fn normalized_prompt(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+        .to_owned()
+}
+
+fn owned_prompt_id(value: &Value, prompt: &str) -> Option<String> {
+    let input = value.get("input")?.as_array()?;
+    if input.len() != 1
+        || input[0].get("type").and_then(Value::as_str) != Some("text")
+        || input[0]
+            .get("text")
+            .and_then(Value::as_str)
+            .map(normalized_prompt)
+            .as_deref()
+            != Some(normalized_prompt(prompt).as_str())
+    {
+        return None;
+    }
+    let id = value.get("promptId")?.as_str()?;
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
 fn committed_outcome_lines(
     lines: impl IntoIterator<Item = Result<String, String>>,
     turn_id: u64,
@@ -57,29 +82,7 @@ fn committed_outcome_lines(
                 {
                     continue;
                 }
-                let input = value.get("input")?.as_array()?;
-                let normalize = |value: &str| {
-                    value
-                        .replace("\r\n", "\n")
-                        .replace('\r', "\n")
-                        .trim_end_matches(|character: char| character.is_ascii_whitespace())
-                        .to_owned()
-                };
-                if input.len() != 1
-                    || input[0].get("type").and_then(Value::as_str) != Some("text")
-                    || input[0]
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(normalize)
-                        .as_deref()
-                        != Some(normalize(prompt).as_str())
-                {
-                    return None;
-                }
-                prompt_id = value.get("promptId")?.as_str()?.to_owned();
-                if prompt_id.is_empty() {
-                    return None;
-                }
+                prompt_id = owned_prompt_id(&value, prompt)?;
                 owned = true;
             }
             "agent.message.appended" if owned && agent_outcome.is_none() => {
