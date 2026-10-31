@@ -238,6 +238,13 @@ impl Worker {
         match result {
             Ok(ResponseResult::AgentPrompted { .. }) => {
                 self.own_turns.insert(agent.id, std::time::Instant::now());
+                if agent
+                    .actionable_error
+                    .as_deref()
+                    .is_some_and(|error| error.starts_with("Launch prompt delivery"))
+                {
+                    self.set_launch_prompt_error(agent, None, None)?;
+                }
                 tracing::info!(
                     event = "bus.delivery.launch_prompt",
                     agent_id = agent.id.0,
@@ -246,33 +253,95 @@ impl Worker {
                 );
             }
             Err(error) if error.definitely_rejected => {
-                std::fs::remove_file(&attempted).map_err(|e| e.to_string())?;
-                if error
-                    .message
-                    .contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)
-                {
-                    self.withdrawn_at
-                        .insert(agent.id, std::time::Instant::now());
-                }
-                tracing::info!(
-                    event = "bus.delivery.launch_prompt",
-                    agent_id = agent.id.0,
-                    outcome = "rejected",
-                    "Launch prompt was not typed; safe to retry"
-                );
+                self.reject_launch_prompt(agent, &attempted, error)?;
             }
             Ok(other) => {
                 self.own_turns.insert(agent.id, std::time::Instant::now());
+                self.set_launch_prompt_error(
+                    agent,
+                    Some(format!(
+                        "Unexpected submit response; no automatic retry: {other:?}"
+                    )),
+                    None,
+                )?;
                 tracing::warn!(event = "bus.delivery.launch_prompt", agent_id = agent.id.0,
                     response = ?other, "Launch prompt outcome unknown; not retrying");
             }
             Err(error) => {
                 self.own_turns.insert(agent.id, std::time::Instant::now());
+                self.set_launch_prompt_error(
+                    agent,
+                    Some(format!(
+                        "Submit outcome unknown; no automatic retry: {}",
+                        error.message
+                    )),
+                    None,
+                )?;
                 tracing::warn!(event = "bus.delivery.launch_prompt", agent_id = agent.id.0,
                     error = %error.message, "Launch prompt outcome unknown; not retrying");
             }
         }
         Ok(true)
+    }
+
+    fn reject_launch_prompt(
+        &mut self,
+        agent: &RoomAgent,
+        attempted: &std::path::Path,
+        error: crate::messaging::native::TransportError,
+    ) -> Result<(), String> {
+        std::fs::remove_file(attempted).map_err(|e| e.to_string())?;
+        if error
+            .message
+            .contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)
+        {
+            self.withdrawn_at
+                .insert(agent.id, std::time::Instant::now());
+        }
+        let status = match error.code.as_deref() {
+            Some("agent_not_found" | "agent_identity_changed") => Some(RuntimeStatus::Unavailable),
+            Some("agent_blocked") => Some(RuntimeStatus::Blocked),
+            Some(code)
+                if code == crate::protocol::api::AGENT_COMPOSER_BUSY
+                    || code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN =>
+            {
+                Some(RuntimeStatus::Blocked)
+            }
+            _ => None,
+        };
+        self.set_launch_prompt_error(
+            agent,
+            Some(format!(
+                "Launch prompt delivery failed: {}. Bus will retry when the agent is ready.",
+                error.message
+            )),
+            status,
+        )?;
+        tracing::info!(
+            event = "bus.delivery.launch_prompt",
+            agent_id = agent.id.0,
+            outcome = "rejected",
+            "Launch prompt was not typed; safe to retry"
+        );
+        Ok(())
+    }
+
+    fn set_launch_prompt_error(
+        &mut self,
+        agent: &RoomAgent,
+        error: Option<String>,
+        status: Option<RuntimeStatus>,
+    ) -> Result<(), String> {
+        let mut state = self.state.clone();
+        if let Some(status) = status {
+            state
+                .observe_status(agent.id, status, io::now_ms())
+                .map_err(|e| e.to_string())?;
+        }
+        state
+            .set_agent_error(agent.id, error)
+            .map_err(|e| e.to_string())?;
+        self.save(state)
     }
 
     fn deliver_request(
