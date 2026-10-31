@@ -1,5 +1,5 @@
 //! Which worker copy is this request's own result.
-use super::reply_routing::reply_key;
+use super::reply_routing::{reply_key, ReplyRoute};
 use super::worker_events::{WorkerEvent, WorkerEventKind};
 use super::{AgentId, Author, BusState, PromptId, Request, RequestId, RoomId};
 
@@ -28,6 +28,30 @@ impl BusState {
             .reply()
             .is_some_and(|reply| !reply.text.trim().is_empty())
             && self.assigned_copy_at(request, None).is_some()
+    }
+
+    /// The worker posted its own result after this request closed with no
+    /// captured reply. That send replaces `reply_not_captured`. A message from
+    /// before the close, and one owned by another request's captured reply,
+    /// does not.
+    pub(super) fn explicit_fallback_after_close(&self, request: &Request) -> bool {
+        let Some(completed) = request.completed_at_ms else {
+            return false;
+        };
+        if request
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty())
+        {
+            return false;
+        }
+        let end = completed.saturating_add(60_000);
+        self.worker_result_messages(request.room_id, request.agent_id)
+            .iter()
+            .any(|(at, text)| {
+                (completed..=end).contains(at)
+                    && !self.claimed_by_captured_reply(request, text, *at)
+                    && self.fallback_owner(request, *at) == Some(request.id)
+            })
     }
 
     /// A restart line covers only requests that already existed when it was posted.
@@ -78,22 +102,48 @@ impl BusState {
         )
     }
 
+    /// A grouped late final is a second copy only when this request already has
+    /// its own worker message. An ungrouped final still yields to any earlier
+    /// copy of the same text in the room.
+    pub(super) fn final_text_already_posted(
+        &self,
+        late: Option<&Request>,
+        room: RoomId,
+        worker: AgentId,
+        text: &str,
+    ) -> bool {
+        let Some(request) = late else {
+            return self.result_already_in_room(room, worker, text);
+        };
+        self.assigned_result_at(
+            request.room_id,
+            request.agent_id,
+            request.prompt.submitted_at_ms,
+            request.id,
+            text.trim(),
+            None,
+        )
+        .is_some()
+    }
+
     /// A grouped final is withdrawn when this request still receives a worker
     /// copy of its body after earlier same-text replies have taken theirs.
     /// An ungrouped final is withdrawn when any other worker copy exists.
+    /// Matching uses the posted message, because the stored summary is only
+    /// a preview once the body is long.
     pub(super) fn final_has_explicit_copy(&self, event: &WorkerEvent) -> bool {
         if event.kind != WorkerEventKind::Final {
             return false;
         }
-        let body = final_body(&event.text);
+        let body = self.final_source_text(event).trim().to_owned();
         if body.is_empty() {
             return false;
         }
         let Some(group) = event.group else {
-            return self.other_worker_copy(event.room, event.agent, body, Some(event.message));
+            return self.other_worker_copy(event.room, event.agent, &body, Some(event.message));
         };
         let Some(request) = self.request(group) else {
-            return self.other_worker_copy(event.room, event.agent, body, Some(event.message));
+            return self.other_worker_copy(event.room, event.agent, &body, Some(event.message));
         };
         let (room, worker, submit_at, id) = (
             request.room_id,
@@ -101,8 +151,26 @@ impl BusState {
             request.prompt.submitted_at_ms,
             request.id,
         );
-        self.assigned_result_at(room, worker, submit_at, id, body, Some(event.message))
+        self.assigned_result_at(room, worker, submit_at, id, &body, Some(event.message))
             .is_some()
+    }
+
+    /// The posted final keeps the full body. The event summary keeps only a
+    /// preview once that body is longer than the notice cap.
+    fn final_source_text<'a>(&'a self, event: &'a WorkerEvent) -> &'a str {
+        self.prompt_text(event.room, event.message)
+            .unwrap_or_else(|| final_body(&event.text))
+    }
+
+    fn prompt_text(&self, room: RoomId, id: PromptId) -> Option<&str> {
+        self.notices(room)
+            .find(|prompt| prompt.id == id)
+            .map(|prompt| prompt.text.as_str())
+            .or_else(|| {
+                self.requests()
+                    .find(|request| request.room_id == room && request.prompt.id == id)
+                    .map(|request| request.prompt.text.as_str())
+            })
     }
 
     fn other_worker_copy(
@@ -138,7 +206,9 @@ impl BusState {
             let Some(index) = claimants
                 .iter()
                 .enumerate()
-                .find(|(index, (submit, _))| !taken[*index] && *submit <= copy_at)
+                .find(|(index, (submit, id))| {
+                    !taken[*index] && *submit <= copy_at && !self.reply_wake_delivered(*id)
+                })
                 .map(|(index, _)| index)
             else {
                 continue;
@@ -149,6 +219,21 @@ impl BusState {
             taken[index] = true;
         }
         None
+    }
+
+    /// A request whose reply wake was already delivered does not take a later
+    /// request's explicit copy.
+    fn reply_wake_delivered(&self, request_id: RequestId) -> bool {
+        let Some(request) = self.request(request_id) else {
+            return false;
+        };
+        match self.reply_routes.get(&reply_key(request)).copied() {
+            Some(ReplyRoute::Seen) => true,
+            Some(ReplyRoute::Routed(notice)) => {
+                self.request(notice).is_some_and(|queued| queued.settled())
+            }
+            Some(ReplyRoute::Pending) | None => false,
+        }
     }
 
     fn worker_copies(
@@ -222,6 +307,74 @@ impl BusState {
                     && from_worker(&request.prompt.author)
                     && matches(&request.prompt.text)
             })
+    }
+
+    fn worker_result_messages(&self, room: RoomId, worker: AgentId) -> Vec<(u64, String)> {
+        let mut found = std::collections::BTreeMap::<PromptId, (u64, String)>::new();
+        let mut keep = |id: PromptId, at: u64, author: &Author, stored: &str| {
+            if author != &Author::Agent(worker) || is_wrapper(stored) || stored.trim().is_empty() {
+                return;
+            }
+            found
+                .entry(id)
+                .or_insert_with(|| (at, stored.trim().to_owned()));
+        };
+        for prompt in self.notices(room) {
+            keep(
+                prompt.id,
+                prompt.submitted_at_ms,
+                &prompt.author,
+                &prompt.text,
+            );
+        }
+        for request in self.requests().filter(|request| request.room_id == room) {
+            keep(
+                request.prompt.id,
+                request.prompt.submitted_at_ms,
+                &request.prompt.author,
+                &request.prompt.text,
+            );
+        }
+        let mut messages: Vec<_> = found.into_values().collect();
+        messages.sort_unstable();
+        messages
+    }
+
+    fn claimed_by_captured_reply(&self, request: &Request, text: &str, at: u64) -> bool {
+        self.requests().any(|other| {
+            other.id != request.id
+                && other.room_id == request.room_id
+                && other.agent_id == request.agent_id
+                && other
+                    .reply()
+                    .is_some_and(|reply| same_result_text(&reply.text, text))
+                && self.assigned_result_at(
+                    other.room_id,
+                    other.agent_id,
+                    other.prompt.submitted_at_ms,
+                    other.id,
+                    text,
+                    None,
+                ) == Some(at)
+        })
+    }
+
+    /// The latest request that closed without a reply in the minute before
+    /// `at` owns an unmatched post-close send.
+    fn fallback_owner(&self, request: &Request, at: u64) -> Option<RequestId> {
+        self.requests()
+            .filter(|other| {
+                other.room_id == request.room_id
+                    && other.agent_id == request.agent_id
+                    && other
+                        .reply()
+                        .is_none_or(|reply| reply.text.trim().is_empty())
+                    && other.completed_at_ms.is_some_and(|completed| {
+                        completed <= at && at <= completed.saturating_add(60_000)
+                    })
+            })
+            .max_by_key(|other| (other.completed_at_ms, other.id.0))
+            .map(|other| other.id)
     }
 }
 

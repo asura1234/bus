@@ -1804,5 +1804,174 @@ fn explicit_send_withdraws_an_already_queued_duplicate_reply_wake() {
     );
 }
 
+#[test]
+fn explicit_result_send_suppresses_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "The actual result.".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
+        "the explicit result is the delivery, not another no-reply outcome: {notices:?}"
+    );
+}
+
+#[test]
+fn identical_late_final_for_a_distinct_request_still_wakes() {
+    let mut f = Fixture::new();
+    ready_worker(&mut f);
+    report(&mut f, "Done.");
+    f.worker.submit_ready().unwrap();
+    let held = f
+        .worker
+        .state
+        .agent(f.orch)
+        .and_then(|agent| agent.current_request)
+        .expect("earlier explicit result");
+    f.finish(held, "ack");
+
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    f.worker.save(state).unwrap();
+    autonomous(&mut f, "owned", "Done.");
+    collect(&mut f);
+
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls.iter().any(|call| {
+            call.contains("Late reply") && call.contains(&format!("request {}", source.0))
+        }),
+        "an earlier request's identical text must not consume this late result: {calls:?}"
+    );
+}
+
+#[test]
+fn later_explicit_copy_is_not_claimed_by_an_earlier_identical_reply() {
+    let mut f = Fixture::new();
+    let first = f.send(Author::Agent(f.orch), "first task");
+    f.finish(first, "Done.");
+    collect(&mut f);
+    let held = f
+        .worker
+        .state
+        .agent(f.orch)
+        .and_then(|agent| agent.current_request)
+        .expect("first reply wrapper");
+    f.finish(held, "ack");
+
+    let second = f.send(Author::Agent(f.orch), "second task");
+    f.finish(second, "Done.");
+    report(&mut f, "Done.");
+    collect(&mut f);
+
+    let notices = f.notices();
+    assert!(
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("Reply to message")
+                || !notice
+                    .prompt
+                    .text
+                    .contains(&format!("request {}", second.0))
+        }),
+        "the later request's explicit send is its only copy: {notices:?}"
+    );
+}
+
+#[test]
+fn explicit_send_withdraws_a_queued_long_turn_final() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    let text = "A detailed review result with evidence. ".repeat(20);
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            f.agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("worker".into()),
+                terminal_id: Some("worker-terminal".into()),
+                pane_id: Some("worker-pane".into()),
+                session_id: Some("worker-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(f.agent).unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
+        .unwrap();
+    state.accept_callback(ProviderCallback {
+        callback_id: "long-final-before-send".into(),
+        sequence: 10,
+        occurred_at_ms: now,
+        agent_id: f.agent,
+        launch_id: "worker".into(),
+        provider_session_id: Some("worker-session".into()),
+        provider_turn_id: Some("background".into()),
+        provider_prompt_id: Some("background".into()),
+        prompt_payload: None,
+        kind: CallbackEventKind::Final { text: text.clone() },
+    });
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text,
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("Turn final")),
+        "the explicit long result must replace its queued wrapper: {notices:?}"
+    );
+}
+
 #[path = "worker_event_waiter_overlap_test.rs"]
 mod waiter_overlap;

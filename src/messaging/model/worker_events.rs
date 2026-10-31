@@ -134,9 +134,10 @@ impl BusState {
             },
         );
         let (room, worker) = (agent.room_id, agent.id);
-        // The explicit send, or any earlier copy of this text, is the one result.
-        // Do not post the body again and do not add a Late reply or Turn final.
-        if self.result_already_in_room(room, worker, text) {
+        // This request's own copy suppresses its late final. An ungrouped
+        // final still yields to any earlier copy, so an explicit send is not
+        // posted again as Turn final.
+        if self.final_text_already_posted(late, room, worker, text) {
             self.note_result_posted(turn, callback.occurred_at_ms);
             return;
         }
@@ -435,7 +436,9 @@ impl BusState {
             return true;
         }
         reason == "reply_not_captured"
-            && (self.captured_reply_already_sent(request) || self.restart_covers(request, now_ms))
+            && (self.captured_reply_already_sent(request)
+                || self.explicit_fallback_after_close(request)
+                || self.restart_covers(request, now_ms))
     }
 
     fn posted_class(&self, request: &Request, class: &str) -> bool {
