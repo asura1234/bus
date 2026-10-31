@@ -565,6 +565,9 @@ mod tests {
             launch_id: "launch".into(),
         };
         let home = private_home(&source, &root, &hooks).unwrap();
+        let tui = std::fs::read_to_string(home.join("tui.toml")).unwrap();
+        assert!(tui.contains("cache_expiry_hint = false"));
+        assert!(tui.contains("auto_install = false"));
         for folder in ["credentials", "oauth"] {
             let path = home.join(folder);
             assert!(std::fs::symlink_metadata(&path)

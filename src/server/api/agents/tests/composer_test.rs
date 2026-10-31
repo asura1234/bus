@@ -21,6 +21,16 @@ fn kimi_only_accepts_the_current_idle_framed_composer() {
         observe(AgentKind::Kimi, &busy, "Bus task"),
         crate::terminal::runtime::InputObservation::Unavailable
     );
+    let historical = format!("The earlier turn said Working… in its answer\n{frame}");
+    assert_eq!(
+        observe(AgentKind::Kimi, &historical, "Bus task"),
+        crate::terminal::runtime::InputObservation::Empty
+    );
+    let moon = format!("🌕\n{frame}");
+    assert_eq!(
+        observe(AgentKind::Kimi, &moon, "Bus task"),
+        crate::terminal::runtime::InputObservation::Unavailable
+    );
 }
 
 #[test]
