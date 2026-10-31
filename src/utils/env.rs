@@ -29,29 +29,32 @@ pub(crate) fn path_var() -> Option<std::ffi::OsString> {
     std::env::var_os("PATH")
 }
 
-/// First `program` on [`path_var`], if it is a file. Relative entries stay
-/// relative; callers that exec after a chdir resolve them.
+/// First executable `program` on [`path_var`]. Relative entries stay relative;
+/// callers that exec after a chdir resolve them. A non-executable namesake is
+/// skipped, matching `execvp`.
 pub(crate) fn resolve_on_path(program: impl AsRef<std::ffi::OsStr>) -> Option<PathBuf> {
     let program = program.as_ref();
     let path = path_var()?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(program))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| crate::terminal::runtime::spawn::is_executable_file(candidate))
 }
 
-/// `Command` for a bare program name. An active test override never falls
-/// back to the process PATH, or a fixture directory would still run the real tool.
+/// `Command` for a bare program name.
+///
+/// With no test override this is `Command::new(program)`. The operating system
+/// searches `PATH` and skips a non-executable namesake. An active override
+/// never falls back to the process `PATH`, or a fixture directory would still
+/// run the real tool.
 pub(crate) fn command_on_path(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let program = program.as_ref();
+    if !path_override_active() {
+        return std::process::Command::new(program);
+    }
     if let Some(resolved) = resolve_on_path(program) {
         return std::process::Command::new(resolved);
     }
-    if path_override_active() {
-        return std::process::Command::new(
-            std::env::temp_dir().join("bus-path-miss").join(program),
-        );
-    }
-    std::process::Command::new(program)
+    std::process::Command::new(std::env::temp_dir().join("bus-path-miss").join(program))
 }
 
 fn path_override_active() -> bool {
