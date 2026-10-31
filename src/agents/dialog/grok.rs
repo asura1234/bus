@@ -62,6 +62,26 @@ pub(super) fn startup_trust(lines: &[&str]) -> Option<Dialog> {
     })
 }
 
+/// Live 1.0.70 chrome that ticks while a permission card is open.
+/// The status line (`◆ … 3m44s … [↓][stop]`) and the task row under it
+/// (`:`, `⸬`, `⋅`, `⁙` plus `Run …`) change every frame. Leaving either in
+/// the digest makes `agent choose` stale before Enter is sent.
+fn animated_approval_chrome(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('◆')
+        && (line.contains("[stop]") || line.contains("[↓]") || line.contains("[↑]"))
+    {
+        return true;
+    }
+    let Some(marker) = trimmed.chars().next() else {
+        return false;
+    };
+    if !matches!(marker, ':' | '⸬' | '⋅' | '⁙') {
+        return false;
+    }
+    trimmed[marker.len_utf8()..].starts_with(" Run ")
+}
+
 struct Row {
     selector: char,
     glyph: String,
@@ -113,7 +133,7 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     }
     let text = lines[header..first]
         .iter()
-        .filter(|line| !(line.trim_start().starts_with('◆') && line.contains("[stop]")))
+        .filter(|line| !animated_approval_chrome(line))
         .map(|line| {
             line.trim()
                 .trim_start_matches("◆ ")
@@ -124,13 +144,11 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         .collect::<Vec<_>>()
         .join("\n");
     // Preserve scope, question, row/check/focus/input and style observations.
-    // The live 1.0.70 status line (`◆ … 3m44s … [stop]`) ticks every frame.
-    // Leaving it in the digest makes `agent choose` stale before the key is sent.
     let fingerprint_context = {
         let mut text_lines = Vec::new();
         let mut style_rows = Vec::new();
         for (index, line) in lines.iter().enumerate().skip(header).take(end - header + 1) {
-            if line.trim_start().starts_with('◆') && line.contains("[stop]") {
+            if animated_approval_chrome(line) {
                 continue;
             }
             text_lines.push(*line);
@@ -576,6 +594,12 @@ mod tests {
         assert!(super::super::parse(APPROVAL).is_some());
         let later = APPROVAL.replace("3m44s", "9m01s").replace("4m2s", "12s");
         assert_eq!(dialog.digest(), card(&later).unwrap().digest());
+        let with_task = APPROVAL.replacen("[stop]\n", "[stop]\n   ⸬ Run the approved command\n", 1);
+        let other_marker = with_task.replacen('⸬', "⋅", 1);
+        assert_eq!(
+            card(&with_task).unwrap().digest(),
+            card(&other_marker).unwrap().digest()
+        );
         let other = APPROVAL.replace("bus send --reply-to 4", "sleep 35");
         assert_ne!(dialog.digest(), card(&other).unwrap().digest());
         let detected = detected(APPROVAL, "grok");
