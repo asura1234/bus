@@ -1811,3 +1811,147 @@ fn removing_a_restart_marker_posts_one_steady_dialog() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_bus_generated_result_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    let mut state = worker.state.clone();
+    let request = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "initial task".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            now,
+            false,
+        )
+        .unwrap()[0];
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "done".into(), now)
+        .unwrap();
+    worker.save(state).unwrap();
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a real first-turn result must suppress Blocked even when Bus generated the request"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_task_quoting_the_blocked_sentence_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    queue_message(
+        &mut worker,
+        room,
+        agent,
+        Author::Developer,
+        "Investigate why Bus reported: Blocked, needs help to continue.",
+        settled_now(),
+    );
+    open_dialog(&screen);
+    polls(&mut worker, 3);
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "quoting a notice must not hide a real new task from activity suppression"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_result_spooled_before_the_decisive_poll_suppresses_a_steady_dialog() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    let now = settled_now();
+    let request = queue_message(
+        &mut worker,
+        room,
+        agent,
+        Author::Developer,
+        "finish before the next poll",
+        now,
+    );
+    let mut state = worker.state.clone();
+    state.begin_submission(request, "launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            crate::messaging::model::SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let prompt = state.render_request_payload(request).unwrap();
+    worker.save(state).unwrap();
+    let spool = worker.data_dir.join("callbacks").join("launch");
+    crate::agents::providers::spool::initialize(
+        &spool,
+        &crate::agents::providers::spool::Manifest {
+            routing_key: crate::agents::providers::spool::RoutingKey(agent.0),
+            provider: Provider::ClaudeCode,
+            launch_id: "launch".into(),
+        },
+    )
+    .unwrap();
+    crate::agents::providers::spool::append(
+        &spool,
+        "launch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"session",
+            "turn_id":"turn", "prompt_id":"turn", "prompt":prompt}),
+        &[],
+        false,
+    )
+    .unwrap();
+    worker.consume_callbacks(agent, &spool).unwrap();
+    open_dialog(&screen);
+    worker.poll().unwrap();
+    crate::agents::providers::spool::append(
+        &spool,
+        "launch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"Stop", "session_id":"session", "turn_id":"turn",
+            "prompt_id":"turn", "last_assistant_message":"done"}),
+        &[],
+        false,
+    )
+    .unwrap();
+    worker.tick().unwrap();
+    assert!(
+        sent_by(&worker, room, agent).is_empty(),
+        "a result already spooled before the decisive poll must not post Blocked first"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_stale_restart_marker_does_not_suppress_a_real_dialog_forever() {
+    let (worker, agent, _, _, _, dir) = worker(true);
+    write_restart_marker(&worker);
+    let much_later = settled_now().saturating_add(86_400_000);
+    assert!(
+        !restart_suppresses(&worker, agent, much_later),
+        "a marker left by an interrupted restart must not hide a real dialog a day later"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
