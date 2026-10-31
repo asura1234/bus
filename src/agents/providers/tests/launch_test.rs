@@ -31,7 +31,7 @@ fn fake_provider_is_available_only_to_an_isolated_dev_driver() {
 }
 use crate::agents::providers::{
     hook_json::{self, HookContract},
-    launch::{launch_args, runtime_args, validate_args},
+    launch::{canonical_directory, launch_args, runtime_args, validate_args},
     suggest::suggestions,
     ProviderKind as Provider,
 };
@@ -66,6 +66,15 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
         .iter()
         .map(|event| (*event, contract.entry(&command)))
         .collect()
+}
+
+#[test]
+fn unreadable_pwd_error_names_the_field_and_path() {
+    let path = format!("/definitely/missing-bus-pwd-{}", std::process::id());
+    let error = canonical_directory(&path).unwrap_err();
+    assert!(error.contains("Agent PWD"), "{error}");
+    assert!(error.contains(&path), "{error}");
+    assert!(error.contains("No such file or directory"), "{error}");
 }
 
 #[test]

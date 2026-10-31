@@ -215,7 +215,9 @@ pub(crate) fn canonical_directory(input: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("Agent PWD must be an absolute path or ~/ path".into());
     }
-    let path = path.canonicalize().map_err(|e| e.to_string())?;
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Agent PWD {input:?} cannot be read: {error}"))?;
     if !path.is_dir() {
         return Err("Agent PWD must be an existing directory".into());
     }
