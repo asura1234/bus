@@ -12,7 +12,9 @@ use std::path::Path;
 
 mod callback_spool;
 mod control_reads;
+mod history;
 mod restart_notice;
+mod restored_prompt;
 use control_reads::interrupts_delivery;
 
 /// How often a tick moves settled history out of `state.json`.
@@ -235,24 +237,6 @@ impl Worker {
         self.durable_state = state.clone();
         self.state = state;
         Ok(())
-    }
-
-    /// Before serving anything, deduplicates crash copies in history, so the
-    /// rewrite never runs on the UI thread or between commands.
-    fn compact_history(&self) {
-        match self.store.compact_history() {
-            Ok(true) => tracing::info!(
-                event = "bus.history.compacted",
-                entries = self.state.history().len(),
-                "Bus history rewritten without duplicate crash copies"
-            ),
-            Ok(false) => {}
-            Err(error) => tracing::warn!(
-                event = "bus.history.compact_failed",
-                %error,
-                "Bus history keeps duplicate crash copies until the next start"
-            ),
-        }
     }
 
     /// Runs the archive pass at most once per [`ARCHIVE_EVERY`].
@@ -556,6 +540,7 @@ impl Worker {
         else {
             return Ok(());
         };
+        self.withdraw_restored_grok_prompts();
         // Every callback this tick applies is persisted by one write.
         perf::COORDINATOR_LOOP.relabel("tick.callbacks");
         self.begin_batch();

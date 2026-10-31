@@ -459,6 +459,16 @@ impl BusState {
         }
         let first = *queue.first()?;
         let queued = self.requests.get(&first)?;
+        // Grok 1.0.70 shows a follow-up typed during a turn as Enter:queue and
+        // does not accept it before the submit deadline. Withdrawal then
+        // refuses that composer, so the draft is still there after the turn
+        // goes idle. Hold ordinary work for a normal submit once the turn ends.
+        // A blocked-dialog notice above may still interrupt the turn.
+        if agent_state.provider == super::Provider::Grok
+            && agent_state.status == RuntimeStatus::Working
+        {
+            return None;
+        }
         (!queued.queue_only && queued.room_id == lead.room_id).then_some((first, lead.id))
     }
 

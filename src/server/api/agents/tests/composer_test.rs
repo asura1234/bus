@@ -1105,6 +1105,224 @@ mod stale_own_paste;
 #[path = "late_own_paste_test.rs"]
 mod late_own_paste;
 
+fn grok_native_composer(body: &[&str], footer: &str) -> String {
+    let mut rows = vec!["  ╭────────────────────────────────────────────────╮".to_owned()];
+    for (index, line) in body.iter().enumerate() {
+        let marker = if index == 0 { "❯" } else { " " };
+        rows.push(format!("  │ {marker} {line} │"));
+    }
+    rows.push("  ╰───────────── Grok 4.7 (high) · always-approve ─╯".to_owned());
+    rows.push(String::new());
+    rows.push(footer.to_owned());
+    rows.join("\n")
+}
+
+const SCROLLED_PASTE: &str = "[Bus message 12; answer with bus send --reply-to 12 --as 3 --text 'YOUR ANSWER'; run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status 12 before resending]\nScratch E2E path 1: assign grok-e2e-a a task to run a shell command in this scratch Git project that writes path1.txt containing PATH1_OK, then require its correlated Bus reply. When its reply reaches you, answer this request with the worker message ID, reply stage, and observed file content. Use your Bus CLI and do not ask for tool approval.";
+
+#[test]
+fn grok_scrolled_owned_draft_cleanup_accepts_attested_remainder() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let scrolled =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-scrolled.txt");
+    let footer =
+        "  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts";
+    let remainder = grok_native_composer(&["resending]"], footer);
+    let developer = grok_native_composer(&["resending] edited"], footer);
+
+    let unrecognized = observer(AgentKind::Grok, SCROLLED_PASTE.into());
+    unrecognized.clearing(0);
+    unrecognized.clearing(1);
+    assert_eq!(
+        unrecognized.observe(&remainder),
+        InputObservation::Unavailable,
+        "a prefix is not owned before the full paste"
+    );
+
+    let inspector = observer(AgentKind::Grok, SCROLLED_PASTE.into());
+    assert_eq!(inspector.observe(scrolled), InputObservation::Pending);
+    inspector.clearing(0);
+    inspector.clearing(1);
+    assert_eq!(
+        inspector.observe(&remainder),
+        InputObservation::Pending,
+        "the visible suffix of the remaining first line stays owned"
+    );
+
+    let edited = observer(AgentKind::Grok, SCROLLED_PASTE.into());
+    assert_eq!(edited.observe(scrolled), InputObservation::Pending);
+    edited.clearing(0);
+    edited.clearing(1);
+    assert_eq!(edited.observe(&developer), InputObservation::Unavailable);
+    assert_eq!(
+        edited.observe(&remainder),
+        InputObservation::Unavailable,
+        "a developer edit ends ownership of the attested remainder"
+    );
+}
+
+#[test]
+fn grok_suggestion_ghost_is_not_a_developer_draft() {
+    let footer = "  Tab/→:accept suggestion  │  Shift+Tab:mode  │  Ctrl+.:shortcuts";
+    let send =
+        "  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts";
+    let ghost = |body: &str, faint: bool, footer: &str| {
+        let painted = if faint {
+            format!("\x1b[2m{body}\x1b[0m")
+        } else {
+            body.to_owned()
+        };
+        grok_native_composer(&[&painted], footer)
+    };
+
+    let faint = ghost("print the next task", true, footer);
+    assert_eq!(
+        observe(AgentKind::Grok, &faint, "print the next task"),
+        InputObservation::Empty
+    );
+    let solid = ghost("print the next task", false, footer);
+    assert_eq!(
+        observe(AgentKind::Grok, &solid, "print the next task"),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        observe(AgentKind::Grok, &solid, "from bus"),
+        InputObservation::Unavailable
+    );
+    let faint_draft = ghost("print the next task", true, send);
+    assert_eq!(
+        observe(AgentKind::Grok, &faint_draft, "print the next task"),
+        InputObservation::Pending,
+        "faint text without the accept-suggestion hint stays a draft"
+    );
+
+    let captured = "Send the bus reply and verify delivery.";
+    assert_eq!(
+        observe(AgentKind::Grok, &ghost(captured, true, footer), captured),
+        InputObservation::Empty
+    );
+    assert_eq!(
+        observe(AgentKind::Grok, &ghost(captured, false, footer), captured),
+        InputObservation::Pending,
+        "the captured wording without faint styling is a draft"
+    );
+}
+
+/// The manifest treats a bare `Queued N` line as accepted work. The composer
+/// observer must too, or a queued submit is closed instead of waited on.
+#[test]
+fn unmarked_queued_count_is_accepted_like_the_tasks_header() {
+    assert_eq!(
+        observe(AgentKind::Grok, "   Queued 1\n   from bus\n", "from bus"),
+        InputObservation::Accepted
+    );
+    assert_eq!(
+        observe(
+            AgentKind::Grok,
+            "Bus closed it because Queued 1 was still waiting\n",
+            "from bus"
+        ),
+        InputObservation::Unavailable
+    );
+}
+
+/// One Ctrl+C on `Waiting for response… [stop]` puts the Bus prompt back and
+/// the pane is idle. The next delivery must not see that occupied composer.
+#[test]
+fn ctrl_c_restored_bus_prompt_is_not_left_on_an_idle_composer() {
+    let screen = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
+    );
+    let detection = crate::agents::manifest::detect_with_osc(
+        AgentKind::Grok,
+        crate::agents::manifest::DetectionInput {
+            screen,
+            osc_title: "grok",
+            osc_progress: "4;0;0",
+        },
+    );
+    let observation = observe(AgentKind::Grok, screen, "NEXT");
+    assert!(
+        detection.state != crate::agents::AgentState::Idle
+            || observation == InputObservation::Empty,
+        "state={:?} observation={observation:?}: the restored Bus prompt stays in an idle composer",
+        detection.state
+    );
+}
+
+/// Ctrl+C restores every visible row of Bus's prompt. A cap that stops
+/// before the last row leaves that continuation, which no longer starts
+/// with the Bus envelope, on a composer the idle OSC title will accept.
+#[test]
+fn restored_bus_prompt_past_eight_rows_is_fully_withdrawn() {
+    let screen = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
+    );
+    let mut lines: Vec<String> = screen.lines().map(str::to_owned).collect();
+    let bottom = lines
+        .iter()
+        .rposition(|line| line.contains('╰') && line.contains("Grok"))
+        .expect("composer bottom");
+    let continuation = lines[bottom - 1].clone();
+    assert!(
+        continuation.trim_start().starts_with('│') && !continuation.contains("[Bus message"),
+        "{continuation:?}"
+    );
+    for _ in 0..5 {
+        lines.insert(bottom, continuation.clone());
+    }
+    let long = lines.join("\n");
+    let rows = long
+        .lines()
+        .skip_while(|line| !(line.contains('╭') && line.contains('╮')))
+        .skip(1)
+        .take_while(|line| !(line.contains('╰') && line.contains("Grok")))
+        .count();
+    assert!(rows > 8, "constructed rows: {rows}");
+    let held = crate::agents::manifest::detect_with_osc(
+        AgentKind::Grok,
+        crate::agents::manifest::DetectionInput {
+            screen: &long,
+            osc_title: "grok",
+            osc_progress: "4;0;0",
+        },
+    );
+    assert_eq!(
+        held.state,
+        crate::agents::AgentState::Working,
+        "the tall restored prompt must stay working until it is withdrawn: {held:?}"
+    );
+    let keys =
+        crate::agents::grok_surface::restored_prompt_clear_keys(&long).expect("owned prompt");
+    let mut tail_lines: Vec<String> = screen.lines().map(str::to_owned).collect();
+    let top = tail_lines
+        .iter()
+        .rposition(|line| line.contains('╭') && line.contains('╮'))
+        .expect("composer top");
+    let tail_bottom = tail_lines
+        .iter()
+        .rposition(|line| line.contains('╰') && line.contains("Grok"))
+        .expect("composer bottom");
+    tail_lines.drain(top + 1..tail_bottom);
+    tail_lines.insert(top + 1, continuation.replacen("│   ", "│ ❯ ", 1));
+    let tail = tail_lines.join("\n");
+    let tail_detection = crate::agents::manifest::detect_with_osc(
+        AgentKind::Grok,
+        crate::agents::manifest::DetectionInput {
+            screen: &tail,
+            osc_title: "grok",
+            osc_progress: "4;0;0",
+        },
+    );
+    let tail_observation = observe(AgentKind::Grok, &tail, "NEXT");
+    assert_eq!(
+        keys.len(),
+        rows * 3,
+        "line-kills cover {rows} visible rows, got {} keys; remainder state={:?} observation={tail_observation:?}",
+        keys.len(),
+        tail_detection.state
+    );
+}
+
 #[test]
 fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
     use crate::terminal::runtime::SubmissionInspector;

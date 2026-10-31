@@ -106,21 +106,30 @@ impl SubmissionInspector for OwnedComposer {
                     }
                     return observation;
                 }
-                if body == owned.body {
-                    return InputObservation::Pending;
+                if accept_owned_change(&mut owned, body) {
+                    InputObservation::Pending
+                } else {
+                    owned.lost = true;
+                    InputObservation::Other
                 }
-                if let Some(at) = owned
-                    .remainders
-                    .iter()
-                    .position(|remaining| Some(remaining) == body.as_ref())
-                {
-                    owned.remainders.drain(..=at);
-                    owned.body = body;
-                    owned.progress = owned.progress.wrapping_add(1);
-                    return InputObservation::Pending;
+            }
+            // Grok refuses every body that is not the full paste. A line kill
+            // therefore looks unavailable even when it is the remainder of the
+            // draft Bus just typed. Keep clearing only that owned remainder.
+            // A developer edit is not one of those remainders: mark it lost
+            // and leave it. Do not treat a prefix as owned before the full
+            // paste was recognized, or a developer prefix could be submitted.
+            InputObservation::Unavailable if self.kind == AgentKind::Grok => {
+                if owned.lost || owned.body.is_none() {
+                    return InputObservation::Unavailable;
                 }
-                owned.lost = true;
-                InputObservation::Other
+                let body = input(self.kind, screen);
+                if accept_owned_change(&mut owned, body) {
+                    InputObservation::Pending
+                } else {
+                    owned.lost = true;
+                    InputObservation::Unavailable
+                }
             }
             other => other,
         }
@@ -142,6 +151,7 @@ impl SubmissionInspector for OwnedComposer {
         let end = owned.text[cursor..]
             .find('\n')
             .map_or(owned.text.len(), |at| cursor + at);
+        let previous = owned.text.clone();
         match index {
             0 => owned.cursor = start, // Ctrl+A: beginning of logical line.
             1 => {
@@ -167,11 +177,14 @@ impl SubmissionInspector for OwnedComposer {
         }
         // Preserve the exact visible spacing. Only the prefix cut at the
         // modelled logical-line boundary is authorized, never arbitrary edits.
-        if let Some(remaining) = owned
-            .body
-            .as_ref()
-            .and_then(|body| remaining_prefix(body, &owned.text))
-        {
+        // A scrolled 1.0.70 draft proves ownership from a visible suffix, so
+        // the same cut is also authorized when that suffix still overlaps the
+        // shortened paste.
+        let body = owned.body.clone();
+        if let Some(remaining) = body.as_ref().and_then(|body| {
+            remaining_prefix(body, &owned.text)
+                .or_else(|| remaining_attested_suffix(body, &previous, &owned.text))
+        }) {
             if Some(&remaining) != owned.body.as_ref()
                 && owned.remainders.back() != Some(&remaining)
             {
@@ -179,6 +192,23 @@ impl SubmissionInspector for OwnedComposer {
             }
         }
     }
+}
+
+fn accept_owned_change(owned: &mut Owned, body: Option<String>) -> bool {
+    if body == owned.body {
+        return true;
+    }
+    let Some(at) = owned
+        .remainders
+        .iter()
+        .position(|remaining| Some(remaining) == body.as_ref())
+    else {
+        return false;
+    };
+    owned.remainders.drain(..=at);
+    owned.body = body;
+    owned.progress = owned.progress.wrapping_add(1);
+    true
 }
 
 fn remaining_prefix(body: &str, text: &str) -> Option<String> {
@@ -196,4 +226,54 @@ fn remaining_prefix(body: &str, text: &str) -> Option<String> {
         .next()
         .is_none()
         .then(|| body[..end].trim_end().to_owned())
+}
+
+/// The visible body is a suffix of the paste from before this key, and the
+/// shortened paste is still a prefix of that text. Authorize the prefix of
+/// the original visible body that the shortened paste still covers.
+fn remaining_attested_suffix(body: &str, previous: &str, next: &str) -> Option<String> {
+    let body_norm = normalize_visible(body);
+    let old_norm = normalize(previous);
+    let new_norm = normalize(next);
+    let old_count = old_norm.chars().count();
+    let body_count = body_norm.chars().count();
+    let new_count = new_norm.chars().count();
+    if body_count == 0
+        || old_count < body_count
+        || !old_norm.ends_with(&body_norm)
+        || !old_norm.starts_with(&new_norm)
+    {
+        return None;
+    }
+    let hidden = old_count - body_count;
+    if new_count < hidden {
+        return None;
+    }
+    let keep = new_count - hidden;
+    // Deleting only off-screen text leaves the visible suffix unchanged.
+    if keep == 0 || keep >= body_count {
+        return None;
+    }
+    let mut seen = 0;
+    for (at, character) in body.char_indices() {
+        if character.is_whitespace() || is_scroll_rail(character) {
+            continue;
+        }
+        seen += 1;
+        if seen == keep {
+            let remaining = body[..at + character.len_utf8()].trim_end().to_owned();
+            return (remaining != body).then_some(remaining);
+        }
+    }
+    None
+}
+
+fn normalize_visible(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_whitespace() && !is_scroll_rail(*character))
+        .collect()
+}
+
+fn is_scroll_rail(character: char) -> bool {
+    ('▁'..='█').contains(&character)
 }

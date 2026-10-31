@@ -4,7 +4,15 @@ use crate::terminal::runtime::InputObservation;
 
 pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
     let Some(body) = input(screen) else {
-        return InputObservation::Unavailable;
+        // Grok 1.0.70 replaces the composer with its queue pane after it
+        // accepts a prompt submitted mid-turn ("▾ Queued N" under Tasks).
+        // That is acceptance. A dialog that happens to mention the queue
+        // is not, and a still-readable draft stays owned by the caller.
+        return if provider_queued(screen) && crate::agents::dialog::parse(screen).is_none() {
+            InputObservation::Accepted
+        } else {
+            InputObservation::Unavailable
+        };
     };
     if body.is_empty() {
         return InputObservation::Empty;
@@ -72,6 +80,44 @@ fn native_visible_draft(screen: &str, body: &str, expected: &str) -> bool {
 
 fn is_scroll_rail(character: char) -> bool {
     ('▁'..='█').contains(&character)
+}
+
+/// The Tasks-panel header Grok 1.0.70 draws for prompts waiting to run.
+/// Same shape as the manifest rule `queued_prompts_working`: an optional
+/// disclosure marker, the word Queued, and a count of at least 1, with
+/// nothing else on the line. A bare `Queued N` is the same acceptance. A
+/// transcript sentence does not match.
+fn provider_queued(screen: &str) -> bool {
+    screen.lines().any(queued_count_line)
+}
+
+fn queued_count_line(line: &str) -> bool {
+    let line = line.trim();
+    let rest = if let Some(marked) = line.strip_prefix('▾').or_else(|| line.strip_prefix('▸')) {
+        if !marked.starts_with(|c: char| c.is_whitespace()) {
+            return false;
+        }
+        marked.trim_start()
+    } else {
+        line
+    };
+    let mut parts = rest.split_whitespace();
+    parts.next() == Some("Queued")
+        && parts.next().is_some_and(positive_count)
+        && parts.next().is_none()
+}
+
+fn positive_count(count: &str) -> bool {
+    let mut chars = count.chars();
+    matches!(chars.next(), Some(c) if ('1'..='9').contains(&c)) && chars.all(|c| c.is_ascii_digit())
+}
+
+/// Ctrl+C on `Waiting for response… [stop]` unsends Bus's prompt into the
+/// composer and drops `[stop]`. That body is still Bus's submission. A
+/// developer draft does not start with the Bus envelope.
+#[cfg(test)]
+pub(super) fn restored_bus_prompt(screen: &str) -> bool {
+    crate::agents::grok_surface::restored_prompt_clear_keys(screen).is_some()
 }
 
 pub(super) fn input(screen: &str) -> Option<String> {
@@ -142,11 +188,35 @@ pub(super) fn input(screen: &str) -> Option<String> {
             .iter()
             .filter(|c| !c.character.is_whitespace() && !matches!(c.character, '❯' | '│'))
             .all(|c| c.faint);
-    if placeholder {
+    // Grok 1.0.70 fills the idle composer with faint ghost text and the
+    // footer "Tab/→:accept suggestion". That is not a developer draft.
+    // Non-faint text, and faint text without that hint, stays typed input.
+    let suggestion = footer.contains("tab/")
+        && footer.contains("accept suggestion")
+        && faint_suggestion(&styled, top, bottom);
+    if placeholder || suggestion {
         Some(String::new())
     } else {
         Some(body)
     }
+}
+
+fn faint_suggestion(styled: &[Vec<super::StyledChar>], top: usize, bottom: usize) -> bool {
+    let mut saw_text = false;
+    for row in &styled[top + 1..bottom] {
+        for cell in row {
+            if cell.character.is_whitespace()
+                || matches!(cell.character, '│' | '╭' | '╮' | '╯' | '╰' | '─' | '❯')
+            {
+                continue;
+            }
+            if !cell.faint {
+                return false;
+            }
+            saw_text = true;
+        }
+    }
+    saw_text
 }
 
 /// Grok 1.0.70 collapses a bracketed paste into a chip. The shared submission
@@ -298,6 +368,57 @@ mod tests {
             observe(&unlabelled, "Bus task"),
             InputObservation::Unavailable
         );
+    }
+
+    #[test]
+    fn ctrl_c_restored_prompt_is_an_owned_line_kill() {
+        let screen = include_str!(
+            "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
+        );
+        assert!(restored_bus_prompt(screen));
+        let keys = crate::agents::grok_surface::restored_prompt_clear_keys(screen).expect("keys");
+        assert!(keys.len() >= 3 && keys.len().is_multiple_of(3));
+        assert!(keys
+            .chunks(3)
+            .all(|chunk| chunk == ["ctrl+a", "ctrl+k", "ctrl+u"]));
+        assert!(!restored_bus_prompt(&format!("{screen}\n[stop]")));
+        assert!(!restored_bus_prompt(NATIVE_1070_EMPTY));
+        let developer = screen.replace("[Bus message", "developer note");
+        assert!(!restored_bus_prompt(&developer));
+        assert!(crate::agents::grok_surface::restored_prompt_clear_keys(&developer).is_none());
+    }
+
+    #[test]
+    fn grok_queued_pane_without_a_composer_is_accepted() {
+        let queued = "   ▾ Queued 1\n   from bus\n";
+        assert_eq!(input(queued), None);
+        assert_eq!(observe(queued, "from bus"), InputObservation::Accepted);
+        assert_eq!(
+            observe("   ▸ Queued 2\n", "from bus"),
+            InputObservation::Accepted
+        );
+        assert_eq!(
+            observe("   ▾ Queued 0\n", "from bus"),
+            InputObservation::Unavailable
+        );
+        assert_eq!(
+            observe(
+                "Bus closed it because Queued 1 was still waiting\n",
+                "from bus"
+            ),
+            InputObservation::Unavailable
+        );
+        // The draft is still in the composer. The queue header above it is
+        // not acceptance, and must not skip withdrawal.
+        let drafted = "\
+   ▾ Queued 1
+  ╭────────────────────────────────────────────────────────────╮
+  │ ❯ from bus                                                 │
+  ╰──────── Grok 4.7 (high) · always-approve ─╯
+  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts
+";
+        assert_eq!(input(drafted).as_deref(), Some("from bus"));
+        assert_eq!(observe(drafted, "from bus"), InputObservation::Pending);
     }
 
     #[test]

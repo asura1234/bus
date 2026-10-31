@@ -1,0 +1,17 @@
+     ◆ Thought for 0.4s
+
+   ◆ Reply ready to Bus message 4… 3m44s  4m2s [stop]
+
+  ┃
+  ┃  ›  Reply ready to Bus message 4
+  ┃  │ bus send --reply-to 4 --as 3 --text 'Ready.'
+  ┃  ← → narrow scope  ·  e edit pattern
+  ┃
+  ┃  1 (○) Yes, and don't ask again for anything (always-approve mode)
+  ┃  2 (○) Always allow: bus send --reply-to
+  ┃  3 (●) Yes, proceed
+  ┃  4 (○) No, reject (type to add feedback)
+  ┃  5 (○) Never allow: bus send --reply-to
+  ┃
+
+  1/5:select  │  Tab:next option  │  ←/→:scope  │  e:edit pattern  │  Ctrl+o:always-approve  │  Ctrl+c:cancel  │  Esc:scrollback

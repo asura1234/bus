@@ -125,6 +125,196 @@ async fn a_developer_deleted_line_is_not_mistaken_for_bus_partial_progress() {
     withdraw_inline_draft(Some("header")).await;
 }
 
+/// Grok 1.0.70 draws a labelled lower border and an Enter:send footer.
+/// Continuation rows keep three spaces inside the frame; `input` strips them.
+fn grok_native_frame(lines: &[&str]) -> String {
+    const INNER: usize = 60;
+    let mut rows = Vec::with_capacity(lines.len() + 3);
+    rows.push(format!("  ╭{}╮", "─".repeat(INNER)));
+    let source: Vec<String> = if lines.is_empty() {
+        vec![" ❯".to_owned()]
+    } else {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                if index == 0 {
+                    format!(" ❯ {line}")
+                } else {
+                    format!("   {line}")
+                }
+            })
+            .collect()
+    };
+    for text in source {
+        assert!(
+            text.chars().count() <= INNER,
+            "frame row wider than the composer: {text}"
+        );
+        rows.push(format!("  │{text:<INNER$}│"));
+    }
+    rows.push(format!(
+        "  ╰{} Grok 4.7 (high) · always-approve ─╯",
+        "─".repeat(8)
+    ));
+    rows.push(
+        "  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts"
+            .into(),
+    );
+    format!("\x1b[2J\x1b[H{}", rows.join("\r\n"))
+}
+
+fn paint_grok(app: &App, lines: &[&str]) {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(grok_native_frame(lines).as_bytes());
+}
+
+async fn withdraw_grok_owned_draft(edit_after_first_kill: Option<&[&str]>) {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Grok, true, "");
+    // The shared fixture paints a Codex prompt. Replace it before Bus looks,
+    // or Grok refuses the foreign frame and never types.
+    paint_grok(&app, &[]);
+    let expiry = confirmation_expiry(&method);
+    let Method::AgentPromptIfIdle(mut params) = method else {
+        unreachable!()
+    };
+    params.text = "header\nmiddle words\nlast".into();
+    let response = start(&mut app, Method::AgentPromptIfIdle(params));
+    let mut response = (
+        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        None,
+    );
+    assert_eq!(
+        next_write(&mut writes).await,
+        Bytes::from_static(b"\x1b[200~header\nmiddle words\nlast\x1b[201~")
+    );
+    paint_grok(&app, &["header", "middle words", "last"]);
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).wait_for_enters(1);
+    clock(&app).advance(expiry);
+    assert_eq!(
+        write_or_done(&mut writes, &mut response).await.unwrap(),
+        Bytes::from_static(b"\x01")
+    );
+    paint_grok(&app, &["header", "middle words", "last"]);
+    assert_eq!(
+        write_or_done(&mut writes, &mut response).await.unwrap(),
+        Bytes::from_static(b"\x0b")
+    );
+    if let Some(edit) = edit_after_first_kill {
+        paint_grok(&app, edit);
+        let reply = match write_or_done(&mut writes, &mut response).await {
+            Err(reply) => reply,
+            Ok(key) => {
+                clock(&app).advance(Duration::from_secs(2));
+                if response.1.is_none() {
+                    let _ = response.0.await;
+                }
+                panic!("cleanup sent {key:?} after a developer edit");
+            }
+        };
+        assert!(reply.contains("could not be safely cleared"), "{reply}");
+        assert!(
+            writes.try_recv().is_err(),
+            "never delete or submit a developer edit"
+        );
+        return;
+    }
+    paint_grok(&app, &["header", "middle words"]);
+    for (key, remaining) in [
+        (b"\x15".as_slice(), &["header", "middle words"][..]),
+        (b"\x01".as_slice(), &["header", "middle words"][..]),
+        (b"\x0b".as_slice(), &["header"][..]),
+        (b"\x15".as_slice(), &["header"][..]),
+        (b"\x01".as_slice(), &["header"][..]),
+        (b"\x0b".as_slice(), &[][..]),
+    ] {
+        assert_eq!(
+            write_or_done(&mut writes, &mut response)
+                .await
+                .unwrap()
+                .as_ref(),
+            key,
+            "while the composer still showed {remaining:?}"
+        );
+        paint_grok(&app, remaining);
+    }
+    let reply = response.0.await.unwrap();
+    assert!(reply.contains("remaining draft was cleared"), "{reply}");
+    assert!(
+        reply.contains("may have run"),
+        "an unconfirmed submit must be reported as failed: {reply}"
+    );
+    assert!(
+        !reply.contains("agent_prompted"),
+        "clearing is not acceptance: {reply}"
+    );
+    assert!(
+        !reply.contains("agent_prompt_not_shown"),
+        "Enter may have run: {reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "one paste, one Enter, no replay"
+    );
+}
+
+#[tokio::test]
+async fn grok_unconfirmed_multiline_draft_is_withdrawn_instead_of_left_behind() {
+    withdraw_grok_owned_draft(None).await;
+}
+
+#[tokio::test]
+async fn grok_developer_edit_during_withdrawal_is_preserved() {
+    withdraw_grok_owned_draft(Some(&["header", "middle words + developer edit"])).await;
+}
+
+#[tokio::test]
+async fn grok_developer_deleted_line_is_not_treated_as_owned_progress() {
+    withdraw_grok_owned_draft(Some(&["header"])).await;
+}
+
+/// Enter during a live turn parks the prompt in Grok's own queue. The
+/// composer is gone and "▾ Queued N" is under Tasks. That is acceptance:
+/// Bus must not withdraw the prompt or report the submit as unconfirmed.
+#[tokio::test]
+async fn grok_queued_submission_is_accepted_instead_of_withdrawn() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Grok, true, "");
+    paint_grok(&app, &[]);
+    let expiry = confirmation_expiry(&method);
+    let Method::AgentPromptIfIdle(params) = method else {
+        unreachable!()
+    };
+    let response = start(&mut app, Method::AgentPromptIfIdle(params));
+    assert_eq!(
+        next_write(&mut writes).await,
+        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+    );
+    paint_grok(&app, &["from bus"]);
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    clock(&app).wait_for_enters(1);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes("\x1b[2J\x1b[H   ▾ Queued 1\r\n   from bus\r\n".as_bytes());
+    clock(&app).advance(expiry);
+    let reply = response.recv_timeout(WAIT).unwrap();
+    assert!(
+        reply.contains("agent_prompted"),
+        "a Grok-queued prompt is an accepted submission: {reply}"
+    );
+    assert!(
+        !reply.contains("may have run"),
+        "acceptance must not be reported as an unconfirmed withdraw: {reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "an accepted queue must not be cleared or retyped"
+    );
+}
+
 /// The composer emptying after Enter is this module's acceptance signal.
 /// Seen before any cleanup key, it must not be reported as Bus clearing it.
 #[tokio::test]

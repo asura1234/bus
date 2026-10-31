@@ -199,6 +199,39 @@ fn a_rejected_steering_write_preserves_the_original_turn_end_evidence() {
 }
 
 #[test]
+fn grok_working_turn_keeps_a_follow_up_queued_instead_of_steering_it() {
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Grok, "/scratch".into(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch-grok".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    let lead = submit_text(&mut state, room, agent, "sleep in the foreground");
+    start_request(&mut state, lead, "launch-grok", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    let follow = submit_text(&mut state, room, agent, "reply after it exits");
+
+    assert_eq!(state.next_steering(agent), None);
+    assert_eq!(state.queued_requests(agent), &[follow]);
+    assert_eq!(state.request(follow).unwrap().phase, RequestPhase::Queued);
+    assert!(!state.request(follow).unwrap().steered);
+}
+
+#[test]
 fn invalidated_stalled_typed_request_can_be_recovered_explicitly() {
     let (mut state, agent, request) = idle_with_queued(1_000, "go");
     start_request(&mut state, request, "launch-codex", 5);
