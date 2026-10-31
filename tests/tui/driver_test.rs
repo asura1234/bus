@@ -1497,7 +1497,9 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     let request = &status["result"]["requests"][0];
     assert_eq!(request["start_bound"], true, "{status}");
     assert!(
-        request["turn_id"].as_str().is_some_and(|turn| !turn.is_empty()),
+        request["turn_id"]
+            .as_str()
+            .is_some_and(|turn| !turn.is_empty()),
         "{status}"
     );
     let (code, observed) = parse(scratch_bus(&session, &["agent", "dialog", "dialog-worker"]));
