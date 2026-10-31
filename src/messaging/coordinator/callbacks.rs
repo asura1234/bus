@@ -20,6 +20,8 @@ enum CallbackFlow {
 
 #[path = "callback_binding.rs"]
 mod binding;
+#[path = "callback_completion.rs"]
+mod completion;
 #[path = "grok_callbacks.rs"]
 mod grok_callbacks;
 #[path = "provider_turns.rs"]
@@ -361,28 +363,14 @@ impl Worker {
                 session,
                 turn,
                 prompt,
-            } => Some(callback(
-                record,
-                id,
-                session,
-                turn,
-                Some(prompt),
-                CallbackEventKind::PromptStarted,
+            } => Some(completion::started_callback(
+                record, id, session, turn, prompt,
             )),
             Parsed::CompletionCandidate { session, turn } => {
-                return self.grok_completion_callback(id, state, path, record, session, Some(turn));
-            }
-            Parsed::ReconcileSession { session: _ }
-                if record.manifest.provider == ProviderKind::Kimi =>
-            {
-                return Ok(ControlFlow::Continue((
-                    state,
-                    None,
-                    vec![path.to_path_buf()],
-                )));
+                return self.completion_callback(id, state, path, record, session, Some(turn));
             }
             Parsed::ReconcileSession { session } => {
-                return self.grok_completion_callback(id, state, path, record, session, None);
+                return self.completion_callback(id, state, path, record, session, None);
             }
             Parsed::Final {
                 session,
