@@ -312,9 +312,20 @@ fn prompt_matches(turn: &OpenTurn, prompt: &str) -> bool {
 }
 
 fn find_bound<'a>(done: &'a [OpenTurn], turn_id: u64, prompt: &str) -> Option<&'a OpenTurn> {
-    done.iter()
+    if let Some(exact) = done
+        .iter()
         .find(|turn| turn.id == turn_id && prompt_matches(turn, prompt))
-        .or_else(|| done.iter().find(|turn| prompt_matches(turn, prompt)))
+    {
+        return Some(exact);
+    }
+    // A missing turn id is still in progress. Only a stored id that now points
+    // at a different Bus message may fall back to the earlier prompt turn.
+    let stored = done.iter().find(|turn| turn.id == turn_id)?;
+    if !stored.prompt_text.contains("[Bus message") {
+        return None;
+    }
+    done.iter()
+        .find(|turn| turn.id < turn_id && prompt_matches(turn, prompt))
 }
 
 fn empty_capture() -> SessionCapture {
