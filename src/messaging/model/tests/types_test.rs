@@ -127,7 +127,7 @@ fn feishu_prunes_delivery_guards_after_their_history_is_removed() {
 }
 
 #[test]
-fn operational_notice_stalled_requests_keep_status_without_bus_chat() {
+fn operational_notice_requests_have_no_stall_status_or_bus_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     state.confirm_hook_setup(agent).unwrap();
@@ -137,10 +137,8 @@ fn operational_notice_stalled_requests_keep_status_without_bus_chat() {
         state.record_stalled_errors(now).unwrap();
         assert_eq!(state.notices(master).count(), 0);
         assert_eq!(
-            state
-                .stall_reason(state.request(request).unwrap(), now)
-                .as_deref(),
-            Some("not_submitted")
+            state.stall_reason(state.request(request).unwrap(), now),
+            None
         );
     }
     assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
@@ -377,8 +375,8 @@ fn idle_with_queued(at: u64, text: &str) -> (BusState, AgentId, RequestId) {
     (state, agent, request)
 }
 
-fn stall_at(state: &BusState, request: RequestId, now_ms: u64) -> Option<String> {
-    state.stall_reason(state.request(request).unwrap(), now_ms)
+fn recovery_at(state: &BusState, request: RequestId, now_ms: u64) -> Option<String> {
+    state.recovery_reason(state.request(request).unwrap(), now_ms)
 }
 
 #[test]

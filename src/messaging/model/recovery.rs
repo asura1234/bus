@@ -196,7 +196,7 @@ impl BusState {
                 })
             })
             .filter_map(|request| {
-                self.stall_reason(request, now_ms)
+                self.recovery_reason(request, now_ms)
                     .or_else(|| {
                         (self.is_dialog_notice(request.id)
                             && now_ms.saturating_sub(request.prompt.submitted_at_ms)

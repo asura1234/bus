@@ -51,7 +51,7 @@ impl Worker {
             {
                 return false;
             }
-            retry.paused |= self.state.stall_reason(request, now_ms).is_some();
+            retry.paused |= self.state.recovery_reason(request, now_ms).is_some();
             true
         });
     }
