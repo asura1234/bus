@@ -471,19 +471,19 @@ its context.
 - **Delivery is not completion.** Wait for `complete: true` from `bus wait` or
   `bus message status`.
 
-## Keep working; report status, don't ask permission
+## Keep working; report new information, don't ask permission
 
 Follow the [binding keep-working rule](orchestrator-rules.md#keep-working).
-The developer needs status: what is running, its state, and what comes next.
-Routine permission questions transfer the orchestrator's job back to the
-developer and leave workers idle while a reply is unavailable.
+The developer needs new information: a milestone, decision, blocker, or question
+and what comes next. Routine permission questions transfer the orchestrator's
+job back to the developer and leave workers idle while a reply is unavailable.
 
 Advance in-scope work yourself: assign a newly found bug for evidence-based
 root-cause analysis and a fix, start the next workflow step, dispatch review
 fixes, and execute follow-ups. Log your decision in both room notes and the
-workflow log, report status in MASTER, and keep workers busy. A new bug inside
-the agreed goal does not need a new permission question; an unrelated bug does
-not silently widen the goal.
+workflow log, report that new information in MASTER, and keep workers busy. A
+new bug inside the agreed goal does not need a new permission question; an
+unrelated bug does not silently widen the goal.
 
 Check existing instructions, kickoff approval and workflow decisions before
 asking. Routine scheduling, reversible engineering defaults, mandatory

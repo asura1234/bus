@@ -157,8 +157,8 @@ fn workflow_paths_use_source_detection_only_for_dev_launches() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// What MASTER carries (progress, questions, blockers, plan changes) and what
-/// stays in the work room, as the prompt and rules word it.
+/// MASTER carries new milestones, questions, blockers and plan changes;
+/// a turn with none of those produces no status text.
 const MASTER_REPORT_PHRASES: [&str; 7] = [
     "Report progress, questions and blockers in MASTER; keep details in your room.",
     "A turn no message started posts in your work room.",
@@ -166,7 +166,7 @@ const MASTER_REPORT_PHRASES: [&str; 7] = [
     "every question or decision for the developer;",
     "every blocker that waits on the developer (a dialog they must approve, a destructive action);",
     "anything that changes the plan.",
-    "Keep in your work room: routine dialog approvals, worker hand-offs, step-by-step details, and \"nothing is waiting on you\" notes.",
+    "A turn with none of those ends with no text at all.",
 ];
 
 fn values(room: Option<(&str, u64)>, data: &Path) -> PromptValues {
@@ -305,11 +305,12 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
     // Replies appear in the request's room for developer and agent senders.
-    // Autonomous finals appear in the work room. Progress, questions, blockers
-    // and plan changes go to MASTER with `send --to human`.
+    // Autonomous finals appear in the work room. New milestones, questions,
+    // blockers and plan changes go to MASTER with `send --to human`.
     for phrase in MASTER_REPORT_PHRASES {
         assert!(flat(&text).contains(phrase), "missing {phrase}: {text}");
     }
+    assert!(!text.contains("nothing is waiting on you"), "{text}");
     assert!(!text.contains("automatically, whatever woke you"), "{text}");
     assert!(
         text.contains("bus send --room master --as orch --to human"),
@@ -494,9 +495,14 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         "One developer post per review round.",
         "No new toasts or popup errors.",
         "Agents are only Idle, Working, Blocked or Unavailable.",
+        "A background job whose head and result are unchanged sends nothing",
+        "a new verdict, finding, blocker, or question is still sent once",
+        "`[waiting-on-you]` is for a new hard blocker",
+        "Do not reply Ready merely to acknowledge that prompt.",
     ] {
         assert!(communication.contains(phrase), "missing {phrase}");
     }
+    assert_eq!(communication.matches("a final no-reply outcome").count(), 2);
     assert!(!communication.contains("ends with one short line"));
     assert!(!communication.contains(" stalled "));
 

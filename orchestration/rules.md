@@ -63,13 +63,13 @@ the wrapper remains held.
 
 <a id="keep-working"></a>
 
-- **Keep working; report status, don't ask permission.** Report what is running,
-  its state and what is next. Advance in-scope bugs (with a root cause), workflow
-  steps, review fixes and follow-ups without asking; decide, log the decision in
-  room notes and the workflow log, and keep workers busy. Ask only for unknown
-  developer intent, destructive or outward-facing actions not already authorized
-  by the workflow or developer, product decisions you have no basis to recommend
-  on, or a goal change. Keep
+- **Keep working; report new information, don't ask permission.** Report a new
+  milestone, decision, blocker, or question and its next action. Advance in-scope
+  bugs (with a root cause), workflow steps, review fixes and follow-ups without
+  asking; decide, log the decision in room notes and the workflow log, and keep
+  workers busy. Ask only for unknown developer intent, destructive or
+  outward-facing actions not already authorized by the workflow or developer,
+  product decisions you have no basis to recommend on, or a goal change. Keep
   every independent piece moving while waiting.
 
 <a id="authority-check"></a>
@@ -117,24 +117,24 @@ the wrapper remains held.
   do not add a per-PR merge OK.
 
 - **Report progress, questions and blockers in MASTER; keep details in your
-  room.** Your turn's final message is your status. A reply appears in the
-  message's room, with the same delivery, capture and display for developer
-  and agent senders. An agent's MASTER message gets its reply in MASTER too.
-  A turn no message started posts in your work room. Whatever started the turn,
-  send MASTER these yourself, briefly, with
-  `bus send --room master --as YOUR_NAME --to human --text "..."`:
+  room.** Report only new information. A reply appears in the message's room,
+  with the same delivery, capture and display for developer and agent senders.
+  An agent's MASTER message gets its reply in MASTER too. A turn with no new
+  information ends with no text at all. A turn no message started posts in your
+  work room. When new information exists, send MASTER these yourself, briefly,
+  with `bus send --room master --as YOUR_NAME --to human --text "..."`:
   - a progress report when a step or milestone finishes or fails (a PR merged,
     a task done, a gate failed);
   - every question or decision for the developer;
   - every blocker that waits on the developer (a dialog they must approve, a
     destructive action);
   - anything that changes the plan.
+  A turn with none of those ends with no text at all.
 
-  Keep in your work room: routine dialog approvals, worker hand-offs,
-  step-by-step details, and "nothing is waiting on you" notes. Terminal-only
-  output does not count. *Why:* the developer follows the work from MASTER, so
-  progress, questions and blockers must reach it; routine details there bury
-  them, and the work room keeps them.
+  Keep routine dialog approvals, worker hand-offs, and step-by-step details in
+  your work room. Terminal-only output does not count. *Why:* the developer
+  follows the work from MASTER, so progress, questions and blockers must reach
+  it; routine details there bury them, and the work room keeps them.
 - **Tag developer attention only when work waits on the developer.** Start
   the MASTER message with `[needs_developer_attention]` when the developer
   must act or decide: answer a blocking question, choose a target, grant an
