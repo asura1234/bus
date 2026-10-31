@@ -8,6 +8,10 @@ const QUIT_UNSAVED_NOTICE: &str = "Unsaved changes or slow storage. Press Ctrl+Q
 const QUIT_RETRY_NOTICE: &str = "Unsaved changes or slow storage. Ctrl+Q retries saving.";
 
 impl BusUi {
+    pub(super) fn quit_retry_pending(&self) -> bool {
+        self.error.as_deref() == Some(QUIT_RETRY_NOTICE)
+    }
+
     pub(super) fn request_quit(&mut self) {
         // Repeated presses while saving must not postpone the warning.
         if self.quitting.is_some() {

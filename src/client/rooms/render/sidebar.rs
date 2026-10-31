@@ -315,7 +315,7 @@ impl BusUi {
             + master_header_rows
             + rooms.len()
             + agents.iter().map(|entry| entry.height).sum::<usize>();
-        let notices = if self.force_exit_until.is_some() {
+        let notices = if self.force_exit_until.is_some() || self.quit_retry_pending() {
             2
         } else {
             u16::from(self.quitting.is_some())
@@ -665,6 +665,8 @@ impl BusUi {
             Rect::new(1, rows.saturating_sub(4 + build_row), sw, 1),
             if self.force_exit_until.is_some() {
                 "Ctrl+Q again within 5s"
+            } else if self.quit_retry_pending() {
+                "Ctrl+Q retries saving"
             } else {
                 ""
             },
@@ -678,6 +680,8 @@ impl BusUi {
                 "Saving before exit…"
             } else if self.force_exit_until.is_some() {
                 "May lose unsaved edits"
+            } else if self.quit_retry_pending() {
+                "Unsaved changes or slow storage"
             } else {
                 ""
             },
