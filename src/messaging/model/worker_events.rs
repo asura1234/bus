@@ -138,6 +138,7 @@ impl BusState {
         // Do not post the body again and do not add a Late reply or Turn final.
         if self.result_already_in_room(room, worker, text) {
             self.consumed_provider_turns.insert(turn);
+            self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms);
             return;
         }
         let Ok(message) =
@@ -165,6 +166,9 @@ impl BusState {
             },
         );
         self.consumed_provider_turns.insert(turn);
+        // The posted body is the result. A quiet no-reply stored before it
+        // arrived must not ride along in the same wake.
+        self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms);
     }
 
     /// A final for a closed owned turn must not wait behind newer unbound work.
@@ -244,7 +248,46 @@ impl BusState {
                 );
             }
         }
-        before != self.worker_events.len()
+        let retracted = self.retract_suppressed_quiet_outcomes(now_ms);
+        retracted || before != self.worker_events.len()
+    }
+
+    /// A result that arrived after a quiet no-reply was stored replaces that
+    /// notice. Remove only a still-pending quiet `ended` outcome. Leave the
+    /// late final, any stall, and a real outcome (provider error, startup
+    /// failure, session limit, unsent submission) in place, and do not record
+    /// a replacement no-reply.
+    fn retract_suppressed_quiet_outcomes(&mut self, now_ms: u64) -> bool {
+        let pending: Vec<(String, RequestId)> = self
+            .worker_events
+            .iter()
+            .filter(|(key, event)| {
+                event.kind == WorkerEventKind::Outcome
+                    && event.route == ReplyRoute::Pending
+                    && key.starts_with("ended:")
+                    && stored_quiet_ended(&event.text)
+            })
+            .filter_map(|(key, event)| event.group.map(|group| (key.clone(), group)))
+            .collect();
+        let drop_keys: Vec<String> = pending
+            .into_iter()
+            .filter(|(_, group)| {
+                let Some(request) = self.request(*group) else {
+                    return false;
+                };
+                if request.phase != RequestPhase::Abandoned {
+                    return false;
+                }
+                let closer = self.named_abandon_reason(request);
+                self.suppress_outcome(request, now_ms, &closer)
+            })
+            .map(|(key, _)| key)
+            .collect();
+        let changed = !drop_keys.is_empty();
+        for key in drop_keys {
+            self.worker_events.remove(&key);
+        }
+        changed
     }
 
     /// One stall or one abandon for this request, never both, and never a
@@ -575,6 +618,19 @@ impl BusState {
         self.worker_events.retain(|key, _| keep.contains(key));
         before != self.worker_events.len()
     }
+}
+
+/// The stored notice names a quiet closer, not a provider or startup failure.
+fn stored_quiet_ended(text: &str) -> bool {
+    ["reply_not_captured", "idle", "superseded"]
+        .into_iter()
+        .any(|closer| {
+            let needle = format!("abandoned: {closer}");
+            text.match_indices(&needle).any(|(at, _)| {
+                let tail = &text[at + needle.len()..];
+                tail.is_empty() || matches!(tail.chars().next(), Some(';' | ')' | ' ' | '\n' | '.'))
+            })
+        })
 }
 
 fn is_wrapper(text: &str) -> bool {

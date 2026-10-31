@@ -1603,5 +1603,48 @@ fn a_restart_burst_posts_no_per_request_reply_not_captured() {
     );
 }
 
+#[test]
+fn same_minute_late_result_replaces_pending_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state.retain_worker_outcomes(now);
+    let pending: Vec<_> = state
+        .worker_outcomes_for(state.request(source).unwrap())
+        .into_iter()
+        .filter(|(_, text)| text.contains("reply_not_captured"))
+        .collect();
+    assert_eq!(
+        pending.len(),
+        1,
+        "the quiet outcome is retained before the result arrives: {pending:?}"
+    );
+    f.worker.save(state).unwrap();
+    autonomous(&mut f, "owned", "The real late result.");
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("The real late result.")),
+        "the late result still posts: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("reply_not_captured")),
+        "a result in the same minute replaces the pending no-reply: {calls:?}"
+    );
+}
+
 #[path = "worker_event_waiter_overlap_test.rs"]
 mod waiter_overlap;
