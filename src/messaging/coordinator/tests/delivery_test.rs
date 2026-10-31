@@ -14,6 +14,245 @@ fn composer_available() -> Result<ResponseResult, TransportError> {
     })
 }
 
+struct LaunchPromptTransport(Arc<Mutex<Vec<String>>>);
+
+impl Transport for LaunchPromptTransport {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentPromptIfIdle(params) => {
+                self.0.lock().unwrap().push(params.text);
+                Ok(ResponseResult::AgentPrompted {
+                    agent: native_info("pane", "provider", "session"),
+                })
+            }
+            other => panic!("unexpected launch-prompt call: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn cursor_and_grok_launch_prompts_type_once_without_room_history_or_resume_replay() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(LaunchPromptTransport(Arc::clone(&prompts)));
+        orchestrator::write_prompt(&dir.join("callbacks/launch"), "Worker launch instructions")
+            .unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, 2)
+            .unwrap();
+        worker.submit_ready().unwrap();
+        assert!(prompts.lock().unwrap().is_empty());
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 3)
+            .unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        let typed = prompts.lock().unwrap()[0].clone();
+        assert!(typed.contains("Worker launch instructions"));
+        assert!(!typed.contains("reply briefly that you are ready"));
+        assert_eq!(worker.state.requests().count(), 0);
+        assert!(worker
+            .state
+            .notices(room)
+            .all(|notice| !notice.text.contains("Worker launch instructions")));
+        drop(worker);
+
+        let mut recovered = Worker::open(
+            dir.clone(),
+            Box::new(LaunchPromptTransport(Arc::clone(&prompts))),
+        )
+        .unwrap();
+        recovered
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 4)
+            .unwrap();
+        recovered.submit_ready().unwrap();
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        drop(recovered);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+struct LaunchPromptOutcomeTransport {
+    prompts: Arc<Mutex<Vec<String>>>,
+    outcomes: VecDeque<Result<ResponseResult, TransportError>>,
+}
+
+impl Transport for LaunchPromptOutcomeTransport {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentPromptIfIdle(params) => {
+                self.prompts.lock().unwrap().push(params.text);
+                self.outcomes
+                    .pop_front()
+                    .expect("unexpected extra launch-prompt attempt")
+            }
+            other => panic!("unexpected launch-prompt call: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn launch_prompt_submission_failure_is_visible_without_room_history() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(LaunchPromptOutcomeTransport {
+            prompts: Arc::clone(&prompts),
+            outcomes: vec![Err(TransportError {
+                message: "lost launch-prompt response".into(),
+                code: Some("timeout".into()),
+                definitely_rejected: false,
+            })]
+            .into(),
+        });
+        orchestrator::write_prompt(&dir.join("callbacks/launch"), "Worker launch instructions")
+            .unwrap();
+        worker.submit_ready().unwrap();
+        let failed = worker.state.agent(agent).unwrap();
+        assert_eq!(
+            failed.actionable_error.as_deref(),
+            Some("Submit outcome unknown; no automatic retry: lost launch-prompt response")
+        );
+        assert_eq!(failed.status, RuntimeStatus::Idle);
+        assert_eq!(worker.state.requests().count(), 0);
+        assert_eq!(worker.state.notices(room).count(), 0);
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        assert!(dir
+            .join("callbacks/launch/launch-prompt-attempted")
+            .exists());
+        drop(worker);
+
+        let mut recovered = Worker::open(
+            dir.clone(),
+            Box::new(LaunchPromptOutcomeTransport {
+                prompts: Arc::clone(&prompts),
+                outcomes: VecDeque::new(),
+            }),
+        )
+        .unwrap();
+        recovered
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 4)
+            .unwrap();
+        recovered.submit_ready().unwrap();
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        assert!(recovered
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .as_deref()
+            .is_some_and(|error| error.contains("lost launch-prompt response")));
+        drop(recovered);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn uncertain_launch_prompt_failure_is_visible_or_retried() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(LaunchPromptOutcomeTransport {
+            prompts: Arc::clone(&prompts),
+            outcomes: vec![Ok(ResponseResult::Ok {})].into(),
+        });
+        orchestrator::write_prompt(&dir.join("callbacks/launch"), "Worker launch instructions")
+            .unwrap();
+        worker.submit_ready().unwrap();
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .as_deref()
+            .is_some_and(
+                |error| error.starts_with("Unexpected submit response; no automatic retry:")
+            ));
+        assert_eq!(worker.state.requests().count(), 0);
+        assert_eq!(worker.state.notices(room).count(), 0);
+        assert!(dir
+            .join("callbacks/launch/launch-prompt-attempted")
+            .exists());
+        worker.submit_ready().unwrap();
+        assert_eq!(prompts.lock().unwrap().len(), 1);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn rejected_launch_prompt_is_visible_and_retries_once_after_recovery() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        for (code, failed_status) in [
+            ("agent_blocked", RuntimeStatus::Blocked),
+            ("agent_not_found", RuntimeStatus::Unavailable),
+        ] {
+            let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+            let prompts = Arc::new(Mutex::new(Vec::new()));
+            worker.transport = Box::new(LaunchPromptOutcomeTransport {
+                prompts: Arc::clone(&prompts),
+                outcomes: vec![
+                    Err(TransportError {
+                        message: format!("{code} while typing launch prompt"),
+                        code: Some(code.into()),
+                        definitely_rejected: true,
+                    }),
+                    Ok(ResponseResult::AgentPrompted {
+                        agent: native_info("pane", "provider", "session"),
+                    }),
+                ]
+                .into(),
+            });
+            orchestrator::write_prompt(&dir.join("callbacks/launch"), "Worker launch instructions")
+                .unwrap();
+            worker.submit_ready().unwrap();
+            let failed = worker.state.agent(agent).unwrap();
+            assert_eq!(failed.status, failed_status);
+            assert!(
+                failed
+                    .actionable_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains(code)),
+                "{:?}",
+                failed.actionable_error
+            );
+            assert!(!dir
+                .join("callbacks/launch/launch-prompt-attempted")
+                .exists());
+            assert_eq!(worker.state.requests().count(), 0);
+            assert_eq!(worker.state.notices(room).count(), 0);
+
+            worker
+                .state
+                .observe_status(agent, RuntimeStatus::Idle, 4)
+                .unwrap();
+            worker.submit_ready().unwrap();
+            assert_eq!(prompts.lock().unwrap().len(), 2);
+            {
+                let prompts = prompts.lock().unwrap();
+                assert_eq!(prompts[0], prompts[1]);
+            }
+            assert!(worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .is_none());
+            worker.submit_ready().unwrap();
+            assert_eq!(prompts.lock().unwrap().len(), 2);
+            assert_eq!(worker.state.requests().count(), 0);
+            assert_eq!(worker.state.notices(room).count(), 0);
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
 #[test]
 fn occupied_composer_retains_fifo_without_failure_or_expiry_across_reload() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {

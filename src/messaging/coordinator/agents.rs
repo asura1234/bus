@@ -19,17 +19,17 @@ pub(crate) struct AddAgent {
     pub(crate) consent_project_hooks: bool,
 }
 
-/// The queued first turn for a provider that cannot take the prompt at launch.
+/// The first turn for a provider that cannot take the prompt at launch.
 pub(super) fn first_message_text(
     provider: Provider,
     is_orchestrator: bool,
     instructions: &str,
 ) -> String {
     match provider {
-        Provider::Cursor => cursor::system_prompt::prompt_message(instructions),
         Provider::Grok if is_orchestrator => {
             crate::agents::providers::grok::system_prompt::prompt_message(instructions)
         }
+        Provider::Cursor | Provider::Grok => cursor::system_prompt::prompt_message(instructions),
         _ => orchestrator::prompt_message(instructions),
     }
 }
@@ -714,7 +714,7 @@ impl Worker {
                 &mut prepared.args,
                 args,
             ),
-            // Queued until the agent is ready, like any room message.
+            None if matches!(input.provider, Provider::Cursor | Provider::Grok) => {}
             None => {
                 let master = input.room;
                 state

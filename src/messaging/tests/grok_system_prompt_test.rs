@@ -95,7 +95,7 @@ Keep this line.
     assert!(message.ends_with(&prompt));
     let bootstrap = flat(message.strip_suffix(&prompt).unwrap());
     assert!(bootstrap.contains("for the rest of this session"));
-    assert!(bootstrap.contains("reply briefly that you are ready"));
+    assert!(!bootstrap.contains("reply briefly that you are ready"));
     assert!(bootstrap.contains("Do not dispatch or replay worker tasks during this bootstrap"));
 }
 

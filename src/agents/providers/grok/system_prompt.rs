@@ -19,6 +19,6 @@ pub(crate) fn prompt_args(_path: &Path, _adopted: bool) -> Result<Option<Vec<Str
 
 pub(crate) fn prompt_message(text: &str) -> String {
     format!(
-        "Bus: these are your Grok orchestrator instructions. Follow them for the rest of this session, then reply briefly that you are ready. Do not dispatch or replay worker tasks during this bootstrap. If this session already has work in progress, retain its context and reconcile durable Bus state when work continues.\n\n{text}"
+        "Bus: these are your Grok orchestrator instructions. Follow them for the rest of this session. Do not dispatch or replay worker tasks during this bootstrap. If this session already has work in progress, retain its context and reconcile durable Bus state when work continues.\n\n{text}"
     )
 }

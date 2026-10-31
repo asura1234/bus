@@ -1,47 +1,43 @@
 use super::*;
 
 #[test]
-fn grok_worker_bootstrap_uses_worker_instructions_without_orchestrator_guide() {
-    let (worker, agent, room, dir, _) = fixture(Provider::Grok, vec![]);
-    let mut state = worker.state.clone();
-    let hooks = crate::agents::providers::hook_json::HookContext {
-        binary: dir.join("bus"),
-        spool: dir.join("callbacks/worker-bootstrap"),
-        launch_id: "worker-bootstrap".into(),
-    };
-    std::fs::create_dir_all(&hooks.spool).unwrap();
-    let input = AddAgent {
-        room,
-        name: "author".into(),
-        provider: Provider::Grok,
-        cwd: dir.to_string_lossy().into_owned(),
-        extra_args: String::new(),
-        consent_project_hooks: true,
-    };
-    let mut prepared = launch::PreparedLaunch {
-        cwd: dir.clone(),
-        args: Vec::new(),
-        adopted_session: None,
-        env: std::collections::HashMap::new(),
-    };
-    worker
-        .prepare_agent_prompt(&input, agent, &mut state, None, &mut prepared, &hooks)
-        .unwrap();
-    let request = state.request(state.queued_requests(agent)[0]).unwrap();
-    assert!(request.prompt.text.contains("Bus"));
-    assert!(!request
-        .prompt
-        .text
-        .contains("Grok orchestrator instructions"));
-    assert!(!request
-        .prompt
-        .text
-        .contains("## Authored room instructions"));
-    let prompt = std::fs::read_to_string(hooks.spool.join("system-prompt.md")).unwrap();
-    assert!(!prompt.contains("Grok orchestrator instructions"));
-    assert!(!prompt.contains("## Authored room instructions"));
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
+fn cursor_and_grok_worker_bootstraps_stay_out_of_room_history() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let (worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let mut state = worker.state.clone();
+        let hooks = crate::agents::providers::hook_json::HookContext {
+            binary: dir.join("bus"),
+            spool: dir.join("callbacks/worker-bootstrap"),
+            launch_id: "worker-bootstrap".into(),
+        };
+        std::fs::create_dir_all(&hooks.spool).unwrap();
+        let input = AddAgent {
+            room,
+            name: "author".into(),
+            provider,
+            cwd: dir.to_string_lossy().into_owned(),
+            extra_args: String::new(),
+            consent_project_hooks: true,
+        };
+        let mut prepared = launch::PreparedLaunch {
+            cwd: dir.clone(),
+            args: Vec::new(),
+            adopted_session: None,
+            env: std::collections::HashMap::new(),
+        };
+        worker
+            .prepare_agent_prompt(&input, agent, &mut state, None, &mut prepared, &hooks)
+            .unwrap();
+        assert!(state.queued_requests(agent).is_empty());
+        assert_eq!(state.requests().count(), 0);
+        assert_eq!(state.notices(room).count(), 0);
+        let prompt = std::fs::read_to_string(hooks.spool.join("system-prompt.md")).unwrap();
+        assert!(prompt.contains("Bus messaging"));
+        assert!(!prompt.contains("Grok orchestrator instructions"));
+        assert!(!prompt.contains("## Authored room instructions"));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[derive(Default)]
@@ -1523,11 +1519,28 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
             .find(|a| a.name == "bootstrap")
             .unwrap()
             .id;
-        let prompt = worker.state.queued_requests(agent)[0];
-        assert_eq!(
-            worker.state.request(prompt).unwrap().prompt.author,
-            Author::Developer
-        );
+        let prompt = worker.state.queued_requests(agent).first().copied();
+        if provider == Provider::Codex {
+            assert_eq!(
+                worker.state.request(prompt.unwrap()).unwrap().prompt.author,
+                Author::Developer
+            );
+        } else {
+            assert!(prompt.is_none());
+        }
+        let launch = worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .runtime_identity
+            .launch_id
+            .clone()
+            .unwrap();
+        let prompt_path = dir
+            .join("callbacks")
+            .join(launch)
+            .join(orchestrator::PROMPT_FILE);
+        let prompt_text = std::fs::read_to_string(&prompt_path).unwrap();
         let send = queue(&mut worker, room, agent, "sender-authored work");
         worker
             .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
@@ -1535,20 +1548,29 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
         let late = queue(&mut worker, room, agent, "new send after startup failure");
         drop(worker);
         let worker = reopen_saved(&dir);
-        let generated = worker.state.request(prompt).unwrap().clone();
+        let generated = prompt.map(|id| worker.state.request(id).unwrap().clone());
         let queued = worker.state.queued_requests(agent).to_vec();
         let sends: Vec<_> = [send, late]
             .into_iter()
             .map(|id| worker.state.request(id).unwrap().clone())
             .collect();
+        assert_eq!(std::fs::read_to_string(&prompt_path).unwrap(), prompt_text);
+        assert!(!prompt_path
+            .with_file_name("launch-prompt-attempted")
+            .exists());
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
-        assert_eq!(
-            generated.phase,
-            RequestPhase::Queued,
-            "{provider:?}: generated first turn must survive startup failure"
-        );
-        assert_eq!(queued, vec![prompt]);
+        match generated {
+            Some(generated) => {
+                assert_eq!(
+                    generated.phase,
+                    RequestPhase::Queued,
+                    "{provider:?}: generated first turn must survive startup failure"
+                );
+                assert_eq!(queued, vec![prompt.unwrap()]);
+            }
+            None => assert!(queued.is_empty()),
+        }
         for send in sends {
             assert_eq!(send.phase, RequestPhase::Abandoned);
             assert_eq!(send.failure_reason.as_deref(), Some("agent_startup_failed"));
