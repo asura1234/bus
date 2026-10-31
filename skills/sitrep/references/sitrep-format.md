@@ -14,7 +14,7 @@ The other arrays contain objects with exactly these keys:
 - `deferred`: `name`, `tldr`, `context`.
 
 A finished `pr` is merge evidence and nothing else. It is exactly
-`merged [#N title](url)` for a PR merged in the window, or `landed` plus the
+`merged [#N title](https://example.com/pr/N)` for a PR merged in the window, or `landed` plus the
 40-hex SHA of a commit that landed on the default branch in the window. The
 renderer rejects any other finished `pr`, including an open link, `not opened
 yet`, or text that the work is ready, approved, gate-green, or waiting to

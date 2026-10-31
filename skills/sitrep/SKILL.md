@@ -45,7 +45,7 @@ it in the report. For other hosts or any failed query, note the limitation.
 Reconcile current room notes, workflow, recent history, Git and host evidence.
 Use the guide's evidence and status rules. Finished lists only work actually
 merged or landed after since and no later than cutoff: a merged PR as
-`merged [#N title](url)`, or a commit that landed on the default branch as
+`merged [#N title](https://example.com/pr/N)`, or a commit that landed on the default branch as
 `landed` plus its 40-hex SHA. Ready, approved, gate-green, and waiting-to-merge
 items stay under Ongoing with their real status. If nothing merged or landed,
 finished is `[]`, which renders exactly `None`, with no "none merged, but..."
