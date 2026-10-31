@@ -1519,11 +1519,28 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
             .find(|a| a.name == "bootstrap")
             .unwrap()
             .id;
-        let prompt = worker.state.queued_requests(agent)[0];
-        assert_eq!(
-            worker.state.request(prompt).unwrap().prompt.author,
-            Author::Developer
-        );
+        let prompt = worker.state.queued_requests(agent).first().copied();
+        if provider == Provider::Codex {
+            assert_eq!(
+                worker.state.request(prompt.unwrap()).unwrap().prompt.author,
+                Author::Developer
+            );
+        } else {
+            assert!(prompt.is_none());
+        }
+        let launch = worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .runtime_identity
+            .launch_id
+            .clone()
+            .unwrap();
+        let prompt_path = dir
+            .join("callbacks")
+            .join(launch)
+            .join(orchestrator::PROMPT_FILE);
+        let prompt_text = std::fs::read_to_string(&prompt_path).unwrap();
         let send = queue(&mut worker, room, agent, "sender-authored work");
         worker
             .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
@@ -1531,20 +1548,29 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
         let late = queue(&mut worker, room, agent, "new send after startup failure");
         drop(worker);
         let worker = reopen_saved(&dir);
-        let generated = worker.state.request(prompt).unwrap().clone();
+        let generated = prompt.map(|id| worker.state.request(id).unwrap().clone());
         let queued = worker.state.queued_requests(agent).to_vec();
         let sends: Vec<_> = [send, late]
             .into_iter()
             .map(|id| worker.state.request(id).unwrap().clone())
             .collect();
+        assert_eq!(std::fs::read_to_string(&prompt_path).unwrap(), prompt_text);
+        assert!(!prompt_path
+            .with_file_name("launch-prompt-attempted")
+            .exists());
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
-        assert_eq!(
-            generated.phase,
-            RequestPhase::Queued,
-            "{provider:?}: generated first turn must survive startup failure"
-        );
-        assert_eq!(queued, vec![prompt]);
+        match generated {
+            Some(generated) => {
+                assert_eq!(
+                    generated.phase,
+                    RequestPhase::Queued,
+                    "{provider:?}: generated first turn must survive startup failure"
+                );
+                assert_eq!(queued, vec![prompt.unwrap()]);
+            }
+            None => assert!(queued.is_empty()),
+        }
         for send in sends {
             assert_eq!(send.phase, RequestPhase::Abandoned);
             assert_eq!(send.failure_reason.as_deref(), Some("agent_startup_failed"));
