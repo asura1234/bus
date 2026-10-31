@@ -3,7 +3,10 @@ use super::io::PaneRuntimeIo;
 use bytes::Bytes;
 use std::{
     io,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -11,7 +14,6 @@ use std::{
 /// pauses. Every key/text/paste sent by the TUI resets this pane-local clock.
 pub(crate) const DRAFT_QUIET_WINDOW: Duration = Duration::from_secs(3);
 
-#[derive(Default)]
 pub(super) struct DraftInput {
     last_key: Option<Instant>,
     buffered: Option<Vec<u8>>,
@@ -19,6 +21,23 @@ pub(super) struct DraftInput {
     pending: Option<PendingPaste>,
     working_started: Option<Instant>,
     completed_turn: Option<(Instant, Instant)>,
+    // Shared with the runtime launch window. AtomicBool's Default is false,
+    // which would hide the placeholder, so this Default starts it true.
+    launch_window: Arc<AtomicBool>,
+}
+
+impl Default for DraftInput {
+    fn default() -> Self {
+        Self {
+            last_key: None,
+            buffered: None,
+            revision: 0,
+            pending: None,
+            working_started: None,
+            completed_turn: None,
+            launch_window: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 /// Lives with the PTY, across client/coordinator reconnects, never a new PTY.
@@ -40,6 +59,16 @@ pub(super) struct DraftInputLease {
 }
 
 impl DraftInput {
+    pub(super) fn shared_with_launch_window() -> (SharedDraftInput, Arc<AtomicBool>) {
+        let state = SharedDraftInput::default();
+        let launch_window = state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .launch_window
+            .clone();
+        (state, launch_window)
+    }
+
     pub(super) fn send(
         state: &SharedDraftInput,
         io: &PaneRuntimeIo,
@@ -47,12 +76,17 @@ impl DraftInput {
     ) -> Result<(), tokio::sync::mpsc::error::TrySendError<Bytes>> {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         // A full channel returns the bytes. They never reached the pane, so
-        // they must not start the quiet window or cancel a launch placeholder.
+        // they must not start the quiet window. A buffer-only Ok does not
+        // close the launch window; only a queued write does.
         let result = if let Some(buffered) = &mut state.buffered {
             buffered.extend_from_slice(&bytes);
             Ok(())
         } else {
-            io.try_send_bytes(bytes)
+            let result = io.try_send_bytes(bytes);
+            if result.is_ok() {
+                state.launch_window.store(false, Ordering::Release);
+            }
+            result
         };
         if result.is_ok() {
             state.last_key = Some(io.submission_clock().now());
@@ -219,6 +253,7 @@ impl Drop for DraftInputLease {
         );
         match result {
             Ok(completion) => {
+                state.launch_window.store(false, Ordering::Release);
                 let _ = completion.into_receiver();
             }
             Err(error) => {

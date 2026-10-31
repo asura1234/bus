@@ -1,5 +1,7 @@
 use super::*;
 use crate::terminal::runtime::draft_input::{DraftInput, DRAFT_QUIET_WINDOW};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 const MESSAGE: &[u8] = b"BUS_PAYLOAD";
@@ -262,10 +264,136 @@ async fn draft_lease_replays_buffered_events_in_order_before_later_developer_inp
     lease.restored();
     drop(lease);
     assert_eq!(next(&mut writes).await.as_ref(), b"abc\x1b[D");
+    assert!(
+        !runtime
+            .startup_suggestion_open
+            .load(std::sync::atomic::Ordering::Acquire),
+        "replaying buffered bytes onto the pane closes the launch window"
+    );
     runtime
         .try_send_developer_bytes(Bytes::from_static(b"!"))
         .unwrap();
     assert_eq!(next(&mut writes).await.as_ref(), b"!");
+}
+
+struct PlaceholderInspector;
+
+impl SubmissionInspector for PlaceholderInspector {
+    fn observe(&self, screen: &str) -> InputObservation {
+        self.observe_with_launch(screen, None, false)
+    }
+
+    fn observe_with_launch(
+        &self,
+        screen: &str,
+        _cursor: Option<(u16, u16)>,
+        pristine: bool,
+    ) -> InputObservation {
+        if screen.contains("from bus") {
+            InputObservation::Accepted
+        } else if pristine && screen.contains("Try \"fix typecheck errors\"") {
+            InputObservation::Empty
+        } else {
+            InputObservation::Other
+        }
+    }
+}
+
+fn paint_try_quote(runtime: &TerminalRuntime) {
+    let rule = "─".repeat(20);
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    runtime.test_process_pty_bytes(
+        format!("{rule}\r\n❯\u{a0}Try \"fix typecheck errors\"").as_bytes(),
+    );
+    runtime.test_process_pty_bytes(b"\x1b[2;3H");
+}
+
+async fn paste_prompt(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+) -> (Vec<Bytes>, std::io::Result<()>) {
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(b"from bus"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01")],
+            Duration::ZERO,
+            Some(std::time::Instant::now() + Duration::from_secs(4)),
+            Box::new(PlaceholderInspector),
+        )
+        .unwrap();
+    let result = completion
+        .recv_timeout(Duration::from_secs(6))
+        .unwrap_or_else(|error| Err(std::io::Error::other(error)));
+    let mut queued = Vec::new();
+    while let Ok(bytes) = writes.try_recv() {
+        queued.push(bytes);
+    }
+    (queued, result)
+}
+
+struct RestoreBusDataDir(Option<std::ffi::OsString>);
+
+impl Drop for RestoreBusDataDir {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(value) => std::env::set_var("BUS_DATA_DIR", value),
+            None => std::env::remove_var("BUS_DATA_DIR"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn buffered_developer_byte_discarded_by_the_lease_keeps_the_placeholder_deliverable() {
+    let root = crate::utils::test_temp::unique_temp_path("lease-window");
+    std::fs::create_dir_all(&root).unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(80, 12, 8);
+    paint_try_quote(&runtime);
+    let (queued, result) = paste_prompt(&runtime, &mut writes).await;
+    assert!(
+        queued.iter().any(|bytes| bytes.as_ref() == b"from bus"),
+        "control: untouched placeholder was not pasted: {queued:?} {result:?}"
+    );
+
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(80, 12, 8);
+    paint_try_quote(&runtime);
+    let lease = DraftInput::acquire(&runtime.draft_input, &runtime.io).unwrap();
+    runtime
+        .try_send_developer_bytes(Bytes::from_static(b"T"))
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "the byte must stay in the preservation buffer"
+    );
+    {
+        // recover_input writes under data_dir(). Hold the shared env lock only
+        // around that drop so a parallel test cannot redirect the recovery file
+        // onto the live Bus, and so this sleep does not block other tests.
+        let _env = crate::utils::test_env::mutex()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var_os("BUS_DATA_DIR");
+        std::env::set_var("BUS_DATA_DIR", &root);
+        let _restore = RestoreBusDataDir(previous);
+        drop(lease);
+    }
+    assert!(
+        writes.try_recv().is_err(),
+        "a lease that is not replay-safe must not write the buffered byte"
+    );
+    std::thread::sleep(DRAFT_QUIET_WINDOW + Duration::from_millis(200));
+    let open = runtime
+        .startup_suggestion_open
+        .load(std::sync::atomic::Ordering::Acquire);
+    let (queued, result) = paste_prompt(&runtime, &mut writes).await;
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        open && queued.iter().any(|bytes| bytes.as_ref() == b"from bus"),
+        "a developer byte that never reached the pane left the placeholder undeliverable: open={open} queued={queued:?} {result:?}"
+    );
 }
 
 #[tokio::test]

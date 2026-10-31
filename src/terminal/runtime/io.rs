@@ -193,14 +193,9 @@ impl TerminalRuntime {
         bytes: Bytes,
     ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         self.invalidate_shell_prompt();
-        let result = super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes);
-        if result.is_ok() {
-            // An Ok that only buffers for a preservation lease still counts:
-            // the bytes were accepted. A full channel leaves the placeholder
-            // deliverable because the screen did not change.
-            self.startup_suggestion_open.store(false, Ordering::Release);
-        }
-        result
+        // DraftInput closes the launch window when these bytes are queued,
+        // including a restored lease replay. A buffer-only Ok leaves it open.
+        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
     }
     pub(crate) fn try_send_developer_paste(
         &self,

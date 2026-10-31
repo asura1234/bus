@@ -804,6 +804,8 @@ impl TerminalRuntime {
             render_dirty.clone(),
         );
 
+        let (draft_input, startup_suggestion_open) =
+            super::draft_input::DraftInput::shared_with_launch_window();
         Ok(Self {
             pane_id,
             terminal,
@@ -815,7 +817,7 @@ impl TerminalRuntime {
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq,
             content_write_lock,
-            draft_input: Default::default(),
+            draft_input,
             #[cfg(test)]
             dialog_wait_test: Mutex::default(),
             detection_content_seq,
@@ -823,7 +825,7 @@ impl TerminalRuntime {
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_prompt_generation: Arc::new(AtomicU64::new(0)),
-            startup_suggestion_open: Arc::new(AtomicBool::new(true)),
+            startup_suggestion_open,
             launch_input_error: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             launch_input_submitted: Arc::new(AtomicBool::new(false)),
