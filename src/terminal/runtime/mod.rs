@@ -167,6 +167,12 @@ pub struct TerminalRuntime {
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_prompt_generation: Arc<AtomicU64>,
+    /// True until developer or API bytes are queued to this pane, or Bus
+    /// successfully pastes a prompt, since the last agent launch. A
+    /// preservation buffer that is never queued leaves it set. Dialog
+    /// automation, mouse, and focus do not clear it. A rejected send leaves
+    /// it set. Only then is Claude's `Try "..."` shape a placeholder.
+    startup_suggestion_open: Arc<AtomicBool>,
     launch_input_error: Arc<Mutex<Option<(String, bool)>>>,
     #[cfg(test)]
     launch_input_submitted: Arc<AtomicBool>,
@@ -233,6 +239,7 @@ impl TerminalRuntime {
     }
 
     pub(crate) fn mark_agent_launch(&self) {
+        self.startup_suggestion_open.store(true, Ordering::Release);
         self.invalidate_submission_ownership();
         self.launch_prompt_generation
             .store(self.shell_prompt_generation(), Ordering::Release);

@@ -201,6 +201,8 @@ impl TerminalRuntime {
             GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
         ));
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        let (draft_input, startup_suggestion_open) =
+            super::draft_input::DraftInput::shared_with_launch_window();
 
         (
             Self {
@@ -218,13 +220,14 @@ impl TerminalRuntime {
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
-                draft_input: Default::default(),
+                draft_input,
                 dialog_wait_test: Mutex::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
                 preserve_processes_on_drop: true,
                 shell_integration: None,
                 launch_prompt_generation: Arc::new(AtomicU64::new(0)),
+                startup_suggestion_open,
                 launch_input_error: Arc::new(Mutex::new(None)),
                 launch_input_submitted: Arc::new(AtomicBool::new(false)),
                 compression,

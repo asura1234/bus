@@ -185,13 +185,16 @@ impl PaneRuntimeIo {
 }
 
 impl TerminalRuntime {
-    /// Only developer key/text/paste events use this path; terminal replies,
-    /// focus reports and Bus automation do not count as typing.
+    /// Developer key/text/paste events, and pane or agent API input, use this
+    /// path. Terminal replies, focus reports, mouse, and Bus dialog automation
+    /// do not count as typing.
     pub(crate) fn try_send_developer_bytes(
         &self,
         bytes: Bytes,
     ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         self.invalidate_shell_prompt();
+        // DraftInput closes the launch window when these bytes are queued,
+        // including a restored lease replay. A buffer-only Ok leaves it open.
         super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
     }
     pub(crate) fn try_send_developer_paste(

@@ -35,8 +35,14 @@ impl PreservingComposer {
 }
 
 impl PreservingComposer {
-    fn choose(&self, screen: &str, allow_empty: bool) -> Option<DraftPreservation> {
-        let body = input(self.kind, screen)?;
+    fn choose(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        allow_empty: bool,
+        pristine: bool,
+    ) -> Option<DraftPreservation> {
+        let body = super::input_since_launch(self.kind, screen, cursor, pristine)?;
         if (body.is_empty() && !allow_empty) || self.keys.len() != 3 {
             return None;
         }
@@ -92,7 +98,18 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn observe(&self, screen: &str) -> InputObservation {
-        self.owned.observe(screen)
+        self.observe_with_launch(screen, None, false)
+    }
+    fn observe_with_cursor(&self, screen: &str, cursor: Option<(u16, u16)>) -> InputObservation {
+        self.observe_with_launch(screen, cursor, false)
+    }
+    fn observe_with_launch(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        pristine: bool,
+    ) -> InputObservation {
+        self.owned.observe_with_launch(screen, cursor, pristine)
     }
     fn clearing(&self, index: usize) {
         self.owned.clearing(index);
@@ -105,23 +122,32 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn draft_preservation(&self, screen: &str) -> Option<DraftPreservation> {
-        self.choose(screen, false)
+        self.draft_preservation_since_launch(screen, None, false)
     }
     fn draft_preservation_with_cursor(
         &self,
         screen: &str,
         cursor: Option<(u16, u16)>,
     ) -> Option<DraftPreservation> {
+        self.draft_preservation_since_launch(screen, cursor, false)
+    }
+    fn draft_preservation_since_launch(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        pristine: bool,
+    ) -> Option<DraftPreservation> {
         let invisible = invisible_content(self.kind, screen, cursor);
         if self.kind == AgentKind::Claude
             && !invisible
             && native_stash_present(screen)
-            && input(self.kind, screen).is_some_and(|body| body.is_empty())
+            && super::input_since_launch(self.kind, screen, cursor, pristine)
+                .is_some_and(|body| body.is_empty())
         {
             *self.native_draft.lock().ok()? = Some(NativeDraft::ExistingStash);
             return None;
         }
-        self.choose(screen, invisible)
+        self.choose(screen, cursor, invisible, pristine)
             .or_else(|| invisible.then_some(DraftPreservation::Hold))
     }
     fn native_stash_visible(&self, screen: &str) -> bool {
