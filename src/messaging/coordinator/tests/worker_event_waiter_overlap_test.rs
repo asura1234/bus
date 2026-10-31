@@ -1,10 +1,9 @@
 use super::*;
 
-/// A status read between coordinator ticks must materialize the stalled fact
-/// before returning the exact keys its author waiter will print and acknowledge.
-/// Once that waiter exits, expiry of its lease must not cause another wake.
+/// A status read returns the actual request stage with no stalled event to
+/// acknowledge, and expiry of the author waiter's lease causes no wake.
 #[test]
-fn stall_printed_by_the_author_waiter_does_not_wake_the_orchestrator_again() {
+fn delivered_status_has_no_stall_ack_or_orchestrator_wake() {
     let mut f = Fixture::new();
     let now = io::now_ms();
     let source = earlier_background_request_at(
@@ -12,7 +11,7 @@ fn stall_printed_by_the_author_waiter_does_not_wake_the_orchestrator_again() {
         false,
         now - crate::messaging::model::DELIVERED_STALL_MS - 5_000,
     );
-    // A tick before the stall threshold.
+    // A tick before the recovery deadline.
     let mut state = f.worker.state.clone();
     state.retain_worker_outcomes(now - 20_000);
     f.worker.save(state).unwrap();
@@ -22,7 +21,7 @@ fn stall_printed_by_the_author_waiter_does_not_wake_the_orchestrator_again() {
         json!({"message":message.0.to_string(),"as":f.orch.0.to_string()}),
     );
     let row = status.result["requests"][0].clone();
-    assert_eq!(row["stage"], "stalled", "the waiter exits on this stall");
+    assert_eq!(row["stage"], "delivered");
     let keys = row["event_acks"].clone();
     if !keys.as_array().unwrap().is_empty() {
         assert!(
@@ -38,7 +37,7 @@ fn stall_printed_by_the_author_waiter_does_not_wake_the_orchestrator_again() {
     let calls = f.calls.lock().unwrap();
     assert!(
         !calls.iter().any(|text| text.contains("No reply (stalled")),
-        "the stall the waiter already printed was delivered again: {calls:?}"
+        "a delivered status produced a stalled wake: {calls:?}"
     );
 }
 

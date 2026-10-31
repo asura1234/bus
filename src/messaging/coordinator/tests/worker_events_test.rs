@@ -1113,7 +1113,7 @@ fn continue_background_work(f: &mut Fixture, at: u64) {
 }
 
 #[test]
-fn one_stall_per_request_does_not_repost_after_work_resumes() {
+fn resumed_work_does_not_create_stall_outcomes() {
     let mut f = Fixture::new();
     let source = earlier_background_request(&mut f, false);
     let first_at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
@@ -1125,7 +1125,7 @@ fn one_stall_per_request_does_not_repost_after_work_resumes() {
         .filter(|(_, text)| text.contains("No reply (stalled:"))
         .map(|(key, _)| key)
         .collect();
-    assert_eq!(old.len(), 1);
+    assert!(old.is_empty());
     state
         .see_worker_outcomes(source, f.orch, &old, first_at)
         .unwrap();
@@ -1143,10 +1143,7 @@ fn one_stall_per_request_does_not_repost_after_work_resumes() {
         .filter(|(_, text)| text.contains("No reply (stalled:"))
         .map(|(key, _)| key)
         .collect();
-    assert!(
-        current.is_empty(),
-        "the same request posts one stall; a later episode is not a second notice: {current:?}"
-    );
+    assert!(current.is_empty());
     assert_eq!(state.request(source).unwrap().phase, RequestPhase::Active);
 }
 
