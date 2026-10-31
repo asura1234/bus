@@ -25,7 +25,7 @@ impl Worker {
                     .runtime_identity
                     .launch_id
                     .as_deref()
-                    .ok_or("Saved Grok launch identity is missing; no retry was sent")?;
+                    .ok_or("Saved provider launch identity is missing; no retry was sent")?;
                 let hooks = crate::agents::providers::hook_json::HookContext {
                     binary: std::env::current_exe().map_err(|e| e.to_string())?,
                     spool: self.data_dir.join("callbacks").join(launch_id),
@@ -40,7 +40,7 @@ impl Worker {
                     identity::provider_kind(agent.provider),
                     &env,
                 )?
-                .ok_or("Saved Grok executable is missing; no retry was sent")?;
+                .ok_or("Saved provider executable is missing; no retry was sent")?;
                 let grok_home = env.get("GROK_HOME").cloned();
                 let kimi_home = env.get("KIMI_CODE_HOME").cloned();
                 if agent.provider == Provider::Grok && grok_home.is_none()

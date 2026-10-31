@@ -33,13 +33,15 @@ The startup flag can precede `resume` or follow its selector.
 | Claude Code | `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | Codex | `--yolo` | `--yolo`, `--dangerously-bypass-approvals-and-sandbox` |
 | Cursor | `--force` | `--force`, `--yolo`, `-f` |
+| Kimi | `--yolo` | `--yolo`, `-y` |
 
 Evidence checked locally on 2026-10-16: Claude Code 2.1.301 `--help` describes
 `--dangerously-skip-permissions` as bypassing permission checks. Codex 0.163.0
 `--help` documents `--dangerously-bypass-approvals-and-sandbox`; its hidden
 `--yolo` alias is accepted by `codex --yolo --version`. Cursor
 2026.10.14-0f9edde `--help` documents `-f, --force` as allowing commands unless
-explicitly denied and `--yolo` as its alias.
+explicitly denied and `--yolo` as its alias. Kimi 2.4.0 accepts `--yolo` and
+`-y`; it rejects either alias combined with `--auto`, on both add and resume.
 
 The existing restriction on adding new Codex orchestrators still applies;
 saved Codex MASTER agents receive the bypass flag when resumed with `--yolo`.
@@ -62,10 +64,13 @@ worker permission dialogs are unchanged.
 
 Bus disables provider self-updates on fresh room launches and saved-session
 resumes: Codex gets `-c check_for_update_on_startup=false`, Cursor gets
-`--disable-auto-update`, and Claude gets `DISABLE_AUTOUPDATER=1` when that
-environment setting is absent. An explicit inherited Claude setting is retained;
-Claude user/project settings can override the inherited environment. Bus does
-not modify user configuration or the shared provider installation.
+`--disable-auto-update`, Claude gets `DISABLE_AUTOUPDATER=1` when that
+environment setting is absent, and Kimi's Bus-owned `tui.toml` gets
+`upgrade.auto_install = false`. An explicit inherited Claude setting is retained;
+Claude user/project settings can override the inherited environment. Kimi's
+private `tui.toml` also sets `cache_expiry_hint = false`; if its Cache expired
+chooser still appears, Bus exposes it as a dialog. Bus does not modify global
+user configuration or the shared provider installation.
 
 Update providers outside Bus after closing their panes. An update chooser
 remains blocked for an operator; Bus never selects “Update now”, interrupts an
@@ -83,6 +88,7 @@ For example:
 codex:  -c 'model_reasoning_effort="high"' --sandbox workspace-write --ask-for-approval on-request
 claude: --dangerously-skip-permissions --permission-mode bypassPermissions
 cursor: --yolo --force --sandbox disabled --approve-mcps
+kimi: --yolo --model k3 --output-format text
 ```
 
 Bus saves the original user tokens in the launch's `launch-options.json` and
@@ -92,8 +98,11 @@ already consumed its initial prompt and native session selector, so those one-ti
 sent again. Options after an initial prompt are retained. An unstarted launch
 retains all initial input. Unknown option arity preserves the remaining tokens
 without guessing which of them are values or one-time input.
-Bus separately supplies its capture arguments (`--no-daemon` for Codex and
-`--settings <capture-file>` for Claude) and the saved conversation selector.
+Bus separately supplies its capture arguments (`--no-daemon` for Codex,
+`--settings <capture-file>` for Claude, and a Bus-owned `--agent-file` for a new
+Kimi session) and the saved conversation selector. Exact Kimi resume uses
+`--session` and retains that agent file; its hooks, session files and cache
+setting live in an owner-only per-agent home, not the developer's global home.
 When the user supplies Codex `--no-daemon`, Bus omits its generated copy:
 Codex 0.162.0 rejects the same flag appearing twice.
 An explicit UUID resume selector can be normalized and reserved for ownership;
@@ -116,12 +125,15 @@ command/option position:
 | Claude | `-p`, `--print`, `--bg`, `--background` | Print mode exits; background mode returns immediately, leaving Bus without its interactive worker. |
 | Claude | `--bare`, `--safe-mode` | These explicitly disable hooks required for session ownership and request completion. |
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
+| Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, or positional input | These replace Bus's interactive prompt, agent file, session, or version/help ownership. |
+| Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this permission combination; Bus also rejects Bus `--yolo` with saved `--auto` on resume. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`
 and its `e` alias, plus `review`, noninteractive; `claude --help` (2.1.300)
 documents print-and-exit, background-and-return, and hooks disabled by bare/safe
 mode; `cursor-agent --help` (2026.10.14-0f9edde) documents print as noninteractive.
+Kimi 2.4.0 provides the session, agent-file and permission options described above.
 Bus's dependency is in `src/messaging/coordinator/agents.rs` (interactive
 `agent.start`), `src/agents/providers/hook_json.rs` (required observation events)
 and `src/messaging/coordinator/callbacks.rs` (SessionStart ownership attestation).
@@ -130,5 +142,8 @@ change hook behavior are still forwarded to the provider.
 
 Resume also verifies Bus's stored ownership, capture manifest and hooks before
 reattaching a managed worker. An unstarted Codex record containing a native
-session selector cannot be restored as a new empty conversation. These checks
-protect conversation identity; they do not filter the saved permission flags.
+session selector cannot be restored as a new empty conversation. An unstarted
+Kimi restore accepts Bus's exact `/usr/bin/env`, refresh-lock and private-home
+argv envelope, rejects native session selectors, and reconstructs the managed
+launch without inventing a session. These checks protect conversation identity;
+saved permission flags replay except for the documented incompatible combinations.
