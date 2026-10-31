@@ -1,13 +1,15 @@
-//! Edge-triggered idle-worker reminders, with episode state owned by the coordinator.
-use super::{BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
+//! Edge-triggered idle-worker reminders, with durable roster dedupe.
+use super::{Author, BusState, ModelError, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 use std::collections::BTreeSet;
 
-/// Preserve the original alert's definition of an idle worker.
+/// Preserve the original alert's minimum idle interval.
 pub(crate) const MIN_IDLE_FOR_ALERT_MS: u64 = 60_000;
+const STAFFING_GRACE_MS: u64 = 2 * MIN_IDLE_FOR_ALERT_MS;
+const IDLE_ALERT_ACTION: &str = ". Give them parallel work or delete the ones you no longer need (bus agent delete NAME --confirm).";
 
 impl BusState {
     /// Remind only a room's bound orchestrator on a strict crossing above the limit.
-    /// The caller keeps `alerted` in memory and commits it after saving any notices.
+    /// The caller keeps the crossing in memory; saved notices dedupe rosters across restarts.
     pub(crate) fn notify_idle_agents(
         &mut self,
         limit: u32,
@@ -31,7 +33,7 @@ impl BusState {
                 }
                 continue;
             }
-            let idle = self.idle_workers(room, |agent| finished(agent, now_ms));
+            let idle = self.idle_workers(room, |agent| self.finished(agent, now_ms));
             if idle.len() <= limit as usize {
                 continue;
             }
@@ -39,16 +41,19 @@ impl BusState {
             let Some(orchestrator) = self.notice_orchestrator(room, None) else {
                 continue;
             };
+            alerted.insert(room);
+            if self.idle_alerted_before(room, &idle) {
+                continue;
+            }
             let text = format!(
-                "{} agents in room {} are idle (limit {}): {}. Give them parallel work \
-                 or delete the ones you no longer need (bus agent delete NAME --confirm).",
+                "{} agents in room {} are idle (limit {}): {}{}",
                 idle.len(),
                 room.0,
                 limit,
-                idle.join(", ")
+                idle.join(", "),
+                IDLE_ALERT_ACTION
             );
             self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
-            alerted.insert(room);
             changed = true;
         }
         Ok(changed)
@@ -69,11 +74,40 @@ impl BusState {
             .map(|agent| self.agent_message_label(agent.id))
             .collect()
     }
+
+    fn finished(&self, agent: &RoomAgent, now_ms: u64) -> bool {
+        if agent.shown_status() != RuntimeStatus::Idle
+            || now_ms.saturating_sub(agent.status_since_ms) < STAFFING_GRACE_MS
+        {
+            return false;
+        }
+        let last = self
+            .requests()
+            .filter(|request| request.agent_id == agent.id)
+            .last();
+        last.is_none_or(|request| {
+            request.failure_reason.as_deref() != Some("reply_not_captured")
+                && now_ms.saturating_sub(request.prompt.submitted_at_ms) >= STAFFING_GRACE_MS
+        })
+    }
+
+    fn idle_alerted_before(&self, room: RoomId, idle: &[String]) -> bool {
+        let idle = idle.iter().cloned().collect::<BTreeSet<_>>();
+        self.requests().any(|request| {
+            request.room_id == room
+                && request.prompt.author == Author::Bus
+                && idle_alert_names(&request.prompt.text).is_some_and(|names| names == idle)
+        })
+    }
 }
 
-fn finished(agent: &RoomAgent, now_ms: u64) -> bool {
-    agent.shown_status() == RuntimeStatus::Idle
-        && now_ms.saturating_sub(agent.status_since_ms) >= MIN_IDLE_FOR_ALERT_MS
+fn idle_alert_names(text: &str) -> Option<BTreeSet<String>> {
+    let head = text.strip_suffix(IDLE_ALERT_ACTION)?;
+    if !head.contains(" agents in room ") || !head.contains(" are idle (limit ") {
+        return None;
+    }
+    let (_, names) = head.rsplit_once(": ")?;
+    Some(names.split(", ").map(str::to_owned).collect())
 }
 
 fn may_be_idle(agent: &RoomAgent) -> bool {

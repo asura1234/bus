@@ -96,7 +96,39 @@ fn observe(worker: &mut Worker, agents: &[AgentId], status: RuntimeStatus, ago_m
 }
 
 fn idle(worker: &mut Worker, agents: &[AgentId]) {
-    observe(worker, agents, RuntimeStatus::Idle, MIN_IDLE_FOR_ALERT_MS);
+    observe(
+        worker,
+        agents,
+        RuntimeStatus::Idle,
+        2 * MIN_IDLE_FOR_ALERT_MS,
+    );
+}
+
+fn staff(worker: &mut Worker, agent: AgentId, ago_ms: u64, failure: Option<&str>) {
+    let at = io::now_ms().saturating_sub(ago_ms);
+    let room = worker.state.agent(agent).unwrap().room_id;
+    let mut state = worker.state.clone();
+    let request = state
+        .submit_message_from(
+            room,
+            crate::messaging::model::Draft {
+                text: "staffed work".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            at,
+        )
+        .unwrap()[0];
+    state.finish_for_test(request, "done", at);
+    if let Some(reason) = failure {
+        let mut value = serde_json::to_value(&state).unwrap();
+        value["requests"][request.0.to_string()]["phase"] = json!("abandoned");
+        value["requests"][request.0.to_string()]["completed_reply"] = json!(null);
+        value["requests"][request.0.to_string()]["failure_reason"] = json!(reason);
+        state = serde_json::from_value(value).unwrap();
+    }
+    worker.save(state).unwrap();
 }
 
 fn alerts(worker: &Worker, room: RoomId) -> Vec<crate::messaging::model::Prompt> {
@@ -188,36 +220,41 @@ fn crossing_default_limit_fires_once_with_actionable_text_only_to_the_orchestrat
 }
 
 #[test]
-fn falling_to_the_limit_or_below_rearms_the_next_crossing() {
-    let mut r = setup(true, 3);
+fn falling_to_the_limit_rearms_only_for_a_changed_roster() {
+    let mut r = setup(true, 4);
     limit(&mut r.worker, 2);
-    idle(&mut r.worker, &r.workers);
+    observe(&mut r.worker, &r.workers[3..], RuntimeStatus::Working, 0);
+    idle(&mut r.worker, &r.workers[..3]);
     refresh(&mut r.worker);
     assert_eq!(alerts(&r.worker, r.room).len(), 1);
-    observe(&mut r.worker, &r.workers[2..], RuntimeStatus::Working, 0);
+    observe(&mut r.worker, &r.workers[2..3], RuntimeStatus::Working, 0);
     refresh(&mut r.worker);
     assert!(!r.worker.idle_alerted_rooms.contains(&r.room));
-    idle(&mut r.worker, &r.workers[2..]);
+    idle(&mut r.worker, &r.workers[2..3]);
     refresh(&mut r.worker);
-    assert_eq!(alerts(&r.worker, r.room).len(), 2);
+    assert_eq!(
+        alerts(&r.worker, r.room).len(),
+        1,
+        "the same names do not alert twice"
+    );
     observe(&mut r.worker, &r.workers, RuntimeStatus::Working, 0);
     refresh(&mut r.worker);
     idle(&mut r.worker, &r.workers);
     refresh(&mut r.worker);
-    assert_eq!(alerts(&r.worker, r.room).len(), 3);
+    assert_eq!(alerts(&r.worker, r.room).len(), 2);
     cleanup(r);
 }
 
 #[test]
-fn limit_changes_preserve_an_over_limit_episode_and_rearm_when_count_is_within_limit() {
+fn limit_changes_preserve_an_over_limit_episode_without_repeating_a_roster() {
     let mut r = setup(true, 4);
     idle(&mut r.worker, &r.workers);
     let (events, receiver) = mpsc::channel();
-    for (value, count) in [(3, 1), (2, 1), (1, 1), (4, 1), (3, 2)] {
+    for value in [3, 2, 1, 4, 3] {
         r.worker
             .command(BusCommand::SetIdleAgentsAlert(value), &events)
             .unwrap();
-        assert_eq!(alerts(&r.worker, r.room).len(), count);
+        assert_eq!(alerts(&r.worker, r.room).len(), 1);
         assert_eq!(
             settings::load(r.worker.settings_path.as_ref().unwrap())
                 .unwrap()
@@ -244,7 +281,7 @@ fn limit_changes_preserve_an_over_limit_episode_and_rearm_when_count_is_within_l
     refresh(&mut r.worker);
     limit(&mut r.worker, 2);
     refresh(&mut r.worker);
-    assert_eq!(alerts(&r.worker, r.room).len(), 3);
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
     cleanup(r);
 }
 
@@ -273,7 +310,7 @@ fn deleting_the_bound_orchestrator_does_not_fall_back_to_the_developer() {
 }
 
 #[test]
-fn idle_alert_episodes_are_per_room_and_in_memory_only() {
+fn idle_alert_episodes_are_per_room_and_survive_restart() {
     let mut r = setup(true, 2);
     limit(&mut r.worker, 1);
     let mut state = r.worker.state.clone();
@@ -313,7 +350,7 @@ fn idle_alert_episodes_are_per_room_and_in_memory_only() {
     refresh(&mut r.worker);
     idle(&mut r.worker, &r.workers);
     refresh(&mut r.worker);
-    assert_eq!(alerts(&r.worker, r.room).len(), 2);
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
     assert_eq!(alerts(&r.worker, other).len(), 1);
     let saved = std::fs::read_to_string(r.dir.join("state.json")).unwrap();
     assert!(!saved.contains("idle_alert"));
@@ -323,9 +360,10 @@ fn idle_alert_episodes_are_per_room_and_in_memory_only() {
     refresh(&mut r.worker);
     assert_eq!(
         alerts(&r.worker, r.room).len(),
-        3,
-        "restart starts fresh episodes"
+        1,
+        "the durable roster suppresses a post-restart duplicate"
     );
+    assert!(r.worker.idle_alerted_rooms.contains(&r.room));
     cleanup(r);
 }
 
@@ -398,7 +436,7 @@ fn only_idle_workers_without_an_open_or_queued_message_count() {
         &mut r.worker,
         &[w[1]],
         RuntimeStatus::Idle,
-        MIN_IDLE_FOR_ALERT_MS,
+        2 * MIN_IDLE_FOR_ALERT_MS,
     );
     refresh(&mut r.worker);
     let posted = alerts(&r.worker, r.room);
@@ -425,21 +463,51 @@ fn the_orchestrator_never_counts_as_an_idle_agent() {
 }
 
 #[test]
-fn an_agent_counts_only_after_sixty_seconds_continuously_idle() {
+fn a_new_agent_counts_only_after_two_minutes_continuously_idle() {
     assert_eq!(MIN_IDLE_FOR_ALERT_MS, 60_000);
     let mut r = setup(true, 2);
     limit(&mut r.worker, 1);
     let w = r.workers.clone();
-    observe(&mut r.worker, &w, RuntimeStatus::Idle, 59_000);
+    observe(&mut r.worker, &w, RuntimeStatus::Idle, 119_000);
     refresh(&mut r.worker);
     assert!(
         alerts(&r.worker, r.room).is_empty(),
-        "59 s idle does not count"
+        "the two-minute creation grace suppresses the alert"
     );
     observe(&mut r.worker, &w, RuntimeStatus::Working, 0);
-    observe(&mut r.worker, &w, RuntimeStatus::Idle, 60_000);
+    observe(&mut r.worker, &w, RuntimeStatus::Idle, 120_000);
     refresh(&mut r.worker);
-    assert_eq!(alerts(&r.worker, r.room).len(), 1, "60 s idle counts");
+    assert_eq!(alerts(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+#[test]
+fn staffing_in_the_last_two_minutes_does_not_count_as_spare() {
+    let mut r = setup(true, 3);
+    limit(&mut r.worker, 2);
+    idle(&mut r.worker, &r.workers);
+    staff(&mut r.worker, r.workers[2], 0, None);
+    refresh(&mut r.worker);
+    assert!(alerts(&r.worker, r.room).is_empty());
+    cleanup(r);
+}
+
+#[test]
+fn a_reply_not_captured_agent_does_not_count_as_spare() {
+    let mut r = setup(true, 4);
+    limit(&mut r.worker, 2);
+    idle(&mut r.worker, &r.workers);
+    staff(
+        &mut r.worker,
+        r.workers[3],
+        180_000,
+        Some("reply_not_captured"),
+    );
+    refresh(&mut r.worker);
+    let posted = alerts(&r.worker, r.room);
+    assert_eq!(posted.len(), 1);
+    assert!(posted[0].text.starts_with("3 agents in room"));
+    assert!(!posted[0].text.contains("w3"));
     cleanup(r);
 }
 
