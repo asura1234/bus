@@ -30,10 +30,11 @@ impl BusState {
             && self.assigned_copy_at(request, None).is_some()
     }
 
-    /// The worker posted its own result after this request closed with no
+    /// The worker posted its own answer after this request closed with no
     /// captured reply. That send replaces `reply_not_captured`. A message from
-    /// before the close, and one owned by another request's captured reply,
-    /// does not.
+    /// before the close, a status line, and one owned by another request's
+    /// captured reply do not. A closed request cannot take `--reply-to`, so
+    /// the ordinary send is the delivery when it is actually the answer.
     pub(super) fn explicit_fallback_after_close(&self, request: &Request) -> bool {
         let Some(completed) = request.completed_at_ms else {
             return false;
@@ -49,6 +50,7 @@ impl BusState {
             .iter()
             .any(|(at, text)| {
                 (completed..=end).contains(at)
+                    && !is_status_line(text)
                     && !self.claimed_by_captured_reply(request, text, *at)
                     && self.fallback_owner(request, *at) == Some(request.id)
             })
@@ -389,6 +391,14 @@ fn is_wrapper(text: &str) -> bool {
         || text.starts_with("Turn final")
         || text.starts_with("Reply to message")
         || text.starts_with("Restarted ")
+}
+
+/// Narration of the turn is not the answer. The communication guide names
+/// "still working" as that kind of post, so it must leave the no-reply in place.
+fn is_status_line(text: &str) -> bool {
+    text.trim()
+        .to_ascii_lowercase()
+        .starts_with("still working")
 }
 
 fn same_result_text(stored: &str, text: &str) -> bool {

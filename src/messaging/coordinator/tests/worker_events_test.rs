@@ -1973,5 +1973,45 @@ fn explicit_send_withdraws_a_queued_long_turn_final() {
     );
 }
 
+#[test]
+fn post_close_unrelated_message_does_not_hide_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Still working on a different request.".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+        "an unrelated post-close message is not this request's result: {notices:?}"
+    );
+}
+
 #[path = "worker_event_waiter_overlap_test.rs"]
 mod waiter_overlap;
