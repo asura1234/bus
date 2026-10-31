@@ -386,18 +386,16 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   prove the long paste. Mark every unrun cell explicitly.
 
 - [ ] Busy-then-idle delivery. A turn, a tool, or a background row is busy even
-  when Bus status says idle. On this master, `osc_title_idle` matches a bare
-  `grok` title and has no `Queued`, still-running, or suggestion exclusion, so
-  that title can win over those frames. Busy frames to record include Grok
+  when Bus status says idle. A bare `grok` title does not win over `Queued`,
+  still-running, or suggestion frames. Busy frames to record include Grok
   `[stop]`, `◎ … still running`, `◎ waiting · send a message to interrupt`,
   `Queued N` or `N queued` with N at least 1, and Kimi `[N tasks running]`,
   `Running a command`, or `Working…` (Kimi only when `agent add --help` lists
   `kimi`). Bus must submit the message or keep it queued, and must not leave
-  its text in the composer. After #237 merges, a `Queued N` prompt is accepted:
-  wait for that turn, and closing it as `reply_not_captured` fails. A
-  suggestion ghost (`Tab/→:accept suggestion`) is not a draft. Do not
-  Tab-accept it. `prompt_not_shown` on that ghost fails. Until that merge, do
-  not treat those two pass rules as current. After the busy work ends, deliver
+  its text in the composer. A `Queued N` prompt is accepted: wait for that
+  turn, and closing it as `reply_not_captured` fails. A suggestion ghost
+  (`Tab/→:accept suggestion`) is not a draft. Do not Tab-accept it.
+  `prompt_not_shown` on that ghost fails. After the busy work ends, deliver
   a second marker. `prompt_not_shown` until a person clears the box fails.
   `composer_busy` against an empty composer means a preserved `draft-*.txt`
   from a failed editor handoff. That reason starts no queued stall clock, so a
@@ -471,8 +469,8 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   alongside it. If the provider's format cannot be unambiguously extracted,
   stop and ask for a verified procedure rather than substituting a preview.
 - [ ] Interrupt, then deliver. Start a long turn and run
-  `sbus agent interrupt AGENT`, without Bus `--yolo`. On this master that
-  command sends Esc for Claude, Codex, and Grok, and Ctrl+C for Cursor. On
+  `sbus agent interrupt AGENT`, without Bus `--yolo`. That command sends Esc
+  for Claude and Codex, and Ctrl+C for Cursor and Grok (`Ctrl+c:cancel`). On
   success, interrupt `outcome` is `stopped`. Read `sbus message status
   MESSAGE_ID` (`ok: true`). When no final was captured before the stop, expect
   `complete: true`, `requests[].stage` `abandoned`, `reason` `interrupted`,
@@ -481,11 +479,9 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   `Waiting for response…` can put Bus's own prompt back in the idle composer,
   and the next delivery is `NotSubmitted`. Withdraw that owned text before
   sending. Deliver a new marker and require `stage: replied` with no draft
-  left behind. Interrupt `outcome` is not the output of `sbus stop`. After
-  #237 merges, Grok's cancel key is Ctrl+C (`Ctrl+c:cancel`), and Esc leaving
-  the turn running (`outcome` `failed`, "still working 15s after esc") is not
-  a pass. Until that merge, do not score the cell as if Bus already sent
-  Ctrl+C.
+  left behind. Interrupt `outcome` is not the output of `sbus stop`. Esc
+  leaving the turn running (`outcome` `failed`, "still working 15s after esc")
+  is not a pass.
 - [ ] Run the fixture filters below with `just test-one FILTER`. Each one is a
   cargo nextest run and follows the slot, disk, and clean-first rules above.
   Do not edit a live transcript or session file to manufacture a negative case.
@@ -601,15 +597,11 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   must be supplied again on relaunch. Record the generated provider flag and
   check routine work; an attach with a different Bus yolo setting is refused.
   Also run one worker with neither Bus `--yolo` nor the provider's
-  skip-permissions flag. On this master the approval-card parser requires a
-  `◆ ` header. Grok 1.0.70's tool-approval card (a selected `●`, a trailing
-  `┃`, footer `Ctrl+c:cancel`, no `◆` header) is not returned by
-  `sbus agent dialog`. `dialog` false on that card is current parser
-  behaviour. Do not press Enter. Yes is a permission decision. After #237
-  merges, that card must be returned by `sbus agent dialog` with status
-  blocked, and `dialog` false while it is up fails. Choose only an authorized
-  option with a fresh fingerprint. Until that merge, do not fail the cell for
-  the missing header.
+  skip-permissions flag. Grok 1.0.70's tool-approval card (a selected `●`, a
+  trailing `┃`, footer `Ctrl+c:cancel`, no `◆` header) is returned by
+  `sbus agent dialog` with status blocked. `dialog` false while it is up
+  fails. Do not press Enter. Yes is a permission decision. Choose only an
+  authorized option with a fresh fingerprint.
 - [ ] `git -C "$scratch/project" status --short` may list `?? .codex/` and
   `?? .cursor/` after a consented Codex or Cursor add (`.codex/hooks.json` and
   `.cursor/hooks.json`). Grok writes `.grok/hooks/bus.json` and
@@ -750,34 +742,28 @@ idle then deliver, and an approval card without `--yolo`.
   mid-turn. A ghost line `Tab/→:accept suggestion` also abandoned as
   `prompt_not_shown`. Cause: Bus treated `[stop]`, `◎ … still running`,
   `Queued N`, and the suggestion ghost as an empty idle composer and typed
-  into it. On this master, `osc_title_idle` still matches a bare `grok` title
-  and has no `Queued`, still-running, or suggestion rule, so that idle title
-  wins over those frames. Test: busy-then-idle delivery. After #237 merges,
-  those markers mean working: a `Queued N` prompt (N at least 1) is accepted
-  (wait; do not close `reply_not_captured`), and the ghost is not a draft
-  (do not Tab-accept it). Until that merge, do not score those two pass rules
-  as current. If submit is unconfirmed, Bus must withdraw its own text. The
-  next idle send must not be `prompt_not_shown`.
+  into it. A bare `grok` title does not win over `Queued`, still-running, or
+  suggestion frames. Test: busy-then-idle delivery. Those markers mean
+  working: a `Queued N` prompt (N at least 1) is accepted (wait; do not close
+  `reply_not_captured`), and the ghost is not a draft (do not Tab-accept it).
+  If submit is unconfirmed, Bus must withdraw its own text. The next idle
+  send must not be `prompt_not_shown`.
 - **2026-10-31 — Grok interrupt:** Symptom: `interrupt_failed`, "still working
   15s after esc". The live 1.0.70 cancel hint is Ctrl+C, and Esc left the turn
   running. A Ctrl+C typed on `Waiting for response…` can also drop `[stop]`
   and put the Bus prompt back in the composer, so the next delivery is
-  `NotSubmitted`. On this master, `sbus agent interrupt` still sends Esc for
-  Grok, the same as Claude and Codex. Cursor is Ctrl+C. Test:
-  interrupt-then-deliver, without `--yolo`, and record the key Bus actually
-  sent. After #237 merges, the rule is: stop with Ctrl+C, read the composer,
-  withdraw Bus's own restored text, then require `stage: replied`. An Esc
-  failure is not a pass. Until that merge, do not treat Ctrl+C as the key
-  Bus sends.
+  `NotSubmitted`. `sbus agent interrupt` sends Ctrl+C for Grok. Esc is the
+  key for Claude and Codex. Cursor is Ctrl+C. Test: interrupt-then-deliver,
+  without `--yolo`, and record the key Bus actually sent. The rule is: stop
+  with Ctrl+C, read the composer, withdraw Bus's own restored text, then
+  require `stage: replied`. An Esc failure is not a pass.
 - **2026-10-31 — Grok approval card:** Symptom: a worker without
   `--always-approve` sat on the tool-approval card, `agent dialog` was null,
   and no reply was sent. Cause: the card has a selected `●`, a trailing `┃`,
-  and `Ctrl+c:cancel`, and no `◆` header. On this master the parser requires
-  a `◆ ` header, so that card is not a dialog. Test: approval card without
+  and `Ctrl+c:cancel`, and no `◆` header. Test: approval card without
   Bus `--yolo` and without the provider skip-permissions flag. Do not press
-  Enter. Yes is a permission decision. After #237 merges, the card must be a
-  blocked dialog. Until that merge, `dialog` false on the no-`◆` card is
-  current behaviour, not a failed cell.
+  Enter. Yes is a permission decision. The card is a blocked dialog.
+  `dialog` false while it is up fails.
 - **2026-10-31 — Claude `Try "..."` placeholder:** Symptom: `composer_busy` on
   a fresh Claude Code 2.1.309 worker, so no agent-to-agent message arrived. One
   manual key was required, and the welcome ghost survived a key plus a
