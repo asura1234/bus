@@ -92,12 +92,10 @@ pub fn reveal_path(path: &std::path::Path) -> std::io::Result<Option<std::proces
 
 pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     if running_inside_wsl() {
-        if let Some(image) =
-            read_wsl_clipboard_image_with_command(
-                |program| crate::utils::env::command_on_path(program),
-                max_bytes,
-            )
-        {
+        if let Some(image) = read_wsl_clipboard_image_with_command(
+            |program| crate::utils::env::command_on_path(program),
+            max_bytes,
+        ) {
             return Some(image);
         }
     }

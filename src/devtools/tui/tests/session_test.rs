@@ -374,7 +374,10 @@ fn reap_session_tree_kills_dir_holders_and_the_recorded_pid_only() {
     reap_session_tree(&paths.dir, "tok", None, Some(recorded.id()));
     assert!(!holder.wait().unwrap().success(), "holder survived");
     assert!(!recorded.wait().unwrap().success(), "recorded pid survived");
-    assert!(process_alive(bystander.id()), "unrelated process was signaled");
+    assert!(
+        process_alive(bystander.id()),
+        "unrelated process was signaled"
+    );
     let _ = bystander.kill();
     let _ = bystander.wait();
     let _ = std::fs::remove_dir_all(&root);
@@ -417,7 +420,10 @@ fn watcher_reaps_when_the_observed_process_exits() {
     let _ = observer.kill();
     let _ = observer.wait();
     handle.join().unwrap();
-    assert!(!victim.wait().unwrap().success(), "victim survived the watcher");
+    assert!(
+        !victim.wait().unwrap().success(),
+        "victim survived the watcher"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

@@ -331,10 +331,9 @@ fn a_panic_kills_only_that_threads_scratch_process() {
 fn stop_kills_processes_left_after_the_host_dies() {
     let session = Session::start("reap");
     let dir = session_dir(&session.0);
-    let claim: Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("bus-tui-session")).expect("claim"),
-    )
-    .expect("claim json");
+    let claim: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("bus-tui-session")).expect("claim"))
+            .expect("claim json");
     let token = claim["token"].as_str().expect("token").to_owned();
     let info: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.join("session.json")).expect("session info"),
@@ -921,7 +920,9 @@ fn stop_from_the_work_dir_keeps_a_relative_run_dir() {
     let caller = caller.canonicalize().unwrap();
     let started = bus(&session.0)
         .current_dir(&caller)
-        .args(["--dev", "tui", "start", "--name", &session.0, "--size", "80x24"])
+        .args([
+            "--dev", "tui", "start", "--name", &session.0, "--size", "80x24",
+        ])
         .args(["--run-dir", "runs"])
         .output()
         .unwrap();

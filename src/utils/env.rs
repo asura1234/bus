@@ -47,7 +47,9 @@ pub(crate) fn command_on_path(program: impl AsRef<std::ffi::OsStr>) -> std::proc
         return std::process::Command::new(resolved);
     }
     if path_override_active() {
-        return std::process::Command::new(std::env::temp_dir().join("bus-path-miss").join(program));
+        return std::process::Command::new(
+            std::env::temp_dir().join("bus-path-miss").join(program),
+        );
     }
     std::process::Command::new(program)
 }
