@@ -7,7 +7,7 @@ use super::super::{
 };
 use crate::messaging::{
     coordinator::{agents::AddAgent, BusCommand},
-    model::{RoomId, RoomKind},
+    model::{ModelError, RoomId, RoomKind},
     orchestration::OrchestratorSpec,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -54,7 +54,7 @@ impl BusUi {
     pub(super) fn start_rename(&mut self, target: RenameTarget) {
         let error = match target {
             RenameTarget::Room(id) if self.is_master_room(id) => {
-                Some("The MASTER room is fixed".into())
+                Some(ModelError::MasterRoomFixed.to_string())
             }
             _ => None,
         };

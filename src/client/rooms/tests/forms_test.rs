@@ -200,7 +200,10 @@ fn quick_stepper_presses_survive_the_echo_of_an_earlier_press() {
         })
     };
     ui.receive_event(echo(29));
-    assert_eq!(ui.settings.sidebar_width, 31, "the first echo must not undo later presses");
+    assert_eq!(
+        ui.settings.sidebar_width, 31,
+        "the first echo must not undo later presses"
+    );
     assert!(ui.settings.color_blind_mode, "other fields still arrive");
     assert!(room_screen(&mut ui, 120, 40).contains("‹ 31 ›"));
     // Once every press is answered, the echo is the truth again.
@@ -620,13 +623,17 @@ fn pwd_tab_moves_the_suggestion_highlight_and_enter_takes_the_path_without_addin
         });
         ui.receive_event(BusEvent::Suggestions {
             query_id: ui.suggestions.query_id,
-            result: Ok(["/projects/frontend", "/projects/framework", "/projects/fresh"]
-                .into_iter()
-                .map(|path| PathSuggestion {
-                    path: path.into(),
-                    is_directory: true,
-                })
-                .collect()),
+            result: Ok([
+                "/projects/frontend",
+                "/projects/framework",
+                "/projects/fresh",
+            ]
+            .into_iter()
+            .map(|path| PathSuggestion {
+                path: path.into(),
+                is_directory: true,
+            })
+            .collect()),
         });
         let added_cwd = |ui: &BusUi| {
             ui.pending.iter().find_map(|p| match &p.command {
@@ -636,7 +643,8 @@ fn pwd_tab_moves_the_suggestion_highlight_and_enter_takes_the_path_without_addin
                 _ => None,
             })
         };
-        let cwd_text = |ui: &mut BusUi| ui.form.as_mut().unwrap().editor_mut().unwrap().text.clone();
+        let cwd_text =
+            |ui: &mut BusUi| ui.form.as_mut().unwrap().editor_mut().unwrap().text.clone();
         let field = |ui: &BusUi| match &ui.form {
             Some(forms::Form::Agent { field, .. }) => *field,
             _ => usize::MAX,
@@ -661,7 +669,11 @@ fn pwd_tab_moves_the_suggestion_highlight_and_enter_takes_the_path_without_addin
         assert_eq!(cwd_text(&mut ui), "/projects/fresh/");
         assert!(ui.suggestions.entries.is_empty());
         assert_eq!(field(&ui), 2);
-        assert_eq!(added_cwd(&ui), None, "Enter on a suggestion must not add the agent");
+        assert_eq!(
+            added_cwd(&ui),
+            None,
+            "Enter on a suggestion must not add the agent"
+        );
 
         // With the list closed, Tab moves fields and Enter adds as before.
         key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
@@ -699,10 +711,13 @@ fn ctrl_enter_confirms_the_typed_pwd_even_with_directory_suggestions_open() {
 
         key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
 
-        let submitted = ui.pending.iter().find_map(|pending| match &pending.command {
-            BusCommand::AddAgent(input) => Some((input.room, input.cwd.as_str())),
-            _ => None,
-        });
+        let submitted = ui
+            .pending
+            .iter()
+            .find_map(|pending| match &pending.command {
+                BusCommand::AddAgent(input) => Some((input.room, input.cwd.as_str())),
+                _ => None,
+            });
         assert_eq!(
             submitted,
             Some((room, "/projects/")),
@@ -727,13 +742,17 @@ fn master_pwd_suggestions_are_visible_before_enter_completes_at_120x40() {
     }
     ui.receive_event(BusEvent::Suggestions {
         query_id: ui.suggestions.query_id,
-        result: Ok(["/projects/frontend", "/projects/framework", "/projects/fresh"]
-            .into_iter()
-            .map(|path| crate::agents::providers::suggest::PathSuggestion {
-                path: path.into(),
-                is_directory: true,
-            })
-            .collect()),
+        result: Ok([
+            "/projects/frontend",
+            "/projects/framework",
+            "/projects/fresh",
+        ]
+        .into_iter()
+        .map(|path| crate::agents::providers::suggest::PathSuggestion {
+            path: path.into(),
+            is_directory: true,
+        })
+        .collect()),
     });
     for error in [None, Some("PWD must be a directory".to_owned())] {
         ui.error = error;
@@ -744,13 +763,23 @@ fn master_pwd_suggestions_are_visible_before_enter_completes_at_120x40() {
         key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
         let screen = room_screen(&mut ui, 120, 40);
         let selected = ui.suggestions.selected;
-        assert!(screen.contains(&format!("{}/", ui.suggestions.entries[selected].path.display())), "{screen}");
+        assert!(
+            screen.contains(&format!(
+                "{}/",
+                ui.suggestions.entries[selected].path.display()
+            )),
+            "{screen}"
+        );
     }
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(matches!(&ui.form, Some(forms::Form::Agent { cwd, field: 2, .. })
-        if cwd.text == "/projects/fresh/"));
-    assert!(!ui.pending.iter().any(|p| matches!(p.command,
-        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..))));
+    assert!(
+        matches!(&ui.form, Some(forms::Form::Agent { cwd, field: 2, .. })
+        if cwd.text == "/projects/fresh/")
+    );
+    assert!(!ui.pending.iter().any(|p| matches!(
+        p.command,
+        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+    )));
     assert_ne!(master, room);
 }
 
@@ -776,4 +805,121 @@ fn enter_uses_typed_pwd_when_the_suggestion_list_does_not_fit() {
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.pending.iter().any(|p| matches!(&p.command,
         BusCommand::AddAgent(input) if input.cwd == "/projects")));
+}
+
+fn form_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
+    ui.compute_view(cols, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+    ui.render(&mut buffer);
+    (0..rows)
+        .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn provider_menu_stays_below_validation_errors_and_before_pwd() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Add);
+    ui.action(render::Action::Field(1));
+    form_rows(&mut ui, 100, 30);
+    let model = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Field(1))
+        .unwrap()
+        .rect;
+    let pwd = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Field(2))
+        .unwrap()
+        .rect;
+    for provider in [
+        Provider::Codex,
+        Provider::ClaudeCode,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        let rect = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::Provider(provider))
+            .unwrap()
+            .rect;
+        assert!(!model.intersects(rect), "{provider:?} covers Model");
+        assert!(!pwd.intersects(rect), "{provider:?} covers PWD");
+    }
+}
+
+#[test]
+fn async_pwd_rejection_is_inline_and_logged_once() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::Codex));
+    if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
+        *name = editor::Editor::new("worker".into());
+        *cwd = editor::Editor::new("/definitely/missing".into());
+    }
+    ui.action(render::Action::Add);
+    let id = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(pending.command, BusCommand::AddAgent(_)))
+        .unwrap()
+        .id;
+    let preceding: Vec<_> = ui
+        .pending
+        .iter()
+        .filter(|pending| pending.id < id)
+        .map(|pending| pending.id)
+        .collect();
+    let error = "Agent PWD does not exist";
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        for command_id in preceding {
+            ui.receive_event(BusEvent::CommandFinished {
+                command_id,
+                result: Ok(()),
+            });
+        }
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: id,
+            result: Err(error.into()),
+        });
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot.last_command_id = id;
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+        ui.settle();
+    });
+    assert_eq!(ui.form_errors.get(&2).map(String::as_str), Some(error));
+    assert!(ui.error.is_none());
+    let logs = capture.text();
+    assert_eq!(logs.matches("bus.command.failed").count(), 1, "{logs}");
+    assert_eq!(logs.matches(error).count(), 1, "{logs}");
+    assert!(logs.contains(&format!("command_id={id}")), "{logs}");
+}
+
+#[test]
+fn suggestion_failure_is_logged_without_a_form_error_dialog() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        ui.receive_event(BusEvent::Suggestions {
+            query_id: ui.suggestions.query_id,
+            result: Err("directory unreadable".into()),
+        });
+    });
+    assert!(
+        capture.text().contains("directory unreadable"),
+        "{}",
+        capture.text()
+    );
+    assert!(!room_screen(&mut ui, 100, 30).contains("OK (Enter)"));
 }

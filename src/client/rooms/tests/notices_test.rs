@@ -63,3 +63,33 @@ fn storage_pause_is_a_persistent_sidebar_marker_and_recovery_is_silent() {
     assert!(!screen.contains("Storage paused"), "{screen}");
     assert!(!screen.contains("Storage recovered"), "{screen}");
 }
+
+#[test]
+fn storage_marker_survives_quit_notices() {
+    let (mut ui, _, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.error = Some("Storage paused; retrying".into());
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.request_quit();
+    ui.quitting = Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
+    ui.tick_quit(std::time::Instant::now());
+    assert!(room_screen(&mut ui, 100, 30).contains("Storage paused"));
+    ui.force_exit_until = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    ui.tick_quit(std::time::Instant::now());
+    assert!(room_screen(&mut ui, 100, 30).contains("Storage paused"));
+}
+
+#[test]
+fn storage_marker_is_not_overwritten_by_sidebar_scrolling() {
+    let (mut ui, _, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.error = Some("Storage paused; retrying".into());
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.sidebar_scroll = 1;
+    let screen = room_screen(&mut ui, 100, 10);
+    assert_eq!(ui.sidebar_scroll, 1, "the fixture must really scroll");
+    assert!(screen.contains("Storage paused"), "{screen}");
+    assert!(!screen.contains("ROOMSge paused"), "{screen}");
+}

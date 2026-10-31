@@ -464,7 +464,9 @@ fn master_room_rename_error_stays_beside_the_name_field() {
     ui.open_room(master);
     key(&mut ui, KeyCode::F(2), KeyModifiers::NONE);
     assert!(ui.rename.is_some());
-    assert!(room_screen(&mut ui, 100, 30).contains("The MASTER room is fixed"));
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(screen.contains("The MASTER room cannot be"), "{screen}");
+    assert!(screen.contains("renamed or deleted"), "{screen}");
     assert!(!ui
         .pending
         .iter()
@@ -1040,6 +1042,16 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     assert_eq!(
         ui.form_errors.get(&1).map(String::as_str),
         Some(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED)
+    );
+    let screen = room_screen(&mut ui, 120, 40);
+    assert!(screen.contains("does not start"), "{screen}");
+    assert!(
+        screen.contains("a new turn when a background command exits"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("Claude Code or Cursor as the orchestrator"),
+        "{screen}"
     );
     assert!(
         matches!(ui.form, Some(forms::Form::Agent { .. })),

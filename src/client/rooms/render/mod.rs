@@ -38,7 +38,6 @@ pub(super) enum Action {
     Delete(DeleteTarget),
     CancelDelete,
     ConfirmDelete,
-    DismissAlert,
     Room(crate::messaging::model::RoomId),
     Agent(crate::messaging::model::AgentId),
     NewRoom,

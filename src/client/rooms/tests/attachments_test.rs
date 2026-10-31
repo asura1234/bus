@@ -11,7 +11,12 @@ fn composer_full_height_long_file_details_stay_readable() {
     snapshot.state.attach_file(room, path.clone()).unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     let chip = chip_at(&mut ui, &path);
-    mouse(&mut ui, crossterm::event::MouseEventKind::Moved, chip.0, chip.1);
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Moved,
+        chip.0,
+        chip.1,
+    );
     assert!(room_screen(&mut ui, 100, 30).contains("required-detail-tail.md"));
 }
 
@@ -296,16 +301,29 @@ fn attaching_from_inside_a_live_bus_pane_leaves_that_bus_untouched() {
         .unwrap();
     let written: Vec<_> = walk(&live);
     std::fs::remove_dir_all(&live).unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-    assert!(written.is_empty(), "wrote into the inherited Bus: {written:?}");
+    assert!(
+        written.is_empty(),
+        "wrote into the inherited Bus: {written:?}"
+    );
 }
 
 fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     std::fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .flat_map(|path| if path.is_dir() { walk(&path) } else { vec![path] })
+        .flat_map(|path| {
+            if path.is_dir() {
+                walk(&path)
+            } else {
+                vec![path]
+            }
+        })
         .collect()
 }
 
@@ -340,41 +358,52 @@ fn paste(ui: &mut BusUi, text: &str) {
     );
 }
 
-/// Refused: nothing is attached, and a dialog names the file and the decode
-/// error until Enter dismisses it.
-fn assert_refused_with_dialog(ui: &mut BusUi, name: &str) {
-    assert_eq!(attached_paths(ui), Vec::<String>::new(), "a corrupt image is not attached");
-    let screen = room_screen(ui, 100, 30);
-    assert!(
-        screen.contains(&format!("Could not attach \"{name}\"")),
-        "the dialog names the refused file: {screen}"
+/// Refused: the decode error is logged without interrupting the room.
+fn assert_refused_log_only(ui: &mut BusUi, name: &str) {
+    assert_eq!(
+        attached_paths(ui),
+        Vec::<String>::new(),
+        "a corrupt image is not attached"
     );
-    assert!(screen.contains("not a readable image"), "the dialog says why: {screen}");
-    assert!(screen.contains("OK (Enter)"), "the dialog can be dismissed: {screen}");
-    key(ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.visible_error().is_none());
     let screen = room_screen(ui, 100, 30);
-    assert!(!screen.contains("Could not attach"), "Enter dismisses the dialog");
-    assert_eq!(attached_paths(ui), Vec::<String>::new(), "dismissing attaches nothing");
+    assert!(!screen.contains("Could not attach"), "no dialog: {screen}");
+    assert!(
+        !screen.contains("not a readable image"),
+        "no dialog: {screen}"
+    );
+    assert!(
+        !screen.contains(name),
+        "the failed path is log-only: {screen}"
+    );
+    assert_eq!(
+        attached_paths(ui),
+        Vec::<String>::new(),
+        "nothing is attached"
+    );
 }
 
 #[test]
-fn corrupt_image_dropped_into_the_composer_is_refused_with_a_dialog() {
+fn corrupt_image_dropped_into_the_composer_is_logged_without_a_dialog() {
     let dir = thumbnail_dir("drop-corrupt");
     let path = corrupt_png(&dir, "damaged drop.png");
     let (mut ui, _, _) = fixture();
     // Terminals deliver a drop as a paste of the shell-escaped path.
-    paste(&mut ui, &format!("{} ", path.display().to_string().replace(' ', "\\ ")));
-    assert_refused_with_dialog(&mut ui, "damaged drop.png");
+    paste(
+        &mut ui,
+        &format!("{} ", path.display().to_string().replace(' ', "\\ ")),
+    );
+    assert_refused_log_only(&mut ui, "damaged drop.png");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn corrupt_image_path_pasted_into_the_composer_is_refused_with_a_dialog() {
+fn corrupt_image_path_pasted_into_the_composer_is_logged_without_a_dialog() {
     let dir = thumbnail_dir("paste-corrupt");
     let path = corrupt_png(&dir, "damaged.png");
     let (mut ui, _, _) = fixture();
     paste(&mut ui, &path.display().to_string());
-    assert_refused_with_dialog(&mut ui, "damaged.png");
+    assert_refused_log_only(&mut ui, "damaged.png");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -387,13 +416,22 @@ fn corrupt_pasted_image_data_is_logged_without_a_dialog_and_never_saved() {
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| ui.attach_image_data(Some(root.clone()), &bytes, "png"));
     assert_eq!(attached_paths(&ui), Vec::<String>::new());
-    assert!(ui.alert.is_none());
     assert!(ui.visible_error().is_none());
-    assert!(capture.text().contains("bus.attach.image_refused"), "{}", capture.text());
+    assert!(
+        capture.text().contains("bus.attach.image_refused"),
+        "{}",
+        capture.text()
+    );
     let screen = room_screen(&mut ui, 100, 30);
-    assert!(!screen.contains("Could not attach the clipboard image"), "{screen}");
+    assert!(
+        !screen.contains("Could not attach the clipboard image"),
+        "{screen}"
+    );
     assert!(!screen.contains("not a readable image"), "{screen}");
-    assert!(!root.join("attachments").exists(), "a corrupt paste leaves no file behind");
+    assert!(
+        !root.join("attachments").exists(),
+        "a corrupt paste leaves no file behind"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -406,7 +444,10 @@ fn valid_images_attach_by_drop_pasted_path_and_pasted_data_as_before() {
     std::fs::write(&notes, "not an image").unwrap();
     let root = dir.join("data");
     let (mut ui, _, _) = fixture();
-    paste(&mut ui, &format!("{} ", dropped.display().to_string().replace(' ', "\\ ")));
+    paste(
+        &mut ui,
+        &format!("{} ", dropped.display().to_string().replace(' ', "\\ ")),
+    );
     paste(&mut ui, &pasted.display().to_string());
     paste(&mut ui, &notes.display().to_string());
     ui.attach_image_data(Some(root.clone()), &std::fs::read(&pasted).unwrap(), "png");
@@ -417,7 +458,11 @@ fn valid_images_attach_by_drop_pasted_path_and_pasted_data_as_before() {
     for (path, source) in attached.iter().zip([&dropped, &pasted]) {
         assert_eq!(std::fs::read(path).unwrap(), std::fs::read(source).unwrap());
     }
-    assert_eq!(attached[2], notes.display().to_string(), "non-image files are unaffected");
+    assert_eq!(
+        attached[2],
+        notes.display().to_string(),
+        "non-image files are unaffected"
+    );
     assert!(std::path::Path::new(&attached[3]).starts_with(root.join("attachments")));
     assert!(!room_screen(&mut ui, 100, 30).contains("Could not attach"));
     std::fs::remove_dir_all(&dir).unwrap();

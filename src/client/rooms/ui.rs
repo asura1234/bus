@@ -29,7 +29,6 @@ pub(super) struct ViewKey {
     pub terminal: Option<AgentId>,
     pub form: Option<std::mem::Discriminant<super::forms::Form>>,
     pub deletion: bool,
-    pub alert: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -80,7 +79,6 @@ pub(in crate::client) struct BusUi {
     pub(super) terminal_navigation: u64,
     pub(super) form: Option<Form>,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
-    pub(super) alert: Option<super::alert::Alert>,
     pub(super) rename: Option<Rename>,
     pub(super) notes_focus: bool,
     pub(super) recipient_menu: bool,
@@ -197,7 +195,6 @@ impl BusUi {
             terminal_navigation: 0,
             form: None,
             deletion: None,
-            alert: None,
             rename: None,
             notes_focus: false,
             recipient_menu: false,
@@ -441,7 +438,10 @@ impl BusUi {
                         self.suggestions.entries = entries;
                         self.suggestions.selected = 0;
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => {
+                        tracing::warn!(event = "bus.suggestions.failed", %error);
+                        self.error = Some(error);
+                    }
                 }
             }
             BusEvent::SetupRequired {
@@ -465,15 +465,11 @@ impl BusUi {
             .snapshot
             .error
             .as_deref()
-            .is_some_and(|error| error.starts_with("Storage paused;"))
+            .is_some_and(storage_paused_error)
         {
             self.dismissed_snapshot_error = self.snapshot.error.clone();
         }
-        if self
-            .error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("Storage paused;"))
-        {
+        if self.error.as_deref().is_some_and(storage_paused_error) {
             self.error = None;
         }
         let failed = std::mem::take(&mut self.failed);
@@ -574,9 +570,23 @@ impl BusUi {
                                 | Effect::Recipients(..)
                                 | Effect::Files(..)
                         ) && super::deletion::target_exists(&pending.command, &self.snapshot.state);
+                    tracing::warn!(
+                        event = "bus.command.failed",
+                        command_id = pending.id,
+                        command = crate::messaging::perf::command_name(&pending.command),
+                        %error,
+                    );
                     // Only a command that is retried hides its rejection.
                     if !(recovered && keep) {
                         self.error = Some(error.clone());
+                        if matches!(
+                            pending.command,
+                            BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+                        ) && error.contains("PWD")
+                        {
+                            self.form_errors.insert(2, error.clone());
+                            self.error = None;
+                        }
                     }
                     self.send_intent = None;
                     if keep {
@@ -766,11 +776,12 @@ impl BusUi {
     }
 }
 
+pub(super) fn storage_paused_error(error: &str) -> bool {
+    error.starts_with("Storage paused;")
+}
+
 pub(super) fn storage_paused(pending: &Pending) -> bool {
-    matches!(
-        pending.result.as_ref(),
-        Some(Err(error)) if error.starts_with("Storage paused;")
-    )
+    matches!(pending.result.as_ref(), Some(Err(error)) if storage_paused_error(error))
 }
 
 #[cfg(test)]

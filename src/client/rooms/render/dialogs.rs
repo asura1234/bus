@@ -85,22 +85,6 @@ impl BusUi {
         );
     }
 
-    pub(super) fn alert_view(&self, view: &mut View, area: Rect) {
-        let Some(alert) = &self.alert else {
-            return;
-        };
-        let text_width = dialog_text_width(area);
-        let body = wrap(&alert.message, text_width);
-        let (x, y) = dialog_frame(view, area, alert.title.clone(), body);
-        view.row(
-            Rect::new(x, y, text_width.min(10), 1),
-            "OK (Enter)",
-            Some(Action::DismissAlert),
-            false,
-            false,
-        );
-    }
-
     pub(super) fn form_view(&self, view: &mut View, main: Rect, form: &Form) {
         let x = main.x + 3;
         let width = main.width.saturating_sub(6);
@@ -208,6 +192,7 @@ impl BusUi {
             cwd,
             args,
             field,
+            orchestrates,
             ..
         } = form
         else {
@@ -248,8 +233,12 @@ impl BusUi {
                 );
             }
             if let Some(error) = self.form_errors.get(&index) {
-                view.row(Rect::new(x, y + 1, width, 1), error, None, false, false);
-                y += 1;
+                let height = wrap(error, width).len() as u16;
+                view.lines(Rect::new(x, y + 1, width, height), error, None, false);
+                y += height;
+            }
+            if index == 1 && *field == 1 {
+                y += super::super::forms::provider_choices(orchestrates.is_some()).len() as u16;
             }
             y += gap;
         }
@@ -302,8 +291,9 @@ impl BusUi {
                 .form_errors
                 .get(&super::super::forms::ORCHESTRATES_FIELD)
             {
-                view.row(Rect::new(x, y + 1, width, 1), error, None, false, false);
-                y += 1;
+                let height = wrap(error, width).len() as u16;
+                view.lines(Rect::new(x, y + 1, width, height), error, None, false);
+                y += height;
             }
             y += gap;
         }
@@ -333,8 +323,9 @@ impl BusUi {
             );
             y += height + 1;
             if let Some(error) = error {
-                view.row(Rect::new(x, y, width, 1), error, None, false, false);
-                y += 1;
+                let height = wrap(error, width).len() as u16;
+                view.lines(Rect::new(x, y, width, height), error, None, false);
+                y += height;
             }
         }
 
@@ -363,10 +354,7 @@ impl BusUi {
             false,
         );
         y += 2;
-        if let Some(error) = self
-            .visible_error()
-            .filter(|_| !matches!(form, Form::Agent { .. }))
-        {
+        if let Some(error) = self.visible_error().filter(|_| self.form_errors.is_empty()) {
             view.lines(Rect::new(x, y, width, 3), error, None, false);
             y += 4;
         }
@@ -402,8 +390,17 @@ impl BusUi {
             ..
         } = form
         {
-            // Below the Agent field's value row.
-            let top = 6 + agent_form_gap(main, form);
+            // Below the Agent field's value row and any wrapped validation errors.
+            let top = 6
+                + agent_form_gap(main, form)
+                + self
+                    .form_errors
+                    .get(&0)
+                    .map_or(0, |error| wrap(error, width).len() as u16)
+                + self
+                    .form_errors
+                    .get(&1)
+                    .map_or(0, |error| wrap(error, width).len() as u16);
             for (index, kind) in super::super::forms::provider_choices(orchestrates.is_some())
                 .iter()
                 .copied()

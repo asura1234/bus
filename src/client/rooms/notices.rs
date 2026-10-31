@@ -41,7 +41,11 @@ impl BusUi {
     pub(super) fn storage_is_paused(&self) -> bool {
         self.error
             .as_deref()
-            .or(self.snapshot.error.as_deref())
-            .is_some_and(|error| error.starts_with("Storage paused;"))
+            .is_some_and(super::storage_paused_error)
+            || self
+                .snapshot
+                .error
+                .as_deref()
+                .is_some_and(super::storage_paused_error)
     }
 }

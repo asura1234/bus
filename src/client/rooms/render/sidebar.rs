@@ -250,7 +250,6 @@ impl BusUi {
             terminal: self.terminal,
             form: self.form.as_ref().map(std::mem::discriminant),
             deletion: self.deletion.is_some(),
-            alert: self.alert.is_some(),
         };
         if self
             .view_key
@@ -282,9 +281,6 @@ impl BusUi {
         if self.deletion.is_some() {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
         }
-        if self.alert.is_some() {
-            self.alert_view(&mut view, Rect::new(0, 0, cols, rows));
-        }
         // Kitty images draw above text, so hide them under forms, dialogs,
         // agent terminals, and the inline rename field.
         if view.dialog.width > 0
@@ -304,8 +300,13 @@ impl BusUi {
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
         let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
+        let rename_error_rows = self
+            .rename
+            .as_ref()
+            .and_then(|rename| rename.error.as_deref())
+            .map_or(0, |error| wrap(error, sw).len().saturating_sub(1));
         let master_header_rows = if self.snapshot.state.master_room().is_some() {
-            MASTER_SECTION_ROWS - 1
+            MASTER_SECTION_ROWS - 1 + rename_error_rows
         } else {
             0
         };
@@ -338,21 +339,22 @@ impl BusUi {
             offset,
             visible_end,
         };
-        let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
+        let rooms_header =
+            sidebar_rooms_header(&self.snapshot.state, self.room) + rename_error_rows;
         let work_rooms = rooms
             .iter()
             .filter(|room| room.kind == RoomKind::Work)
             .count();
         let divider_row = rooms_header + 2 + work_rooms;
         let agents_header = divider_row + 1;
+        self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
+        view.sidebar_divider = viewport.at(1, divider_row, sw);
+        self.sidebar_agent_rows(view, viewport, agents, agents_header);
         if self.storage_is_paused() {
             let marker = Rect::new(1, 0, sw, 1);
             view.row(marker, "Storage paused", None, false, false);
             view.color_last_row(marker, BLOCKED_BRIGHT);
         }
-        self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
-        view.sidebar_divider = viewport.at(1, divider_row, sw);
-        self.sidebar_agent_rows(view, viewport, agents, agents_header);
         self.sidebar_footer(view, rows);
     }
 
@@ -457,7 +459,16 @@ impl BusUi {
             {
                 view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
                 if let Some(error) = &rename.error {
-                    view.row(viewport.at(1, row + 1, sw), error, None, false, false);
+                    let height = wrap(error, sw).len() as u16;
+                    view.lines(
+                        Rect {
+                            height,
+                            ..viewport.at(1, row + 1, sw)
+                        },
+                        error,
+                        None,
+                        false,
+                    );
                 }
             } else {
                 view.row(

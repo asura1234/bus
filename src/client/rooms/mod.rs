@@ -1,5 +1,3 @@
-#[path = "dialogs/alert.rs"]
-mod alert;
 mod chat_search;
 #[path = "dialogs/deletion.rs"]
 mod deletion;
@@ -190,7 +188,7 @@ impl crate::client::compositor::ClientShellState {
         &mut self,
         pane_id: &str,
         navigation: u64,
-        error: String,
+        _error: String,
     ) -> bool {
         let Some(bus) = self.bus.as_mut().filter(|bus| {
             bus.terminal.is_some()
@@ -200,7 +198,6 @@ impl crate::client::compositor::ClientShellState {
             return false;
         };
         bus.target_pane = None;
-        tracing::warn!(event = "bus.terminal.focus_failed", %error, pane_id, navigation);
         true
     }
     pub(crate) fn bus_exit_ready(&self) -> bool {
@@ -213,10 +210,7 @@ impl crate::client::compositor::ClientShellState {
             .ok_or_else(|| "Bus is not open".to_string())?;
         match bus.edit_in_external_editor() {
             Ok(()) => Ok(()),
-            Err(error) => {
-                tracing::warn!(event = "bus.composer.external_edit_failed", %error);
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
     /// The native terminal owns the pane area once its target pane is on a retained surface.
@@ -293,8 +287,8 @@ mod tests {
     #[path = "sidebar_test.rs"]
     mod sidebar_tests;
 
-    #[path = "toasts_test.rs"]
-    mod toasts_tests;
+    #[path = "notices_test.rs"]
+    mod notices_tests;
 
     #[path = "submission_notice_test.rs"]
     mod submission_notice_tests;
