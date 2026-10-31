@@ -6,9 +6,9 @@ pub(crate) mod callback_entry;
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod cursor;
-pub(crate) mod grok;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod fake;
+pub(crate) mod grok;
 pub(crate) mod hook_json;
 pub(crate) mod kimi;
 pub(crate) mod launch;

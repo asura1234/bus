@@ -50,7 +50,11 @@ impl Worker {
                     {
                         Provider::Fake
                     }
-                    _ => return Err("Provider must be claude, codex, cursor, grok, kimi, or fake".into()),
+                    _ => {
+                        return Err(
+                            "Provider must be claude, codex, cursor, grok, kimi, or fake".into(),
+                        )
+                    }
                 };
                 let room = self.control_room(required(p, "room")?)?;
                 let master = self.state.master_room().is_some_and(|m| m.id == room);
