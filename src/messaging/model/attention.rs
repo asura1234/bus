@@ -139,22 +139,19 @@ impl BusState {
         text: &str,
         now_ms: u64,
     ) -> Result<(), super::ModelError> {
+        self.expire_quota_episodes(now_ms);
         match active {
             Some(true) if !self.episode_latched(&key) => {
                 self.post_developer_attention(agent, text, now_ms)?;
-                self.clear_previous_quota_episode(&key);
                 self.attention_episodes.insert(key);
             }
-            Some(false) => {
-                self.clear_previous_quota_episode(&key);
-                self.attention_episodes.remove(&key);
-            }
+            Some(false) => self.clear_recovered_episode(&key),
             _ => {}
         }
         Ok(())
     }
 
-    /// One open episode per provider, window, and reset. A suffix after the reset is the same episode.
+    /// Same provider, window, and reset. A suffix after the reset stays on that episode.
     fn episode_latched(&self, key: &str) -> bool {
         match quota_reset(key) {
             Some((family, reset)) => self.attention_episodes.iter().any(|old| {
@@ -166,13 +163,27 @@ impl BusState {
         }
     }
 
-    /// Drop other resets for this provider and window. Recovery and a new reset both do this.
-    fn clear_previous_quota_episode(&mut self, key: &str) {
-        let Some((family, _)) = quota_reset(key) else {
-            return;
-        };
+    /// Forget one recovered reset, including a suffixed latch. Another reset of that window stays.
+    fn clear_recovered_episode(&mut self, key: &str) {
+        match quota_reset(key) {
+            Some((family, reset)) => {
+                self.attention_episodes.retain(|old| {
+                    quota_reset(old).is_none_or(|(old_family, old_reset)| {
+                        old_family != family || old_reset != reset
+                    })
+                });
+            }
+            None => {
+                self.attention_episodes.remove(key);
+            }
+        }
+    }
+
+    /// A paged reset is remembered only while its timestamp is still ahead.
+    fn expire_quota_episodes(&mut self, now_ms: u64) {
+        let now_s = now_ms / 1000;
         self.attention_episodes
-            .retain(|old| quota_reset(old).is_none_or(|(old_family, _)| old_family != family));
+            .retain(|old| quota_reset(old).is_none_or(|(_, reset)| reset > now_s));
     }
 
     pub(super) fn unconfirmed_submission_message(prompt: super::PromptId) -> String {
@@ -439,5 +450,125 @@ mod tests {
             notices[2].contains("quota:codex:weekly:1793774141"),
             "{notices:?}"
         );
+    }
+
+    #[test]
+    fn quota_returning_to_an_active_reset_does_not_page_twice() {
+        let (mut state, agent) = quota_room();
+        let start = 1_793_364_695_031;
+        for (key, text, at) in [
+            (
+                "quota:claude:five_hour:1793368200",
+                "five-hour first",
+                start,
+            ),
+            (
+                "quota:claude:weekly:1793368200",
+                "weekly is independent",
+                start + 30_000,
+            ),
+            (
+                "quota:claude:five_hour:1793400000",
+                "corrected reset",
+                start + 60_000,
+            ),
+            (
+                "quota:claude:five_hour:1793368200",
+                "original reset returns",
+                start + 90_000,
+            ),
+        ] {
+            state
+                .attention_episode(key.to_string(), Some(true), agent, text, at)
+                .unwrap();
+        }
+        let notices = master_texts(&state);
+        assert_eq!(
+            notices.len(),
+            3,
+            "distinct windows and a new reset page once each; returning to an already-reported active reset must not page again: {notices:?}"
+        );
+        assert!(
+            !notices
+                .iter()
+                .any(|notice| notice.contains("original reset returns")),
+            "{notices:?}"
+        );
+    }
+
+    #[test]
+    fn quota_recovery_clears_only_the_recovered_reset() {
+        let (mut state, agent) = quota_room();
+        let start = 1_793_364_695_031;
+        let first = "quota:claude:five_hour:1793368200";
+        let next = "quota:claude:five_hour:1793400000";
+        state
+            .attention_episode(
+                format!("{first}:observed-by-12"),
+                Some(true),
+                agent,
+                "first",
+                start,
+            )
+            .unwrap();
+        state
+            .attention_episode(next.to_string(), Some(true), agent, "next", start + 60_000)
+            .unwrap();
+        state
+            .attention_episode(next.to_string(), Some(false), agent, "", start + 120_000)
+            .unwrap();
+        state
+            .attention_episode(
+                first.to_string(),
+                Some(true),
+                agent,
+                "first again",
+                start + 180_000,
+            )
+            .unwrap();
+        state
+            .attention_episode(
+                next.to_string(),
+                Some(true),
+                agent,
+                "next again",
+                start + 240_000,
+            )
+            .unwrap();
+        assert_eq!(
+            master_texts(&state),
+            vec![
+                "[needs_developer_attention] first".to_string(),
+                "[needs_developer_attention] next".to_string(),
+                "[needs_developer_attention] next again".to_string(),
+            ],
+            "recovery clears that reset, including a suffixed latch, and leaves the other one"
+        );
+    }
+
+    #[test]
+    fn quota_reset_pages_again_after_its_timestamp_passes() {
+        let (mut state, agent) = quota_room();
+        let reset = 1_793_368_200_u64;
+        let key = format!("quota:claude:five_hour:{reset}");
+        state
+            .attention_episode(
+                key.clone(),
+                Some(true),
+                agent,
+                "before",
+                reset * 1000 - 1_000,
+            )
+            .unwrap();
+        state
+            .attention_episode(key, Some(true), agent, "after", reset * 1000 + 1_000)
+            .unwrap();
+        let notices = master_texts(&state);
+        assert_eq!(
+            notices.len(),
+            2,
+            "a reset that has passed is no longer remembered: {notices:?}"
+        );
+        assert!(notices[1].contains("after"), "{notices:?}");
     }
 }

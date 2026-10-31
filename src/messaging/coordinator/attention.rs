@@ -293,4 +293,60 @@ mod quota_page {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn returning_to_an_active_reset_does_not_page_twice() {
+        let root = crate::utils::test_temp::unique_temp_path("quota-return");
+        let mut worker = super::Worker::open(root.join("session"), Box::new(NoNative)).unwrap();
+        let mut state = worker.state.clone();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(master, "orch", Provider::ClaudeCode, root.clone(), None)
+            .unwrap();
+        state.bind_orchestrator(agent, work).unwrap();
+        worker.save(state).unwrap();
+        let start = 1_793_364_695_031;
+        let (events, _receiver) = std::sync::mpsc::channel();
+        let samples: [(Option<u64>, Option<u64>, u64); 4] = [
+            (Some(1_793_368_200), None, 0),
+            (Some(1_793_368_200), Some(1_793_368_200), 30_000),
+            (Some(1_793_400_000), Some(1_793_368_200), 60_000),
+            (Some(1_793_368_200), Some(1_793_368_200), 90_000),
+        ];
+        for (five_hour, weekly, offset) in samples {
+            let at = start + offset;
+            worker.usage.claude = Some(UsageSnapshot {
+                windows: UsageWindows {
+                    five_hour: five_hour.map(exhausted),
+                    weekly: weekly.map(exhausted),
+                },
+                read_at_ms: at,
+                observed_by_agent: agent,
+            });
+            worker.pump_feishu(&events, at).unwrap();
+        }
+        let notices = {
+            let master = worker.state.master_room().unwrap().id;
+            worker
+                .state
+                .notices(master)
+                .map(|notice| notice.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(notices.len(), 3, "{notices:?}");
+        assert!(
+            notices[0].contains("quota:claude:five_hour:1793368200"),
+            "{notices:?}"
+        );
+        assert!(
+            notices[1].contains("quota:claude:weekly:1793368200"),
+            "{notices:?}"
+        );
+        assert!(
+            notices[2].contains("quota:claude:five_hour:1793400000"),
+            "{notices:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
