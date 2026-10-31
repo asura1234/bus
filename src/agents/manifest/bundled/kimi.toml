@@ -93,6 +93,30 @@ visible_working = true
 line_regex = ['(?i)^\s*[\u2800-\u28FF]+\s*(thinking(?:\.\.\.|…)|working(?:\.\.\.|…)|using )']
 
 [[rules]]
+id = "footer_tasks_running_working"
+state = "working"
+priority = 85
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['(?i)\[[1-9][0-9]*\s+tasks?\s+running\]']
+
+[[rules]]
+id = "footer_running_command_working"
+state = "working"
+priority = 84
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['(?i)\brunning a command\b']
+
+[[rules]]
+id = "footer_steer_working"
+state = "working"
+priority = 83
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['(?i)ctrl-s to steer', '↑ to edit']
+
+[[rules]]
 id = "current_empty_composer"
 state = "idle"
 priority = 70

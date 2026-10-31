@@ -65,25 +65,112 @@ fn kimi_cache_expiry_chooser_is_blocked() {
     assert!(detection.visible_blocker);
 }
 
+fn kimi_frame(footer: &str) -> String {
+    format!(
+        "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\n{footer}\n                               context: 3% (24.4k/1M)"
+    )
+}
+
+fn kimi_detection(screen: &str) -> Detected {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    detect_loaded(
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+    )
+}
+
 #[test]
-fn kimi_idle_composer_remains_ready_with_background_tasks() {
+fn kimi_live_tracking_agents_running_footer_is_working() {
+    let detection = kimi_detection(&kimi_frame("kimi thinking [2 agents running]"));
+    assert_eq!(detection.state, AgentState::Working);
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agent_status_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_tasks_running_is_working() {
+    let detection = kimi_detection(&kimi_frame(
+        "Ask When Needed  K2.8 Preview thinking: max  [2 tasks running]",
+    ));
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_tasks_running_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_steer_footer_is_working() {
+    let detection = kimi_detection(&kimi_frame("↑ to edit · ctrl-s to steer"));
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_steer_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_running_a_command_is_working() {
+    let detection = kimi_detection(&kimi_frame("Running a command"));
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+}
+
+#[test]
+fn kimi_tasks_running_footer_is_working() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
     for tasks in ["[1 task running]", "[2 tasks running]"] {
         let frame = format!(
             "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\nAsk When Needed  K2.8 Preview thinking: max  {tasks}\n                               context: 3% (24.4k/1M)"
         );
-        let detection = evaluate_loaded_manifest(
+        let detection = detect_loaded(
             DetectionInput {
                 screen: &frame,
                 osc_title: "",
                 osc_progress: "",
             },
             &loaded,
-            true,
         );
-        assert_eq!(detection.state, AgentState::Idle, "{tasks}");
-        assert!(detection.visible_idle, "{tasks}");
+        assert_eq!(detection.state, AgentState::Working, "{tasks}");
+        assert!(detection.visible_working, "{tasks}");
+        assert_eq!(
+            detection
+                .matched_rule
+                .as_ref()
+                .map(|rule| rule.id.as_str()),
+            Some("footer_tasks_running_working"),
+            "{tasks}"
+        );
     }
 }
 
