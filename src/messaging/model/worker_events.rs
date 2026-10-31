@@ -137,9 +137,7 @@ impl BusState {
         // The explicit send, or any earlier copy of this text, is the one result.
         // Do not post the body again and do not add a Late reply or Turn final.
         if self.result_already_in_room(room, worker, text) {
-            self.consumed_provider_turns.insert(turn);
-            self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms)
-                .unwrap_or(true);
+            self.note_result_posted(turn, callback.occurred_at_ms);
             return;
         }
         let Ok(message) =
@@ -166,10 +164,15 @@ impl BusState {
                 route: ReplyRoute::Pending,
             },
         );
+        self.note_result_posted(turn, callback.occurred_at_ms);
+    }
+
+    /// The body is already the result. Remember the turn and drop a quiet
+    /// no-reply that this result replaces.
+    fn note_result_posted(&mut self, turn: String, now_ms: u64) {
         self.consumed_provider_turns.insert(turn);
-        // The posted body is the result. A quiet no-reply stored before it
-        // arrived must not ride along in the same wake.
-        self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms)
+        let _changed = self
+            .retract_suppressed_quiet_outcomes(now_ms)
             .unwrap_or(true);
     }
 
