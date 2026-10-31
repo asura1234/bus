@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: Watch an open PR's two signals until it can merge — CI conclusions and review comments. Attribute every red CI check individually; failures caused by this PR's changes must be fixed (reproduce by running the gates locally, never by reading log tails), while pre-existing failures from the base or flakes may be carried into the merge. Handle only the latest round of review comments, hand them to address-review-comments, and post its triage ledger back to the PR verbatim (otherwise REJECTs leave no trace and machine review raises the same points again next round). When the branch has diverged from origin/master, converge before talking about merging — rebase-origin-main by default, and merge master in instead when the commit count exceeds a threshold (this repo squash-merges, so branch-internal history is discarded anyway). Squash-merge when all green; when only red checks not caused by this PR remain, admin-merge and state the release basis for each one. Use when the user asks to merge a PR, watch CI, or asks "can this merge yet".
+description: Watch an open PR's two signals until it can merge — CI conclusions and review comments. Attribute every red CI check individually; failures caused by this PR's changes must be fixed (reproduce by running the gates locally, never by reading log tails), while pre-existing failures from the base or flakes may be carried into the merge. Handle only the latest round of review comments, hand them to address-review-comments, and post its triage ledger back to the PR verbatim (otherwise REJECTs leave no trace and machine review raises the same points again next round). When the branch has diverged from origin/<base_branch>, converge before talking about merging — rebase-origin-main by default, and merge master in instead when the commit count exceeds a threshold (this repo squash-merges, so branch-internal history is discarded anyway). Squash-merge when all green; when only red checks not caused by this PR remain, admin-merge and state the release basis for each one. Use when the user asks to merge a PR, watch CI, or asks "can this merge yet".
 ---
 
 # Merge PR
@@ -27,14 +27,14 @@ Capture: HEAD, branch, base, isDraft, mergeable, mergeStateStatus, checkCount,
 pending / passed / failed / **other**, plus this PR's `topLevel` and `files`.
 scope is the first-hand basis for every attribution below; get it first.
 -- This section takes a single snapshot only; waiting belongs to section 3, and must come after review handling (guide.md).
-The source of truth for `checks` is `statusCheckRollup`, at **per-check** granularity; do not switch back to `gh run list`
-(reasons in guide.md "Per check, not per workflow").
+On GitHub the source of truth for `checks` is `statusCheckRollup`, at **per-check** granularity; do not switch to
+workflow-granularity run listings (reasons in guide.md "Per check, not per workflow").
 IF checks reports `isDraft == true`
   Run: `pr_host ready --pr <pr>`, then return to this section and retake the signals; continue only after confirming `isDraft == false`.
   If it fails, STOP and report verbatim; do not skip past it.
 -- Reasons in guide.md "Draft becomes ready first, no stop".
 -- `checkCount == 0` does not STOP here: the 0 in the tens of seconds right after a push is temporary; the later wait handles it.
-========== 1b. Converge first when diverged from origin/master ==========
+========== 1b. Converge first when diverged from origin/<base_branch> ==========
 The entry is a **positive enumeration**; only these two states enter this section. It must not be written as a negation (reasons in guide.md "Why the entry must be a positive
 enumeration"):
   divergent = (mergeable == "CONFLICTING")
@@ -122,7 +122,10 @@ round is opened.
 
 ========== 3. Wait for CI to converge (wait last) ==========
 
-By here review covers the current HEAD, so this section waits on the CI of **the tree that will be merged**.
+IF host == codeup:
+  Record `checks` without waiting, attribution, or local gate reruns; `checkCount == 0`, pending, failed, and other are
+  neither merge blockers nor CI passes. Skip sections 3-5 and continue to section 6.
+Otherwise sections 3-5 wait on GitHub CI of **the tree that will be merged**.
 
 WHILE (`checkCount == 0` OR pending is nonempty) AND waited < max_wait:
   Sleep poll_seconds and rerun `checks`.
@@ -148,7 +151,7 @@ FOR EACH job IN failed + other:
   b. Take the failure evidence: use `failed[].logCommand`. **The log may be truncated before the real failure** (see guide).
   c. Decide per guide "Three acceptable kinds of evidence"; each red check lands in exactly one class: IN-SCOPE (caused by this PR, must fix) /
      PRE-EXISTING / FLAKY / ENVIRONMENT. Anything undecidable is IN-SCOPE; never release by default.
-  d. When FLAKY is suspected, **rerun** instead of reasoning: `gh run rerun <runId> --failed`, then return to section 2 to wait for convergence.
+  d. When FLAKY is suspected, **rerun** instead of reasoning: `pr_host rerun --run-id <runId>`, then return to section 2 to wait for convergence.
 
 ========== 5. Fix IN-SCOPE red checks ==========
 
@@ -171,36 +174,32 @@ IF any IN-SCOPE red check exists:
 IF --no-merge   -- stops before the retake and assertions; --hold-before-merge stops after all of them, right before the merge command
   Report the current state and conclusion, STOP. Do not merge.
 
-First **retake** the review lane; do not assert from section 2's conclusion (reasons in guide.md "Review must be retaken before merging"):
+IF host == github:
+  First **retake** the review lane; do not assert from section 2's conclusion (guide.md "Review must be retaken before merging"):
+    python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" fetch   --pr <pr>
+    python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" reviews --pr <pr>
+    python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" verdict --pr <pr> (informational only)
 
-Run:
-  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" fetch   --pr <pr>
-  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" reviews --pr <pr>
+  **Branch first, then assert**:
+  IF this `fetch` returns `status == head-moved`
+    Return to **section 1** and retake everything: a racy snapshot would merge with stale CI, review state and `merge_head`.
+  IF this `fetch` opened a round to handle (`status == created`, or the latest round has `triaged == false`)
+    Return to section 2 to handle it; do not STOP here.
+  -- The order cannot be reversed; reasons in guide.md "Branch first, then assert".
 
-Run the verdict once more too (for the report, not as a release condition):
-  python3 "<skill_dir>/../address-review-comments/scripts/github_review_lane.py" verdict --pr <pr>
+  Assert: pending is empty; every entry in `failed` and `other` is attributed and **none is IN-SCOPE**;
+  no unhandled FLAG; mergeable == "MERGEABLE"; isDraft == false;
+  **review covers the current HEAD** (`coveredAtHead == true`, or the developer explicitly confirmed release);
+  **and this `fetch` opened no round to handle** (`no-comments`, or the latest round has `triaged == true`).
+  -- The criterion is `triaged`, not `reviewExists` or reviewer agreement; see guide.md "The criterion that a round is done".
+  IF `verdict.approved == false`
+    Merge as usual, but report the verdict, unresolved findings, dispositions and counter-evidence; **do not use `--admin`**.
+  -- A nonempty `other` must be attributed exactly like a red check, otherwise STOP.
 
-**Branch first, then assert**:
-
-IF this `fetch` returns `status == head-moved`
-  Return to **section 1** and retake everything: a racy snapshot would merge with stale CI, review state and `merge_head`.
-
-IF this `fetch` opened a round to handle (`status == created`, or the latest round has `triaged == false`)
-  Return to section 2 to handle it; do not STOP here.
--- The order cannot be reversed; reasons in guide.md "Branch first, then assert".
-
-Assert: pending is empty; every entry in `failed` and `other` is attributed and **none is IN-SCOPE**;
-no unhandled FLAG; mergeable == "MERGEABLE"; isDraft == false;
-**review covers the current HEAD** (`coveredAtHead == true`, or the developer explicitly confirmed release);
-**and this `fetch` opened no round to handle** (`no-comments`, or the latest round has `triaged == true`).
--- This last one is the criterion for "the review path has no unadjudicated feedback": anything new the reviewer says on the current HEAD opens a
---   new round, and if none opens, every point has entered the ledger. It **does not require the reviewer to agree**, only that the author adjudicated.
-IF `verdict.approved == false`
-  Merge as usual, but state in the output: the verdict text at that time, the count of unresolved findings, and each one's ledger disposition
-  and first-hand counter-evidence. A review sitting at 🟡 / 🔵 with all findings REJECTed is the expected end state, not a release exception; **do not use `--admin`**.
--- The criterion is `triaged`, not `reviewExists`; see guide.md "The criterion that a round is done".
--- A nonempty `other` is not released just because it is not called failed: a cancelled required check proved nothing either,
---   and must be attributed exactly like a red check, otherwise STOP.
+IF host == codeup:
+  Retake `pr_host comments --pr <pr>` and `pr_host view --pr <pr>`.
+  IF `aiReviewPending` is true OR `openCount` is nonzero: return to section 2; do not merge with unhandled comments.
+  Assert no unhandled FLAG, mergeable == "MERGEABLE", and isDraft == false.
 
 merge_head = the HEAD last taken in section 1
 Retake `pr_host view --pr <pr>` and require its HEAD and the local HEAD to equal merge_head.
@@ -210,18 +209,22 @@ verify it with `python3 "<skill_dir>/../gate-and-fix/scripts/gate_and_fix.py" ve
 IF --hold-before-merge
   Report "ready to merge at <merge_head>, holding for developer verification" and the state summary (guide.md "Holding before merge"), STOP. Do not merge.
 
-IF failed and other are both empty:
-  `pr_host merge --pr <pr> --head <merge_head>` (Codeup also requires `--note-file <file>`).
+IF host == codeup:
+  `pr_host merge --pr <pr> --head <merge_head> --note-file <file>`; record-only CI never selects `--admin`.
+ELSE IF failed and other are both empty:
+  `pr_host merge --pr <pr> --head <merge_head>`.
 ELSE:
   -- Only PRE-EXISTING / FLAKY / ENVIRONMENT remain; state the release basis for each one,
   --   no unnamed summaries like "the rest are environment issues".
-  `pr_host merge --pr <pr> --head <merge_head> --admin` (Codeup also requires `--note-file <file>`).
+  `pr_host merge --pr <pr> --head <merge_head> --admin`.
 
 -- `--match-head-commit` is not optional: without it a push after the signals were taken merges a tree that was never verified.
 
 Read back: `pr_host view --pr <pr>` and inspect `state`, `mergedAt`, `mergeCommit`.
 IF state != "MERGED"
   STOP and report the actual fields. Never announce a merge from a command's exit code.
+IF host == codeup:
+  Run `git fetch origin`, then require `git merge-base --is-ancestor <mergeCommit> origin/<base_branch>` before reporting success.
 
 After a successful merge, append one line of review metrics:
 
@@ -240,7 +243,7 @@ Report:
   - Number of rounds, and what each round did (which IN-SCOPE red checks were fixed, how many comments were handled)
   - Per-check CI conclusions: passed count; for each red check the job name, attribution class, **and which evidence it rests on**
   - Review handling: which round was handled (anchor commit), counts per disposition, triage path
-  - If diverged from origin/master: whether rebase or merge was used, what `ahead` was, and
+  - If diverged from origin/<base_branch>: whether rebase or merge was used, what `ahead` was, and
     each entry of the discarded `dropped_shared_infra` (lockfile)
   - Whether a normal merge or `--admin` was used; with admin, repeat the release basis for each one
   - Unhandled FLAGs (if any) must be the last content of the output

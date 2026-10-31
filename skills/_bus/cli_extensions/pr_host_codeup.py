@@ -312,6 +312,24 @@ class CodeupHost:
             "file": output if open_rows and output else None,
         }
 
+    def metrics(self, pr: str) -> dict:
+        mr = self._get(pr)
+        author = (mr.get("author") or {}).get("id")
+        rows = [r for r in self._mr_call("codeup-list-merge-request-comments", pr) or [] if not r.get("is_deleted")]
+        reviews = [
+            {"body": r.get("content") or "", "state": "COMMENTED"}
+            for r in rows
+            if r.get("comment_type") == "GLOBAL_COMMENT" and (r.get("author") or {}).get("id") != author
+        ]
+        threads = []
+        for row in rows:
+            if row.get("comment_type") == "INLINE_COMMENT":
+                threads.append({"id": row.get("comment_biz_id"), "in_reply_to_id": None})
+            for child in row.get("child_comments_list") or []:
+                if not child.get("is_deleted"):
+                    threads.append({"id": child.get("comment_biz_id"), "in_reply_to_id": row.get("comment_biz_id")})
+        return {"info": self.view(pr), "reviews": reviews, "threads": threads}
+
     def reply(self, pr: str, comment_id: str, body: str) -> dict:
         # 平台要求回复与父评论同类型、同补丁版本；inline 父评论还要带同一处文件、行与对比版本。
         rows = self._mr_call("codeup-list-merge-request-comments", pr) or []

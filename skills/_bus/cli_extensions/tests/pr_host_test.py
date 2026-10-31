@@ -135,6 +135,22 @@ def test_github_merge_matches_head(gh_calls, admin, extra):
     assert calls[0] == ["pr", "merge", "7", "--squash", *extra, "--delete-branch=false", "--match-head-commit", HEAD]
 
 
+def test_github_rerun_uses_failed_jobs(gh_calls):
+    calls, _ = gh_calls
+    assert _github().rerun("77") == {"runId": 77}
+    assert calls == [["run", "rerun", "77", "--failed"]]
+
+
+def test_github_metrics_collects_review_data(gh_calls):
+    calls, replies = gh_calls
+    replies[("api", "repos/{owner}/{repo}/pulls/7/reviews?per_page=100")] = '[{"body":"review"}]'
+    replies[("api", "repos/{owner}/{repo}/pulls/7/comments?per_page=100")] = '[{"id":1}]'
+    replies[("pr", "view")] = '{"changedFiles":2}'
+    payload = _github().metrics("7")
+    assert payload == {"info": {"changedFiles": 2}, "reviews": [{"body": "review"}], "threads": [{"id": 1}]}
+    assert len(calls) == 3
+
+
 def test_github_request_review_falls_back_to_bot_login(monkeypatch):
     calls = []
 
@@ -509,6 +525,27 @@ def test_codeup_comments_empty_has_no_file(codeup_env, tmp_path):
     )
     result = host.comments("5", str(tmp_path / "c.md"))
     assert (result["file"], result["aiReviewPending"]) == (None, False)
+
+
+def test_codeup_metrics_uses_reviewer_comments_and_threads(codeup_env):
+    rows = [
+        {"comment_biz_id": "r1", "comment_type": "GLOBAL_COMMENT", "author": {"id": 2}, "content": "AI report"},
+        {"comment_biz_id": "mine", "comment_type": "GLOBAL_COMMENT", "author": {"id": 1}, "content": "triage"},
+        {
+            "comment_biz_id": "c1", "comment_type": "INLINE_COMMENT", "author": {"id": 2},
+            "child_comments_list": [{"comment_biz_id": "c2", "content": "reply"}],
+        },
+    ]
+    host, _ = _codeup(
+        {"codeup-list-change-request-patch-sets": _patch_sets(), "codeup-list-merge-request-comments": rows}
+    )
+    payload = host.metrics("5")
+    assert payload["info"]["headRefOid"] == HEAD
+    assert payload["reviews"] == [{"body": "AI report", "state": "COMMENTED"}]
+    assert payload["threads"] == [
+        {"id": "c1", "in_reply_to_id": None},
+        {"id": "c2", "in_reply_to_id": "c1"},
+    ]
 
 
 def _parent(comment_type="INLINE_COMMENT"):

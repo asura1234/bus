@@ -17,6 +17,8 @@
   ready   --pr N                                Draft → Ready
   comment --pr N --body-file F                  发一条 PR 级评论
   request-review --pr N                         请求机器评审（GitHub Copilot / Codeup AI 评审）
+  metrics --pr N                                合并后的评审统计输入
+  rerun   --run-id N                            重跑失败 job（仅 GitHub）
   merge   --pr N --head SHA [--admin] [--note-file F]       squash 合并并读回
   checks / comments / reply                     仅 Codeup；GitHub 的对应信号归 merge-pr 与
                                                 address-review-comments 的既有脚本
@@ -137,6 +139,18 @@ class GitHubHost:
         _gh(*args, "--delete-branch=false", "--match-head-commit", head)
         return self.view(pr)
 
+    def rerun(self, run_id: str) -> dict:
+        _gh("run", "rerun", run_id, "--failed")
+        return {"runId": int(run_id)}
+
+    def metrics(self, pr: str) -> dict:
+        reviews = json.loads(_gh("api", f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews?per_page=100", "--paginate"))
+        threads = json.loads(_gh("api", f"repos/{{owner}}/{{repo}}/pulls/{pr}/comments?per_page=100", "--paginate"))
+        info = json.loads(
+            _gh("pr", "view", pr, "--json", "baseRefName,headRefOid,additions,deletions,changedFiles,mergedAt")
+        )
+        return {"info": info, "reviews": reviews, "threads": threads}
+
 
 def detect(repo: Path | None = None):
     remote = origin_remote(repo)
@@ -199,6 +213,12 @@ def run(args: argparse.Namespace, host) -> object:
     if command == "merge":
         note = Path(args.note_file).read_text(encoding="utf-8") if args.note_file else None
         return host.merge(args.pr, args.head, args.admin, note)
+    if command == "metrics":
+        return host.metrics(args.pr)
+    if command == "rerun":
+        if host.name != "github":
+            raise HostError("`rerun` 只用于 GitHub；Codeup CI 仅作记录，不重跑")
+        return host.rerun(args.run_id)
     if command == "checks":
         return _codeup_only(host, command).checks(args.pr)
     if command == "comments":
@@ -227,8 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
     edit.add_argument("--title", required=True)
     edit.add_argument("--body-file", required=True)
 
-    for name in ("view", "ready", "request-review", "checks"):
+    for name in ("view", "ready", "request-review", "checks", "metrics"):
         sub.add_parser(name).add_argument("--pr", required=True)
+
+    rerun = sub.add_parser("rerun")
+    rerun.add_argument("--run-id", required=True)
 
     comment = sub.add_parser("comment")
     comment.add_argument("--pr", required=True)

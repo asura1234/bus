@@ -15,19 +15,19 @@ import review_metrics as rm  # noqa: E402
 
 
 def _stub(monkeypatch, reviews, comments, info=None):
-    def gh_json(*args, **kwargs):
-        if args[0] == "pr":
-            return info or {
-                "baseRefName": "main",
-                "headRefOid": "a" * 40,
-                "additions": 10,
-                "deletions": 2,
-                "changedFiles": 3,
-                "mergedAt": "2026-09-20T06:00:00Z",
-            }
-        return reviews if "/reviews" in args[1] else comments
-
-    monkeypatch.setattr(rm, "_gh_json", gh_json)
+    payload = {
+        "info": info or {
+            "baseRefName": "main",
+            "headRefOid": "a" * 40,
+            "additions": 10,
+            "deletions": 2,
+            "changedFiles": 3,
+            "mergedAt": "2026-09-20T06:00:00Z",
+        },
+        "reviews": reviews,
+        "threads": comments,
+    }
+    monkeypatch.setattr(rm, "_host_metrics", lambda *args, **kwargs: payload)
 
 
 def test_replies_are_not_counted_as_findings(monkeypatch) -> None:
@@ -78,29 +78,21 @@ def test_each_merge_appends_one_line(tmp_path) -> None:
     assert [json.loads(x)["pr"] for x in lines] == [1, 2]
 
 
-def test_gh_runs_in_the_selected_repository(monkeypatch, tmp_path) -> None:
-    """不传 cwd 时 `gh` 按调用方当前目录解析 `{owner}/{repo}`。
+def test_host_metrics_runs_in_the_selected_repository(monkeypatch, tmp_path) -> None:
+    """从另一个检出调用时，共享 host 也必须在 `--repo` 指向的仓库里解析 PR。"""
 
-    于是从另一个检出跑 `--repo <path>` 会查 A 仓库的 PR、把记录写进 B 仓库的台账——
-    一行描述错了 PR 的数据，而这份台账的全部用途就是长期趋势。
-    """
+    seen = []
 
-    seen: list = []
+    class Host:
+        def metrics(self, pr):
+            assert pr == "899"
+            seen.append(Path.cwd())
+            return {"info": {"changedFiles": 1}, "reviews": [], "threads": []}
 
-    def fake_run(argv, **kwargs):
-        seen.append(kwargs.get("cwd"))
-
-        class R:
-            returncode = 0
-            stdout = "[]" if argv[1] == "api" else '{"changedFiles": 1}'
-            stderr = ""
-
-        return R()
-
-    monkeypatch.setattr(rm.subprocess, "run", fake_run)
+    monkeypatch.setattr(rm.pr_host, "detect", lambda: Host())
     rm.collect("899", tmp_path)
 
-    assert seen and all(c == str(tmp_path) for c in seen), seen
+    assert seen == [tmp_path]
 
 
 def test_adjudication_counts_must_be_supplied(monkeypatch) -> None:

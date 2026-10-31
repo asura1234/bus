@@ -141,6 +141,37 @@ class SkillMigrationContractTest(unittest.TestCase):
             self.assertIn("rebase-origin-main --base origin/<base_branch>", text)
         self.assertIn('gate-and-fix --base <merge-base> --command "<policy.gate_command>"', merge)
 
+    def test_codeup_ci_is_record_only_through_the_merge_workflow(self) -> None:
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        ci = merge.split("========== 3. Wait for CI to converge (wait last) ==========", 1)[1]
+        ci = ci.split("========== 5. Fix IN-SCOPE red checks ==========", 1)[0]
+        self.assertIn("IF host == codeup:", ci)
+
+    def test_codeup_merge_skips_the_github_final_review_lane(self) -> None:
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        final = merge.split("========== 6. Merge ==========", 1)[1]
+        retake = final.split("**Branch first, then assert**:", 1)[0]
+        self.assertIn("IF host == github:", retake)
+
+    def test_review_metrics_does_not_bypass_the_shared_host(self) -> None:
+        metrics = (SKILLS / "merge-pr/scripts/review_metrics.py").read_text()
+        self.assertNotIn('subprocess.run(["gh"', metrics)
+
+    def test_merge_guide_does_not_reintroduce_legacy_host_or_base_commands(self) -> None:
+        guide = (SKILLS / "merge-pr/guide.md").read_text()
+        self.assertNotRegex(guide, r"`gh (?:pr|run) ")
+        self.assertNotIn("merge `origin/master`", guide)
+
+    def test_codeup_pr_body_readback_ignores_only_trailing_newlines(self) -> None:
+        pr = (SKILLS / "pr/SKILL.md").read_text()
+        publish = pr.split("Then read back and verify the published state", 1)[1]
+        self.assertRegex(publish, r"published_body.*rstrip|rstrip.*published_body")
+
+    def test_codeup_merge_verifies_commit_landed_on_the_target_branch(self) -> None:
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        final = merge.split("========== 6. Merge ==========", 1)[1]
+        self.assertIn("git merge-base --is-ancestor <mergeCommit> origin/<base_branch>", final)
+
     def test_review_verdicts_are_the_canonical_closed_sets(self) -> None:
         verdicts = _review_types_module().LEGAL_VERDICTS
         self.assertEqual(

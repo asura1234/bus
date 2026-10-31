@@ -194,7 +194,10 @@ Bind returned fields as `published_title`, `published_body`, `published_head`, `
 `published_base`, and `published_is_draft`; write `published_body` byte-exact to ignored `temp/` as
 `published_body_file`, and rerun `pr_format_check.py --phase <phase>` against it with `published_title`.
 
-IF `published_title` or `published_body` differs from the intended title/body or fails the check
+body_matches = (`published_body` == the intended body)
+IF host == codeup:
+  body_matches = (`published_body.rstrip("\n")` == the intended body `.rstrip("\n")`)
+IF `published_title` differs from the intended title, OR `body_matches` is false, OR the body fails the check
   Fix via `pr_host edit` and re-verify; do not report success with a non-conforming PR.
 Require `published_head == head`, `published_state == OPEN`, `published_base == base_branch`, and, for a
 PR created this run, `published_is_draft == true`; otherwise STOP with the observed fields.
