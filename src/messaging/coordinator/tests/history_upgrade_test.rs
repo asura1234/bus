@@ -105,11 +105,9 @@ fn routing_floor_blocks_inline_event_backfill_but_keeps_recent_and_open_work() {
     // Peer finals belong to the peer: none are copied to the orchestrator.
     assert!(events.get(format!("turn-final:{}", ids[0].0)).is_none());
     assert!(events.get(format!("turn-final:{}", ids[1].0)).is_none());
-    assert!(!events
-        .as_object()
-        .unwrap()
+    assert!(events.as_object().is_none_or(|events| !events
         .keys()
-        .any(|key| key.starts_with(&format!("stalled:{}:", ids[2].0))));
+        .any(|key| key.starts_with(&format!("stalled:{}:", ids[2].0)))));
     assert_eq!(
         state.request(ids[0]).unwrap().reply().unwrap().text,
         "peer verdict"

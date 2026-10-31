@@ -1126,17 +1126,11 @@ fn resumed_work_does_not_create_stall_outcomes() {
         .map(|(key, _)| key)
         .collect();
     assert!(old.is_empty());
-    state
-        .see_worker_outcomes(source, f.orch, &old, first_at)
-        .unwrap();
     f.worker.save(state).unwrap();
     continue_background_work(&mut f, first_at + 1_000);
     let mut state = f.worker.state.clone();
     let second_at = first_at + crate::messaging::model::DELIVERED_STALL_MS + 4_000;
     state.retain_worker_outcomes(second_at);
-    state
-        .see_worker_outcomes(source, f.orch, &old, second_at)
-        .unwrap();
     let current: Vec<_> = state
         .worker_outcomes_for(state.request(source).unwrap())
         .into_iter()

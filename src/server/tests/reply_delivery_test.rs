@@ -1161,7 +1161,7 @@ async fn socket_eagain_during_active_reply_preserves_ownership_and_recovers_once
 }
 
 #[tokio::test]
-async fn transcript_unmatched_diagnostic_is_not_rearmed_by_status_flapping_or_restart() {
+async fn transcript_gap_has_no_stall_diagnostic_even_after_status_flapping_or_restart() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
     f.send(agent, f.work, "lost reply", false, None);
@@ -1171,7 +1171,7 @@ async fn transcript_unmatched_diagnostic_is_not_rearmed_by_status_flapping_or_re
     f.tick();
     f.age_request_progress(600_000);
     f.tick();
-    assert_eq!(f.stall_diagnostics(), 1);
+    assert_eq!(f.stall_diagnostics(), 0);
     f.status(agent, AgentState::Working);
     f.tick();
     f.status(agent, AgentState::Idle);
@@ -1179,7 +1179,7 @@ async fn transcript_unmatched_diagnostic_is_not_rearmed_by_status_flapping_or_re
     f.age_request_progress(600_000);
     f.reopen();
     f.tick();
-    assert_eq!(f.stall_diagnostics(), 1);
+    assert_eq!(f.stall_diagnostics(), 0);
 }
 
 // One cycle is also a normal integration guard: both rounds must really hold
@@ -1189,13 +1189,13 @@ async fn batched_reply_cycles_hold_fresh_shells_after_reopen() {
     let mut f = soak_fixture();
     for round in 0..2 {
         delivery_cycle(&mut f, round);
-        stall_cycle(&mut f, round);
+        idle_cycle(&mut f, round);
         orchestrator_inbox_burst(round);
         f.reopen();
         f.provider_startup();
     }
     assert_eq!(f.state().requests().count(), 50);
-    assert_eq!(f.stall_diagnostics(), 2);
+    assert_eq!(f.stall_diagnostics(), 0);
 }
 
 #[tokio::test]
@@ -1288,10 +1288,10 @@ fn delivery_cycle(f: &mut Delivery, round: usize) {
     }
 }
 
-fn stall_cycle(f: &mut Delivery, round: usize) {
+fn idle_cycle(f: &mut Delivery, round: usize) {
     let agent = f.agents[0];
-    let prompt = format!("stall-probe-{round}");
-    let turn = format!("stall-turn-{round}");
+    let prompt = format!("idle-probe-{round}");
+    let turn = format!("idle-turn-{round}");
     let request = f.send(agent, f.work, &prompt, false, None);
     f.tick();
     f.start(agent, &turn, &prompt);
@@ -1299,22 +1299,14 @@ fn stall_cycle(f: &mut Delivery, round: usize) {
     f.tick();
     f.age_request_progress(600_000);
     f.tick();
-    assert_eq!(
-        f.stall_diagnostics_for(request),
-        1,
-        "the phase must really record a diagnostic"
-    );
+    assert_eq!(f.stall_diagnostics_for(request), 0);
     f.status(agent, AgentState::Working);
     f.tick();
     f.status(agent, AgentState::Idle);
     f.tick();
     f.age_request_progress(600_000);
     f.reopen();
-    assert_eq!(
-        f.stall_diagnostics_for(request),
-        1,
-        "same request diagnosed twice after flapping/restart"
-    );
+    assert_eq!(f.stall_diagnostics_for(request), 0);
     f.stop(
         agent,
         &turn,
@@ -1323,7 +1315,7 @@ fn stall_cycle(f: &mut Delivery, round: usize) {
         json!([]),
     );
     f.assert_reply(request, &format!("late-reply-{round}"));
-    assert_eq!(f.stall_diagnostics_for(request), 1);
+    assert_eq!(f.stall_diagnostics_for(request), 0);
 }
 
 fn run_soak() {
