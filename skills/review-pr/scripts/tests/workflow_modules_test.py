@@ -18,7 +18,7 @@ class WorkflowModulesTests(unittest.TestCase):
             with self.subTest(skill=skill):
                 entrypoint = (SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
                 self.assertLessEqual(len(entrypoint.splitlines()), 250)
-                command = f"Read($SKILL_DIR/../{skill}/scripts/{helper}) completely" if skill == "review-pr" else f"Read(skills/{skill}/scripts/{helper}) completely"
+                command = f"Read($SKILL_DIR/../{skill}/scripts/{helper}) completely" if skill == "review-pr" else f"Read(<skill_dir>/scripts/{helper}) completely"
                 self.assertIn(command, entrypoint)
 
     def test_helpers_load_only_in_their_original_modes(self) -> None:
@@ -27,7 +27,7 @@ class WorkflowModulesTests(unittest.TestCase):
         self.assertRegex(
             author,
             r"IF mode == pr AND no --scope AND no explicit --review-file / --free-form-file:\n"
-            r"  Read\(skills/address-review-comments/scripts/github_lane.md\) completely",
+            r"  Read\(<skill_dir>/scripts/github_lane.md\) completely",
         )
         self.assertRegex(
             reviewer,

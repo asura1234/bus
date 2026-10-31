@@ -97,6 +97,81 @@ class SkillMigrationContractTest(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertTrue((REPO / relative).is_file())
 
+    def test_pr_host_and_installed_pr_paths_are_portable(self) -> None:
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home, repo, installed = root / "home", root / "project", root / "skills"
+            home.mkdir()
+            repo.mkdir()
+            env = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+            subprocess.run(["git", "init", "-q", str(repo)], env=env, check=True)
+            shutil.copytree(SKILLS / "pr", installed / "pr")
+            shutil.copytree(SKILLS / "_bus", installed / "_bus")
+            plan = repo / "plan.md"
+            plan.write_text("## 目标\n\nPortable goal\n\n## 非目标\n\nNone\n")
+            script = installed / "pr/scripts/pr_goal_context.py"
+            done = subprocess.run(
+                [sys.executable, str(script), "--branch", "feat/portable", "--plan", str(plan),
+                 "--output", str(repo / "context.md")],
+                cwd=repo, env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            lock = repo / "temp/review-pr/feat-portable/.locked-goal"
+            self.assertTrue(lock.is_file(), done.stdout)
+            self.assertEqual(lock.read_text(), "Portable goal\n")
+            self.assertFalse((installed / "temp").exists())
+            host = subprocess.run(
+                [sys.executable, "-I", str(installed / "_bus/cli_extensions/pr_host.py"), "--help"],
+                cwd=repo, env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(host.returncode, 0, host.stderr)
+            for name in ("pr", "merge-pr", "address-review-comments"):
+                text = (SKILLS / name / "SKILL.md").read_text()
+                self.assertNotRegex(text, r"python3 (?:skills/|cli_extensions/)")
+
+    def test_pr_host_delegations_receive_repository_policy(self) -> None:
+        pr = (SKILLS / "pr/SKILL.md").read_text()
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        for text in (pr, merge):
+            self.assertIn("rebase-origin-main --base origin/<base_branch>", text)
+        self.assertIn('gate-and-fix --base <merge-base> --command "<policy.gate_command>"', merge)
+
+    def test_codeup_ci_is_record_only_through_the_merge_workflow(self) -> None:
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        ci = merge.split("========== 3. Wait for CI to converge (wait last) ==========", 1)[1]
+        ci = ci.split("========== 5. Fix IN-SCOPE red checks ==========", 1)[0]
+        self.assertIn("IF host == codeup:", ci)
+
+    def test_codeup_merge_skips_the_github_final_review_lane(self) -> None:
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        final = merge.split("========== 6. Merge ==========", 1)[1]
+        retake = final.split("**Branch first, then assert**:", 1)[0]
+        self.assertIn("IF host == github:", retake)
+
+    def test_review_metrics_does_not_bypass_the_shared_host(self) -> None:
+        metrics = (SKILLS / "merge-pr/scripts/review_metrics.py").read_text()
+        self.assertNotIn('subprocess.run(["gh"', metrics)
+
+    def test_merge_guide_does_not_reintroduce_legacy_host_or_base_commands(self) -> None:
+        guide = (SKILLS / "merge-pr/guide.md").read_text()
+        self.assertNotRegex(guide, r"`gh (?:pr|run) ")
+        self.assertNotIn("merge `origin/master`", guide)
+
+    def test_codeup_pr_body_readback_ignores_only_trailing_newlines(self) -> None:
+        pr = (SKILLS / "pr/SKILL.md").read_text()
+        publish = pr.split("Then read back and verify the published state", 1)[1]
+        self.assertRegex(publish, r"published_body.*rstrip|rstrip.*published_body")
+
+    def test_codeup_merge_verifies_commit_landed_on_the_target_branch(self) -> None:
+        merge = (SKILLS / "merge-pr/SKILL.md").read_text()
+        final = merge.split("========== 6. Merge ==========", 1)[1]
+        self.assertIn("git merge-base --is-ancestor <mergeCommit> origin/<base_branch>", final)
+
     def test_review_verdicts_are_the_canonical_closed_sets(self) -> None:
         verdicts = _review_types_module().LEGAL_VERDICTS
         self.assertEqual(

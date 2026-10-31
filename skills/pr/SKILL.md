@@ -1,11 +1,13 @@
 ---
 name: pr
-description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/master, then create or refresh an English Draft PR and its body. It does not run gates or dead-code cleanup; the orchestrator sequences gate-and-fix and delete-dead-code itself and may hand their results to pr as optional --verification input. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
+description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/<base_branch>, then create or refresh an English Draft PR and its body. It does not run gates or dead-code cleanup; the orchestrator sequences gate-and-fix and delete-dead-code itself and may hand their results to pr as optional --verification input. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
 ---
 
 # PR
 
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md.
+All host operations use `python3 "$SKILL_DIR/../_bus/cli_extensions/pr_host.py"` (`pr_host`).
+Run `pr_host host` first; stop on an unknown host. For Codeup, read `../_bus/docs/codeup-pr-workflow.md`.
 
 ```text
 INPUT $ARGUMENTS = [--plan <plan-file>]... [--origin <file>] [--relock <file>] [--lock-only] [--verification <file>]
@@ -50,14 +52,16 @@ IF verification given AND the file is missing or contains a line that is not a `
 Run:
   git status --short
   git fetch origin
-Assert `origin/master` resolves.
+  python3 "$SKILL_DIR/../rebase-origin-main/scripts/rebase_base.py" --repo "<repo>" --refresh-default
+base_branch = the refreshed `refs/remotes/origin/HEAD` branch name without `origin/`; stop if it is unavailable.
+Assert `origin/<base_branch>` resolves.
 
 working_changed = tracked + untracked files in the current worktree
-committed_changed = `git diff --name-only origin/master...HEAD`
-ahead = `git rev-list --count origin/master..HEAD`
+committed_changed = `git diff --name-only origin/<base_branch>...HEAD`
+ahead = `git rev-list --count origin/<base_branch>..HEAD`
 
 IF NOT lock-only AND working_changed empty AND committed_changed empty AND ahead == 0
-  ERROR "The current branch has no work to commit or publish relative to origin/master."
+  ERROR "The current branch has no work to commit or publish relative to origin/<base_branch>."
 
 Inspect the complete current diff, untracked files, and commits. Confirm they describe one coherent
 PR purpose. Do not silently discard, stash, rewrite, or absorb unrelated developer changes.
@@ -96,7 +100,7 @@ IF lock-only: go to RETURN.
 ========== SCOPE CHECK ==========
 
 It runs before anything is committed or pushed, so out-of-goal work never reaches the PR.
-mb = `git merge-base origin/master HEAD`.
+mb = `git merge-base origin/<base_branch> HEAD`.
 pr_files = committed_changed plus the uncommitted files that belong to this PR (exactly what LAND will commit);
 unrelated dirty files LAND leaves untouched are listed as excluded and never sorted.
 Sort every file in pr_files (excluding `plans/**`) into: serves the locked goal, is a direct consequence of it (its
@@ -128,13 +132,13 @@ they block the rebase, that is a blocking report, never a reason to absorb them 
 
 ========== REBASE (ONLY IF NEEDED) ==========
 
-IF `git merge-base --is-ancestor origin/master HEAD` fails:
-  Invoke `rebase-origin-main` with the Bus adapter base `origin/master`.
+IF `git merge-base --is-ancestor origin/<base_branch> HEAD` fails:
+  Invoke `rebase-origin-main --base origin/<base_branch>`.
   It owns conflict triage, dependency/submodule resync when applicable, and force-with-lease push; this skill never runs rebase itself.
   If it reports a non-empty `dropped_shared_infra`, it must be written verbatim into the PR description's `## 其他说明`; never omit it.
 Never describe or publish a pre-rebase tree.
 
-baseline = `git rev-parse origin/master`; head = `git rev-parse HEAD`.
+baseline = `git rev-parse origin/<base_branch>`; head = `git rev-parse HEAD`.
 Assert the remote branch tip is exactly `head`.
 copy_diff = `git diff <baseline>...<head>`; copy_commits = `git log <baseline>..<head> --oneline`.
 
@@ -146,7 +150,7 @@ IF verification given AND any line names a commit other than `head`:
 Read(`$SKILL_DIR/../_bus/docs/pr-template.md`) and Read(`$SKILL_DIR/../_bus/docs/pull-request-template.md`)
 Write the English title and narrative under one hard constraint: **the narrative may come only from the
 immutable `copy_diff` / `copy_commits`; goal and non-goals come only from GOAL_CONTEXT_FILE.** Never re-derive
-from the live worktree, live `HEAD`, or the mutable `origin/master`.
+from the live worktree, live `HEAD`, or the mutable `origin/<base_branch>`.
 
 Fill every section of the GitHub template, in its order:
 - Insert the full `## 目标` and `## 非目标` sections of GOAL_CONTEXT_FILE verbatim; never add source labels,
@@ -171,28 +175,31 @@ IF the check fails: fix and rerun; do not publish an unvalidated body.
 
 ========== PUBLISH ==========
 
-existing = `gh pr list --head <branch> --state open --json number,title,url,isDraft`
+existing = `pr_host find --branch <branch>`
 STOP if it contains more than one PR. `created_as_draft = false`.
 IF existing PR found (Draft or ready):
-  `gh pr edit <number> --title "<title>" --body-file <body-file>`; never change its draft/ready status.
+  `pr_host edit --pr <number> --title "<title>" --body-file <body-file>`; never change its draft/ready status.
 ELSE:
-  `gh pr create --draft --head <branch> --base master --title "<title>" --body-file <body-file>`;
+  `pr_host create --branch <branch> --base <base_branch> --title "<title>" --body-file <body-file>`;
   `created_as_draft = true`.
 
 Capture PR number/URL. A PR created here stays draft; never run `gh pr ready`.
 The explicit PR request authorizes only this create/edit; never approve, merge, close, or delete
 anything without separate authorization.
 
-Then read back and verify the published state — `gh pr edit` can silently fail or truncate,
+Then read back and verify the published state — an edit can silently fail or truncate,
 and this is the only check that proves what is actually on GitHub:
-  published = `gh pr view <number> --json title,body,headRefOid,state,baseRefName,isDraft`
+  published = `pr_host view --pr <number>`
 Bind returned fields as `published_title`, `published_body`, `published_head`, `published_state`,
 `published_base`, and `published_is_draft`; write `published_body` byte-exact to ignored `temp/` as
 `published_body_file`, and rerun `pr_format_check.py --phase <phase>` against it with `published_title`.
 
-IF `published_title` or `published_body` differs from the intended title/body or fails the check
-  Fix via `gh pr edit` and re-verify; do not report success with a non-conforming PR.
-Require `published_head == head`, `published_state == OPEN`, `published_base == master`, and, for a
+body_matches = (`published_body` == the intended body)
+IF host == codeup:
+  body_matches = (`published_body.rstrip("\n")` == the intended body `.rstrip("\n")`)
+IF `published_title` differs from the intended title, OR `body_matches` is false, OR the body fails the check
+  Fix via `pr_host edit` and re-verify; do not report success with a non-conforming PR.
+Require `published_head == head`, `published_state == OPEN`, `published_base == base_branch`, and, for a
 PR created this run, `published_is_draft == true`; otherwise STOP with the observed fields.
 Assert the worktree has no change this skill made.
 

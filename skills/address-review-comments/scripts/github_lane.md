@@ -9,12 +9,12 @@ The GitHub machine reviewer is one reviewer lane of the PR; its output just live
 transcribe it into a `review.md` like everyone else's, and from then on **it is no longer special**: the lane discovery glob already scans it,
 and deduplication, evidence gathering, and adjudication all follow the same path.
 
-`<pr>` = the number given by `--pr`; if not given, take the current branch's PR via `gh pr view --json number`; if that fails, STOP.
+`<pr>` = the number given by `--pr`; if not given, take the current branch's PR via `python3 "<skill_dir>/../_bus/cli_extensions/pr_host.py" find --branch <branch>` (require exactly one result); if that fails, STOP.
 -- Both commands in this section need the PR number, which previously did not exist in INPUT at all, so the flow had no way to obtain it here.
 --   The caller (merge-pr) has already resolved the number itself; passing it explicitly is more reliable than letting this skill guess again.
 
 Run:
-  python3 skills/address-review-comments/scripts/github_review_lane.py fetch --pr <pr>
+  python3 "<skill_dir>/scripts/github_review_lane.py" fetch --pr <pr>
 
 `status` has four values: `head-moved` (race, fewest fields), `no-comments`, `created`, `reused`.
 Only the last two provide `roundDir`, `source` (verbatim source dump + per-item timestamps), `baseRef` / `baseSha`,

@@ -7,7 +7,7 @@ or not (may merge with it) — and that judgment cannot rest on the job name or 
 
 The source of truth for `checks` is `statusCheckRollup` — the one GitHub itself uses to decide whether a PR can merge. In this repo the
 `CI` workflow carries `conventional-commits` / `check (ubuntu-latest)` / `check (macos-latest)` / `check (windows-latest)` /
-`Windows ConPTY package` as independent checks, and `gh run list`'s workflow granularity collapses them into one name, while also listing
+`Windows ConPTY package` as independent checks, and workflow-granularity run listings collapse them into one name while also listing
 workflows such as `Copilot` that do not gate at all.
 
 ## Why attribution must gather evidence mechanically
@@ -31,7 +31,7 @@ and before they were `git add`ed, every per-file lint was blind to them.
 
 Therefore:
 
-- **Do not** decide ownership from the tail of `gh run view --log-failed` alone; truncation is normal.
+- **Do not** decide ownership from the failed-check log tail alone; truncation is normal.
 - **Do not** assume it is an environment problem because the job name contains Windows / macOS / Build / E2E.
 - Judging "not caused by this PR" requires one of the pieces of evidence below, written out in the output.
 
@@ -53,7 +53,7 @@ Ordered by strength; one is enough, but you must name which one:
 
 ## Flaky criterion: rerun, don't debate
 
-When flaky is suspected, **rerun that job** (`gh run rerun <id> --failed`); do not reason yourself into it.
+When flaky is suspected on GitHub, **rerun that job** (`pr_host rerun --run-id <id>`); do not reason yourself into it.
 A passing rerun means flaky, and it may be carried into the merge; still red after the rerun, re-attribute per the three above, and if it cannot be attributed away it is this PR's.
 
 The combination "green earlier, red now, and our diff is disjoint" is the most deceptive — it has both 1 and reverse 2.
@@ -107,8 +107,8 @@ and neither can the next person. The consequence is that **REJECT leaves no trac
 and is rejected again — machine review has no memory, it only sees that the code is still the same. Measured (libtv-desktop): over twenty-odd rounds of one PR,
 the same class of claim was raised again and again in exactly this shape.
 
-So after every `address-review-comments` run, post `triage.md` back to the PR **verbatim** (`gh pr comment
---body-file`). It answers "why this is not changed", and that answer must live in the same place as the code.
+So after every `address-review-comments` run, post `triage.md` back to the PR **verbatim**
+(`pr_host comment --pr <pr> --body-file <file>`). It answers "why this is not changed", and that answer must live in the same place as the code.
 
 The reader is a **human** (and the next agent), not machine review — it cannot read comments. Since 2026-09-18 its overview
 keeps progress across rounds (`Open` / `Resolved since last review` / `Previously missed`), so the old claim "it has no memory"
@@ -124,7 +124,7 @@ is no longer accurate; the accurate claim is **it does not read our replies**, a
 - This repo always uses **squash and merge**.
 - Touch the branch only when it is truly diverged; do not rebase proactively without divergence (`mergeStateStatus` will say).
 - When diverged, **rebase by default** (`rebase-origin-main`). Only when the branch's commit count exceeds
-  `--rebase-max-commits` merge `origin/master` in instead.
+  `--rebase-max-commits` merge `origin/<base_branch>` in instead.
   Reason: rebase replays every commit, so the same conflict may be resolved once on each of several commits,
   while merge resolves it only once. And rebase's usual benefit — linear history — is worth nothing under squash:
   branch-internal history is discarded entirely on landing, and the extra merge commit never reaches master.
@@ -150,10 +150,10 @@ is no longer accurate; the accurate claim is **it does not read our replies**, a
 ## Draft becomes ready first, no stop
 
 On a draft PR **every workflow is skipped**: not a single check registers, and the CI wait section can only wait until timeout.
-So when section 1 sees `isDraft == true`, run `gh pr ready` first and continue, instead of stopping to ask.
+So when section 1 sees `isDraft == true`, run `pr_host ready --pr <pr>` first and continue, instead of stopping to ask.
 
 This is not deciding for the developer: invoking merge-pr means "merge this PR", and draft state directly contradicts it
-— if it really should stay a draft, the right move is not to invoke merge-pr. Ready is also reversible (`gh pr ready --undo`), and the cost is completely
+— if it really should stay a draft, the right move is not to invoke merge-pr. Ready is also reversible, and the cost is completely
 unequal to "stop once, wait for the developer to come back and click, rerun everything".
 
 ## Branch first, then assert
@@ -215,7 +215,7 @@ old feedback nobody refreshed.
 
 Fetching comments, determining rounds, adjudicating, fixing, landing and posting the ledger all belong to it. These **used to** be written in merge-pr:
 calling `pr_signals.py comments` itself to fetch the latest round, rendering it into a free-form file to feed in, then posting the ledger with
-`gh pr comment` itself. Not one of the three belongs to the responsibility "watch the PR until it can merge"; and the free-form
+`pr_host comment` itself. Not one of the three belongs to the responsibility "watch the PR until it can merge"; and the free-form
 entry has no round provenance, so closed-increment gate (d) is **undecidable** on that path. As a lane, round identity is
 the commit the comments pin to, and that gate becomes decidable again.
 
@@ -231,7 +231,9 @@ two new comments nobody had looked at. The criterion must be `fetch` returning `
 
 ## CI convergence criterion
 
-The convergence condition is "`checkCount > 0` **and** pending is empty"; both are required. Judging only pending-empty hits immediately in the tens of seconds
+On Codeup, CI is record-only: take one `checks` snapshot, do not wait or gate merging on it, and never call zero or failed checks a pass.
+
+On GitHub, the convergence condition is "`checkCount > 0` **and** pending is empty"; both are required. Judging only pending-empty hits immediately in the tens of seconds
 right after a push — at that time not a single check has registered yet, so pending is naturally empty, and "zero checks"
 is taken as "all passed". Measured while dogfooding (libtv-desktop): polling right after a push, the first poll reported convergence with passed=0, and tens of seconds later
 14 checks all appeared and started running. **Zero checks is not all green; it is no signal.**
@@ -284,7 +286,7 @@ so the investigation ran off course into branch history, while the branch had no
 ## Holding before merge
 
 `--hold-before-merge` is for a developer manual test of the exact tree that will merge. It runs sections 1-6 in full, including the
-review-lane retake and every merge assertion, and stops only where the next step would be `gh pr merge`. `--no-merge` stops at the
+review-lane retake and every merge assertion, and stops only where the next step would be `pr_host merge`. `--no-merge` stops at the
 start of section 6 and proves less: it skips the retake and the assertions, so it cannot say the PR is ready to merge.
 
 The hold report states `ready to merge at <merge_head>, holding for developer verification`, then the OUTPUT items as of that moment:

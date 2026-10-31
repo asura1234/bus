@@ -11,6 +11,7 @@ must be passed in by the caller — APPLY / REJECT / FLAG are the main agent's j
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import subprocess
@@ -19,7 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_bus" / "cli_extensions"))
+
+import pr_host  # noqa: E402
+
+
 # Lands under `temp/`: it is an ignored local artifact. This is not for convenience — the merge happens after the PR has landed,
 # when no branch can carry a new commit (this repo forbids committing to master directly), and writing an **untracked** in-repo
 # file would immediately fail the next merge-pr / gate-and-fix precondition "the worktree must be clean".
@@ -30,28 +35,18 @@ DEFAULT_LEDGER = "temp/review-metrics.jsonl"
 BODY_FINDINGS_RE = re.compile(r"(?:suppressed\s+comments|previously\s+missed|open)\s*\((?!0\))\d+\)", re.IGNORECASE)
 
 
-def _gh_json(*args: str, cwd: Path | None = None):
-    """`gh` must run inside **the selected repository**.
-
-    Without `cwd` it resolves `{owner}/{repo}` from the caller's current directory, so running `--repo <path>` from another
-    checkout queries repository A's PR and writes the record into repository B's ledger — a line describing the wrong PR's data,
-    while this ledger's entire purpose is long-term trends.
-    """
-
-    done = subprocess.run(["gh", *args], capture_output=True, text=True, check=False, cwd=str(cwd) if cwd else None)
-    if done.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(args)} failed: {done.stderr.strip()}")
-    return json.loads(done.stdout)
+def _host_metrics(pr: str, cwd: Path) -> dict:
+    with contextlib.chdir(cwd):
+        return pr_host.detect().metrics(pr)
 
 
 def collect(pr: str, repo: Path) -> dict:
-    """The part mechanically available from GitHub and git."""
+    """The part mechanically available from the shared PR host."""
 
-    reviews = _gh_json("api", f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews?per_page=100", "--paginate", cwd=repo)
-    threads = _gh_json("api", f"repos/{{owner}}/{{repo}}/pulls/{pr}/comments?per_page=100", "--paginate", cwd=repo)
-    info = _gh_json(
-        "pr", "view", pr, "--json", "baseRefName,headRefOid,additions,deletions,changedFiles,mergedAt", cwd=repo
-    )
+    payload = _host_metrics(pr, repo)
+    reviews = payload["reviews"]
+    threads = payload["threads"]
+    info = payload["info"]
 
     # One review pass = a review with a body, **or** a state-only `APPROVED` / `CHANGES_REQUESTED`.
     # Filtering only on a nonempty body would record a clear conclusion like "a human only clicked Request changes" as 0 passes.
@@ -97,7 +92,7 @@ def append(record: dict, ledger: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", required=True)
-    parser.add_argument("--repo", default=str(REPO_ROOT))
+    parser.add_argument("--repo", default=None)
     parser.add_argument("--ledger", default=None)
     # Adjudication counts have no machine source of truth and must be passed in truthfully by the main agent.
     parser.add_argument("--applied", type=int, required=True)
@@ -106,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verdict", default=None, help="the verdict text at merge time, e.g. \"🔵 Needs a closer look\"")
     args = parser.parse_args(argv)
 
-    repo = Path(args.repo)
+    repo = Path(args.repo) if args.repo else Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
     ledger = Path(args.ledger) if args.ledger else repo / DEFAULT_LEDGER
     try:
         record = collect(args.pr, repo)
