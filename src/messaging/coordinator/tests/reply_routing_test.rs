@@ -601,6 +601,33 @@ fn reply_routing_seen_reply_is_not_rerouted_after_archive_and_restart() {
 }
 
 #[test]
+fn stored_reply_text_is_not_posted_again_as_reply_to_message() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "build this");
+    f.finish(source, "Built and tested.");
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Built and tested.".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms() - 4_000,
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls.iter().all(|call| !call.contains("Reply to message")),
+        "the explicit send is the copy; no wrapper: {calls:?}"
+    );
+}
+
+#[test]
 fn reply_routing_developer_lead_group_routes_its_orchestrator_member_once() {
     for acknowledge in [false, true] {
         let mut f = Fixture::new();

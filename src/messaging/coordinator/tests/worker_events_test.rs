@@ -46,6 +46,23 @@ fn autonomous(f: &mut Fixture, turn: &str, text: &str) {
     f.worker.save(state).unwrap();
 }
 
+fn report(f: &mut Fixture, text: &str) {
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: text.into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms() - 4_000,
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+}
+
 fn collect(f: &mut Fixture) {
     let mut state = f.worker.state.clone();
     state
@@ -179,9 +196,12 @@ fn reply_not_captured_then_late_final_keeps_the_actual_result() {
     collect(&mut f);
     let calls = f.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains("reply_not_captured"));
     assert!(calls[0].contains("The real late result."));
     assert!(calls[0].contains("Late reply"));
+    assert!(
+        !calls[0].contains("reply_not_captured"),
+        "a result in the same minute is the only notice: {calls:?}"
+    );
 }
 
 fn answered_background_request(f: &mut Fixture) -> RequestId {
@@ -1093,7 +1113,7 @@ fn continue_background_work(f: &mut Fixture, at: u64) {
 }
 
 #[test]
-fn an_acknowledged_stall_does_not_hide_a_new_stall_after_work_resumes() {
+fn one_stall_per_request_does_not_repost_after_work_resumes() {
     let mut f = Fixture::new();
     let source = earlier_background_request(&mut f, false);
     let first_at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
@@ -1123,12 +1143,10 @@ fn an_acknowledged_stall_does_not_hide_a_new_stall_after_work_resumes() {
         .filter(|(_, text)| text.contains("No reply (stalled:"))
         .map(|(key, _)| key)
         .collect();
-    assert_eq!(
-        current.len(),
-        1,
-        "a stale printed status must not hide a later stalled episode"
+    assert!(
+        current.is_empty(),
+        "the same request posts one stall; a later episode is not a second notice: {current:?}"
     );
-    assert_ne!(old, current);
     assert_eq!(state.request(source).unwrap().phase, RequestPhase::Active);
 }
 
@@ -1377,6 +1395,255 @@ fn replayed_autonomous_final_after_later_abandonment_claude() {
 #[test]
 fn replayed_autonomous_final_after_later_abandonment_codex() {
     replayed_autonomous_final_after_later_abandonment(Provider::Codex);
+}
+
+#[test]
+fn explicit_send_then_same_provider_final_adds_no_second_body() {
+    let mut f = Fixture::new();
+    ready_worker(&mut f);
+    let text = "Verdict at head abc.";
+    report(&mut f, text);
+    autonomous(&mut f, "background", text);
+    collect(&mut f);
+    let copies = f
+        .worker
+        .state
+        .notices(f.room)
+        .filter(|prompt| prompt.text.trim() == text)
+        .count()
+        + f.worker
+            .state
+            .requests()
+            .filter(|request| request.prompt.text.trim() == text)
+            .count();
+    assert_eq!(
+        copies, 1,
+        "the explicit send is the only copy of the result"
+    );
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("Turn final") && !call.contains("Late reply")),
+        "the orchestrator gets no summary wrapper: {calls:?}"
+    );
+}
+
+#[test]
+fn five_polls_of_the_same_stall_post_one_notice() {
+    let mut f = Fixture::new();
+    let source = earlier_background_request(&mut f, false);
+    let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
+    let mut state = f.worker.state.clone();
+    for poll in 0..5 {
+        state.retain_worker_outcomes(at + poll);
+    }
+    let stalls: Vec<_> = state
+        .worker_outcomes_for(state.request(source).unwrap())
+        .into_iter()
+        .filter(|(_, text)| text.contains("No reply (stalled:"))
+        .collect();
+    assert_eq!(stalls.len(), 1, "{stalls:?}");
+    state
+        .route_worker_replies(at + 10_000, &BTreeSet::new())
+        .unwrap();
+    let notices = state
+        .requests()
+        .filter(|request| request.prompt.text.contains("No reply (stalled:"))
+        .count();
+    assert_eq!(notices, 1);
+}
+
+#[test]
+fn working_agent_with_an_older_queued_request_posts_no_stall() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    ready_worker_at(&mut f, now - 30_000);
+    let mut state = f.worker.state.clone();
+    let queued = state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "older queued work".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(f.orch),
+            now - crate::messaging::model::QUEUED_STALL_MS - 10_000,
+        )
+        .unwrap()[0];
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, now - 1_000)
+        .unwrap();
+    state.retain_worker_outcomes(now);
+    let outcomes = state.worker_outcomes_for(state.request(queued).unwrap());
+    assert!(
+        outcomes.iter().all(|(_, text)| !text.contains("No reply")),
+        "a Working agent posts no stall for an older queued request: {outcomes:?}"
+    );
+}
+
+#[test]
+fn a_stall_and_a_later_abandon_post_one_outcome() {
+    let mut f = Fixture::new();
+    let source = earlier_background_request(&mut f, false);
+    let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
+    let mut state = f.worker.state.clone();
+    state.retain_worker_outcomes(at);
+    state.recover_idle_request(source, at + 1_000).unwrap();
+    state.retain_worker_outcomes(at + 1_000);
+    let outcomes = state.worker_outcomes_for(state.request(source).unwrap());
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert!(outcomes[0].1.contains("No reply (stalled:"), "{outcomes:?}");
+    assert!(
+        outcomes.iter().all(|(_, text)| !text.contains("abandoned")),
+        "{outcomes:?}"
+    );
+}
+
+#[test]
+fn an_abandon_without_a_closer_does_not_render_abandoned_abandoned() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "unanswered work");
+    let mut state = f.worker.state.clone();
+    state
+        .recover_idle_request(source, io::now_ms() - 4_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let text = f.calls.lock().unwrap()[0].clone();
+    assert!(text.contains("No reply (abandoned:"), "{text}");
+    assert!(!text.contains("abandoned: abandoned"), "{text}");
+    assert!(text.contains("abandoned: idle"), "{text}");
+}
+
+#[test]
+fn an_abandon_with_a_same_minute_result_posts_nothing() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "unanswered work");
+    let at = io::now_ms() - 4_000;
+    let mut state = f.worker.state.clone();
+    state.recover_idle_request(source, at).unwrap();
+    f.worker.save(state).unwrap();
+    report(&mut f, "The review landed.");
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls.iter().all(|call| !call.contains("No reply")),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn reply_not_captured_after_an_explicit_send_is_not_a_room_message() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    report(&mut f, "Already reported the head.");
+    let now = io::now_ms() + 120_000;
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    f.worker.save(state).unwrap();
+    let mut state = f.worker.state.clone();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("reply_not_captured")),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn a_restart_burst_posts_no_per_request_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    assert_eq!(
+        state.request(source).unwrap().failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    assert!(state
+        .announce_restart("Restarted old -> new (by agent:9).", now)
+        .unwrap());
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("Restarted old -> new")),
+        "{calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("reply_not_captured")),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn same_minute_late_result_replaces_pending_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state.retain_worker_outcomes(now);
+    let pending: Vec<_> = state
+        .worker_outcomes_for(state.request(source).unwrap())
+        .into_iter()
+        .filter(|(_, text)| text.contains("reply_not_captured"))
+        .collect();
+    assert_eq!(
+        pending.len(),
+        1,
+        "the quiet outcome is retained before the result arrives: {pending:?}"
+    );
+    f.worker.save(state).unwrap();
+    autonomous(&mut f, "owned", "The real late result.");
+    collect(&mut f);
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("The real late result.")),
+        "the late result still posts: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("reply_not_captured")),
+        "a result in the same minute replaces the pending no-reply: {calls:?}"
+    );
 }
 
 #[path = "worker_event_waiter_overlap_test.rs"]
