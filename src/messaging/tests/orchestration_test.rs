@@ -157,8 +157,8 @@ fn workflow_paths_use_source_detection_only_for_dev_launches() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// What MASTER carries (progress, questions, blockers, plan changes) and what
-/// stays in the work room, as the prompt and rules word it.
+/// MASTER carries new milestones, questions, blockers and plan changes;
+/// a turn with none of those produces no status text.
 const MASTER_REPORT_PHRASES: [&str; 7] = [
     "Report progress, questions and blockers in MASTER; keep details in your room.",
     "A turn no message started posts in your work room.",
@@ -166,7 +166,7 @@ const MASTER_REPORT_PHRASES: [&str; 7] = [
     "every question or decision for the developer;",
     "every blocker that waits on the developer (a dialog they must approve, a destructive action);",
     "anything that changes the plan.",
-    "Keep in your work room: routine dialog approvals, worker hand-offs, step-by-step details, and \"nothing is waiting on you\" notes.",
+    "A turn with none of those ends with no text at all.",
 ];
 
 fn values(room: Option<(&str, u64)>, data: &Path) -> PromptValues {
@@ -305,11 +305,12 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
     // Replies appear in the request's room for developer and agent senders.
-    // Autonomous finals appear in the work room. Progress, questions, blockers
-    // and plan changes go to MASTER with `send --to human`.
+    // Autonomous finals appear in the work room. New milestones, questions,
+    // blockers and plan changes go to MASTER with `send --to human`.
     for phrase in MASTER_REPORT_PHRASES {
         assert!(flat(&text).contains(phrase), "missing {phrase}: {text}");
     }
+    assert!(!text.contains("nothing is waiting on you"), "{text}");
     assert!(!text.contains("automatically, whatever woke you"), "{text}");
     assert!(
         text.contains("bus send --room master --as orch --to human"),
@@ -480,6 +481,46 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
 }
 
 #[test]
+fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
+    let data = temp_root("communication-rules");
+    let root = write_docs(&data).unwrap();
+    let communication =
+        flat(&std::fs::read_to_string(root.join("bus-communication-guide.md")).unwrap());
+    for phrase in [
+        "No message without new information.",
+        "One copy of each result.",
+        "No \"still working\" posts.",
+        "Bus does not wrap a result.",
+        "The orchestrator does not narrate.",
+        "One developer post per review round.",
+        "No new toasts or popup errors.",
+        "Agents are only Idle, Working, Blocked or Unavailable.",
+        "A background job whose head and result are unchanged sends nothing",
+        "a new verdict, finding, blocker, or question is still sent once",
+        "`[waiting-on-you]` is for a new hard blocker",
+        "Do not reply Ready merely to acknowledge that prompt.",
+        "one explicit send to the intended recipient is the delivery.",
+    ] {
+        assert!(communication.contains(phrase), "missing {phrase}");
+    }
+    assert_eq!(communication.matches("a final no-reply outcome").count(), 2);
+    assert!(!communication.contains("ends with one short line"));
+    assert!(!communication.contains(" stalled "));
+
+    let rules = flat(&std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap());
+    let cli = flat(&std::fs::read_to_string(root.join("how-to-bus-cli.md")).unwrap());
+    for text in [&rules, &cli] {
+        assert!(
+            text.contains("A wake is only the one real notice"),
+            "{text}"
+        );
+        assert!(!text.contains("Agent process exited: NAME"), "{text}");
+        assert!(!text.contains(" stalled "), "{text}");
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
 fn each_provider_gets_its_own_prompt_delivery() {
     let spool = temp_root("args");
     private_dir(&spool).unwrap();
@@ -555,8 +596,11 @@ fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
 }
 
 #[test]
-fn prompt_message_carries_the_prompt_text() {
-    assert!(prompt_message("Be brief.").ends_with("\n\nBe brief."));
+fn prompt_message_carries_the_prompt_text_without_requesting_an_acknowledgement() {
+    assert_eq!(
+        prompt_message("Be brief."),
+        "Bus: this is your system prompt; Bus could not set it at launch for this provider or session. Follow it for the rest of this session.\n\nBe brief."
+    );
 }
 
 #[test]
@@ -728,9 +772,12 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("read /bus-docs/bus-communication-guide.md"));
     assert!(text.contains("send only what changes the receiver's next step"));
     assert!(text.contains("Read /bus-docs/how-to-bus-cli.md"));
-    assert!(text.contains("keep fixing until every reviewer is Ready"));
-    assert!(text.contains("escalate sharp reviewer disagreements, goal changes"));
-    assert!(text.contains("destructive or outward-facing actions without existing authorization"));
+    assert!(text.contains("Any agent can message any agent by name or ID"));
+    assert!(text.contains("One copy of each result"));
+    assert!(text.contains("A turn with no new information sends nothing"));
+    assert!(text.contains("Agents are only Idle, Working, Blocked or Unavailable"));
+    assert!(text.contains("No new toasts or popup errors"));
+    assert!(text.contains("Do not reply Ready merely to acknowledge a launch prompt"));
     assert!(text.contains("Send only the body"));
     assert!(text.contains("use it only for a hard blocker only the developer can clear"));
     assert!(text.contains("[Bus message N from NAME]"));
@@ -741,7 +788,7 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("run it in the foreground"));
     assert!(text.contains("ok:true and stage:\"replied\" before claiming delivery"));
     assert!(text.contains("check the existing answer with bus message status N before resending"));
-    assert!(text.contains("Blocked/needs help, No reply/abandoned, idle-agent notices"));
+    assert!(text.contains("a final no-reply outcome, Blocked, idle, disk, compaction, restart"));
     assert!(text
         .contains("bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\""));
     assert_eq!(state.requests().count(), 0);
