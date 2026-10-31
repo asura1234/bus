@@ -129,12 +129,11 @@ pub(super) fn parse(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     let fingerprint_context = {
         let mut text_lines = Vec::new();
         let mut style_rows = Vec::new();
-        for index in header..=end {
-            let line = lines[index];
+        for (index, line) in lines.iter().enumerate().skip(header).take(end - header + 1) {
             if line.trim_start().starts_with('◆') && line.contains("[stop]") {
                 continue;
             }
-            text_lines.push(line);
+            text_lines.push(*line);
             style_rows.push(styles.get(index).map(Vec::as_slice).unwrap_or(&[]));
         }
         format!("{}\0{:?}", text_lines.join("\n"), style_rows)
