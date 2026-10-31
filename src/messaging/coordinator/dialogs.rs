@@ -244,9 +244,11 @@ fn restart_suppresses(worker: &Worker, id: AgentId, now: u64) -> bool {
     restart_logged_same_minute(root, snapshot.at_ms.max(now))
 }
 
-/// A handoff waits one health budget, then the same budget again on rollback.
-/// Past that, the marker is not a live restart.
+/// A handoff waits one 45s health budget, then the same budget again on
+/// rollback. Messaging does not call the CLI for that duration. Past 90s,
+/// the marker is not a live restart.
 fn restart_marker_in_window(root: &std::path::Path, now: u64) -> bool {
+    const WINDOW_MS: u64 = 90_000;
     let path = crate::utils::restart_record::marker_path(root);
     let Ok(meta) = std::fs::metadata(&path) else {
         return false;
@@ -258,8 +260,7 @@ fn restart_marker_in_window(root: &std::path::Path, now: u64) -> bool {
         return true;
     };
     let written_ms = u64::try_from(written.as_millis()).unwrap_or(u64::MAX);
-    let budget = u64::try_from(crate::cli::restart::HEALTH_TIMEOUT.as_millis()).unwrap_or(45_000);
-    now.saturating_sub(written_ms) <= budget.saturating_mul(2)
+    now.saturating_sub(written_ms) <= WINDOW_MS
 }
 
 fn restart_logged_same_minute(root: &std::path::Path, stamp: u64) -> bool {
@@ -337,9 +338,9 @@ fn spooled_turn_final(worker: &Worker, id: AgentId, now: u64) -> bool {
     };
     let prompt_id = request.provider_prompt_id.clone();
     let turn_id = request.provider_turn_id.clone();
-    let Ok(records) = crate::agents::providers::spool::records(
-        &worker.data_dir.join("callbacks").join(&launch),
-    ) else {
+    let Ok(records) =
+        crate::agents::providers::spool::records(&worker.data_dir.join("callbacks").join(&launch))
+    else {
         return false;
     };
     // Session start can still be missing, so the turn is not bound yet. A
