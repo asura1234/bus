@@ -134,15 +134,18 @@ line_regex = ['[⋅:⸬⁙.·]\s+[1-9][0-9]*\s+│']
 # signals that remain. They must outrank the idle OSC rules below, and stay
 # under dialog and login rules so a question card is still blocked.
 # Captured 2026-10-31: "▾ Tasks 1" plus "⸬ Run …", while a braille status
-# line ended in "[stop]". The header count includes completed rows, so
-# "Tasks N" alone is not work left. A ✓ row and Tasks 0 stay idle.
+# line ended in "[stop]". The same live row animates through ⸬, ⋅, :, and ⁙
+# before "Run". Matching only ⸬ lets the other frames fall through to the
+# idle OSC title, so Bus submits while that shell is still running.
+# The header count includes completed rows, so "Tasks N" alone is not work
+# left. A ✓ row and Tasks 0 stay idle.
 [[rules]]
 id = "background_tasks_panel_working"
 state = "working"
 priority = 1165
 region = "whole_recent"
 visible_working = true
-line_regex = ['^\s*⸬\s+\S']
+line_regex = ['^\s*(?:⸬\s+\S|[:⋅⁙]\s+Run\s+\S)']
 
 # Grok 1.0.70 draws this above the prompt while background commands, monitors,
 # loops, or subagents are still running and the turn looks idle. The companion

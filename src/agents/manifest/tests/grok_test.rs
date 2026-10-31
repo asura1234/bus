@@ -240,6 +240,33 @@ fn completed_tasks_panel_does_not_hold_delivery() {
     assert_eq!(zero.state, AgentState::Idle, "{zero:?}");
 }
 
+/// Idle-OSC frame captured while Bus native-submitted. The row was a
+/// background `find` Grok still recorded as running. That row also draws
+/// as `⋅ Run`, `: Run`, and `⁙ Run` on the neighboring frames.
+const RUNNING_TASK_ROW: &str =
+    include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-running-task-row.txt");
+
+#[test]
+fn captured_running_task_row_stays_working_for_every_animated_marker() {
+    assert!(RUNNING_TASK_ROW.contains("⸬ Run Locate the bus CLI binary"));
+    assert!(!RUNNING_TASK_ROW.contains("[stop]"));
+    for marker in ["⸬", "⋅", ":", "⁙"] {
+        let screen = RUNNING_TASK_ROW.replacen('⸬', marker, 1);
+        let result = detect_screen_with_osc(AgentKind::Grok, &screen, "grok", "4;0;0");
+        assert_eq!(
+            result.state,
+            AgentState::Working,
+            "marker {marker} must hold delivery: {result:?}"
+        );
+        assert!(result.visible_working, "{marker} {result:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("background_tasks_panel_working"),
+            "{marker}"
+        );
+    }
+}
+
 /// Grok 1.0.70 foreground shell, captured while one Ctrl+C was about to be
 /// sent. The status line is a braille spinner plus `[stop]`, and the footer
 /// is `Ctrl+c:cancel` with `Ctrl+b:send to bg`.
