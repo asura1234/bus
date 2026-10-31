@@ -1,10 +1,9 @@
 //! Coordinator worker ownership.
 use super::storage::remove_spooled;
 use super::{
-    control_dispatch, diagnostics, io, mpsc, schema, usage, AgentId, Arc, BTreeMap, BTreeSet,
-    BusCommand, BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Method,
-    Mutex, PathBuf, Provider, RequestId, RequestPhase, ResponseResult, RuntimeStatus, StoragePause,
-    Transport,
+    AgentId, Arc, BTreeMap, BTreeSet, BusCommand, BusEvent, BusSnapshot, BusState,
+    CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId, RequestPhase, RuntimeStatus,
+    StoragePause, Transport, control_dispatch, diagnostics, io, mpsc, usage,
 };
 use crate::agents::providers::spool;
 use crate::messaging::perf;
@@ -13,7 +12,9 @@ use std::path::Path;
 
 mod callback_spool;
 mod control_reads;
+mod history;
 mod restart_notice;
+mod restored_prompt;
 use control_reads::interrupts_delivery;
 
 /// How often a tick moves settled history out of `state.json`.
@@ -236,24 +237,6 @@ impl Worker {
         self.durable_state = state.clone();
         self.state = state;
         Ok(())
-    }
-
-    /// Before serving anything, deduplicates crash copies in history, so the
-    /// rewrite never runs on the UI thread or between commands.
-    fn compact_history(&self) {
-        match self.store.compact_history() {
-            Ok(true) => tracing::info!(
-                event = "bus.history.compacted",
-                entries = self.state.history().len(),
-                "Bus history rewritten without duplicate crash copies"
-            ),
-            Ok(false) => {}
-            Err(error) => tracing::warn!(
-                event = "bus.history.compact_failed",
-                %error,
-                "Bus history keeps duplicate crash copies until the next start"
-            ),
-        }
     }
 
     /// Runs the archive pass at most once per [`ARCHIVE_EVERY`].
@@ -584,64 +567,6 @@ impl Worker {
         })
     }
 
-    /// Ctrl+C on Grok's "Waiting for response…" unsends Bus's prompt into the
-    /// composer. That screen stays working until this owned line-kill runs, so
-    /// the next delivery is not refused for an occupied composer.
-    fn withdraw_restored_grok_prompts(&mut self) {
-        let panes: Vec<_> = self
-            .state
-            .agents()
-            .filter(|agent| {
-                agent.provider == Provider::Grok
-                    && agent.interrupt_pending
-                    && agent.runtime_identity.pane_id.is_some()
-            })
-            .map(|agent| {
-                (
-                    agent.id,
-                    agent.runtime_identity.pane_id.clone().unwrap_or_default(),
-                )
-            })
-            .collect();
-        for (id, pane) in panes {
-            let output = self
-                .transport
-                .request(Method::AgentRead(schema::AgentReadParams {
-                    target: pane.clone(),
-                    source: schema::ReadSource::Visible,
-                    lines: None,
-                    format: schema::ReadFormat::Text,
-                    strip_ansi: true,
-                }));
-            let Ok(ResponseResult::PaneRead { read }) = output else {
-                continue;
-            };
-            let Some(keys) = crate::server::api::grok_restored_prompt_clear_keys(&read.text) else {
-                continue;
-            };
-            tracing::info!(
-                event = "bus.agent.interrupt.withdraw",
-                agent_id = id.0,
-                keys = keys.len(),
-                "Withdrawing the prompt Ctrl+C restored into the Grok composer"
-            );
-            if let Err(error) =
-                self.transport
-                    .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
-                        target: pane,
-                        keys,
-                    }))
-            {
-                tracing::warn!(
-                    event = "bus.agent.interrupt.withdraw",
-                    agent_id = id.0,
-                    error = %error.message,
-                    "Could not withdraw the restored Grok prompt"
-                );
-            }
-        }
-    }
-
     fn consume_all_callbacks(&mut self) -> Result<(), String> {
         let agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in agents {
@@ -726,7 +651,7 @@ fn recorded_codex_end(
     request: &crate::messaging::model::Request,
 ) -> Option<crate::messaging::model::RecordedTurnEnd> {
     use crate::agents::providers::codex::usage::{
-        codex_prompt_turn, codex_turn_prompts, read_codex_turn_end, CodexTurnEnd, PromptTurn,
+        CodexTurnEnd, PromptTurn, codex_prompt_turn, codex_turn_prompts, read_codex_turn_end,
     };
     use crate::messaging::model::RecordedTurnEnd;
     let unreadable = |error: &std::io::Error| {

@@ -116,10 +116,7 @@ fn positive_count(count: &str) -> bool {
 /// composer and drops `[stop]`. That body is still Bus's submission. A
 /// developer draft does not start with the Bus envelope.
 pub(super) fn restored_bus_prompt(screen: &str) -> bool {
-    if screen.contains("[stop]") {
-        return false;
-    }
-    input(screen).is_some_and(|body| body.starts_with("[Bus message "))
+    crate::agents::grok_surface::restored_prompt_clear_keys(screen).is_some()
 }
 
 pub(super) fn input(screen: &str) -> Option<String> {
@@ -378,8 +375,8 @@ mod tests {
             "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
         );
         assert!(restored_bus_prompt(screen));
-        let keys = super::super::grok_restored_prompt_clear_keys(screen).expect("keys");
-        assert!(keys.len() >= 3 && keys.len() % 3 == 0);
+        let keys = crate::agents::grok_surface::restored_prompt_clear_keys(screen).expect("keys");
+        assert!(keys.len() >= 3 && keys.len().is_multiple_of(3));
         assert!(keys
             .chunks(3)
             .all(|chunk| chunk == ["ctrl+a", "ctrl+k", "ctrl+u"]));
@@ -387,7 +384,7 @@ mod tests {
         assert!(!restored_bus_prompt(NATIVE_1070_EMPTY));
         let developer = screen.replace("[Bus message", "developer note");
         assert!(!restored_bus_prompt(&developer));
-        assert!(super::super::grok_restored_prompt_clear_keys(&developer).is_none());
+        assert!(crate::agents::grok_surface::restored_prompt_clear_keys(&developer).is_none());
     }
 
     #[test]

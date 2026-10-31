@@ -1,4 +1,45 @@
 //! Version-bound Grok composer framing shared by input and dialog observers.
+/// One owned line-kill per composer line when Ctrl+C has put Bus's prompt
+/// back. `[stop]` means the turn is still cancelling. A developer draft does
+/// not start with the Bus envelope.
+pub(crate) fn restored_prompt_clear_keys(screen: &str) -> Option<Vec<String>> {
+    if screen.contains("[stop]") {
+        return None;
+    }
+    let lines: Vec<&str> = screen.lines().collect();
+    let bottom = lines.iter().rposition(|line| composer_border(line))?;
+    let top = lines[..bottom]
+        .iter()
+        .rposition(|line| composer_border(line))?;
+    if top + 1 >= bottom {
+        return None;
+    }
+    let first = framed_content(lines[top + 1])?;
+    let body = first.trim_start().strip_prefix('❯')?.trim_start();
+    if !body.starts_with("[Bus message ") {
+        return None;
+    }
+    let mut count = 1usize;
+    for line in &lines[top + 2..bottom] {
+        framed_content(line)?;
+        count += 1;
+    }
+    let count = count.clamp(1, 8);
+    let mut keys = Vec::with_capacity(count * 3);
+    for _ in 0..count {
+        keys.extend(["ctrl+a", "ctrl+k", "ctrl+u"].map(str::to_owned));
+    }
+    Some(keys)
+}
+
+fn framed_content(line: &str) -> Option<&str> {
+    let line = line.trim_end();
+    match line.trim_start().strip_prefix('│') {
+        Some(inner) => Some(inner.strip_suffix('│')?.trim_end()),
+        None => Some(line),
+    }
+}
+
 pub(crate) fn composer_border(line: &str) -> bool {
     let line = line.trim();
     let rules = |text: &str| text.chars().count() >= 3 && text.chars().all(|c| c == '─');

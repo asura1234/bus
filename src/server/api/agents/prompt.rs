@@ -10,20 +10,6 @@ use std::time::Duration;
 mod composer;
 mod grok;
 
-/// One owned line-kill sequence per restored composer line. Extra kills on a
-/// line that already cleared are no-ops; a developer draft is not included.
-pub(crate) fn grok_restored_prompt_clear_keys(screen: &str) -> Option<Vec<String>> {
-    if !grok::restored_bus_prompt(screen) {
-        return None;
-    }
-    let lines = grok::input(screen)?.lines().count().clamp(1, 8);
-    let mut keys = Vec::with_capacity(lines * 3);
-    for _ in 0..lines {
-        keys.extend(["ctrl+a", "ctrl+k", "ctrl+u"].map(str::to_owned));
-    }
-    Some(keys)
-}
-
 #[cfg(test)]
 pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SUBMIT_DELAY;
 
