@@ -80,7 +80,15 @@ if [ -z "${HOME:-}" ]; then
   echo "HOME must be the real login home; a scratch HOME has no logins" >&2
   exit 1
 fi
-exec env -i HOME="$HOME" PATH="$root/bin:/usr/bin:/bin" \
+# Pass SHELL. env -i otherwise makes Bus spawn /bin/sh, which has no
+# shell integration, so agent add sends no launch input.
+shell=${SHELL:-/bin/zsh}
+case "$shell" in
+  *zsh|*bash|*fish|*pwsh|*powershell) ;;
+  *) shell=/bin/zsh ;;
+esac
+exec env -i HOME="$HOME" SHELL="$shell" USER="${USER:-$(id -un)}" LOGNAME="${LOGNAME:-$(id -un)}" \
+  LANG="${LANG:-en_US.UTF-8}" PATH="$root/bin:/usr/bin:/bin" \
   TERM="${TERM:-xterm-256color}" BUS_DATA_DIR="$root/data" \
   "$root/bin/bus" "$@"
 WRAPPER
@@ -852,3 +860,24 @@ idle then deliver, and an approval card without `--yolo`.
   `BUS_KIMI_TRUST_SHA`: the first agent in a fresh scratch folder must expose
   the native Bus trust dialog, and the second must reach the composer without
   it. Record the one throwaway trust key added by the native answer.
+- **2026-11-01 — Kimi busy footers:** Symptom: an empty Kimi composer with
+  `[N tasks running]`, `Running a command`, or `↑ to edit · ctrl-s to steer`
+  was published Idle, and a send pasted into Kimi's own queue. Cause:
+  `current_empty_composer` (priority 70) sets `visible_idle`, so the
+  Working-to-Idle hold never starts. On Kimi 2.4.1 the in-progress bullet
+  `● Running a command` sits above the composer. The bottom five lines are
+  the box, `K3.1 Pro thinking: high`, and `context:`. That effort footer is
+  also the ready idle composer, so it is not a busy marker. A finished bullet
+  is `Ran a command` and stays Idle. `[1 task running]` on the footer is
+  Working. Test: busy-then-idle, only when `agent add --help` lists `kimi`.
+  Rule: those three markers are Working and outrank the empty composer.
+  Match `Running a command` on the visible screen. A send while that marker
+  is Working queues with `agent_working` and must not leave `draft-*.txt`.
+  `▶ Run this command?` for the test's own `sleep 45` is a dialog. Choose
+  `Approve once` through `sbus agent dialog` and `sbus agent choose`. Do not
+  press Enter on the composer. Scratch `sbus` must pass `SHELL` (`zsh`,
+  `bash`, or `fish`); `env -i` without it spawns `/bin/sh` and `agent add`
+  sends no launch input. A later `reply_not_captured` after the text is on
+  screen is the wire-settlement gap, not this detection check. A history
+  line `1 background task still running` without the footer
+  `[N tasks running]` can still be Idle.
