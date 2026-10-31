@@ -9,6 +9,8 @@ use std::io::Result as IoResult;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(any(windows, test))]
+use std::process::Command;
 use std::process::Output;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;

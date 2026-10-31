@@ -4,7 +4,7 @@ use super::{pids_holding, pids_owned, process_alive, SessionPaths};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-pub(super) fn kill_pid(pid: u32) {
+fn kill_pid(pid: u32) {
     if pid <= 1 || pid == std::process::id() {
         return;
     }
@@ -19,7 +19,7 @@ pub(super) fn kill_pid(pid: u32) {
 /// Ends this process without running destructors. The reap watcher uses it
 /// after the scratch children are already signaled, so a dead test cannot
 /// leave the detached host behind.
-pub(super) fn kill_self() -> ! {
+pub(in crate::devtools::tui) fn kill_self() -> ! {
     #[cfg(unix)]
     unsafe {
         libc::kill(std::process::id() as libc::pid_t, libc::SIGKILL);
@@ -28,7 +28,7 @@ pub(super) fn kill_self() -> ! {
 }
 
 /// SIGTERM, then SIGKILL whatever is still alive after `grace`.
-pub(super) fn reap_pids(pids: &[u32], grace: Duration) {
+fn reap_pids(pids: &[u32], grace: Duration) {
     let pids: Vec<u32> = pids
         .iter()
         .copied()
@@ -52,7 +52,7 @@ pub(super) fn reap_pids(pids: &[u32], grace: Duration) {
 }
 
 /// Token holders plus anything else with a file open under `dir`.
-pub(super) fn session_pids(dir: &Path, token: &str) -> Vec<u32> {
+pub(in crate::devtools::tui) fn session_pids(dir: &Path, token: &str) -> Vec<u32> {
     let mut pids = if token.is_empty() {
         Vec::new()
     } else {
@@ -67,7 +67,7 @@ pub(super) fn session_pids(dir: &Path, token: &str) -> Vec<u32> {
 }
 
 /// Kills the host, the scratch Bus, and every process still attached to `dir`.
-pub(super) fn reap_session_tree(
+pub(in crate::devtools::tui) fn reap_session_tree(
     dir: &Path,
     token: &str,
     host_pid: Option<u32>,
@@ -85,7 +85,11 @@ pub(super) fn reap_session_tree(
 /// Blocks until `observer` is gone, then kills this session's processes.
 /// `observer` is the test process named by [`super::REAP_WITH_ENV`]. A zombie still
 /// counts as alive, which matches `kill(pid, 0)` until the runner waits it.
-pub(super) fn watch_until_observer_exits(observer: u32, paths: SessionPaths, token: String) {
+pub(in crate::devtools::tui) fn watch_until_observer_exits(
+    observer: u32,
+    paths: SessionPaths,
+    token: String,
+) {
     while process_alive(observer) {
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -104,7 +108,7 @@ pub(super) fn watch_until_observer_exits(observer: u32, paths: SessionPaths, tok
     }
 }
 
-pub(super) fn terminate(pid: u32) {
+pub(in crate::devtools::tui) fn terminate(pid: u32) {
     #[cfg(unix)]
     unsafe {
         libc::kill(pid as libc::pid_t, libc::SIGTERM);

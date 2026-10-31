@@ -493,8 +493,7 @@ pub(super) fn pids_holding(dir: &Path) -> Vec<u32> {
 #[path = "session_reap.rs"]
 mod reap;
 pub(super) use reap::{
-    kill_pid, kill_self, reap_pids, reap_session_tree, session_pids, terminate,
-    watch_until_observer_exits,
+    kill_self, reap_session_tree, session_pids, terminate, watch_until_observer_exits,
 };
 
 /// Sockets a running Bus serves from its data directory. Bus runs its herdr
