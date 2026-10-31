@@ -28,6 +28,7 @@ pub(super) fn observer(
     ownership::OwnedComposer::new(kind, expected)
 }
 
+#[cfg(test)]
 pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObservation {
     observe_with_cursor(kind, screen, expected, None)
 }
