@@ -28,7 +28,7 @@ impl BusState {
         waited: &BTreeSet<PromptId>,
     ) -> Result<bool, ModelError> {
         let mut changed = self.retain_worker_outcomes(now_ms);
-        changed |= self.drop_duplicate_reply_wakes();
+        changed |= self.drop_duplicate_reply_wakes(now_ms)?;
         let mut batches: BTreeMap<AgentId, Vec<Part>> = BTreeMap::new();
         for part in self
             .notification_parts(None, waited)
@@ -89,31 +89,66 @@ impl BusState {
         Ok(changed)
     }
 
-    /// A captured reply whose text is already a room message is not posted again
-    /// as `Reply to message`. The route is seen so the next tick does not retry it.
-    fn drop_duplicate_reply_wakes(&mut self) -> bool {
+    /// A captured reply the worker already sent for this request is not posted
+    /// again as `Reply to message`. A final whose body was sent the same way is
+    /// not posted as `Turn final`. A route that still points at a queued notice
+    /// is withdrawn and that notice is rebuilt.
+    fn drop_duplicate_reply_wakes(&mut self, now_ms: u64) -> Result<bool, ModelError> {
+        let mut notices = BTreeSet::new();
+        let mut changed = false;
         let stored: Vec<_> = self
             .requests()
             .filter(|request| self.reply_needs_ack(request))
-            .filter(|request| {
-                request.reply().is_some_and(|reply| {
-                    self.result_already_in_room(request.room_id, request.agent_id, &reply.text)
-                })
-            })
+            .filter(|request| self.captured_reply_already_sent(request))
             .map(reply_key)
             .collect();
-        let mut changed = false;
         for key in stored {
-            if self
-                .reply_routes
-                .get(&key)
-                .is_none_or(|route| *route == ReplyRoute::Pending)
-            {
-                self.reply_routes.insert(key, ReplyRoute::Seen);
+            if self.withdraw_reply_route(key, &mut notices) {
                 changed = true;
             }
         }
-        changed
+        let finals: Vec<_> = self
+            .worker_events
+            .iter()
+            .filter(|(_, event)| event.kind == WorkerEventKind::Final)
+            .map(|(key, event)| (key.clone(), event.clone()))
+            .collect();
+        let finals: Vec<String> = finals
+            .into_iter()
+            .filter(|(_, event)| self.event_pending(event) && self.final_has_explicit_copy(event))
+            .map(|(key, _)| key)
+            .collect();
+        for key in finals {
+            if let Some(event) = self.worker_events.get_mut(&key) {
+                notices.extend(event.route.notification());
+                event.route = ReplyRoute::Seen;
+                changed = true;
+            }
+        }
+        for notice in notices {
+            self.refresh_worker_notification(notice, now_ms)?;
+        }
+        Ok(changed)
+    }
+
+    /// See a reply route that has not been delivered. A settled notice stays.
+    fn withdraw_reply_route(&mut self, key: RequestId, notices: &mut BTreeSet<RequestId>) -> bool {
+        let route = self.reply_routes.get(&key).copied();
+        let withdraw = match route {
+            None | Some(ReplyRoute::Pending) => true,
+            Some(ReplyRoute::Routed(id)) => {
+                self.request(id).is_some_and(|notice| !notice.settled())
+            }
+            Some(ReplyRoute::Seen) => false,
+        };
+        if !withdraw {
+            return false;
+        }
+        if let Some(ReplyRoute::Routed(id)) = route {
+            notices.insert(id);
+        }
+        self.reply_routes.insert(key, ReplyRoute::Seen);
+        true
     }
 
     fn notification_parts(

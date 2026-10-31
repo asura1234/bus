@@ -138,7 +138,8 @@ impl BusState {
         // Do not post the body again and do not add a Late reply or Turn final.
         if self.result_already_in_room(room, worker, text) {
             self.consumed_provider_turns.insert(turn);
-            self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms);
+            self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms)
+                .unwrap_or(true);
             return;
         }
         let Ok(message) =
@@ -168,7 +169,8 @@ impl BusState {
         self.consumed_provider_turns.insert(turn);
         // The posted body is the result. A quiet no-reply stored before it
         // arrived must not ride along in the same wake.
-        self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms);
+        self.retract_suppressed_quiet_outcomes(callback.occurred_at_ms)
+            .unwrap_or(true);
     }
 
     /// A final for a closed owned turn must not wait behind newer unbound work.
@@ -238,6 +240,11 @@ impl BusState {
                     .is_none_or(|a| a.deletion_pending);
             let outcome = self.outcome_to_post(&request, now_ms, expected_end);
             if let Some((class, reason)) = outcome {
+                if class == "ended" {
+                    // A terminal closer replaces an earlier stall sample. The
+                    // replacement is the only outcome this request keeps.
+                    let _withdrawn = self.withdraw_stall_outcomes(&request, now_ms).is_ok();
+                }
                 let idle = request.turn_ended_at_ms.map_or("", |_| "; went idle");
                 self.record_request_event(
                     &request,
@@ -248,57 +255,125 @@ impl BusState {
                 );
             }
         }
-        let retracted = self.retract_suppressed_quiet_outcomes(now_ms);
+        let retracted = self
+            .retract_suppressed_quiet_outcomes(now_ms)
+            .unwrap_or(true);
         retracted || before != self.worker_events.len()
     }
 
-    /// A result that arrived after a quiet no-reply was stored replaces that
-    /// notice. Remove only a still-pending quiet `ended` outcome. Leave the
-    /// late final, any stall, and a real outcome (provider error, startup
-    /// failure, session limit, unsent submission) in place, and do not record
-    /// a replacement no-reply.
-    fn retract_suppressed_quiet_outcomes(&mut self, now_ms: u64) -> bool {
-        let pending: Vec<(String, RequestId)> = self
+    /// A result or a restart that now covers this request replaces a quiet
+    /// no-reply. Remove a quiet `ended` outcome that is still pending or queued
+    /// and not yet delivered. Leave the late final and a real outcome in place,
+    /// and do not record a replacement no-reply.
+    fn retract_suppressed_quiet_outcomes(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<bool, super::ModelError> {
+        let pending: Vec<(String, RequestId, Option<RequestId>)> = self
             .worker_events
             .iter()
             .filter(|(key, event)| {
                 event.kind == WorkerEventKind::Outcome
-                    && event.route == ReplyRoute::Pending
+                    && event.route != ReplyRoute::Seen
                     && key.starts_with("ended:")
                     && stored_quiet_ended(&event.text)
             })
-            .filter_map(|(key, event)| event.group.map(|group| (key.clone(), group)))
-            .collect();
-        let drop_keys: Vec<String> = pending
-            .into_iter()
-            .filter(|(_, group)| {
-                let Some(request) = self.request(*group) else {
-                    return false;
-                };
-                if request.phase != RequestPhase::Abandoned {
-                    return false;
-                }
-                let closer = self.named_abandon_reason(request);
-                self.suppress_outcome(request, now_ms, &closer)
+            .filter_map(|(key, event)| {
+                event.group.map(|group| {
+                    let notice = match event.route {
+                        ReplyRoute::Routed(id) => Some(id),
+                        ReplyRoute::Pending | ReplyRoute::Seen => None,
+                    };
+                    (key.clone(), group, notice)
+                })
             })
-            .map(|(key, _)| key)
+            .collect();
+        let drop_keys: Vec<(String, Option<RequestId>)> = pending
+            .into_iter()
+            .filter(|(_, group, notice)| self.quiet_outcome_now_suppressed(*group, *notice, now_ms))
+            .map(|(key, _, notice)| (key, notice))
             .collect();
         let changed = !drop_keys.is_empty();
-        for key in drop_keys {
+        let mut notices = std::collections::BTreeSet::new();
+        for (key, notice) in drop_keys {
             self.worker_events.remove(&key);
+            notices.extend(notice);
         }
-        changed
+        self.refresh_withdrawn(notices, now_ms)?;
+        Ok(changed)
+    }
+
+    /// A quiet ended outcome stays only while it is still the right notice.
+    /// A restart, or this request's own result, withdraws a pending one and a
+    /// copy that is queued but not yet delivered.
+    fn quiet_outcome_now_suppressed(
+        &self,
+        group: RequestId,
+        notice: Option<RequestId>,
+        now_ms: u64,
+    ) -> bool {
+        if notice.is_some_and(|id| self.request(id).is_some_and(|queued| queued.settled())) {
+            return false;
+        }
+        let Some(request) = self.request(group) else {
+            return false;
+        };
+        if request.phase != RequestPhase::Abandoned {
+            return false;
+        }
+        let closer = self.named_abandon_reason(request);
+        self.suppress_outcome(request, now_ms, &closer)
+    }
+
+    /// Drop stall samples for `request` so a terminal closer is the only outcome.
+    fn withdraw_stall_outcomes(
+        &mut self,
+        request: &Request,
+        now_ms: u64,
+    ) -> Result<(), super::ModelError> {
+        let group = reply_key(request).0;
+        let exact = format!("stalled:{group}");
+        let prefix = format!("stalled:{group}:");
+        let keys: Vec<String> = self
+            .worker_events
+            .keys()
+            .filter(|key| *key == &exact || key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        let mut notices = std::collections::BTreeSet::new();
+        for key in keys {
+            if let Some(event) = self.worker_events.remove(&key) {
+                if let ReplyRoute::Routed(id) = event.route {
+                    if self.request(id).is_some_and(|notice| !notice.settled()) {
+                        notices.insert(id);
+                    }
+                }
+            }
+        }
+        self.refresh_withdrawn(notices, now_ms)
+    }
+
+    fn refresh_withdrawn(
+        &mut self,
+        notices: std::collections::BTreeSet<RequestId>,
+        now_ms: u64,
+    ) -> Result<(), super::ModelError> {
+        for notice in notices {
+            self.refresh_worker_notification(notice, now_ms)?;
+        }
+        Ok(())
     }
 
     /// One stall or one abandon for this request, never both, and never a
-    /// second sample of a stall that was already posted.
+    /// second sample of a stall that was already posted. A terminal closer
+    /// still posts when an earlier stall sample exists; a quiet abandon does not.
     fn outcome_to_post(
         &self,
         request: &Request,
         now_ms: u64,
         expected_end: bool,
     ) -> Option<(&'static str, String)> {
-        if self.posted_class(request, "stalled") || self.posted_class(request, "ended") {
+        if self.posted_class(request, "ended") {
             return None;
         }
         if request.phase == RequestPhase::Abandoned {
@@ -309,7 +384,12 @@ impl BusState {
             if self.suppress_outcome(request, now_ms, &closer) {
                 return None;
             }
+            if self.posted_class(request, "stalled") && quiet_reason(&closer) {
+                return None;
+            }
             Some(("ended", format!("abandoned: {closer}")))
+        } else if self.posted_class(request, "stalled") {
+            None
         } else {
             let reason = self.stall_reason(request, now_ms)?;
             if self.suppress_outcome(request, now_ms, &reason) {
@@ -342,10 +422,9 @@ impl BusState {
 
     fn suppress_outcome(&self, request: &Request, now_ms: u64, reason: &str) -> bool {
         // A provider error, startup failure, or a submission still sitting
-        // unsent stays. Same-minute silence is only for a no-reply that the
-        // result already replaced.
-        let quiet = matches!(reason, "reply_not_captured" | "idle" | "superseded");
-        if !quiet {
+        // unsent stays. Same-minute silence is only for a no-reply that this
+        // request's own result already replaced.
+        if !quiet_reason(reason) {
             return false;
         }
         let at = request.completed_at_ms.unwrap_or(now_ms);
@@ -353,7 +432,7 @@ impl BusState {
             return true;
         }
         reason == "reply_not_captured"
-            && (self.explicit_result_sent(request) || self.restart_burst(request.room_id, now_ms))
+            && (self.captured_reply_already_sent(request) || self.restart_covers(request, now_ms))
     }
 
     fn posted_class(&self, request: &Request, class: &str) -> bool {
@@ -365,56 +444,206 @@ impl BusState {
             .any(|key| key == &exact || key.starts_with(&prefix))
     }
 
+    /// This request's own result landed within a minute of `at_ms`: a final
+    /// grouped to it, or the worker copy assigned to its captured reply.
     fn result_in_same_minute(&self, request: &Request, at_ms: u64) -> bool {
         let start = at_ms.saturating_sub(60_000);
         let end = at_ms.saturating_add(60_000);
-        let in_window = |stamp: u64| (start..=end).contains(&stamp);
-        let is_result = |author: &Author, text: &str| {
-            author == &Author::Agent(request.agent_id) && !is_wrapper(text)
-        };
-        self.notices(request.room_id).any(|prompt| {
-            in_window(prompt.submitted_at_ms) && is_result(&prompt.author, &prompt.text)
-        }) || self.requests().any(|other| {
-            other.id != request.id
-                && other.room_id == request.room_id
-                && in_window(other.prompt.submitted_at_ms)
-                && is_result(&other.prompt.author, &other.prompt.text)
-        })
+        let group = reply_key(request);
+        if self.worker_events.values().any(|event| {
+            event.kind == WorkerEventKind::Final
+                && event.group == Some(group)
+                && (start..=end).contains(&event.at_ms)
+        }) {
+            return true;
+        }
+        self.assigned_copy_at(request, None)
+            .is_some_and(|sent_at| (start..=end).contains(&sent_at))
     }
 
-    /// A worker `bus send` of the result, at any time after the request.
-    fn explicit_result_sent(&self, request: &Request) -> bool {
-        let after = request.prompt.submitted_at_ms;
-        let is_send = |author: &Author, text: &str, at: u64| {
-            author == &Author::Agent(request.agent_id) && at >= after && !is_wrapper(text)
-        };
-        self.notices(request.room_id)
-            .any(|prompt| is_send(&prompt.author, &prompt.text, prompt.submitted_at_ms))
-            || self.requests().any(|other| {
-                other.id != request.id
-                    && other.room_id == request.room_id
-                    && is_send(
-                        &other.prompt.author,
-                        &other.prompt.text,
-                        other.prompt.submitted_at_ms,
-                    )
-            })
+    /// The worker already sent this request's captured reply, at or after the
+    /// request was submitted. An earlier request's identical text does not count.
+    pub(super) fn captured_reply_already_sent(&self, request: &Request) -> bool {
+        request
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty())
+            && self.assigned_copy_at(request, None).is_some()
     }
 
-    /// A restart line in this room within the last 15 minutes. Per-request
-    /// `reply_not_captured` notices in that burst are the extra copies.
-    fn restart_burst(&self, room: RoomId, now_ms: u64) -> bool {
+    /// A restart line covers only requests that already existed when it was posted.
+    fn restart_covers(&self, request: &Request, now_ms: u64) -> bool {
+        self.latest_restart_ms(request.room_id, now_ms)
+            .is_some_and(|restart_at| request.prompt.submitted_at_ms <= restart_at)
+    }
+
+    fn latest_restart_ms(&self, room: RoomId, now_ms: u64) -> Option<u64> {
         const WINDOW_MS: u64 = 15 * 60 * 1000;
-        let recent = |at: u64| now_ms.saturating_sub(at) <= WINDOW_MS;
-        let is_restart =
-            |author: &Author, text: &str| author == &Author::Bus && text.starts_with("Restarted ");
-        self.notices(room).any(|prompt| {
-            recent(prompt.submitted_at_ms) && is_restart(&prompt.author, &prompt.text)
-        }) || self.requests().any(|request| {
-            request.room_id == room
-                && recent(request.prompt.submitted_at_ms)
-                && is_restart(&request.prompt.author, &request.prompt.text)
-        })
+        let mut latest = None;
+        let mut note = |author: &Author, text: &str, at: u64| {
+            if author == &Author::Bus
+                && text.starts_with("Restarted ")
+                && now_ms.saturating_sub(at) <= WINDOW_MS
+            {
+                latest = Some(latest.map_or(at, |prior: u64| prior.max(at)));
+            }
+        };
+        for prompt in self.notices(room) {
+            note(&prompt.author, &prompt.text, prompt.submitted_at_ms);
+        }
+        for other in self.requests().filter(|other| other.room_id == room) {
+            note(
+                &other.prompt.author,
+                &other.prompt.text,
+                other.prompt.submitted_at_ms,
+            );
+        }
+        latest
+    }
+
+    /// When the worker's copy of `request`'s result was sent, if one is assigned
+    /// to this request. `exclude` is a posted final's own message, which is not
+    /// a second copy. Copies are claimed oldest-request first.
+    fn assigned_copy_at(&self, request: &Request, exclude: Option<PromptId>) -> Option<u64> {
+        let text = request
+            .reply()
+            .map(|reply| reply.text.trim().to_owned())
+            .filter(|text| !text.is_empty())?;
+        self.assigned_result_at(
+            request.room_id,
+            request.agent_id,
+            request.prompt.submitted_at_ms,
+            request.id,
+            &text,
+            exclude,
+        )
+    }
+
+    /// A grouped final is withdrawn when this request still receives a worker
+    /// copy of its body after earlier same-text replies have taken theirs.
+    /// An ungrouped final is withdrawn when any other worker copy exists.
+    pub(super) fn final_has_explicit_copy(&self, event: &WorkerEvent) -> bool {
+        if event.kind != WorkerEventKind::Final {
+            return false;
+        }
+        let body = final_body(&event.text);
+        if body.is_empty() {
+            return false;
+        }
+        let Some(group) = event.group else {
+            return self.other_worker_copy(event.room, event.agent, body, Some(event.message));
+        };
+        let Some(request) = self.request(group) else {
+            return self.other_worker_copy(event.room, event.agent, body, Some(event.message));
+        };
+        let (room, worker, submit_at, id) = (
+            request.room_id,
+            request.agent_id,
+            request.prompt.submitted_at_ms,
+            request.id,
+        );
+        self.assigned_result_at(room, worker, submit_at, id, body, Some(event.message))
+            .is_some()
+    }
+
+    fn other_worker_copy(
+        &self,
+        room: RoomId,
+        worker: AgentId,
+        text: &str,
+        exclude: Option<PromptId>,
+    ) -> bool {
+        !self.worker_copies(room, worker, text, exclude).is_empty()
+    }
+
+    fn assigned_result_at(
+        &self,
+        room: RoomId,
+        worker: AgentId,
+        submit_at: u64,
+        request_id: RequestId,
+        text: &str,
+        exclude: Option<PromptId>,
+    ) -> Option<u64> {
+        let copies = self.worker_copies(room, worker, text, exclude);
+        if copies.is_empty() {
+            return None;
+        }
+        let mut claimants = self.reply_claimants(room, worker, text);
+        if !claimants.iter().any(|(_, id)| *id == request_id) {
+            claimants.push((submit_at, request_id));
+            claimants.sort_unstable();
+        }
+        let mut taken = vec![false; claimants.len()];
+        for (copy_at, _) in copies {
+            let Some(index) = claimants
+                .iter()
+                .enumerate()
+                .find(|(index, (submit, _))| !taken[*index] && *submit <= copy_at)
+                .map(|(index, _)| index)
+            else {
+                continue;
+            };
+            if claimants[index].1 == request_id {
+                return Some(copy_at);
+            }
+            taken[index] = true;
+        }
+        None
+    }
+
+    fn worker_copies(
+        &self,
+        room: RoomId,
+        worker: AgentId,
+        text: &str,
+        exclude: Option<PromptId>,
+    ) -> Vec<(u64, PromptId)> {
+        let mut found = std::collections::BTreeMap::<PromptId, u64>::new();
+        let mut keep = |id: PromptId, at: u64, author: &Author, stored: &str| {
+            if exclude == Some(id)
+                || author != &Author::Agent(worker)
+                || is_wrapper(stored)
+                || !same_result_text(stored, text)
+            {
+                return;
+            }
+            found.entry(id).or_insert(at);
+        };
+        for prompt in self.notices(room) {
+            keep(
+                prompt.id,
+                prompt.submitted_at_ms,
+                &prompt.author,
+                &prompt.text,
+            );
+        }
+        for request in self.requests().filter(|request| request.room_id == room) {
+            keep(
+                request.prompt.id,
+                request.prompt.submitted_at_ms,
+                &request.prompt.author,
+                &request.prompt.text,
+            );
+        }
+        let mut copies: Vec<_> = found.into_iter().map(|(id, at)| (at, id)).collect();
+        copies.sort_unstable();
+        copies
+    }
+
+    fn reply_claimants(&self, room: RoomId, worker: AgentId, text: &str) -> Vec<(u64, RequestId)> {
+        let mut claimants: Vec<_> = self
+            .requests()
+            .filter(|request| {
+                request.room_id == room
+                    && request.agent_id == worker
+                    && request
+                        .reply()
+                        .is_some_and(|reply| same_result_text(&reply.text, text))
+            })
+            .map(|request| (request.prompt.submitted_at_ms, request.id))
+            .collect();
+        claimants.sort_unstable();
+        claimants
     }
 
     /// The worker's own earlier message already carries `text`. A task prompt
@@ -631,6 +860,14 @@ fn stored_quiet_ended(text: &str) -> bool {
                 tail.is_empty() || matches!(tail.chars().next(), Some(';' | ')' | ' ' | '\n' | '.'))
             })
         })
+}
+
+fn quiet_reason(reason: &str) -> bool {
+    matches!(reason, "reply_not_captured" | "idle" | "superseded")
+}
+
+fn final_body(text: &str) -> &str {
+    text.split_once('\n').map_or(text, |(_, body)| body).trim()
 }
 
 fn is_wrapper(text: &str) -> bool {

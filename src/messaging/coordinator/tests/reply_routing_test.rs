@@ -628,6 +628,186 @@ fn stored_reply_text_is_not_posted_again_as_reply_to_message() {
 }
 
 #[test]
+fn fresh_eyes_identical_text_from_a_distinct_request_still_wakes() {
+    let mut f = Fixture::new();
+    let first = f.send(Author::Agent(f.orch), "first task");
+    f.finish(first, "Done.");
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Done.".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms() - 4_000,
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let second = f.send(Author::Agent(f.orch), "second task");
+    f.finish(second, "Done.");
+    f.worker.submit_ready().unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices.iter().any(|notice| {
+            notice.prompt.text.contains("Reply to message")
+                && notice
+                    .prompt
+                    .text
+                    .contains(&format!("request {}", second.0))
+        }),
+        "the earlier request's explicit copy must not consume this request's reply: {notices:?}"
+    );
+}
+
+#[test]
+fn fresh_eyes_explicit_send_after_final_before_batch_adds_no_turn_final() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    let text = "Verdict at head abc.";
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            f.agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("worker".into()),
+                terminal_id: Some("worker-terminal".into()),
+                pane_id: Some("worker-pane".into()),
+                session_id: Some("worker-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(f.agent).unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 10_000)
+        .unwrap();
+    state.accept_callback(ProviderCallback {
+        callback_id: "fresh-eyes-final-before-send".into(),
+        sequence: 10,
+        occurred_at_ms: now,
+        agent_id: f.agent,
+        launch_id: "worker".into(),
+        provider_session_id: Some("worker-session".into()),
+        provider_turn_id: Some("background".into()),
+        provider_prompt_id: Some("background".into()),
+        prompt_payload: None,
+        kind: CallbackEventKind::Final { text: text.into() },
+    });
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: text.into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("Turn final")),
+        "the explicit send joined the batch before delivery: {notices:?}"
+    );
+}
+
+#[test]
+fn fresh_eyes_pending_reply_not_captured_is_withdrawn_by_restart() {
+    let mut f = Fixture::new();
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            f.agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("worker".into()),
+                terminal_id: Some("worker-terminal".into()),
+                pane_id: Some("worker-pane".into()),
+                session_id: Some("worker-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(f.agent).unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 30_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let source = f.send(Author::Agent(f.orch), "open work");
+    let mut state = f.worker.state.clone();
+    state.begin_submission(source, "worker", 0).unwrap();
+    state
+        .record_submission(
+            source,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("worker-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    state.accept_callback(ProviderCallback {
+        callback_id: "fresh-eyes-restart-start".into(),
+        sequence: 1,
+        occurred_at_ms: now - 9_000,
+        agent_id: f.agent,
+        launch_id: "worker".into(),
+        provider_session_id: Some("worker-session".into()),
+        provider_turn_id: Some("owned".into()),
+        provider_prompt_id: Some("owned".into()),
+        prompt_payload: Some("open work".into()),
+        kind: CallbackEventKind::PromptStarted,
+    });
+    state
+        .observe_status(f.agent, RuntimeStatus::Working, now - 9_000)
+        .unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
+    assert!(state
+        .announce_restart("Restarted old -> new (by agent:9).", now)
+        .unwrap());
+    f.worker.save(state).unwrap();
+    let mut state = f.worker.state.clone();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("Restarted old -> new")),
+        "{calls:?}"
+    );
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
+        "the restart must replace the already pending per-request outcome: {notices:?}"
+    );
+}
+
+#[test]
 fn reply_routing_developer_lead_group_routes_its_orchestrator_member_once() {
     for acknowledge in [false, true] {
         let mut f = Fixture::new();
