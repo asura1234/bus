@@ -72,8 +72,7 @@ fn interrupt_help_uses_ctrl_c_for_grok_and_esc_for_kimi() {
     let args = ["agent", "interrupt", "--help"].map(String::from);
     let text = super::help_for(super::command_tree(false), &args).unwrap();
     assert!(
-        text.contains("Esc for Claude/Codex/Kimi")
-            && text.contains("Ctrl+C for Cursor and Grok"),
+        text.contains("Esc for Claude/Codex/Kimi") && text.contains("Ctrl+C for Cursor and Grok"),
         "{text}"
     );
 }
