@@ -70,6 +70,23 @@ fn external_editor_preserves_unicode_and_all_trailing_whitespace_through_readbac
     assert!(!fixture.exchange.recovery().exists());
 }
 
+#[test]
+fn a_live_exchange_never_quarantines_its_recovery_file() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-draft-live-recovery");
+    let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
+    fs::write(exchange.recovery(), "active bytes").unwrap();
+    assert_eq!(
+        Exchange::begin(root.clone(), Duration::from_secs(60))
+            .err()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::WouldBlock
+    );
+    assert_eq!(fs::read(exchange.recovery()).unwrap(), b"active bytes");
+    drop(exchange);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn exchange_files_and_directory_are_private() {
@@ -203,21 +220,18 @@ fn stale_ack_and_changed_owner_cannot_authorize_an_operation() {
 }
 
 #[test]
-fn unresolved_recovery_and_cancelled_native_launch_block_replacement_transactions() {
+fn orphaned_recovery_is_quarantined_and_cancelled_native_launch_blocks_replacement() {
     let root = crate::utils::test_temp::unique_temp_path("bus-draft-unresolved");
     let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
     exchange.save_recovery("still recoverable").unwrap();
     let saved = exchange.recovery().to_owned();
     drop(exchange);
-    assert_eq!(
-        Exchange::begin(root.clone(), Duration::from_secs(60))
-            .err()
-            .unwrap()
-            .kind(),
-        io::ErrorKind::WouldBlock
-    );
-    assert_eq!(fs::read_to_string(&saved).unwrap(), "still recoverable");
-    fs::remove_file(saved).unwrap();
+    let next = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
+    assert!(!saved.exists());
+    let recovered = saved.with_extension("recovered");
+    assert_eq!(fs::read_to_string(&recovered).unwrap(), "still recoverable");
+    drop(next);
+    fs::remove_file(recovered).unwrap();
     let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
     exchange.request_capture().unwrap();
     drop(exchange);

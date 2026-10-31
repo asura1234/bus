@@ -23,7 +23,11 @@ pub(crate) fn committed_final(wire: &str, turn_id: u64, prompt: &str) -> Option<
 
 #[cfg(test)]
 pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Option<Outcome> {
-    committed_outcome_lines(wire.lines().map(|line| Ok(line.to_owned())), turn_id, prompt)
+    committed_outcome_lines(
+        wire.lines().map(|line| Ok(line.to_owned())),
+        turn_id,
+        prompt,
+    )
 }
 
 fn committed_outcome_lines(
@@ -165,6 +169,7 @@ fn terminal_outcome(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve(
     home: &Path,
     cwd: &Path,

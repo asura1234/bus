@@ -13,6 +13,14 @@ visible_blocker = true
 contains = ["Trust this folder?", "Trust and continue"]
 
 [[rules]]
+id = "current_cache_expiry_panel"
+state = "blocked"
+priority = 445
+region = "whole_recent"
+visible_blocker = true
+contains = ["Cache expired", "Don't ask me again"]
+
+[[rules]]
 id = "current_approval_panel"
 state = "blocked"
 priority = 400

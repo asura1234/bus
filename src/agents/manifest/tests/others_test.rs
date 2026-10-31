@@ -48,6 +48,24 @@ fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
 }
 
 #[test]
+fn kimi_cache_expiry_chooser_is_blocked() {
+    let frame = "↑↓ navigate · Enter select · Esc cancel\nCache expired — the next message re-sends the entire history at full price.\n ❯ Compact and continue    one-time compact cost\n   Start a new session     zero context cost\n   Continue as-is          full history kept\n   Don't ask me again";
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: frame,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Blocked);
+    assert!(detection.visible_blocker);
+}
+
+#[test]
 fn kimi_idle_composer_remains_ready_with_background_tasks() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());

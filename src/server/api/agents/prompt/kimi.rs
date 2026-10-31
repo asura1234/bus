@@ -127,13 +127,28 @@ fn rows(screen: &str) -> Option<(Vec<String>, bool)> {
     }
     let preceding = &lines[top.saturating_sub(16)..top];
     if preceding.iter().any(|line| {
-        let line = line.trim().to_lowercase();
-        line.contains("working…")
-            || line.contains("working...")
-            || line.contains("trust this folder?")
-            || line.contains("run this command?")
-            || line.contains("write this file?")
-            || line.contains("askuserquestion")
+        let line = line.trim();
+        let lowercase = line.to_lowercase();
+        let mut chars = line.chars();
+        let first = chars.next().unwrap_or_default();
+        let rest = chars.as_str().trim_start().to_lowercase();
+        let active_spinner = (('\u{2800}'..='\u{28ff}').contains(&first)
+            && [
+                "thinking…",
+                "thinking...",
+                "working…",
+                "working...",
+                "using ",
+            ]
+            .iter()
+            .any(|prefix| rest.starts_with(prefix)))
+            || (matches!(first, '🌕' | '🌖' | '🌗' | '🌘' | '🌑' | '🌒' | '🌓' | '🌔')
+                && rest.is_empty());
+        active_spinner
+            || lowercase.contains("trust this folder?")
+            || lowercase.contains("run this command?")
+            || lowercase.contains("write this file?")
+            || lowercase.contains("askuserquestion")
     }) {
         return None;
     }
