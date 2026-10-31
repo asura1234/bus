@@ -35,8 +35,13 @@ impl PreservingComposer {
 }
 
 impl PreservingComposer {
-    fn choose(&self, screen: &str, allow_empty: bool) -> Option<DraftPreservation> {
-        let body = input(self.kind, screen)?;
+    fn choose(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        allow_empty: bool,
+    ) -> Option<DraftPreservation> {
+        let body = super::input_with_cursor(self.kind, screen, cursor)?;
         if (body.is_empty() && !allow_empty) || self.keys.len() != 3 {
             return None;
         }
@@ -92,7 +97,10 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn observe(&self, screen: &str) -> InputObservation {
-        self.owned.observe(screen)
+        self.observe_with_cursor(screen, None)
+    }
+    fn observe_with_cursor(&self, screen: &str, cursor: Option<(u16, u16)>) -> InputObservation {
+        self.owned.observe_with_cursor(screen, cursor)
     }
     fn clearing(&self, index: usize) {
         self.owned.clearing(index);
@@ -105,7 +113,7 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn draft_preservation(&self, screen: &str) -> Option<DraftPreservation> {
-        self.choose(screen, false)
+        self.choose(screen, None, false)
     }
     fn draft_preservation_with_cursor(
         &self,
@@ -116,12 +124,13 @@ impl SubmissionInspector for PreservingComposer {
         if self.kind == AgentKind::Claude
             && !invisible
             && native_stash_present(screen)
-            && input(self.kind, screen).is_some_and(|body| body.is_empty())
+            && super::input_with_cursor(self.kind, screen, cursor)
+                .is_some_and(|body| body.is_empty())
         {
             *self.native_draft.lock().ok()? = Some(NativeDraft::ExistingStash);
             return None;
         }
-        self.choose(screen, invisible)
+        self.choose(screen, cursor, invisible)
             .or_else(|| invisible.then_some(DraftPreservation::Hold))
     }
     fn native_stash_visible(&self, screen: &str) -> bool {

@@ -29,6 +29,15 @@ pub(super) fn observer(
 }
 
 pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObservation {
+    observe_with_cursor(kind, screen, expected, None)
+}
+
+pub(super) fn observe_with_cursor(
+    kind: AgentKind,
+    screen: &str,
+    expected: &str,
+    cursor: Option<(u16, u16)>,
+) -> InputObservation {
     if kind == AgentKind::Grok {
         return super::grok::observe(screen, expected);
     }
@@ -58,7 +67,7 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
     {
         return InputObservation::Unavailable;
     }
-    let Some(body) = input(kind, screen) else {
+    let Some(body) = input_with_cursor(kind, screen, cursor) else {
         return if detection.visible_working {
             InputObservation::Accepted
         } else {
@@ -211,6 +220,10 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
 }
 
 fn input(kind: AgentKind, screen: &str) -> Option<String> {
+    input_with_cursor(kind, screen, None)
+}
+
+fn input_with_cursor(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
     if kind == AgentKind::Grok {
         return super::grok::input(screen);
     }
@@ -292,7 +305,71 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
     {
         body.clear();
     }
+    // Claude Code 2.1.309 paints a fresh-launch placeholder as the entire
+    // composer line `Try "..."`. The raw PTY has no SGR, so faint-stripping
+    // leaves it, and Enter does not submit it. The cursor sits on the first
+    // character. The same text with the cursor anywhere else is a draft:
+    // Tab accepts the placeholder into the buffer and parks the cursor at
+    // the end. Do not paste over that.
+    if kind == AgentKind::Claude
+        && claude_startup_suggestion(&body)
+        && cursor_on_claude_suggestion(screen, cursor)
+    {
+        body.clear();
+    }
     Some(body)
+}
+
+fn claude_startup_suggestion(body: &str) -> bool {
+    let Some(inner) = body
+        .strip_prefix("Try \"")
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return false;
+    };
+    !inner.is_empty() && !inner.contains('"')
+}
+
+fn cursor_on_claude_suggestion(screen: &str, cursor: Option<(u16, u16)>) -> bool {
+    use unicode_width::UnicodeWidthChar;
+    let Some((x, y)) = cursor else {
+        return false;
+    };
+    let lines: Vec<String> = screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|cell| cell.character)
+                .collect()
+        })
+        .collect();
+    let Some(index) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let prompt = line.trim_start();
+        (prompt.starts_with('❯') && index > 0 && lines[index - 1].trim_start().starts_with('─'))
+            .then_some(index)
+    }) else {
+        return false;
+    };
+    if usize::from(y) != index {
+        return false;
+    }
+    let line = &lines[index];
+    let Some(marker) = line.find('❯') else {
+        return false;
+    };
+    let mut column = line[..marker]
+        .chars()
+        .map(|c| c.width().unwrap_or(0))
+        .sum::<usize>()
+        + 1;
+    for c in line[marker + '❯'.len_utf8()..].chars() {
+        if !c.is_whitespace() {
+            break;
+        }
+        column += c.width().unwrap_or(0);
+    }
+    usize::from(x) == column
 }
 
 /// The first marked row in the last shaded composer starts its draft. Later

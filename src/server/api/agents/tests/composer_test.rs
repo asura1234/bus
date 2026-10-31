@@ -301,6 +301,68 @@ fn codex_composer_check_accepts_only_empty_prompt_states() {
 }
 
 #[test]
+fn claude_fresh_startup_suggestion_is_not_a_developer_draft() {
+    // Claude Code 2.1.309 after folder trust, before any keypress.
+    // bus.composer.ownership: cursor (2, 41), faint_chars 0, body
+    // `Try "refactor <filepath>"`. The raw PTY paints that line with no SGR.
+    let captured = include_str!("fixtures/claude_2_1_309_startup_suggestion.txt");
+    assert_eq!(
+        observe_with_cursor(AgentKind::Claude, captured, "from bus", Some((2, 41))),
+        InputObservation::Empty
+    );
+    assert_ne!(
+        observe(AgentKind::Claude, captured, "from bus"),
+        InputObservation::Empty,
+        "the same screen is a draft until the cursor is known"
+    );
+
+    let rule = "─".repeat(20);
+    let screen = |input: &str| format!("● done\n\n{rule}\n{input}\n{rule}\n  ⏵⏵ auto mode on");
+    let prompt_row = 3u16;
+    let start = Some((2, prompt_row));
+    for suggestion in [
+        "Try \"fix typecheck errors\"",
+        "Try \"how does <filepath> work?\"",
+        "Try \"fix lint errors\"",
+        "Try \"edit <filepath> to...\"",
+    ] {
+        assert_eq!(
+            observe_with_cursor(
+                AgentKind::Claude,
+                &screen(&format!("❯\u{a0}{suggestion}")),
+                "from bus",
+                start,
+            ),
+            InputObservation::Empty,
+            "{suggestion}"
+        );
+    }
+    // Tab accepts the placeholder and parks the cursor after the text.
+    let accepted = screen("❯\u{a0}Try \"fix typecheck errors\"");
+    let end = 2 + u16::try_from("Try \"fix typecheck errors\"".chars().count()).unwrap();
+    assert_ne!(
+        observe_with_cursor(
+            AgentKind::Claude,
+            &accepted,
+            "from bus",
+            Some((end, prompt_row))
+        ),
+        InputObservation::Empty
+    );
+    for typed in [
+        "❯\u{a0}Try the linux-lint recipe",
+        "❯\u{a0}Try \"fix typecheck errors\" please",
+        "❯\u{a0}master is where I coordinate",
+    ] {
+        assert_ne!(
+            observe_with_cursor(AgentKind::Claude, &screen(typed), "from bus", start),
+            InputObservation::Empty,
+            "{typed}"
+        );
+    }
+}
+
+#[test]
 fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
     let rule = "─".repeat(20);
     let screen = |input: &str| format!("● done\n\n{rule}\n{input}\n{rule}\n  ⏵⏵ auto mode on");

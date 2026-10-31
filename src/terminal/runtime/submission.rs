@@ -73,6 +73,10 @@ impl PromptNotShown {
 /// Provider-specific ownership transitions after Bus's own editing keys.
 pub(crate) trait SubmissionInspector: Send {
     fn observe(&self, screen: &str) -> InputObservation;
+    fn observe_with_cursor(&self, screen: &str, cursor: Option<(u16, u16)>) -> InputObservation {
+        let _ = cursor;
+        self.observe(screen)
+    }
     /// Called once when this attempt is refused, outside the render lock.
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
@@ -256,7 +260,11 @@ impl ObservedSubmission {
                 .observe(phase, InputObservation::Unavailable, 0, self.clock.now());
             return None;
         };
-        let observation = self.inspect.observe(&screen);
+        let cursor = self
+            .terminal
+            .cursor_state()
+            .map(|cursor| (cursor.x, cursor.y));
+        let observation = self.inspect.observe_with_cursor(&screen, cursor);
         self.diagnostics
             .observe(phase, observation, screen.len(), self.clock.now());
         Some(observation)

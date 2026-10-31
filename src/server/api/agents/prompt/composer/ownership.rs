@@ -1,5 +1,5 @@
 //! Pin the visible draft and model only Bus's queued line-editing keys.
-use super::{input, observe, AgentKind, InputObservation};
+use super::{input, AgentKind, InputObservation};
 use crate::terminal::runtime::SubmissionInspector;
 use std::{collections::VecDeque, sync::Mutex};
 
@@ -81,7 +81,11 @@ impl SubmissionInspector for OwnedComposer {
     }
 
     fn observe(&self, screen: &str) -> InputObservation {
-        let observation = observe(self.kind, screen, &self.expected);
+        self.observe_with_cursor(screen, None)
+    }
+
+    fn observe_with_cursor(&self, screen: &str, cursor: Option<(u16, u16)>) -> InputObservation {
+        let observation = super::observe_with_cursor(self.kind, screen, &self.expected, cursor);
         let Ok(mut owned) = self.state.lock() else {
             return InputObservation::Unavailable;
         };
@@ -98,7 +102,7 @@ impl SubmissionInspector for OwnedComposer {
                 if owned.lost {
                     return InputObservation::Other;
                 }
-                let body = input(self.kind, screen);
+                let body = super::input_with_cursor(self.kind, screen, cursor);
                 if owned.body.is_none() {
                     if observation == InputObservation::Pending {
                         owned.body = body;
