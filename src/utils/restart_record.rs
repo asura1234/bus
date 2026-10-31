@@ -424,7 +424,9 @@ pub(crate) fn yolo_unrecorded_message() -> String {
 
 /// Recorded flags win. A flag passed to `restart` overrides only that setting.
 /// `--dev` on the restart command unlocks the dev tool and does not replace a
-/// recorded dev mode. `BUS_DATA_DIR` replaces the data directory and session.
+/// recorded dev mode. An explicit data-dir override replaces the directory
+/// and clears the session. The CLI sets that override only for a data dir
+/// this command itself set, not for the server's inherited root.
 pub(crate) fn resolve_restart_launch(
     recorded: &RecordedLaunch,
     status_yolo: Option<bool>,

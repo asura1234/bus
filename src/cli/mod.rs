@@ -135,6 +135,28 @@ fn last_session(
     .map_err(io::Error::other)
 }
 
+/// A restart treats `BUS_DATA_DIR` as an explicit data-dir override only when
+/// this command set it. An inherited value equal to the running server's root
+/// still carries that server's session id, and that keeps the recorded session.
+/// A different root, or the same root with the session id removed, is the
+/// override and clears the recorded session.
+fn restart_command_overrides_data_dir(
+    data_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+    server_root: &std::path::Path,
+) -> bool {
+    let Some(data_dir) = data_dir else {
+        return false;
+    };
+    if data_dir == server_root {
+        return match session_id {
+            Some(id) if !id.is_empty() => false,
+            _ => true,
+        };
+    }
+    true
+}
+
 fn bind_session_env(root: &std::path::Path, session_id: Option<&str>) -> io::Result<()> {
     std::env::set_var("BUS_DATA_DIR", root);
     match session_id {
@@ -169,7 +191,8 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     }
 
     let explicit_root = bus_data_dir();
-    let explicit_data_dir = explicit_root.is_some();
+    let env_sets_data_dir = explicit_root.is_some();
+    let mut restart_explicit_data_dir = false;
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());
     if invocation.action == Action::Sessions {
@@ -209,13 +232,39 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             return Ok(());
         }
         // Stop targets the same session as control commands.
-        Action::Control(_) | Action::Stop | Action::Restart(_) => match explicit_root {
+        Action::Control(_) | Action::Stop => match explicit_root.clone() {
             Some(root) => (root, None),
             None => {
                 let session = last_session(&registry, &invocation.action)?;
                 (session.root, Some(session.id))
             }
         },
+        // An inherited BUS_DATA_DIR names this server. It is not an override
+        // while the server's session id is still in the environment.
+        Action::Restart(_) => {
+            let (root, registry_session) = match explicit_root.clone() {
+                Some(root) => (root, None),
+                None => {
+                    let session = last_session(&registry, &invocation.action)?;
+                    (session.root, Some(session.id))
+                }
+            };
+            let session_id = std::env::var("BUS_SESSION_ID")
+                .ok()
+                .filter(|id| !id.is_empty())
+                .or(registry_session);
+            restart_explicit_data_dir = restart_command_overrides_data_dir(
+                explicit_root.as_deref(),
+                session_id.as_deref(),
+                &root,
+            );
+            let kept_session = if restart_explicit_data_dir {
+                None
+            } else {
+                session_id
+            };
+            (root, kept_session)
+        }
         Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
         Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
     };
@@ -230,6 +279,11 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         bus_io::private_dir(&root)?;
         require_private_root(&root)?;
     }
+    let explicit_data_dir = if matches!(invocation.action, Action::Restart(_)) {
+        restart_explicit_data_dir
+    } else {
+        env_sets_data_dir
+    };
     bind_session_env(&root, local_session_id.as_deref())?;
     match invocation.action {
         // Reads files only, so it also works while the session is hung.
@@ -340,7 +394,10 @@ fn run_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_invocation, require_private_root, Action, Invocation, ResumeTarget, USAGE};
+    use super::{
+        parse_invocation, require_private_root, restart_command_overrides_data_dir, Action,
+        Invocation, ResumeTarget, USAGE,
+    };
 
     /// A normal session used to run without a control socket, so a shared
     /// BUS_DATA_DIR still started. Now every session runs the socket, which
@@ -439,6 +496,58 @@ mod tests {
             parse_invocation(&args(&["stop", "bus"])).unwrap_err(),
             USAGE
         );
+    }
+
+    #[test]
+    fn inherited_data_dir_equal_to_the_server_keeps_the_recorded_session() {
+        let root = std::path::Path::new("/tmp/bus-session");
+        let other = std::path::Path::new("/tmp/other-bus");
+        assert!(
+            !restart_command_overrides_data_dir(Some(root), Some("abc"), root),
+            "an inherited BUS_DATA_DIR equal to the server root keeps the session"
+        );
+        assert!(
+            restart_command_overrides_data_dir(Some(root), None, root),
+            "BUS_DATA_DIR set on the command without the session is an override"
+        );
+        assert!(
+            restart_command_overrides_data_dir(Some(root), Some(""), root),
+            "an empty session id does not make BUS_DATA_DIR inherited"
+        );
+        assert!(
+            restart_command_overrides_data_dir(Some(other), Some("abc"), root),
+            "a data dir other than the running server's root is an override"
+        );
+        assert!(
+            !restart_command_overrides_data_dir(None, Some("abc"), root),
+            "a restart with no BUS_DATA_DIR uses the recorded session"
+        );
+
+        let recorded = crate::utils::restart_record::RecordedLaunch {
+            dev: Some(true),
+            yolo: Some(true),
+            explicit_data_dir: Some(false),
+            session_id: Some("abc".into()),
+            session_known: true,
+        };
+        let kept = crate::utils::restart_record::resolve_restart_launch(
+            &recorded,
+            None,
+            &crate::utils::restart_record::LaunchOverride {
+                yolo: None,
+                explicit_data_dir: restart_command_overrides_data_dir(
+                    Some(root),
+                    Some("abc"),
+                    root,
+                ),
+                cli_dev: true,
+                cli_session_id: Some("abc".into()),
+            },
+        )
+        .unwrap();
+        assert!(kept.dev && kept.yolo);
+        assert!(!kept.explicit_data_dir);
+        assert_eq!(kept.session_id.as_deref(), Some("abc"));
     }
 
     #[test]
