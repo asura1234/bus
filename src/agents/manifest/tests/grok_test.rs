@@ -307,9 +307,15 @@ fn captured_foreground_cancel_clears_stop_and_stays_idle() {
 
     assert!(WAITING_UNSENT.contains("Enter:send"));
     assert!(!WAITING_UNSENT.contains("[stop]"));
+    assert!(WAITING_UNSENT.contains("│ ❯ [Bus message"));
     let unsent = detect_screen_with_osc(AgentKind::Grok, WAITING_UNSENT, "grok", "4;0;0");
-    assert_eq!(unsent.state, AgentState::Idle, "{unsent:?}");
-    assert!(!unsent.visible_working, "{unsent:?}");
+    assert_eq!(unsent.state, AgentState::Working, "{unsent:?}");
+    assert!(unsent.visible_working, "{unsent:?}");
+    assert_eq!(
+        unsent.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("restored_bus_prompt_working"),
+        "{unsent:?}"
+    );
 
     assert!(PRESS_AGAIN.contains("Ctrl+c:press again to quit"));
     assert!(!PRESS_AGAIN.contains("[stop]"));

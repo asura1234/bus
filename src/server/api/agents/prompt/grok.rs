@@ -112,6 +112,16 @@ fn positive_count(count: &str) -> bool {
     matches!(chars.next(), Some(c) if ('1'..='9').contains(&c)) && chars.all(|c| c.is_ascii_digit())
 }
 
+/// Ctrl+C on `Waiting for response… [stop]` unsends Bus's prompt into the
+/// composer and drops `[stop]`. That body is still Bus's submission. A
+/// developer draft does not start with the Bus envelope.
+pub(super) fn restored_bus_prompt(screen: &str) -> bool {
+    if screen.contains("[stop]") {
+        return false;
+    }
+    input(screen).is_some_and(|body| body.starts_with("[Bus message "))
+}
+
 pub(super) fn input(screen: &str) -> Option<String> {
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled
@@ -360,6 +370,24 @@ mod tests {
             observe(&unlabelled, "Bus task"),
             InputObservation::Unavailable
         );
+    }
+
+    #[test]
+    fn ctrl_c_restored_prompt_is_an_owned_line_kill() {
+        let screen = include_str!(
+            "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
+        );
+        assert!(restored_bus_prompt(screen));
+        let keys = super::super::grok_restored_prompt_clear_keys(screen).expect("keys");
+        assert!(keys.len() >= 3 && keys.len() % 3 == 0);
+        assert!(keys
+            .chunks(3)
+            .all(|chunk| chunk == ["ctrl+a", "ctrl+k", "ctrl+u"]));
+        assert!(!restored_bus_prompt(&format!("{screen}\n[stop]")));
+        assert!(!restored_bus_prompt(NATIVE_1070_EMPTY));
+        let developer = screen.replace("[Bus message", "developer note");
+        assert!(!restored_bus_prompt(&developer));
+        assert!(super::super::grok_restored_prompt_clear_keys(&developer).is_none());
     }
 
     #[test]

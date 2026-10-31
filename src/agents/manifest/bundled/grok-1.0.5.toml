@@ -170,6 +170,18 @@ region = "whole_recent"
 visible_working = true
 line_regex = ['^\s*(?:[▾▸]\s+)?Watchers\s+[1-9][0-9]*\s*$']
 
+# Ctrl+C on "Waiting for response… [stop]" puts Bus's prompt back in the
+# composer and drops [stop]. The OSC title is then the idle "grok" title, so
+# this must outrank osc_title_idle. The pane stays working until that owned
+# body is withdrawn; a developer draft does not start with the Bus envelope.
+[[rules]]
+id = "restored_bus_prompt_working"
+state = "working"
+priority = 1156
+region = "whole_recent"
+visible_working = true
+line_regex = ['│\s*❯\s+\[Bus message\s']
+
 # Mid-turn submit footer and a bare positive "N queued" line. "▾ Queued N"
 # is queued_prompts_working. Zero and a transcript sentence do not match.
 [[rules]]

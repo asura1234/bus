@@ -4,6 +4,8 @@ mod prompt;
 mod read;
 mod startup_snapshot;
 
+pub(crate) use prompt::grok_restored_prompt_clear_keys;
+
 use crate::server::api::errors::encode_error;
 
 fn agent_not_ready(id: String, target: &str) -> String {

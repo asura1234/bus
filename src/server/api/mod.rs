@@ -59,6 +59,7 @@ pub struct ApiRequestMessage {
 pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
 
 mod agents;
+pub(crate) use agents::grok_restored_prompt_clear_keys;
 mod env;
 pub(in crate::server) mod errors;
 pub(crate) mod events;

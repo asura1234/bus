@@ -1225,6 +1225,30 @@ fn unmarked_queued_count_is_accepted_like_the_tasks_header() {
     );
 }
 
+/// One Ctrl+C on `Waiting for response… [stop]` puts the Bus prompt back and
+/// the pane is idle. The next delivery must not see that occupied composer.
+#[test]
+fn ctrl_c_restored_bus_prompt_is_not_left_on_an_idle_composer() {
+    let screen = include_str!(
+        "../../../../../tests/fixtures/grok-composer/native-1.0.70-waiting-unsent.txt"
+    );
+    let detection = crate::agents::manifest::detect_with_osc(
+        AgentKind::Grok,
+        crate::agents::manifest::DetectionInput {
+            screen,
+            osc_title: "grok",
+            osc_progress: "4;0;0",
+        },
+    );
+    let observation = observe(AgentKind::Grok, screen, "NEXT");
+    assert!(
+        detection.state != crate::agents::AgentState::Idle
+            || observation == InputObservation::Empty,
+        "state={:?} observation={observation:?}: the restored Bus prompt stays in an idle composer",
+        detection.state
+    );
+}
+
 #[test]
 fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
     use crate::terminal::runtime::SubmissionInspector;
