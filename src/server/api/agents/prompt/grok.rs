@@ -83,26 +83,33 @@ fn is_scroll_rail(character: char) -> bool {
 }
 
 /// The Tasks-panel header Grok 1.0.70 draws for prompts waiting to run.
-/// Same shape as the manifest rule `queued_prompts_working`: a disclosure
-/// marker, the word Queued, and a count of at least 1, with nothing else
-/// on the line. A transcript sentence does not match.
+/// Same shape as the manifest rule `queued_prompts_working`: an optional
+/// disclosure marker, the word Queued, and a count of at least 1, with
+/// nothing else on the line. A bare `Queued N` is the same acceptance. A
+/// transcript sentence does not match.
 fn provider_queued(screen: &str) -> bool {
-    screen.lines().any(|line| {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix('▾').or_else(|| line.strip_prefix('▸')) else {
+    screen.lines().any(queued_count_line)
+}
+
+fn queued_count_line(line: &str) -> bool {
+    let line = line.trim();
+    let rest = if let Some(marked) = line.strip_prefix('▾').or_else(|| line.strip_prefix('▸')) {
+        if !marked.starts_with(|c: char| c.is_whitespace()) {
             return false;
-        };
-        let mut parts = rest.split_whitespace();
-        parts.next() == Some("Queued")
-            && parts.next().is_some_and(|count| {
-                count
-                    .chars()
-                    .next()
-                    .is_some_and(|c| ('1'..='9').contains(&c))
-                    && count.chars().skip(1).all(|c| c.is_ascii_digit())
-            })
-            && parts.next().is_none()
-    })
+        }
+        marked.trim_start()
+    } else {
+        line
+    };
+    let mut parts = rest.split_whitespace();
+    parts.next() == Some("Queued")
+        && parts.next().is_some_and(positive_count)
+        && parts.next().is_none()
+}
+
+fn positive_count(count: &str) -> bool {
+    let mut chars = count.chars();
+    matches!(chars.next(), Some(c) if ('1'..='9').contains(&c)) && chars.all(|c| c.is_ascii_digit())
 }
 
 pub(super) fn input(screen: &str) -> Option<String> {

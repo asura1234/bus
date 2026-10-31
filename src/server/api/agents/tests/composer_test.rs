@@ -1207,6 +1207,24 @@ fn grok_suggestion_ghost_is_not_a_developer_draft() {
     );
 }
 
+/// The manifest treats a bare `Queued N` line as accepted work. The composer
+/// observer must too, or a queued submit is closed instead of waited on.
+#[test]
+fn unmarked_queued_count_is_accepted_like_the_tasks_header() {
+    assert_eq!(
+        observe(AgentKind::Grok, "   Queued 1\n   from bus\n", "from bus"),
+        InputObservation::Accepted
+    );
+    assert_eq!(
+        observe(
+            AgentKind::Grok,
+            "Bus closed it because Queued 1 was still waiting\n",
+            "from bus"
+        ),
+        InputObservation::Unavailable
+    );
+}
+
 #[test]
 fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
     use crate::terminal::runtime::SubmissionInspector;
