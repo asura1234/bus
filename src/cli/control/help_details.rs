@@ -334,7 +334,7 @@ Cursor): edit/submit in pane, never overwrite. skip_would_cancel_form: Claude
 Esc cancels the whole form; answer instead. dialog_redrawing: observe again.
 An uncertain write may have answered; inspect before retrying with a new token."#;
 
-const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor).
+const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor), /new (Grok/Kimi).
 Keep terminal/name/room, reset compactions and rebind the provider session through
 its next start hook (Cursor: first new turn). This is not a Bus message.
 Result: {agent_id,sent:STRING,stage:"cleared"}.
@@ -342,7 +342,7 @@ Errors: command_failed unless idle, ready, with no active/queued messages and
 valid runtime identity. Settle work first; inspect an uncertain reset before retry.
 Never send reset slash commands through send: they cannot produce a normal reply."#;
 
-const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex, Ctrl+C for Cursor. Wait
+const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Grok/Kimi, Ctrl+C for Cursor. Wait
 up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
 Running/queued/settling requests close as interrupted; no later replay. History
@@ -533,3 +533,20 @@ pub(super) const STOP: &str = "Stop the selected session server and all its agen
 
 pub(super) const RESTART: &str = "Replace the running session server with another bus binary and keep this session.\nRun `bus --dev restart --binary PATH --confirm`. Without --dev the command is refused and omitted from `bus --help`.\nRestart is explicit: Bus never restarts a server on its own.\n\nBefore restart, the orchestrator of every room asks its working agents to pause:\ncommit and push, stop builds and tests, release slot locks, then stop. Wait for\neach confirmation, then run this command. After the outcome notice, tell them\nto resume.\n\nPreflight refuses a binary path that is not absolute, a missing or non-executable\nbinary, a binary that does not run, a build SHA that is not 40 hex, an empty\nprovider list, or less than 5 GB free disk. The running server must already have\nrecorded the binary to roll back to. --confirm is required.\n\nThe command returns immediately. A detached helper stops the server, starts the\nnew binary, and rolls back to that recorded binary if the new one fails a health\ncheck. A rollback that does not come up healthy is a failed restart and that\nprocess is stopped.\nStopping exits pane processes, so an in-flight turn that has not reported is\ninterrupted; persisted messages and provider session refs stay. Agents resume\nthrough each provider's existing resume path. The same package version's TUI\nreconnects; a different package version prints the exact command to run.\nBus then sends each work-room orchestrator a notice (old SHA -> new SHA, a\nrollback and why, a failed restart that is not serving, or refused before any stop\nwhile the server is still serving). Every attempt is\nappended to restarts/log.jsonl in the session data (who, old SHA, new SHA,\noutcome).\n\nResult: {ok:true,stage:handoff,pid,old_sha,new_sha,session_id}.\nErrors: exit 1 when preflight fails or a handoff is already running. The\norchestrator learns the final outcome from the Bus notice, not from this\nprocess, because its pane stops with the server.";
 pub(super) const PERF: &str = "Summarize perf/ records from the selected session's logs directory; files only,\nworks while Bus is hung/exited. --since defaults to 30m; accepts minutes (30m)\nor hours (2h). --all defaults false, excludes --since.\nOutput: text summary of stalls, slow windows and CPU/memory/load peaks, plus\nscan counts on stderr; no JSON envelope.\nErrors: exit 1 for invalid arguments/IO failure; correct the duration/path.\nUnreadable/invalid individual records are counted in scan diagnostics.";
+
+#[cfg(test)]
+mod tests {
+    use super::{AGENT_CLEAR, AGENT_INTERRUPT};
+
+    #[test]
+    fn kimi_clear_help_names_the_command_clear_sends() {
+        let clear = AGENT_CLEAR.replace("/new-chat", "");
+        let clear_names_kimi = clear.contains("Kimi") && clear.contains("/new");
+        let esc_clause = AGENT_INTERRUPT.split("Ctrl+C").next().unwrap_or("");
+        let interrupt_names_kimi = esc_clause.contains("Esc") && esc_clause.contains("Kimi");
+        assert!(
+            clear_names_kimi && interrupt_names_kimi,
+            "clear_names_kimi={clear_names_kimi} interrupt_names_kimi={interrupt_names_kimi}\nCLEAR:\n{AGENT_CLEAR}\nINTERRUPT:\n{AGENT_INTERRUPT}"
+        );
+    }
+}
