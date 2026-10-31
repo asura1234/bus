@@ -140,10 +140,8 @@ impl BusState {
         now_ms: u64,
     ) -> Result<(), super::ModelError> {
         match active {
-            Some(true) if !self.attention_episodes.contains(&key) => {
-                if !self.quota_episode_continues(&key, now_ms) {
-                    self.post_developer_attention(agent, text, now_ms)?;
-                }
+            Some(true) if !self.episode_latched(&key) => {
+                self.post_developer_attention(agent, text, now_ms)?;
                 self.clear_previous_quota_episode(&key);
                 self.attention_episodes.insert(key);
             }
@@ -156,34 +154,25 @@ impl BusState {
         Ok(())
     }
 
-    /// Corrections to a still-future reset belong to the reported episode.
-    fn quota_episode_continues(&self, key: &str, now_ms: u64) -> bool {
-        if !key.starts_with("quota:") {
-            return false;
+    /// One open episode per provider, window, and reset. A suffix after the reset is the same episode.
+    fn episode_latched(&self, key: &str) -> bool {
+        match quota_reset(key) {
+            Some((family, reset)) => self.attention_episodes.iter().any(|old| {
+                quota_reset(old).is_some_and(|(old_family, old_reset)| {
+                    old_family == family && old_reset == reset
+                })
+            }),
+            None => self.attention_episodes.contains(key),
         }
-        let Some((family, _)) = key.rsplit_once(':') else {
-            return false;
-        };
-        self.attention_episodes.iter().any(|old| {
-            old.rsplit_once(':').is_some_and(|(old_family, reset)| {
-                old_family == family
-                    && reset
-                        .parse::<u64>()
-                        .is_ok_and(|reset| reset > now_ms / 1000)
-            })
-        })
     }
 
-    /// Keep one current reset record per provider/window, including corrections.
+    /// Drop other resets for this provider and window. Recovery and a new reset both do this.
     fn clear_previous_quota_episode(&mut self, key: &str) {
-        if key.starts_with("quota:") {
-            if let Some((family, _)) = key.rsplit_once(':') {
-                self.attention_episodes.retain(|old| {
-                    old.rsplit_once(':')
-                        .is_none_or(|(old_family, _)| old_family != family)
-                });
-            }
-        }
+        let Some((family, _)) = quota_reset(key) else {
+            return;
+        };
+        self.attention_episodes
+            .retain(|old| quota_reset(old).is_none_or(|(old_family, _)| old_family != family));
     }
 
     pub(super) fn unconfirmed_submission_message(prompt: super::PromptId) -> String {
@@ -310,5 +299,145 @@ impl BusState {
                 .is_some_and(|agent| agent.room_id == room && agent.orchestrates.is_some()),
             Author::Developer => false,
         }
+    }
+}
+
+/// `quota:{provider}:{window}:{reset}` with an optional `:{suffix}`.
+fn quota_reset(key: &str) -> Option<(&str, u64)> {
+    let rest = key.strip_prefix("quota:")?;
+    let mut parts = rest.split(':');
+    let provider = parts.next()?;
+    let window = parts.next()?;
+    let reset = parts.next()?.parse::<u64>().ok()?;
+    if provider.is_empty() || window.is_empty() {
+        return None;
+    }
+    let family_len = "quota:".len() + provider.len() + 1 + window.len();
+    Some((&key[..family_len], reset))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{BusState, Provider};
+
+    fn quota_room() -> (BusState, super::super::AgentId) {
+        let mut state = BusState::default();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        state.bind_orchestrator(agent, work).unwrap();
+        (state, agent)
+    }
+
+    fn master_texts(state: &BusState) -> Vec<String> {
+        let master = state.master_room().unwrap().id;
+        state
+            .notices(master)
+            .map(|notice| notice.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn quota_same_key_and_suffix_page_once() {
+        let (mut state, agent) = quota_room();
+        let key = "quota:claude:five_hour:1793368200";
+        let text = format!(
+            "Provider usage limit reached ({key}). Wait for reset or choose an available provider."
+        );
+        let start = 1_793_364_695_031;
+        for minute in 0..3 {
+            state
+                .attention_episode(
+                    key.to_string(),
+                    Some(true),
+                    agent,
+                    &text,
+                    start + minute * 60_000,
+                )
+                .unwrap();
+        }
+        state
+            .attention_episode(
+                format!("{key}:observed-by-12"),
+                Some(true),
+                agent,
+                &text,
+                start + 3 * 60_000,
+            )
+            .unwrap();
+        let notices = master_texts(&state);
+        assert_eq!(
+            notices.len(),
+            1,
+            "same reset must page once even if a suffix changes: {notices:?}"
+        );
+        assert!(notices[0].contains(key), "{notices:?}");
+    }
+
+    #[test]
+    fn quota_new_reset_pages_again_while_the_old_reset_is_still_ahead() {
+        let (mut state, agent) = quota_room();
+        let start = 1_793_364_695_031;
+        let first = "quota:claude:five_hour:1793368200";
+        state
+            .attention_episode(first.to_string(), Some(true), agent, "first", start)
+            .unwrap();
+        state
+            .attention_episode(
+                "quota:claude:five_hour:1793400000".to_string(),
+                Some(true),
+                agent,
+                "next window",
+                start + 60_000,
+            )
+            .unwrap();
+        let notices = master_texts(&state);
+        assert_eq!(
+            notices,
+            vec![
+                "[needs_developer_attention] first".to_string(),
+                "[needs_developer_attention] next window".to_string(),
+            ],
+            "a new reset timestamp must page once more"
+        );
+    }
+
+    #[test]
+    fn quota_recovery_rearms_and_another_provider_pages() {
+        let (mut state, agent) = quota_room();
+        let start = 1_793_364_695_031;
+        let key = "quota:claude:five_hour:1793368200";
+        state
+            .attention_episode(key.to_string(), Some(true), agent, "limited", start)
+            .unwrap();
+        state
+            .attention_episode(key.to_string(), Some(false), agent, "", start + 60_000)
+            .unwrap();
+        state
+            .attention_episode(
+                key.to_string(),
+                Some(true),
+                agent,
+                "limited again",
+                start + 120_000,
+            )
+            .unwrap();
+        state
+            .attention_episode(
+                "quota:codex:weekly:1793774141".to_string(),
+                Some(true),
+                agent,
+                "Provider usage limit reached (quota:codex:weekly:1793774141).",
+                start + 180_000,
+            )
+            .unwrap();
+        let notices = master_texts(&state);
+        assert_eq!(notices.len(), 3, "{notices:?}");
+        assert!(
+            notices[2].contains("quota:codex:weekly:1793774141"),
+            "{notices:?}"
+        );
     }
 }
