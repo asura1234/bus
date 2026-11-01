@@ -30,13 +30,14 @@ def wait_until(predicate, seconds=20):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix PTY and SIGSTOP regression")
-def test_delayed_disconnect_reattaches_to_already_published_replacement():
+@pytest.mark.parametrize("completed_handoff", [False, True])
+def test_delayed_disconnect_reattaches_to_already_published_replacement(completed_handoff):
     # Unix socket paths must fit the platform's small sockaddr_un limit.
     with tempfile.TemporaryDirectory(prefix="brr-", dir="/tmp") as directory:
-        run_delayed_restart(Path(directory))
+        run_delayed_restart(Path(directory), completed_handoff)
 
 
-def run_delayed_restart(tmp_path):
+def run_delayed_restart(tmp_path, completed_handoff):
     import fcntl
     import pty
     import struct
@@ -89,7 +90,10 @@ def run_delayed_restart(tmp_path):
         helper_pid = json.loads(call.stdout)["pid"]
         replacement = wait_until(lambda: stamp if (stamp := read_json(data / "restarts/build.json")).get("pid")
                                  not in (None, initial["pid"]) else None)
-        assert read_json(data / "restarts/in-progress"), "resume before the handoff completes"
+        if completed_handoff:
+            wait_until(lambda: not (data / "restarts/in-progress").exists())
+        else:
+            assert read_json(data / "restarts/in-progress"), "resume before the handoff completes"
         os.kill(client.pid, signal.SIGCONT)
         stopped = False
         # Recovery gives up after sixty seconds; survive that deadline on the same client.

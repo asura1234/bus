@@ -13,21 +13,40 @@ pub(crate) fn restart_in_progress() -> Option<RestartMarker> {
         .flatten()
 }
 
+/// A queued loss can arrive after the helper removed its marker. A complete
+/// build record naming a different process still identifies that replacement.
+pub(crate) fn restart_target(previous_pid: Option<u32>) -> Option<RestartMarker> {
+    if let Some(marker) = restart_in_progress() {
+        return Some(marker);
+    }
+    let root = crate::utils::env::bus_data_dir()?;
+    let path = restart_record::build_path(&root);
+    let stamp = restart_record::read_build_stamp(&path)?;
+    if stamp.pid? == previous_pid? || !restart_record::valid_build_sha(&stamp.sha) {
+        return None;
+    }
+    let launch = restart_record::read_recorded_launch(&path).ok()?;
+    if !launch.session_known {
+        return None;
+    }
+    Some(RestartMarker {
+        binary: stamp.binary?,
+        session_id: launch.session_id,
+        explicit_data_dir: launch.explicit_data_dir?,
+        data_dir: root.display().to_string(),
+        dev: launch.dev?,
+        yolo: launch.yolo?,
+    })
+}
+
 /// Waits until `ready` is true, remembering the newest marker so a rollback's
 /// reattach command names the binary that stayed up.
 pub(crate) fn wait_for_restart(
     timeout: Duration,
+    mut latest: RestartMarker,
     mut marker: impl FnMut() -> Option<RestartMarker>,
     mut ready: impl FnMut() -> bool,
 ) -> Result<RestartMarker, RestartMarker> {
-    let mut latest = marker().unwrap_or_else(|| RestartMarker {
-        binary: "bus".into(),
-        session_id: None,
-        explicit_data_dir: false,
-        data_dir: String::new(),
-        dev: false,
-        yolo: false,
-    });
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(seen) = marker() {
@@ -172,7 +191,12 @@ mod tests {
             dev: true,
             yolo: false,
         });
-        let result = wait_for_restart(Duration::from_millis(40), || seen.clone(), || false);
+        let result = wait_for_restart(
+            Duration::from_millis(40),
+            seen.clone().unwrap(),
+            || seen.clone(),
+            || false,
+        );
         let latest = result.unwrap_err();
         assert_eq!(
             restart_record::reattach_command(&latest),
@@ -182,7 +206,12 @@ mod tests {
             binary: "/new/bus".into(),
             ..latest
         });
-        let result = wait_for_restart(Duration::from_millis(30), || seen.clone(), || true);
+        let result = wait_for_restart(
+            Duration::from_millis(30),
+            seen.clone().unwrap(),
+            || seen.clone(),
+            || true,
+        );
         assert_eq!(result.unwrap().binary, "/new/bus");
     }
 
@@ -260,13 +289,26 @@ mod tests {
         );
         restart_record::write_json(
             &build,
-            &serde_json::json!({ "sha": sha, "binary": "/tmp/bus", "pid": 22 }),
+            &serde_json::json!({ "sha": sha, "binary": "/tmp/bus", "pid": 22,
+                "dev": true, "yolo": true, "explicit_data_dir": true, "session_id": null }),
         )
         .unwrap();
         assert!(replacement_server_ready(Some(11)));
         assert!(
             !replacement_server_ready(None),
             "an unknown attached process cannot identify its replacement"
+        );
+        std::fs::remove_file(restart_record::marker_path(&root)).unwrap();
+        let completed = restart_target(Some(11)).unwrap();
+        assert_eq!(completed.binary, "/tmp/bus");
+        assert!(completed.dev && completed.yolo && completed.explicit_data_dir);
+        assert!(
+            restart_target(Some(22)).is_none(),
+            "ordinary shutdown has no replacement"
+        );
+        assert!(
+            restart_target(None).is_none(),
+            "the attached process must be known"
         );
         restart_record::write_json(
             &build,
@@ -277,6 +319,7 @@ mod tests {
             !replacement_server_ready(Some(11)),
             "an incomplete server record is not ready"
         );
+        assert!(restart_target(Some(11)).is_none());
         for _ in 0..4 {
             let _ = crate::platform::ipc::connect_local_stream(&socket);
         }

@@ -378,7 +378,7 @@ fn start_host_readers(
 }
 
 impl ClientLoopDriver {
-    /// Reconnects when a restart marker is present. `None` means this loss is
+    /// Reconnects to an active or completed replacement. `None` means this loss is
     /// not a restart and the caller should surface the original error.
     fn recover_restart(
         &mut self,
@@ -386,18 +386,19 @@ impl ClientLoopDriver {
         error: &ClientError,
     ) -> Option<Result<(), String>> {
         // A restart stop sends ServerShutdown after the socket closes. That is
-        // the same loss as ConnectionLost while restarts/in-progress exists.
+        // the same loss as ConnectionLost, even if the helper already finished.
         if !matches!(
             error,
             ClientError::ConnectionLost(_) | ClientError::ServerShutdown { .. }
         ) {
             return None;
         }
-        crate::client::restart::restart_in_progress()?;
         let previous_pid = self.attached_server.as_ref().and_then(|server| server.pid);
+        let target = crate::client::restart::restart_target(previous_pid)?;
         let marker = match crate::client::restart::wait_for_restart(
             crate::client::restart::RECONNECT_WAIT,
-            crate::client::restart::restart_in_progress,
+            target,
+            || crate::client::restart::restart_target(previous_pid),
             || crate::client::restart::replacement_server_ready(previous_pid),
         ) {
             Ok(marker) => marker,
@@ -421,7 +422,7 @@ impl ClientLoopDriver {
             // next accept on that same server.
             std::thread::sleep(Duration::from_millis(50));
             if let Err(failure) = self.attach_restarted_server(event_tx) {
-                let marker = crate::client::restart::restart_in_progress().unwrap_or(marker);
+                let marker = crate::client::restart::restart_target(previous_pid).unwrap_or(marker);
                 return Some(Err(crate::client::restart::record_attach_failure(
                     self.attached_server.as_ref(),
                     &marker,
