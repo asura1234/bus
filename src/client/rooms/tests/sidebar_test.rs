@@ -720,7 +720,7 @@ fn entire_sidebar_scrolls_together_and_all_agents_remain_reachable() {
 }
 
 #[test]
-fn sidebar_calls_an_unconfirmed_idle_agent_not_ready() {
+fn sidebar_calls_an_unconfirmed_idle_agent_unavailable() {
     let (mut ui, _, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let mut value = serde_json::to_value(&snapshot.state).unwrap();
