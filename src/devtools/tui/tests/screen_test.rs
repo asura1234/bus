@@ -49,7 +49,7 @@ fn styles_come_back_as_named_colours_and_attributes() {
     let cell = &grid.cells[0][0];
     assert_eq!(cell.symbol, "R");
     assert_eq!(cell.fg, "#ff0000");
-    assert!(cell.attrs.contains(&"bold"));
+    assert!(cell.attrs.contains(&"bold".to_owned()));
 }
 
 #[test]
@@ -150,4 +150,23 @@ fn a_frame_begin_split_across_reads_keeps_the_last_complete_screen() {
     screen.feed(b"AB\x1b");
     screen.feed(b"[1;1HX");
     assert_eq!(screen.grid().row_text(0), "XB");
+}
+
+#[tokio::test]
+async fn production_and_bus_ui_driver_share_grid_and_key_encoding() {
+    let bytes = "\x1b[31m界 prompt\x1b[0m\r\n❯ 1. Continue\r\n  2. Exit".as_bytes();
+    let mut screen = Screen::new(80, 12).unwrap();
+    screen.feed(bytes);
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(80, 12);
+    runtime.test_process_pty_bytes(bytes);
+    let (pane, _) = crate::terminal::driver::observe(&runtime).unwrap();
+    assert_eq!(screen.grid(), pane);
+    for key in ["enter", "down", "2", "ctrl+c", "pageup", "alt+x"] {
+        assert_eq!(
+            crate::devtools::tui::input::encode_key(key, screen.keyboard_protocol()).unwrap(),
+            crate::terminal::driver::input::encode_key_with(key, |key| runtime
+                .encode_terminal_key(key))
+            .unwrap(),
+        );
+    }
 }

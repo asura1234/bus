@@ -302,9 +302,6 @@ fn style_holds(cell: &Cell, style: &Style) -> bool {
     };
     same(&style.fg, &cell.fg)
         && same(&style.bg, &cell.bg)
-        && style.attrs.iter().all(|a| cell.attrs.contains(&a.as_str()))
-        && !style
-            .no_attrs
-            .iter()
-            .any(|a| cell.attrs.contains(&a.as_str()))
+        && style.attrs.iter().all(|a| cell.attrs.contains(a))
+        && !style.no_attrs.iter().any(|a| cell.attrs.contains(a))
 }
