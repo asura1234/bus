@@ -633,13 +633,16 @@ impl DetectionTask {
             self.kimi_code_home.as_deref(),
             &mut status.kimi_turn_cache,
         );
-        let ansi = turn.is_none().then(|| self.terminal.visible_ansi());
+        let has_command_suffix =
+            crate::agents::providers::kimi::activity::running_command_has_command_suffix(content);
+        let ansi = (!has_command_suffix && turn.is_none()).then(|| self.terminal.visible_ansi());
         let line_is_bold = ansi
             .as_deref()
             .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
         if crate::agents::providers::kimi::activity::running_command_text_is_live(
             turn,
             line_is_bold,
+            has_command_suffix,
         ) {
             return Some(screen_detection);
         }

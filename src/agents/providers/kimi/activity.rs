@@ -5,16 +5,33 @@
 //! turn is over. A finished reply can show the same words in normal text.
 use super::wire::{MainTurn, MainTurnCache};
 
-/// Wire completion wins. Without a wire, only a bold status line is live.
+/// A `· $ command` suffix is the live Bash header. Wire completion then
+/// decides a bare phrase; without a wire, only a bold status line is live.
 pub(crate) fn running_command_text_is_live(
     turn: Option<MainTurn>,
     line_is_bold: Option<bool>,
+    has_command_suffix: bool,
 ) -> bool {
+    if has_command_suffix {
+        return true;
+    }
     match turn {
         Some(MainTurn::Open) => true,
         Some(MainTurn::Settled) => false,
         None => line_is_bold.unwrap_or(true),
     }
+}
+
+/// True when the running-command line includes the live `·` command suffix.
+pub(crate) fn running_command_has_command_suffix(screen: &str) -> bool {
+    let non_empty: Vec<&str> = screen
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let start = non_empty.len().saturating_sub(6);
+    non_empty[start..]
+        .iter()
+        .any(|line| is_running_command_line(line) && line.contains('·'))
 }
 
 pub(crate) fn refresh_running_command_turn(
@@ -221,12 +238,22 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
     fn kimi_settled_turn_is_idle_even_when_the_reply_line_is_bold() {
         assert!(!running_command_text_is_live(
             Some(MainTurn::Settled),
-            Some(true)
+            Some(true),
+            false
         ));
-        assert!(running_command_text_is_live(Some(MainTurn::Open), None));
-        assert!(running_command_text_is_live(None, Some(true)));
-        assert!(!running_command_text_is_live(None, Some(false)));
-        assert!(running_command_text_is_live(None, None));
+        assert!(running_command_text_is_live(
+            Some(MainTurn::Settled),
+            Some(false),
+            true
+        ));
+        assert!(running_command_text_is_live(
+            Some(MainTurn::Open),
+            None,
+            false
+        ));
+        assert!(running_command_text_is_live(None, Some(true), false));
+        assert!(!running_command_text_is_live(None, Some(false), false));
+        assert!(running_command_text_is_live(None, None, false));
     }
 
     #[test]
@@ -254,5 +281,17 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
             1,
         );
         assert_eq!(running_command_line_is_bold(&color_only), Some(false));
+        assert!(
+            !running_command_has_command_suffix(REPLY_FRAME),
+            "a finished reply has no · command suffix"
+        );
+        let live_cmd = "\
+ ● Running a command · $ sleep 45\n\
+╭──────────────────────────────────────╮\n\
+│ >                                    │\n\
+╰──────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 2% (17.9k/1M)";
+        assert!(running_command_has_command_suffix(live_cmd));
     }
 }
