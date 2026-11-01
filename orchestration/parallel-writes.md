@@ -110,7 +110,7 @@ through the room's build slot; never create a second target. Serialize probe
 writes/builds with the owner's gates so a gate sees only its committed head.
 
 Probe permissions belong to `review-pr`; handoff follows the
-[probe test lifecycle](https://github.com/asura1234/bus/blob/master/docs/guides/code-review-guide.md#probe-test-lifecycle).
+[probe test lifecycle](../docs/guides/code-review-guide.md#probe-test-lifecycle).
 Reports, logs and saved probe patches belong in ignored workflow artifact paths.
 
 ## Integrate deliberately

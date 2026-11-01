@@ -57,10 +57,8 @@ Templates:
 1. **Assign.** Add one investigator per bug, with no limit on how many run at
    once. Brief each on a need-to-know basis: its bug's text, attached logs and
    screenshots, and the report template. No intake folders.
-2. **Investigate.** The investigator works in the main checkout; no worktree.
-   It is read-only except for reproduction: it may write failing tests that
-   reproduce the bug, in new test files of its own, and must not touch source
-   code or shared files. A failing test alone counts as a reproduction; an
+2. **Investigate.** Follow the [workspace policy](../orchestration/parallel-writes.md#reviews-and-investigations)
+   and `review-pr`'s probe permissions. A failing test alone counts as a reproduction; an
    agent-driven UI run on a scratch Bus (e2e-test skill) is the other way.
    It reads the logs of its own runs and any logs attached to the bug, then
    fills in the investigation report. The report records facts and evidence
@@ -74,23 +72,22 @@ Templates:
    may change any row. Otherwise go straight on.
 5. **Fix or add diagnostics.** A separate fixer agent creates a fresh worktree
    with worktree-new. For a fix, it starts from the investigator's failing
-   tests (read from the main checkout and copied into its worktree), fixes the
+   tests (from the report's test paths or saved patch), fixes the
    bug test-first until they pass, and runs gate-and-fix. If its evidence says
    the root cause is wrong, it stops and reports; re-judge. For a deferred bug,
    it adds diagnostic and error logging that would capture the missing
    evidence named in the report, and runs gate-and-fix.
-6. **Verify.** The investigator stays in the main checkout and reruns its
-   reproduction against the fixer's worktree path: the failing tests now pass
+6. **Verify.** The investigator reruns its reproduction in the fixer's existing
+   worktree: the failing tests now pass
    and the UI repro, if any, no longer shows the bug. If the bug still
-   reproduces, it goes back to the fixer. Once verified, the investigator
-   deletes its test files from the main checkout so it stays clean.
+   reproduces, it goes back to the fixer. Hand off tests and evidence per the
+   [probe test lifecycle](../docs/guides/code-review-guide.md#probe-test-lifecycle).
 7. **PR up.** The fixer opens the PR with the pr skill: the fix PR includes the
    reproduction tests and links the investigation report; a diagnostics PR
    links the report and names the evidence it is meant to capture.
 
-Agents are not limited to their PWD: investigators verify against the fixer's
-worktree without moving, and fixers read the investigator's tests from the
-main checkout.
+The report identifies the existing checkout and any test or saved-patch paths,
+so the fixer and investigator can reuse the evidence across the handoff.
 
 ## Failure recovery
 
@@ -112,7 +109,7 @@ main checkout.
 |---|---|---|
 | Orchestrator | any | Adds and briefs agents, judges every report, fills the triage table, asks the review question once, assigns actions, recovers from the cases above. Does not investigate or fix. |
 | Developer | - | Optionally reviews the triage table and changes rows. |
-| Investigator + verifier | any (prefer Codex) | One per bug. Main checkout. Reproduces, writes the investigation report, later verifies the fix against the fixer's worktree. Writes only reproduction tests. |
+| Investigator + verifier | any (prefer Codex) | One per bug. Follows the workspace policy, reproduces, writes the investigation report, and later verifies the fix in the fixer's worktree. |
 | Fixer | any (prefer Codex) | Separate agent, own worktree per bug (or per shared root cause). Fixes test-first or adds diagnostics, runs the gate, opens the PR. |
 
 ## Worker brief messaging rule

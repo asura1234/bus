@@ -178,15 +178,14 @@ You handle these yourself:
 |---|---|---|
 | Orchestrator | any | Supplies goal/base, named peers, authority and holds; owns staffing, dialogs, recovery and replacement announcements. Maintains room notes/roster and mirrors repair state from finals. Decides out-of-goal follow-ups and every FLAG, asking the developer for product decisions. In orchestrator-run mode drives the same gates; in owner-run mode receives handbacks and finals without relaying routine peer findings. Approves splits and dispatches cleanup outside the PR worktree. |
 | Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked. Under a manual-test hold, tests the pinned head while merge-pr holds and approves its merge or supplies feedback that enters the repair loop. Recovers from "PR merge blocked". |
-| Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, keeps fixing until every reviewer is Ready and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold. Prepares manual-test holds with merge-pr --hold-before-merge, records exact-head approval and routes rejected feedback through the repair loop; other holds go to the orchestrator. Sends milestone finals, adjudicates saved reviewer probe patches and leaves no temporary test additions before split/merge, and reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
+| Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, keeps fixing until every reviewer is Ready and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold. Prepares manual-test holds with merge-pr --hold-before-merge, records exact-head approval and routes rejected feedback through the repair loop; other holds go to the orchestrator. Sends milestone finals, adjudicates reviewer tests and records retained uncommitted probes, and reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
 | Verifier | any | Checks the named PR/task on each pushed head; sends VERIFIED or defects with file:line directly to the owner and a final to the orchestrator. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
-All agents for one PR share the feature author's development worktree and
-single target; never build the main checkout or create reviewer/investigator
-clones. Reviewers save test-only probe patches and remove their additions before
-handoff; the author chooses whether to adopt them and is the only one who commits.
-Follow [Parallel writes](../orchestration/parallel-writes.md#reviews-and-investigations).
+Workspace selection and builds follow
+[Parallel writes](../orchestration/parallel-writes.md#reviews-and-investigations).
+Probe handoff follows the [probe test lifecycle](../docs/guides/code-review-guide.md#probe-test-lifecycle);
+the author adjudicates the tests and is the only one who commits.
 
 ## Worker brief messaging rule
 
