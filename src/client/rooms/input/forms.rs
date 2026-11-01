@@ -52,9 +52,15 @@ impl BusUi {
     }
 
     pub(super) fn start_rename(&mut self, target: RenameTarget) {
-        if let RenameTarget::Room(id) = target {
-            if self.is_master_room(id) {
-                self.error = Some(ModelError::MasterRoomFixed.to_string());
+        if let RenameTarget::Room(id) = &target {
+            if self.is_master_room(*id) {
+                let error = ModelError::MasterRoomFixed.to_string();
+                tracing::warn!(
+                    event = "bus.room.rename_refused",
+                    room_id = id.0,
+                    room = "MASTER",
+                    %error,
+                );
                 return;
             }
         }
@@ -72,14 +78,6 @@ impl BusUi {
 
     pub(super) fn open_form(&mut self, form: Form) {
         self.clear_selection();
-        if self.failed.is_empty() {
-            // Dismiss only a handled UI operation's matching snapshot copy,
-            // not unrelated background/runtime failures or unsaved drafts.
-            if self.error.is_some() && self.error == self.snapshot.error {
-                self.dismissed_snapshot_error = self.error.clone();
-            }
-            self.error = None;
-        }
         self.form = Some(form);
         self.terminal = None;
         self.recipient_menu = false;
@@ -392,31 +390,45 @@ impl BusUi {
         else {
             return;
         };
+        let room = self.room;
+        let log_rejection = |field: &str, error: &str| {
+            tracing::warn!(
+                event = "bus.form.validation_failed",
+                room_id = ?room.map(|room| room.0),
+                agent = %name.text,
+                field,
+                path = cwd.text.as_str(),
+                %error,
+            );
+        };
         let mut missing = Vec::new();
-        if name.text.trim().is_empty() {
-            missing.push("Name");
-        }
-        if provider.is_none() {
-            missing.push("Model");
-        }
-        if cwd.text.trim().is_empty() {
-            missing.push("PWD");
+        for (field, label, is_missing) in [
+            ("name", "Name", name.text.trim().is_empty()),
+            ("model", "Model", provider.is_none()),
+            ("pwd", "PWD", cwd.text.trim().is_empty()),
+        ] {
+            if is_missing {
+                missing.push((field, format!("{label} is required.")));
+            }
         }
         if !missing.is_empty() {
-            self.error = Some(match missing.as_slice() {
-                [field] => format!("{field} is required."),
-                [first, second] => format!("{first} and {second} are required."),
-                [first, second, third] => {
-                    format!("{first}, {second}, and {third} are required.")
-                }
-                _ => unreachable!(),
-            });
+            let fields = missing
+                .iter()
+                .map(|(field, _)| *field)
+                .collect::<Vec<_>>()
+                .join(",");
+            let error = missing
+                .into_iter()
+                .map(|(_, error)| error)
+                .collect::<Vec<_>>()
+                .join(" ");
+            log_rejection(&fields, &error);
             return;
         }
         if orchestrates.is_some_and(|choice| choice.0.is_none()) {
-            self.error = Some(
-                "Orchestrates room is required: create a work room without an orchestrator first."
-                    .into(),
+            log_rejection(
+                "orchestrates",
+                "Orchestrates room is required: create a work room without an orchestrator first.",
             );
             return;
         }
@@ -424,7 +436,7 @@ impl BusUi {
         // the coordinator, which refuses it too, in step.
         if let (Some(_), Some(provider)) = (orchestrates, provider) {
             if let Err(error) = crate::messaging::orchestration::check_new_orchestrator(provider) {
-                self.error = Some(error);
+                log_rejection("model", &error);
                 return;
             }
         }
@@ -433,7 +445,7 @@ impl BusUi {
             .as_ref()
             .is_some_and(|text| text.trim().is_empty())
         {
-            self.error = Some("System prompt is required.".into());
+            log_rejection("system_prompt", "System prompt is required.");
             return;
         }
         self.error = None;

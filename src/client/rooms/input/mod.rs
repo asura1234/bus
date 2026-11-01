@@ -37,7 +37,7 @@ impl BusUi {
                 return true;
             }
         }
-        if self.deletion_input(event) || self.alert_input(event) {
+        if self.deletion_input(event) {
             outcome.repaint = true;
             return true;
         }
@@ -110,8 +110,8 @@ impl BusUi {
             }
             return true;
         }
-        if self.deletion.is_some() || self.alert.is_some() {
-            let _ = self.deletion_input(event) || self.alert_input(event);
+        if self.deletion.is_some() {
+            let _ = self.deletion_input(event);
             outcome.repaint = true;
             return true;
         }
@@ -553,7 +553,6 @@ impl BusUi {
             Action::Delete(target) => self.start_delete(target),
             Action::CancelDelete => self.cancel_delete(),
             Action::ConfirmDelete => self.confirm_delete(),
-            Action::DismissAlert => self.dismiss_alert(),
             Action::ScrollFiles(forward) => self.scroll_files(forward),
             Action::Room(room) => self.open_room(room),
             Action::Agent(agent) => self.open_terminal(agent),

@@ -133,12 +133,13 @@ impl BusUi {
             .get(&room)
             .is_none_or(|local| local.recipients.is_empty())
         {
-            self.error = Some("Choose agents with @ before sending.".into());
+            self.recipient_menu = true;
+            self.recipient_index = 0;
             tracing::info!(
-                event = "bus.message.rejected",
+                event = "bus.message.recipients_requested",
                 room_id = room.0,
                 reason = "no_recipients",
-                "Room send rejected locally"
+                "Recipient picker opened before sending"
             );
             return;
         }
@@ -271,7 +272,6 @@ impl BusUi {
         if self.quitting.is_some()
             || self.force_exit_until.is_some()
             || self.deletion.is_some()
-            || self.alert.is_some()
             || self.form.is_some()
             || self.rename.is_some()
             || self.terminal.is_some()

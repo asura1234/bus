@@ -64,11 +64,6 @@ fn assert_no_empty_rejection(ui: &BusUi) {
         "error: {:?}",
         ui.error
     );
-    assert!(
-        !ui.toast.as_ref().is_some_and(|t| t.message.contains(empty)),
-        "toast: {:?}",
-        ui.toast.as_ref().map(|t| &t.message)
-    );
 }
 
 #[test]

@@ -427,6 +427,8 @@ pub(crate) struct RoomAgent {
     /// in `ensure_master_room`; Bus never creates one.
     #[serde(default)]
     pub(crate) orchestrates: Option<RoomId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) unavailable_orchestration_target: Option<RoomId>,
     #[serde(default)]
     pub(crate) compactions: Compactions,
     /// The launch and spool sequence of the last compaction hook counted. State

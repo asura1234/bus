@@ -31,7 +31,7 @@ fn fake_provider_is_available_only_to_an_isolated_dev_driver() {
 }
 use crate::agents::providers::{
     hook_json::{self, HookContract},
-    launch::{launch_args, runtime_args, validate_args},
+    launch::{canonical_directory, launch_args, runtime_args, validate_args},
     suggest::suggestions,
     ProviderKind as Provider,
 };
@@ -66,6 +66,25 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
         .iter()
         .map(|event| (*event, contract.entry(&command)))
         .collect()
+}
+
+#[test]
+fn unreadable_pwd_error_names_the_field_and_path() {
+    let path = std::env::temp_dir().join(format!(
+        "missing-bus-pwd-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    assert!(path.is_absolute());
+    let input = path.to_string_lossy();
+    let cause = std::fs::canonicalize(input.as_ref()).unwrap_err();
+    let error = canonical_directory(&input).unwrap_err();
+    assert!(error.contains("Agent PWD"), "{error}");
+    assert!(error.contains(&format!("{input:?}")), "{error}");
+    assert!(error.ends_with(&cause.to_string()), "{error}");
 }
 
 #[test]

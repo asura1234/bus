@@ -164,7 +164,7 @@ pub(in crate::client::rooms) fn status(status: RuntimeStatus) -> &'static str {
         RuntimeStatus::Idle => "Idle",
         RuntimeStatus::Working => "Working",
         RuntimeStatus::Blocked => "Blocked",
-        RuntimeStatus::Launching => "Not ready",
+        RuntimeStatus::Launching => "Unavailable",
         RuntimeStatus::Unavailable => "Unavailable",
     }
 }

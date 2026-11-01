@@ -157,9 +157,9 @@ fn symbols_stay_literal_in_paste_notes_and_forms() {
 }
 
 #[test]
-fn enter_without_checked_agents_shows_error_and_preserves_draft() {
+fn enter_without_checked_agents_opens_the_picker_and_preserves_draft() {
     let (mut ui, room, _) = fixture();
-    for text in ["hello", "@author hello", "/help me", "/other", ""] {
+    for text in ["hello", "@author hello", "/help me", "/other"] {
         ui.locals.get_mut(&room).unwrap().text = editor::Editor::new(text.into());
         key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
         assert!(ui.send_intent.is_none());
@@ -168,8 +168,14 @@ fn enter_without_checked_agents_shows_error_and_preserves_draft() {
             .iter()
             .all(|p| !matches!(p.command, BusCommand::Submit(_))));
         assert_eq!(ui.locals[&room].text.text, text);
-        assert!(room_screen(&mut ui, 100, 30).contains("Choose agents with @ before sending."));
+        assert!(ui.recipient_menu);
+        assert!(!room_screen(&mut ui, 100, 30).contains("Choose agents with @ before sending."));
+        key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
     }
+    ui.locals.get_mut(&room).unwrap().text = editor::Editor::default();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!ui.recipient_menu);
+    assert!(ui.send_intent.is_none());
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("/help".into());
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(room_screen(&mut ui, 100, 30).contains("Keyboard shortcuts"));
@@ -177,7 +183,7 @@ fn enter_without_checked_agents_shows_error_and_preserves_draft() {
 }
 
 #[test]
-fn composer_autosave_is_silent_but_save_errors_remain_visible() {
+fn composer_autosave_and_save_errors_do_not_title_the_composer() {
     let (mut ui, room, _) = fixture();
     key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
     assert!(ui.pending.iter().any(|pending| {
@@ -185,7 +191,7 @@ fn composer_autosave_is_silent_but_save_errors_remain_visible() {
     }), "typing must still autosave");
     assert!(!room_screen(&mut ui, 100, 30).contains("Saving"));
     ui.error = Some("Could not save: disk full".into());
-    assert!(room_screen(&mut ui, 100, 30).contains("Could not save: disk full"));
+    assert!(!room_screen(&mut ui, 100, 30).contains("Could not save: disk full"));
 }
 
 #[test]

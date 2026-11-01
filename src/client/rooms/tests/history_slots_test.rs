@@ -1105,9 +1105,7 @@ fn images_saved_before_a_restart_draw_after_dropped_or_cleared_frames() {
 }
 
 #[test]
-fn a_notice_on_the_status_line_does_not_hide_history_images() {
-    // Resuming against a running server shows a dev-log notice on the status
-    // line until it is cleared; images above it must still draw.
+fn history_images_stay_placed_without_a_status_line() {
     let dir = thumbnail_dir("notice");
     let image = png(&dir, "earlier.png", (200, 80));
     let (mut ui, room, agent) = fixture();
@@ -1115,11 +1113,6 @@ fn a_notice_on_the_status_line_does_not_hide_history_images() {
     ui.graphics = Some(thumbnails::Protocol::Kitty);
     ui.thumbnails.set_protocol(thumbnails::Protocol::Kitty);
     ui.thumbnails.set_cell(Some(CELL));
-    ui.error = Some(
-        "Dev logs enabled for this client. An existing server keeps its original log level; \
-         restart it when safe for full server logs. Agents were not restarted."
-            .into(),
-    );
     ui.compute_view(100, 40);
 
     assert_eq!(ui.view.thumbnails.len(), 1, "the image stays placed");

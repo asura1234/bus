@@ -19,10 +19,13 @@ const BLOCKED_BRIGHT: Color = Color::Rgb(255, 92, 102);
 const BLOCKED_MID: Color = Color::Rgb(205, 64, 72);
 const BLOCKED_DIM: Color = Color::Rgb(128, 44, 52);
 
-fn agent_status(agent: &RoomAgent) -> &'static str {
-    if !agent.hook_setup_confirmed && !agent.session_binding_invalidated && !agent.deletion_pending
+fn agent_status(state: &BusState, agent: &RoomAgent) -> &'static str {
+    if state.orchestration_is_unavailable(agent)
+        || !agent.hook_setup_confirmed
+            && !agent.session_binding_invalidated
+            && !agent.deletion_pending
     {
-        "Not ready"
+        "Unavailable"
     } else {
         status(agent.shown_status())
     }
@@ -193,17 +196,16 @@ fn sidebar_room_label(room: &Room, width: u16) -> String {
     }
 }
 
-/// The MASTER line under an agent's provider: the room it orchestrates, or
-/// `# unassigned` for a saved orchestrator whose room failed the load checks.
-/// Written like the ROOMS list, `# name`.
+/// The MASTER line under an agent's provider names the room it orchestrates.
+/// An unavailable target stays blank; its cause is client-log-only.
 pub(in crate::client::rooms) fn orchestrated_room_label(
     state: &BusState,
     agent: &RoomAgent,
 ) -> String {
-    match agent.orchestrates.and_then(|room| state.room(room)) {
-        Some(room) => format!("# {}", room.name),
-        None => "# unassigned".into(),
-    }
+    agent
+        .orchestrates
+        .and_then(|room| state.room(room))
+        .map_or_else(String::new, |room| format!("# {}", room.name))
 }
 
 /// Measured agent rows, shared by height calculation and visible-row drawing.
@@ -211,7 +213,6 @@ struct SidebarAgent<'a> {
     agent: &'a RoomAgent,
     in_master: bool,
     paths: Vec<String>,
-    error_lines: Vec<String>,
     height: usize,
 }
 
@@ -244,13 +245,12 @@ impl BusUi {
         static COMPUTE_VIEW: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.compute_view");
         let _timer = COMPUTE_VIEW.start();
-        self.sync_toast();
+        self.sync_agent_notices();
         let key = super::super::ViewKey {
             room: self.room,
             terminal: self.terminal,
             form: self.form.as_ref().map(std::mem::discriminant),
             deletion: self.deletion.is_some(),
-            alert: self.alert.is_some(),
         };
         if self
             .view_key
@@ -278,25 +278,12 @@ impl BusUi {
                 None,
                 true,
             );
-            if let Some(error) = self.visible_error() {
-                view.lines(
-                    Rect::new(main.x + 2, 6, main.width.saturating_sub(4), 8),
-                    error,
-                    None,
-                    false,
-                );
-            }
         }
         if self.deletion.is_some() {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
         }
-        if self.alert.is_some() {
-            self.alert_view(&mut view, Rect::new(0, 0, cols, rows));
-        }
-        // Kitty images draw above text, so hide them under anything that can
-        // cover the history. A notice is not one: the room view shows it on
-        // its own status line under the composer, and the other screens that
-        // show it are covers already.
+        // Kitty images draw above text, so hide them under forms, dialogs,
+        // agent terminals, and the inline rename field.
         if view.dialog.width > 0
             || self.form.is_some()
             || self.deletion.is_some()
@@ -325,7 +312,7 @@ impl BusUi {
             + master_header_rows
             + rooms.len()
             + agents.iter().map(|entry| entry.height).sum::<usize>();
-        let notices = if self.force_exit_until.is_some() {
+        let notices = if self.force_exit_until.is_some() || self.quit_retry_pending() {
             2
         } else {
             u16::from(self.quitting.is_some())
@@ -375,26 +362,12 @@ impl BusUi {
                 let in_master = state
                     .master_room()
                     .is_some_and(|master| master.id == agent.room_id);
-                let error_lines = if in_master || agent.details_disclosed {
-                    agent
-                        .actionable_error
-                        .as_deref()
-                        .or(agent.working_directory_error.as_deref())
-                        .map(|error| wrap(error, sw))
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                // Healthy MASTER rows stay compact; persistent errors remain
-                // visible without an expansion control.
                 if in_master {
-                    let height = MASTER_AGENT_ROWS + error_lines.len();
                     return SidebarAgent {
                         agent,
                         in_master,
                         paths: Vec::new(),
-                        error_lines,
-                        height,
+                        height: MASTER_AGENT_ROWS,
                     };
                 }
                 let paths = if agent.details_disclosed {
@@ -404,13 +377,11 @@ impl BusUi {
                 };
                 let height = 3
                     + usize::from(agent.details_disclosed && agent.branch.is_some())
-                    + paths.len()
-                    + error_lines.len();
+                    + paths.len();
                 SidebarAgent {
                     agent,
                     in_master: false,
                     paths,
-                    error_lines,
                     height,
                 }
             })
@@ -537,7 +508,6 @@ impl BusUi {
             agent,
             in_master,
             paths,
-            error_lines,
             height,
         } in agents
         {
@@ -564,18 +534,14 @@ impl BusUi {
                 view.row(
                     viewport.at(1, y, sw),
                     orchestrated_room_label(&self.snapshot.state, agent),
-                    agent.orchestrates.map(Action::Room),
+                    agent
+                        .orchestrates
+                        .filter(|room| self.snapshot.state.room(*room).is_some())
+                        .map(Action::Room),
                     false,
                     true,
                 );
-                y += 1;
-                for line in error_lines {
-                    let rect = viewport.at(1, y, sw);
-                    view.row(rect, line, None, false, false);
-                    view.color_last_row(rect, BLOCKED_BRIGHT);
-                    y += 1;
-                }
-                y += 1;
+                y += 2;
                 continue;
             }
             view.row(
@@ -595,12 +561,6 @@ impl BusUi {
                     view.row(viewport.at(1, y, sw), line, None, false, true);
                     y += 1;
                 }
-                for line in error_lines {
-                    let rect = viewport.at(1, y, sw);
-                    view.row(rect, line, None, false, false);
-                    view.color_last_row(rect, BLOCKED_BRIGHT);
-                    y += 1;
-                }
             }
             y += 1;
         }
@@ -614,7 +574,7 @@ impl BusUi {
         y: usize,
     ) {
         let sw = viewport.sidebar.width.saturating_sub(3);
-        let right = agent_status(agent);
+        let right = agent_status(&self.snapshot.state, agent);
         let name_width = sw.saturating_sub(right.len() as u16 + 3);
         let rect = viewport.at(1, y, name_width);
         if let Some(rename) = self
@@ -667,6 +627,8 @@ impl BusUi {
             Rect::new(1, rows.saturating_sub(4 + build_row), sw, 1),
             if self.force_exit_until.is_some() {
                 "Ctrl+Q again within 5s"
+            } else if self.quit_retry_pending() {
+                "Ctrl+Q retries saving"
             } else {
                 ""
             },
@@ -680,6 +642,8 @@ impl BusUi {
                 "Saving before exit…"
             } else if self.force_exit_until.is_some() {
                 "May lose unsaved edits"
+            } else if self.quit_retry_pending() {
+                "Unsaved changes or slow storage"
             } else {
                 ""
             },

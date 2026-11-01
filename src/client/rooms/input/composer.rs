@@ -447,22 +447,26 @@ impl BusUi {
             return;
         };
         if let Some(error) = super::super::thumbnails::image_data_error(bytes) {
-            tracing::warn!(event = "bus.attach.image_refused", %error);
-            self.show_alert(
-                "Could not attach the clipboard image".into(),
-                format!("The clipboard image is not a readable image, so it was not attached.\n\n{error}"),
-            );
+            tracing::warn!(event = "bus.attach.image_refused", room_id = room.0, extension, %error);
             return;
         }
         let Some(root) = root else {
-            self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
+            tracing::warn!(
+                event = "bus.paste_image.no_data_dir",
+                room_id = room.0,
+                "Clipboard image was not saved: no Bus data directory"
+            );
             return;
         };
         let path = match save_pasted_image(&root, room, bytes, extension) {
             Ok(path) => path,
             Err(error) => {
-                tracing::warn!(event = "bus.paste_image.write_failed", %error);
-                self.error = Some("Could not write the clipboard image.".into());
+                tracing::warn!(
+                    event = "bus.paste_image.write_failed",
+                    room_id = room.0,
+                    path = %root.display(),
+                    %error,
+                );
                 return;
             }
         };
@@ -473,47 +477,22 @@ impl BusUi {
     }
 
     /// Attaches dropped, pasted or typed paths to the room's draft, except
-    /// images Bus cannot decode: history would show those as blank rows, so a
-    /// dialog names each refused file and its decode error instead.
+    /// images Bus cannot decode: history would show those as blank rows, so
+    /// each refusal is recorded in the client log instead.
     pub(in crate::client::rooms) fn attach_paths(&mut self, room: RoomId, paths: Vec<String>) {
-        let mut refused = Vec::new();
         for path in paths {
             let file = crate::utils::home_path::expand_tilde_path(&path);
             if let Some(error) = super::super::thumbnails::image_file_error(&file) {
-                tracing::warn!(event = "bus.attach.image_refused", %error);
-                refused.push((file, error));
+                tracing::warn!(
+                    event = "bus.attach.image_refused",
+                    room_id = room.0,
+                    path = %file.display(),
+                    %error,
+                );
                 continue;
             }
             let path = self.keep_temporary_image(room, path);
             self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
-        }
-        let name = |file: &std::path::Path| {
-            file.file_name().map_or_else(
-                || file.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            )
-        };
-        match refused.as_slice() {
-            [] => {}
-            [(file, error)] => self.show_alert(
-                format!("Could not attach \"{}\"", name(file)),
-                format!(
-                    "{} is not a readable image, so it was not attached.\n\n{error}",
-                    file.display()
-                ),
-            ),
-            refused => self.show_alert(
-                format!("Could not attach {} images", refused.len()),
-                std::iter::once(
-                    "These are not readable images, so they were not attached:".to_owned(),
-                )
-                .chain(
-                    refused
-                        .iter()
-                        .map(|(file, error)| format!("\n{}: {error}", file.display())),
-                )
-                .collect(),
-            ),
         }
     }
 
@@ -529,7 +508,12 @@ impl BusUi {
             Ok(Some(copy)) => copy.display().to_string(),
             Ok(None) => path,
             Err(error) => {
-                tracing::warn!(event = "bus.paste_image.copy_failed", %error);
+                tracing::warn!(
+                    event = "bus.paste_image.copy_failed",
+                    room_id = room.0,
+                    path,
+                    %error,
+                );
                 path
             }
         }

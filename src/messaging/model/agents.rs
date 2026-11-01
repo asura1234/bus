@@ -69,6 +69,7 @@ impl BusState {
                 session_binding_invalidated: false,
                 deletion_pending: false,
                 orchestrates: None,
+                unavailable_orchestration_target: None,
                 compactions: Compactions::default(),
                 last_compaction_callback: None,
                 session_reset_pending: false,

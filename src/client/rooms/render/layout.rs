@@ -18,7 +18,7 @@ pub(in crate::client) fn layout(
 
 /// Rows from one agent-form field to the next: the MASTER form, which adds a
 /// room and a prompt, drops the blank line in short terminals so its buttons
-/// and validation error stay on screen.
+/// stay on screen.
 pub(super) fn agent_form_gap(main: Rect, form: &Form) -> u16 {
     match form {
         Form::Agent {

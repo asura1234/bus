@@ -101,40 +101,36 @@ fn abandoned_submission_history_keeps_its_own_recovery_after_later_agent_errors(
 }
 
 #[test]
-fn an_uncertain_submission_shows_a_recovery_toast_once() {
+fn an_uncertain_submission_never_titles_the_composer() {
     let (mut ui, _, _, request) = submitting();
     failed(&mut ui, request);
-    let toast = ui
-        .toast
-        .as_ref()
-        .expect("uncertain submission needs visible recovery");
-    assert!(
-        toast.message.contains("draft was left"),
-        "{}",
-        toast.message
-    );
-    let started = toast.started_at;
-    let mut snapshot = (*ui.snapshot).clone();
-    snapshot.revision += 1;
-    ui.receive_snapshot(Arc::new(snapshot));
-    assert_eq!(
-        ui.toast.as_ref().unwrap().started_at,
-        started,
-        "no repeated toast for unchanged failure"
-    );
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let mut title = String::new();
+    for y in composer_rect(&ui).y..30 {
+        for x in 0..100 {
+            title.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(!title.contains("draft was left"), "{title}");
+    assert!(!title.contains("submission_unconfirmed"), "{title}");
 }
 
 #[test]
-fn expanded_details_show_uncertain_submission_recovery_without_a_startup_failure() {
+fn expanded_details_keep_uncertain_submission_recovery_in_the_log_only() {
     let (mut ui, _, agent, request) = submitting();
-    failed(&mut ui, request);
-    let mut snapshot = (*ui.snapshot).clone();
-    snapshot
-        .state
-        .set_agent_details_disclosed(agent, true)
-        .unwrap();
-    snapshot.revision += 1;
-    ui.receive_snapshot(Arc::new(snapshot));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        failed(&mut ui, request);
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .set_agent_details_disclosed(agent, true)
+            .unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
     ui.compute_view(160, 60);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 160, 60));
     ui.render(&mut buffer);
@@ -145,6 +141,9 @@ fn expanded_details_show_uncertain_submission_recovery_without_a_startup_failure
         }
     }
     for expected in ["draftwasleft", "beforeresending"] {
-        assert!(text.replace(' ', "").contains(expected), "{text}");
+        assert!(!text.replace(' ', "").contains(expected), "{text}");
     }
+    let logs = capture.text();
+    assert_eq!(logs.matches("bus.agent.notice").count(), 1, "{logs}");
+    assert!(logs.contains(DETAIL), "{logs}");
 }

@@ -1,6 +1,6 @@
 pub(super) use super::drafts::{ComposerSize, LocalRoom, Recalled};
 use super::editor::Editor;
-pub(super) use super::toast::Toast;
+use super::notices::{command_agent, command_room};
 use super::{
     forms::{Form, Rename, Suggestions},
     render::View,
@@ -30,7 +30,6 @@ pub(super) struct ViewKey {
     pub terminal: Option<AgentId>,
     pub form: Option<std::mem::Discriminant<super::forms::Form>>,
     pub deletion: bool,
-    pub alert: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -67,12 +66,9 @@ pub(in crate::client) struct BusUi {
     /// The pending send waits for each agent's own turn instead of steering.
     pub(super) send_queued: bool,
     pub error: Option<String>,
-    pub(super) dismissed_snapshot_error: Option<String>,
-    pub(super) toast: Option<Toast>,
-    pub(super) observed_notice: Option<String>,
-    /// Agent notices last written to the client log, so each is logged once.
-    pub(super) observed_agent_notices: Option<String>,
-    pub(super) toast_animation_last_tick: Option<std::time::Instant>,
+    /// Agent errors last written to the client log, so each is logged once.
+    pub(super) observed_agent_notices: BTreeMap<AgentId, super::notices::AgentNotices>,
+    pub(super) observed_snapshot_error: Option<String>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
@@ -83,7 +79,6 @@ pub(in crate::client) struct BusUi {
     pub(super) terminal_navigation: u64,
     pub(super) form: Option<Form>,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
-    pub(super) alert: Option<super::alert::Alert>,
     pub(super) rename: Option<Rename>,
     pub(super) notes_focus: bool,
     pub(super) recipient_menu: bool,
@@ -177,7 +172,7 @@ impl BusUi {
             .map(|r| (r.id, LocalRoom::from(r)))
             .collect();
         let seed_first_room = snapshot.state.is_pristine();
-        Self {
+        let mut ui = Self {
             handle: None,
             clipboard_image_reader,
             snapshot,
@@ -190,11 +185,8 @@ impl BusUi {
             send_queued: false,
             recovered_storage_failures: BTreeSet::new(),
             error: None,
-            dismissed_snapshot_error: None,
-            toast: None,
-            observed_notice: None,
-            observed_agent_notices: None,
-            toast_animation_last_tick: None,
+            observed_agent_notices: BTreeMap::new(),
+            observed_snapshot_error: None,
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -202,7 +194,6 @@ impl BusUi {
             terminal_navigation: 0,
             form: None,
             deletion: None,
-            alert: None,
             rename: None,
             notes_focus: false,
             recipient_menu: false,
@@ -248,7 +239,9 @@ impl BusUi {
             system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
             outer_focused: None,
-        }
+        };
+        ui.sync_snapshot_error();
+        ui
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
     pub(super) fn toggle_color_blind_mode(&mut self) {
@@ -260,7 +253,12 @@ impl BusUi {
                 settings.color_blind_mode = on
             }) {
                 Ok(saved) => self.receive_settings(saved),
-                Err(error) => self.error = Some(error),
+                Err(error) => tracing::warn!(
+                    event = "bus.settings.save_failed",
+                    path = %path.display(),
+                    field = "color_blind_mode",
+                    %error,
+                ),
             }
         }
     }
@@ -326,7 +324,6 @@ impl BusUi {
         self.settings_field = self.feishu_field();
         // Normalize a legacy saved off value when this informational row is activated.
         self.queue(BusCommand::SetFeishuNotifications(true), Effect::None);
-        self.show_toast("Developer notifications are always on");
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -447,7 +444,20 @@ impl BusUi {
                         self.suggestions.entries = entries;
                         self.suggestions.selected = 0;
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => {
+                        let path = self
+                            .form
+                            .as_ref()
+                            .and_then(Form::path_query)
+                            .map(|(input, _)| input);
+                        tracing::warn!(
+                            event = "bus.suggestions.failed",
+                            query_id,
+                            room_id = ?self.room.map(|room| room.0),
+                            path = path.as_deref().unwrap_or(""),
+                            %error,
+                        );
+                    }
                 }
             }
             BusEvent::SetupRequired {
@@ -467,21 +477,6 @@ impl BusUi {
         }
     }
     fn receive_storage_recovered(&mut self) {
-        if self
-            .snapshot
-            .error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("Storage paused;"))
-        {
-            self.dismissed_snapshot_error = self.snapshot.error.clone();
-        }
-        if self
-            .error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("Storage paused;"))
-        {
-            self.error = None;
-        }
         let failed = std::mem::take(&mut self.failed);
         for pending in failed {
             if storage_paused(&pending) {
@@ -504,7 +499,6 @@ impl BusUi {
         {
             self.queue(BusCommand::FocusTerminal(agent), Effect::None);
         }
-        self.show_toast("Storage recovered");
     }
 
     fn retry_storage_failure(&mut self, pending: Pending) {
@@ -536,6 +530,7 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        self.sync_snapshot_error();
         if let Some(config) = &self.sound_config {
             let alerts = crate::messaging::model::new_developer_notifications(
                 &previous.state,
@@ -558,9 +553,11 @@ impl BusUi {
             }
         }
         self.reconcile_deleted_targets(&previous.state);
-        self.sync_toast();
+        self.sync_agent_notices();
     }
+
     pub fn settle(&mut self) {
+        self.sync_snapshot_error();
         while self
             .pending
             .front()
@@ -571,7 +568,7 @@ impl BusUi {
             };
             match pending.result.as_ref() {
                 Some(Err(error)) => {
-                    self.settle_deletion(pending.id, Some(error));
+                    self.settle_deletion(pending.id);
                     let recovered = self.recovered_storage_failures.remove(&pending.id);
                     let keep =
                         matches!(
@@ -581,10 +578,7 @@ impl BusUi {
                                 | Effect::Recipients(..)
                                 | Effect::Files(..)
                         ) && super::deletion::target_exists(&pending.command, &self.snapshot.state);
-                    // Only a command that is retried hides its rejection.
-                    if !(recovered && keep) {
-                        self.error = Some(error.clone());
-                    }
+                    self.record_command_failure(&pending, error, recovered, keep);
                     self.send_intent = None;
                     if keep {
                         if recovered {
@@ -595,7 +589,7 @@ impl BusUi {
                     }
                 }
                 Some(Ok(())) => {
-                    self.settle_deletion(pending.id, None);
+                    self.settle_deletion(pending.id);
                     match pending.effect {
                         Effect::Text(room, generation) => {
                             if let Some(local) = self.locals.get_mut(&room) {
@@ -716,6 +710,10 @@ impl BusUi {
                                 tracing::warn!(
                                     event = "bus.command.enqueue_failed",
                                     command_id = pending.id,
+                                    command = crate::messaging::perf::command_name(&pending.command),
+                                    room_id = ?command_room(&pending.command).map(|room| room.0),
+                                    agent_id = ?command_agent(&pending.command).map(|agent| agent.0),
+                                    %error,
                                     "Coordinator command channel unavailable; command retained"
                                 );
                                 self.error = Some(error);
@@ -728,7 +726,6 @@ impl BusUi {
             }
         }
         changed |= self.tick_status_animation(std::time::Instant::now());
-        changed |= self.tick_toast(std::time::Instant::now());
         changed |= self.thumbnails.stale();
         changed |= self.link_paths.poll();
         changed
@@ -774,11 +771,12 @@ impl BusUi {
     }
 }
 
+pub(super) fn storage_paused_error(error: &str) -> bool {
+    error.starts_with("Storage paused;")
+}
+
 pub(super) fn storage_paused(pending: &Pending) -> bool {
-    matches!(
-        pending.result.as_ref(),
-        Some(Err(error)) if error.starts_with("Storage paused;")
-    )
+    matches!(pending.result.as_ref(), Some(Err(error)) if storage_paused_error(error))
 }
 
 #[cfg(test)]
@@ -855,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn quit_failed_save_logs_failure_branch_without_error_contents() {
+    fn quit_failed_save_logs_failure_branch_and_cause_without_draft_contents() {
         let (mut ui, room) = ui();
         ui.locals
             .get_mut(&room)
@@ -878,6 +876,7 @@ mod tests {
         });
         let logs = capture.text();
         assert_eq!(logs.matches("bus.quit.warning").count(), 1, "{logs}");
+        assert_eq!(logs.matches("bus.command.failed").count(), 1, "{logs}");
         for expected in [
             "reason=\"failed_command\"",
             "failed_count=1",
@@ -887,7 +886,8 @@ mod tests {
         ] {
             assert!(logs.contains(expected), "missing {expected}: {logs}");
         }
-        assert!(!logs.contains("PRIVATE_"), "{logs}");
+        assert!(logs.contains("PRIVATE_ERROR"), "{logs}");
+        assert!(!logs.contains("PRIVATE_DRAFT"), "{logs}");
         assert!(!ui.exit_ready);
     }
 
@@ -909,19 +909,16 @@ mod tests {
             enqueued: true,
             result: Some(Err("Storage paused; retrying".into())),
         });
-        ui.error = Some("Storage paused; retrying".into());
 
         ui.receive_event(BusEvent::StorageRecovered);
 
         assert!(ui.failed.is_empty());
-        assert!(ui.error.is_none());
         assert!(ui.pending.iter().any(|pending| {
             matches!(&pending.command, BusCommand::SetDraftText(id, _) if *id == room)
         }));
         assert!(ui.pending.iter().any(|pending| {
             matches!(&pending.command, BusCommand::FocusTerminal(id) if *id == agent)
         }));
-        assert_eq!(ui.toast.as_ref().unwrap().message, "Storage recovered");
     }
     #[test]
     fn delivery_logs_receipt_once_when_reply_snapshot_reaches_room() {
@@ -995,7 +992,7 @@ mod tests {
             .iter()
             .any(|p| matches!(p.command, BusCommand::Submit(_))));
         assert_eq!(ui.locals[&room].text.text, "newer than saved");
-        assert!(ui.error.as_deref().is_some_and(|e| e.contains("disk full")));
+        assert!(ui.error.is_none());
     }
     #[test]
     fn old_submit_ack_preserves_newer_text_and_another_room_draft() {

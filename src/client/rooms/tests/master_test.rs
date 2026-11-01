@@ -446,19 +446,47 @@ fn work_rooms_keep_their_delete_button_and_row_hit_targets() {
 }
 
 #[test]
-fn master_room_cannot_be_deleted_from_the_ui() {
+fn master_room_delete_refusal_is_log_only() {
     let (mut ui, master, _, _, _) = master_fixture();
     ui.open_room(master);
-    ui.start_delete(super::deletion::DeleteTarget::Room(master));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.start_delete(super::deletion::DeleteTarget::Room(master)));
     assert!(ui.deletion.is_none());
-    assert_eq!(
-        ui.error.as_deref(),
-        Some("The MASTER room cannot be renamed or deleted")
-    );
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("The MASTER room cannot"), "{screen}");
     assert!(!ui
         .pending
         .iter()
         .any(|p| matches!(p.command, BusCommand::DeleteRoom(_))));
+    let logs = capture.text();
+    assert!(logs.contains("bus.room.delete_refused"), "{logs}");
+    assert!(logs.contains(&format!("room_id={}", master.0)), "{logs}");
+    assert!(
+        logs.contains("The MASTER room cannot be renamed or deleted"),
+        "{logs}"
+    );
+}
+
+#[test]
+fn master_room_rename_refusal_is_log_only() {
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| key(&mut ui, KeyCode::F(2), KeyModifiers::NONE));
+    assert!(ui.rename.is_none());
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("The MASTER room cannot"), "{screen}");
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::RenameRoom(_, _))));
+    let logs = capture.text();
+    assert!(logs.contains("bus.room.rename_refused"), "{logs}");
+    assert!(logs.contains(&format!("room_id={}", master.0)), "{logs}");
+    assert!(
+        logs.contains("The MASTER room cannot be renamed or deleted"),
+        "{logs}"
+    );
 }
 
 #[test]
@@ -476,11 +504,10 @@ fn repeated_master_navigation_then_opening_agent_never_raises_rename_error() {
     assert_eq!(ui.terminal, Some(agent));
     assert!(ui.rename.is_none());
     assert!(
-        ui.visible_error().is_none(),
+        ui.error.is_none(),
         "navigation must not try to rename MASTER"
     );
     assert!(!screen.contains("The MASTER room cannot"));
-    assert!(ui.toast.is_none());
 }
 
 #[test]
@@ -532,11 +559,19 @@ fn a_master_agent_cannot_be_added_without_a_free_work_room() {
         *cwd = editor::Editor::new("/repo".into());
     }
     ui.action(render::Action::Provider(Provider::Codex));
-    ui.action(render::Action::Add);
-    assert!(ui
-        .error
-        .as_deref()
-        .is_some_and(|error| error.contains("Orchestrates room is required")));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.action(render::Action::Add));
+    assert!(!room_screen(&mut ui, 100, 30).contains("Orchestrates room is required"));
+    let logs = capture.text();
+    assert_eq!(
+        logs.matches("bus.form.validation_failed").count(),
+        1,
+        "{logs}"
+    );
+    assert!(logs.contains("field=\"orchestrates\""), "{logs}");
+    assert!(logs.contains("path=\"/repo\""), "{logs}");
+    assert!(logs.contains("agent=spare"), "{logs}");
+    assert!(logs.contains("Orchestrates room is required"), "{logs}");
     assert!(!ui.pending.iter().any(|p| matches!(
         p.command,
         BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(_)
@@ -709,7 +744,7 @@ fn an_orchestrators_room_line_opens_its_room_and_never_reassigns() {
 }
 
 #[test]
-fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_action() {
+fn unavailable_orchestration_is_log_only_and_work_agents_keep_their_detail_action() {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();
@@ -719,6 +754,9 @@ fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_ac
     let builder = state
         .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
         .unwrap();
+    let mut value = serde_json::to_value(&state).unwrap();
+    value["agents"][idle.0.to_string()]["orchestrates"] = serde_json::json!(999);
+    state = serde_json::from_value(value).unwrap();
     let mut ui = BusUi::new(Arc::new(BusSnapshot {
         state,
         revision: 0,
@@ -726,9 +764,27 @@ fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_ac
         error: None,
     }));
     ui.open_room(master);
-    let rows = sidebar_rows(&mut ui);
-    // Only saved state can hold one: Bus never creates an unassigned orchestrator.
-    assert!(rows.iter().any(|row| row == "# unassigned"), "{rows:?}");
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let mut rows = Vec::new();
+    capture.run(|| rows = sidebar_rows(&mut ui));
+    assert!(!rows.iter().any(|row| row == "# unassigned"), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with("spare") && row.contains("Unavailable")),
+        "{rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("unavailable:")),
+        "{rows:?}"
+    );
+    let logs = capture.text();
+    assert!(
+        logs.contains("bus.agent.orchestration_room_unavailable"),
+        "{logs}"
+    );
+    assert!(logs.contains(&format!("agent_id={}", idle.0)), "{logs}");
+    assert!(logs.contains(&format!("room_id={}", master.0)), "{logs}");
+    assert!(logs.contains("target_room_id=999"), "{logs}");
     assert!(ui
         .view
         .hits
@@ -750,15 +806,59 @@ fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_ac
 }
 
 #[test]
-fn master_agent_form_validation_errors_are_visible_in_a_24_row_terminal() {
+fn master_agent_form_validation_is_log_only_in_a_24_row_terminal() {
     let (mut ui, master, _, _, _) = master_fixture();
     ui.open_room(master);
     ui.action(render::Action::NewAgent);
-    ui.action(render::Action::Add);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.action(render::Action::Add));
     let screen = room_screen(&mut ui, 100, 24);
+    for expected in ["Name is required.", "Model is required."] {
+        assert!(!screen.contains(expected), "{screen}");
+    }
+    let logs = capture.text();
+    assert_eq!(
+        logs.matches("bus.form.validation_failed").count(),
+        1,
+        "{logs}"
+    );
+    assert!(logs.contains("name,model"), "{logs}");
+    assert!(logs.contains("Name is required."), "{logs}");
+    assert!(logs.contains("Model is required."), "{logs}");
     assert!(
-        screen.contains("Name and Model are required."),
-        "validation must explain why Add did not submit in a 24-row terminal: {screen}"
+        logs.contains(&format!("room_id=Some({})", master.0)),
+        "{logs}"
+    );
+}
+
+#[test]
+fn system_prompt_validation_is_log_only_and_keeps_the_form_open() {
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+    if let Some(forms::Form::Agent {
+        name, cwd, prompt, ..
+    }) = &mut ui.form
+    {
+        name.insert("orch");
+        *cwd = editor::Editor::new("/repo".into());
+        prompt.as_mut().unwrap().editor.text.clear();
+    }
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.action(render::Action::Add));
+    let screen = room_screen(&mut ui, 100, 40);
+    assert!(!screen.contains("System prompt is required."), "{screen}");
+    assert!(screen.contains("System prompt"), "{screen}");
+    assert!(screen.contains("Add (Enter)"), "{screen}");
+    let logs = capture.text();
+    assert!(logs.contains("bus.form.validation_failed"), "{logs}");
+    assert!(logs.contains("field=\"system_prompt\""), "{logs}");
+    assert!(logs.contains("path=\"/repo\""), "{logs}");
+    assert!(logs.contains("agent=orch"), "{logs}");
+    assert!(
+        logs.contains(&format!("room_id=Some({})", master.0)),
+        "{logs}"
     );
 }
 
@@ -989,14 +1089,29 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     if let Some(forms::Form::Agent { cwd, .. }) = &mut ui.form {
         *cwd = editor::Editor::new("/repo".into());
     }
-    key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL));
     assert!(!ui.pending.iter().any(|p| matches!(
         p.command,
         BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(..)
     )));
-    assert_eq!(
-        ui.error.as_deref(),
-        Some(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED)
+    let screen = room_screen(&mut ui, 120, 40);
+    assert!(!screen.contains("does not start"), "{screen}");
+    assert!(
+        !screen.contains("a new turn when a background command exits"),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("Claude Code or Cursor as the orchestrator"),
+        "{screen}"
+    );
+    let logs = capture.text();
+    assert!(logs.contains("bus.form.validation_failed"), "{logs}");
+    assert!(logs.contains("field=\"model\""), "{logs}");
+    assert!(logs.contains("path=\"/repo\""), "{logs}");
+    assert!(
+        logs.contains(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED),
+        "{logs}"
     );
     assert!(
         matches!(ui.form, Some(forms::Form::Agent { .. })),
@@ -1183,7 +1298,7 @@ fn master_pwd_enter_completes_only_a_visible_highlight_when_more_than_three_sugg
 }
 
 #[test]
-fn master_directory_warning_is_visible_and_clears_after_recovery() {
+fn master_directory_warning_is_log_only_and_clears_after_recovery() {
     let (mut ui, master, pr, _, agent) = master_fixture();
     let identity = ui
         .snapshot
@@ -1200,11 +1315,21 @@ fn master_directory_warning_is_visible_and_clears_after_recovery() {
         .unwrap();
     ui.snapshot = Arc::new(snapshot);
     ui.open_room(master);
-    let text = sidebar_rows(&mut ui).join(" ");
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let mut text = String::new();
+    capture.run(|| text = sidebar_rows(&mut ui).join(" "));
     for expected in ["/gone", "Restore worktree", "--pwd"] {
-        assert!(text.contains(expected), "missing {expected}: {text}");
+        assert!(!text.contains(expected), "drew {expected}: {text}");
     }
     assert!(!hit_rows(&ui, render::Action::Room(pr)).is_empty());
+    let logs = capture.text();
+    assert!(
+        logs.contains("bus.agent.working_directory_failed"),
+        "{logs}"
+    );
+    assert!(logs.contains(&format!("agent_id={}", agent.0)), "{logs}");
+    assert!(logs.contains(&format!("room_id={}", master.0)), "{logs}");
+    assert!(logs.contains(warning), "{logs}");
     let mut snapshot = (*ui.snapshot).clone();
     snapshot
         .state

@@ -102,11 +102,26 @@ impl BusState {
                         .is_some_and(|room| room.kind == RoomKind::Work)
                     && claimed.insert(room)
             });
-            if !valid {
-                agent.orchestrates = None;
+            if valid {
+                agent.unavailable_orchestration_target = None;
+            } else if let Some(target) = agent.orchestrates.take() {
+                agent.unavailable_orchestration_target = Some(target);
             }
         }
         master
+    }
+
+    /// Includes saved MASTER agents normalized to an unassigned binding.
+    pub(crate) fn orchestration_is_unavailable(&self, agent: &RoomAgent) -> bool {
+        agent.unavailable_orchestration_target.is_some()
+            || agent.orchestrates.is_some_and(|target| {
+                self.room(target)
+                    .is_none_or(|room| room.kind != RoomKind::Work)
+            })
+            || agent.orchestrates.is_none()
+                && self
+                    .room(agent.room_id)
+                    .is_some_and(|room| room.kind == RoomKind::Master)
     }
 
     /// Whether the session holds anything beyond its MASTER room.
@@ -166,10 +181,12 @@ impl BusState {
                 agent: other.id,
             });
         }
-        self.agents
+        let agent = self
+            .agents
             .get_mut(&id)
-            .ok_or(ModelError::UnknownAgent(id))?
-            .orchestrates = Some(room);
+            .ok_or(ModelError::UnknownAgent(id))?;
+        agent.orchestrates = Some(room);
+        agent.unavailable_orchestration_target = None;
         Ok(())
     }
 

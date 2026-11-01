@@ -479,7 +479,7 @@ fn recovered_draft_saves_wait_for_snapshot_and_retry_the_latest_edits() {
 }
 
 #[test]
-fn storage_recovery_keeps_a_rejected_room_creation_error_visible() {
+fn storage_recovery_keeps_a_rejected_room_creation_error_log_only() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::NewRoom);
     for c in "new room".chars() {
@@ -508,7 +508,8 @@ fn storage_recovery_keeps_a_rejected_room_creation_error_visible() {
     snapshot.last_command_id = *ids.last().unwrap();
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
-    ui.settle();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.settle());
 
     assert!(!ui
         .snapshot
@@ -516,8 +517,8 @@ fn storage_recovery_keeps_a_rejected_room_creation_error_visible() {
         .rooms()
         .any(|room| room.name == "new room"));
     assert!(ui.pending.is_empty(), "room creation has not been retried");
-    assert!(
-        ui.visible_error().is_some(),
-        "recovery must not hide rejection of an operation that was not retried"
-    );
+    let logs = capture.text();
+    assert!(logs.contains("bus.command.failed"), "{logs}");
+    assert!(logs.contains("Storage paused; retrying"), "{logs}");
+    assert!(!room_screen(&mut ui, 100, 30).contains("Storage paused"));
 }

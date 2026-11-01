@@ -182,9 +182,19 @@ fn delete_agent_enter_queues_once_and_escape_returns_to_the_same_terminal() {
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.last_command_id = command_id;
     ui.receive_snapshot(Arc::new(snapshot));
-    ui.settle();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.settle());
+    assert!(ui.deletion.is_none());
     let screen = room_screen(&mut ui, 100, 30);
-    assert!(screen.contains("Deletion did not finish") && screen.contains("OK (Enter)"));
+    assert!(!screen.contains("Deletion did not finish"), "{screen}");
+    assert!(!screen.contains("OK (Enter)"), "{screen}");
+    let logs = capture.text();
+    assert!(logs.contains("bus.command.failed"), "{logs}");
+    assert!(
+        logs.contains(&format!("agent_id=Some({})", agent.0)),
+        "{logs}"
+    );
+    assert!(logs.contains("terminal stop failed"), "{logs}");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(
         ui.pending.is_empty(),

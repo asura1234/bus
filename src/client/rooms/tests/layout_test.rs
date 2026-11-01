@@ -148,10 +148,10 @@ fn nothing_is_drawn_under_the_composer() {
         ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft\n".repeat(lines));
         assert_composer_on_last_row(&mut ui, cols, rows, "idle");
 
-        ui.show_toast("Save failed");
-        let screen = assert_composer_on_last_row(&mut ui, cols, rows, "toast");
-        assert!(screen.contains("Save failed"), "the toast titles the composer:\n{screen}");
-        ui.toast = None;
+        ui.error = Some("Save failed".into());
+        let screen = assert_composer_on_last_row(&mut ui, cols, rows, "save error");
+        assert!(!screen.contains("Save failed"), "errors never title the composer:\n{screen}");
+        ui.error = None;
 
         ui.send_intent = Some(room);
         assert_composer_on_last_row(&mut ui, cols, rows, "pending send");
@@ -166,7 +166,6 @@ fn nothing_is_drawn_under_the_composer() {
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
     assert!(capture.text().contains("bus.agent.notice"), "{}", capture.text());
-    assert!(ui.toast.is_none());
     let screen = assert_composer_on_last_row(&mut ui, 100, 30, "agent notice");
     assert!(!screen.contains("captured reply"), "{screen}");
 

@@ -5,8 +5,8 @@
 Use the dev TUI driver, fake providers, a fresh scratch session per case, and a
 160x45 terminal with `--graphics none`. Never drive a live Bus. Scrub inherited
 `BUS_*` and `HERDR_*` variables for every driver invocation. No SKIP is allowed.
-This checks Bus's warning UI; it does not prove a real provider can execute a
-hook after its cwd disappears.
+This checks log-only directory failures and the allowed Unavailable state; it
+does not prove a real provider can execute a hook after its cwd disappears.
 
 ## Fixture setup
 
@@ -22,40 +22,46 @@ and restoration in the numbered steps are authorized scratch fixtures.
 
 1. Complete setup with `codex`, then click `room:cwd-lab`. `T bus state` shows
    worker idle, no actionable_error, and details_disclosed false.
-2. Remove only X. Within 10 seconds, worker's details expand and show
-   `Working directory is unavailable`, X, and the recovery choices `Restore the
-   worktree` and `--pwd`. `T bus state` corroborates actionable_error and
-   working_directory_error. Take and open a screenshot: the warning must be
-   readable in the agent's sidebar without clicking its details toggle.
-3. Restore X from its scratch backup. Within 10 seconds both directory errors
-   clear from `T bus state`, and the warning disappears from the UI. Agent ID
-   and runtime identity are unchanged. Take and open a screenshot.
+2. Remove only X. Within 10 seconds, `T bus state` corroborates actionable_error,
+   and the client log records `bus.agent.working_directory_failed`. The agent row keeps an allowed runtime
+   state label (`Idle`, `Working`, `Blocked` or `Unavailable`); no error text
+   appears anywhere in the sidebar, including with details expanded. The
+   client log names worker, its room, X and the directory failure. Take and open
+   a screenshot; `Working directory is unavailable`, `Restore the worktree` and
+   `--pwd` must not be drawn.
+3. Restore X from its scratch backup. Within 10 seconds actionable_error
+   clears from `T bus state`, and the row returns to its healthy state without
+   error text or a recovery notice. Agent ID and runtime identity are unchanged. Take and open a screenshot.
 
 ### CWD-02 — Claude
 
 1. Complete setup with `claude`, then click `room:cwd-lab`. `T bus state` shows
    worker idle, no actionable_error, and details_disclosed false.
-2. Remove only X. Within 10 seconds, worker's details expand and show
-   `Working directory is unavailable`, X, and the recovery choices `Restore the
-   worktree` and `--pwd`. `T bus state` corroborates actionable_error and
-   working_directory_error. Take and open a screenshot: the warning must be
-   readable in the agent's sidebar without clicking its details toggle.
-3. Restore X from its scratch backup. Within 10 seconds both directory errors
-   clear from `T bus state`, and the warning disappears from the UI. Agent ID
-   and runtime identity are unchanged. Take and open a screenshot.
+2. Remove only X. Within 10 seconds, `T bus state` corroborates actionable_error,
+   and the client log records `bus.agent.working_directory_failed`. The agent row keeps an allowed runtime
+   state label (`Idle`, `Working`, `Blocked` or `Unavailable`); no error text
+   appears anywhere in the sidebar, including with details expanded. The
+   client log names worker, its room, X and the directory failure. Take and open
+   a screenshot; `Working directory is unavailable`, `Restore the worktree` and
+   `--pwd` must not be drawn.
+3. Restore X from its scratch backup. Within 10 seconds actionable_error
+   clears from `T bus state`, and the row returns to its healthy state without
+   error text or a recovery notice. Agent ID and runtime identity are unchanged. Take and open a screenshot.
 
 ### CWD-03 — Cursor
 
 1. Complete setup with `cursor`, then click `room:cwd-lab`. `T bus state` shows
    worker idle, no actionable_error, and details_disclosed false.
-2. Remove only X. Within 10 seconds, worker's details expand and show
-   `Working directory is unavailable`, X, and the recovery choices `Restore the
-   worktree` and `--pwd`. `T bus state` corroborates actionable_error and
-   working_directory_error. Take and open a screenshot: the warning must be
-   readable in the agent's sidebar without clicking its details toggle.
-3. Restore X from its scratch backup. Within 10 seconds both directory errors
-   clear from `T bus state`, and the warning disappears from the UI. Agent ID
-   and runtime identity are unchanged. Take and open a screenshot.
+2. Remove only X. Within 10 seconds, `T bus state` corroborates actionable_error,
+   and the client log records `bus.agent.working_directory_failed`. The agent row keeps an allowed runtime
+   state label (`Idle`, `Working`, `Blocked` or `Unavailable`); no error text
+   appears anywhere in the sidebar, including with details expanded. The
+   client log names worker, its room, X and the directory failure. Take and open
+   a screenshot; `Working directory is unavailable`, `Restore the worktree` and
+   `--pwd` must not be drawn.
+3. Restore X from its scratch backup. Within 10 seconds actionable_error
+   clears from `T bus state`, and the row returns to its healthy state without
+   error text or a recovery notice. Agent ID and runtime identity are unchanged. Take and open a screenshot.
 
 ### CWD-04 — MASTER orchestrator (Claude)
 
@@ -63,10 +69,13 @@ and restoration in the numbered steps are authorized scratch fixtures.
    with `--provider claude --orchestrates cwd-lab --pwd X --consent-hooks`.
    Click `room:MASTER`. Worker is idle with no actionable_error. Its healthy
    row remains compact and the orchestrated room line opens `cwd-lab`.
-2. Remove only X. Within 10 seconds the MASTER sidebar shows
-   `Working directory is unavailable`, X, `Restore the worktree`, and `--pwd`
-   without an expansion toggle. `T bus state` corroborates both warnings.
-   Take and open a screenshot: all recovery instructions must be readable.
-3. Restore X from its scratch backup. Within 10 seconds both directory errors
-   clear and the MASTER row returns to its compact layout. Agent ID and runtime
+2. Remove only X. Within 10 seconds `T bus state` corroborates actionable_error
+   and the client log records `bus.agent.working_directory_failed`. The MASTER agent row keeps an allowed runtime state label (`Idle`,
+   `Working`, `Blocked` or `Unavailable`); no error or recovery instruction is
+   drawn anywhere in the sidebar. The client log names worker,
+   its room, X and the directory failure. Take and open a screenshot: neither
+   `Working directory is unavailable`, `Restore the worktree` nor `--pwd` is
+   visible.
+3. Restore X from its scratch backup. Within 10 seconds actionable_error
+   clears and the MASTER row returns to its compact layout. Agent ID and runtime
    identity remain unchanged. Take and open a screenshot.
