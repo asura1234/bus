@@ -101,13 +101,6 @@ pub(in crate::client) fn do_handshake(
     endpoint_keybindings: bool,
     mouse_capture: bool,
 ) -> Result<HandshakeResult, ClientError> {
-    // Retain the serving identity with this connection, before a later
-    // replacement can publish its own build record.
-    let server = crate::utils::env::bus_data_dir().and_then(|root| {
-        crate::utils::restart_record::read_build_stamp(&crate::utils::restart_record::build_path(
-            &root,
-        ))
-    });
     stream
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
@@ -195,6 +188,14 @@ pub(in crate::client) fn do_handshake(
             error: "server has no compatible endpoint core; update this machine".into(),
         });
     }
+    // Startup publishes the serving identity before welcoming clients. Read
+    // it after the validated welcome so an early connect cannot retain the
+    // record left by the previous server.
+    let server = crate::utils::env::bus_data_dir().and_then(|root| {
+        crate::utils::restart_record::read_build_stamp(&crate::utils::restart_record::build_path(
+            &root,
+        ))
+    });
     info!(
         generation = welcome.generation,
         server_version = %welcome.server_version,
@@ -202,3 +203,7 @@ pub(in crate::client) fn do_handshake(
     );
     Ok(HandshakeResult { server })
 }
+
+#[cfg(test)]
+#[path = "tests/handshake_test.rs"]
+mod tests;
