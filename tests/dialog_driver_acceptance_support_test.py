@@ -54,7 +54,7 @@ def collect_logs(data, evidence):
     for role in ["client", "server"]:
         for index, source in enumerate(sorted(data.rglob(role + ".jsonl"))):
             shutil.copy2(source, evidence / f"{role}-{index}.jsonl")
-        sources = sorted(p for p in data.glob(f"herdr-{role}.log*") if p.is_file()
+        sources = sorted(p for p in data.rglob(f"herdr-{role}.log*") if p.is_file()
                          and not any(part in p.name for part in [".lock", ".policy", ".tmp"]))
         for index, source in enumerate(sources):
             target = evidence / f"{role}-trace-{index}{'.gz' if source.suffix == '.gz' else '.log'}"

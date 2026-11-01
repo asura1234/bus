@@ -249,6 +249,27 @@ class AcceptanceEvidenceTests(unittest.TestCase):
                 case.doCleanups()
 
 
+    def test_collects_nested_native_trace_logs_before_cleanup(self):
+        import gzip
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "private-data"
+            logs = data / "herdr-config/sessions/bus"
+            logs.mkdir(parents=True)
+            evidence = root / "evidence"; evidence.mkdir()
+            (logs / "herdr-client.log").write_bytes(b"client native result\n")
+            (logs / "herdr-server.log.1.gz").write_bytes(gzip.compress(b"server native result\n"))
+            (logs / "herdr-client.log.lock").write_bytes(b"not a trace")
+            (logs / "perf").mkdir()
+            (logs / "perf/client.jsonl").write_bytes(b"performance record\n")
+            traces = support.collect_logs(data, evidence)
+            self.assertEqual(len(traces), 2, "both nested native trace files must be archived")
+            shutil.rmtree(data)
+            retained = [gzip.decompress(path.read_bytes()) if path.suffix == ".gz"
+                        else path.read_bytes() for path in traces]
+            self.assertCountEqual(retained, [b"client native result\n", b"server native result\n"])
+            self.assertEqual((evidence / "client-0.jsonl").read_bytes(), b"performance record\n")
+
     def test_route_proof_requires_each_prompt_and_its_native_result(self):
         with tempfile.TemporaryDirectory() as directory:
             trace = Path(directory) / "client-trace.log"
