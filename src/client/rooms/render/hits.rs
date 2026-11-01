@@ -71,6 +71,11 @@ impl BusUi {
             Action::ScrollFiles(up) => format!("scroll-files:{}", way(*up)),
             Action::Notes => "notes".into(),
             Action::Composer => "composer".into(),
+            Action::Search(super::super::chat_search::SearchFocus::Query) => "find-query".into(),
+            Action::Search(super::super::chat_search::SearchFocus::ToYou) => "find-to-you".into(),
+            Action::Search(super::super::chat_search::SearchFocus::FromYou) => {
+                "find-from-you".into()
+            }
             Action::Recipients => "recipients".into(),
             Action::Recipient(Some(id)) => format!("recipient:{}", self.agent_name(*id)),
             Action::Recipient(None) => "recipient:none".into(),

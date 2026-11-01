@@ -573,6 +573,7 @@ impl BusUi {
                 self.notes_focus = false;
                 self.recipient_menu = false;
             }
+            Action::Search(focus) => self.activate_chat_search(focus),
             Action::Recipients => {
                 self.recipient_menu = !self.recipient_menu;
                 self.notes_focus = false;

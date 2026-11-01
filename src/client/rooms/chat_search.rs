@@ -128,10 +128,9 @@ impl BusUi {
     }
 
     /// Keys while the search panel is open. Typing edits the query, which
-    /// starts at the newest match. Enter or Up steps to the next older match
-    /// (up the history) and Shift+Enter or Down to the next newer one, both
-    /// wrapping; Down is there because some terminals report Shift+Enter as a
-    /// plain Enter. Esc closes the panel; the history stays at the last match.
+    /// starts at the newest match. Enter/Space activates a focused filter.
+    /// In the query, Enter steps older and Shift+Enter newer. Up/Down step
+    /// from every control, wrapping. Esc closes at the last match.
     pub(super) fn chat_search_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match (code, modifiers) {
             (KeyCode::Esc, _) => self.close_chat_search(),
@@ -143,19 +142,25 @@ impl BusUi {
                 }
             }
             (KeyCode::Char(' '), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                if let Some(search) = &mut self.chat_search {
-                    match search.focus {
-                        SearchFocus::Query => search.query.push(' '),
-                        SearchFocus::ToYou => search.you_only = !search.you_only,
-                        SearchFocus::FromYou => search.from_you = !search.from_you,
+                if let Some(focus) = self.chat_search.as_ref().map(|search| search.focus) {
+                    if focus == SearchFocus::Query {
+                        self.edit_chat_query(|query| query.push(' '));
+                    } else {
+                        self.activate_chat_search(focus);
                     }
-                    search.jump_to_newest = true;
                 }
             }
-            (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Down, _) => {
-                self.step_chat_search(true)
+            (KeyCode::Enter, _) => {
+                if let Some(focus) = self.chat_search.as_ref().map(|search| search.focus) {
+                    if focus == SearchFocus::Query {
+                        self.step_chat_search(modifiers.contains(KeyModifiers::SHIFT));
+                    } else {
+                        self.activate_chat_search(focus);
+                    }
+                }
             }
-            (KeyCode::Enter, _) | (KeyCode::Up, _) => self.step_chat_search(false),
+            (KeyCode::Down, _) => self.step_chat_search(true),
+            (KeyCode::Up, _) => self.step_chat_search(false),
             (KeyCode::Char('f' | 'F'), KeyModifiers::CONTROL) => self.step_chat_search(false),
             (KeyCode::Backspace, _) => self.edit_chat_query(|query| {
                 query.pop();
@@ -168,6 +173,19 @@ impl BusUi {
                 self.edit_chat_query(|query| query.push(c))
             }
             _ => {}
+        }
+    }
+
+    /// Shared activation for keyboard and the rendered mouse targets.
+    pub(super) fn activate_chat_search(&mut self, focus: SearchFocus) {
+        if let Some(search) = &mut self.chat_search {
+            search.focus = focus;
+            match focus {
+                SearchFocus::Query => return,
+                SearchFocus::ToYou => search.you_only = !search.you_only,
+                SearchFocus::FromYou => search.from_you = !search.from_you,
+            }
+            search.jump_to_newest = true;
         }
     }
 
