@@ -5,7 +5,7 @@ pub(crate) use crate::utils::time::{now_ms, now_ns};
 use std::{fs::File, io, path::Path};
 
 /// Creates a private lock file when needed, rejects a symlink, and opens it
-/// read/write. `lock` and `lock_wait` share this so both enforce one contract.
+/// read/write. Every lock entry point shares this so they enforce one contract.
 fn open_lock(path: &Path) -> io::Result<File> {
     if !path.exists() {
         match crate::platform::create_private_state_file(path) {
@@ -39,19 +39,6 @@ pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
             Ok(file) => return Ok(file),
             Err(error) if std::time::Instant::now() >= deadline => return Err(error),
             Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
-        }
-    }
-}
-
-/// Blocks until this process holds the exclusive lock. `append_lock` gives up
-/// after 3s, which is too short for a critical section that copies the skill tree.
-pub(crate) fn lock_wait(path: &Path) -> io::Result<File> {
-    let file = open_lock(path)?;
-    loop {
-        match file.lock() {
-            Ok(()) => return Ok(file),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
         }
     }
 }
@@ -119,7 +106,6 @@ mod tests {
             std::os::unix::fs::symlink(&target, &link).unwrap();
             assert!(super::atomic_write(&link, b"replacement").is_err());
             assert!(super::lock(&link).is_err());
-            assert!(super::lock_wait(&link).is_err());
             assert!(std::fs::symlink_metadata(&link)
                 .unwrap()
                 .file_type()
@@ -129,81 +115,5 @@ mod tests {
         assert!(!dir.join("missing").exists());
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn subprocess_lock_holder() {
-        let Some(path) = std::env::var_os("BUS_TEST_LOCK_HOLD") else {
-            return;
-        };
-        let path = std::path::PathBuf::from(path);
-        let lease = super::lock(&path).unwrap();
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(".held");
-        std::fs::write(path.with_file_name(name), b"1").unwrap();
-        let mut byte = [0];
-        let mut input = std::io::stdin();
-        let _ = std::io::Read::read(&mut input, &mut byte);
-        drop(lease);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn lock_wait_blocks_past_the_append_timeout() {
-        use std::process::{Command, Stdio};
-        let dir = crate::utils::test_temp::unique_temp_path("bus-lock-wait");
-        super::private_dir(&dir).unwrap();
-        let path = dir.join("lock");
-        let marker = dir.join("lock.held");
-        let stderr_path = dir.join("holder-stderr");
-        let stderr = std::fs::File::create(&stderr_path).unwrap();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "messaging::storage::io::tests::subprocess_lock_holder",
-                "--test-threads",
-                "1",
-            ])
-            .env("BUS_TEST_LOCK_HOLD", &path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        let mut locked = false;
-        while std::time::Instant::now() < deadline {
-            if marker.is_file() {
-                locked = true;
-                break;
-            }
-            if child.try_wait().unwrap().is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        if !locked {
-            let _ = child.kill();
-            let _ = child.wait();
-            let detail = std::fs::read_to_string(&stderr_path).unwrap_or_default();
-            let _ = std::fs::remove_dir_all(&dir);
-            panic!("child did not acquire lock: {detail}");
-        }
-        let stdin = child.stdin.take().unwrap();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(4));
-            drop(stdin);
-        });
-        let started = std::time::Instant::now();
-        let lease = super::lock_wait(&path).unwrap();
-        let elapsed = started.elapsed();
-        drop(lease);
-        let _ = child.wait();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            elapsed >= std::time::Duration::from_secs(3),
-            "lock_wait returned in {elapsed:?}, inside the 3s append timeout"
-        );
     }
 }

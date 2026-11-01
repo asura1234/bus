@@ -95,7 +95,6 @@ fn record_build_source_identity(
         "assets",
         "orchestration",
         "workflows",
-        "skills",
         "cli_extensions",
         "scripts",
         "docs/guides",

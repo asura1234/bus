@@ -7,7 +7,6 @@ pub(crate) mod launch;
 mod perf;
 pub(crate) mod restart;
 mod session_pick;
-mod skills;
 pub(crate) mod stop;
 use help::print_help;
 use session_pick::{parse_invocation, Action};
@@ -98,14 +97,8 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         return Ok(());
     }
     let invocation = parse_invocation(args).map_err(io::Error::other)?;
-    if matches!(
-        invocation.action,
-        Action::Run | Action::Resume(_) | Action::Skills(_)
-    ) {
+    if matches!(invocation.action, Action::Run | Action::Resume(_)) {
         crate::utils::launch_guard::guard_launch()?;
-    }
-    if let Action::Skills(args) = &invocation.action {
-        return skills::run(args);
     }
     let control_args = match &invocation.action {
         Action::Control(args) => Some(args.clone()),
@@ -312,7 +305,7 @@ fn session_root(
             (root, session)
         }
         Action::Paths => (explicit_root.unwrap_or_else(|| base.to_path_buf()), None),
-        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     };
     Ok(Some(located))
 }
@@ -412,7 +405,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         ),
         Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
         Action::Paths => print_paths(&root, &base, dev),
-        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     }
 }
 
