@@ -3,6 +3,7 @@
 use super::{
     optional_bool, optional_text, required, schema, Duration, Method, ResponseResult, Worker,
 };
+use crate::messaging::native::TransportError;
 use serde_json::{json, Value};
 
 const REDRAW_POLLS: usize = 20;
@@ -22,12 +23,10 @@ impl Worker {
         };
         if method == "agent.observe" {
             let cells = optional_bool(p, "cells")?;
-            let observation =
-                native_observe(&target, managed_terminal.as_deref(), &mut |method| {
-                    self.transport
-                        .request(method)
-                        .map_err(|error| error.message)
-                })?;
+            let observation = native_observe(&target, managed_terminal.as_deref(), &mut |method| {
+                self.transport.request(method)
+            })
+            .map_err(|error| error.message)?;
             return serde_json::to_value(observation)
                 .map(|observation| observation_json(observation, cells))
                 .map_err(|error| error.to_string());
@@ -61,37 +60,49 @@ impl Worker {
         };
         press_terminal(
             params,
-            &mut |method| {
-                self.transport
-                    .request(method)
-                    .map_err(|error| error.message)
-            },
+            &mut |method| self.transport.request(method),
             &mut || std::thread::sleep(REDRAW_INTERVAL),
         )
+    }
+}
+
+fn focus_identity(observation: &schema::TerminalObservation) -> Result<(String, usize), String> {
+    observation
+        .focus
+        .as_ref()
+        .map(|(_, label)| (label.clone(), observation.focus_occurrence))
+        .ok_or_else(|| "Menu focus is not unique".into())
+}
+
+fn driver_error(message: &str) -> TransportError {
+    TransportError {
+        code: None,
+        message: message.into(),
+        definitely_rejected: false,
     }
 }
 
 fn native_observe(
     target: &str,
     expected_terminal: Option<&str>,
-    call: &mut impl FnMut(Method) -> Result<ResponseResult, String>,
-) -> Result<schema::TerminalObservation, String> {
+    call: &mut impl FnMut(Method) -> Result<ResponseResult, TransportError>,
+) -> Result<schema::TerminalObservation, TransportError> {
     match call(Method::AgentObserve(schema::AgentObserveParams {
         target: target.into(),
     }))? {
         ResponseResult::TerminalObserved { observation } => {
             if expected_terminal.is_some_and(|expected| expected != observation.terminal_id) {
-                return Err("Terminal identity changed; observe it again".into());
+                return Err(driver_error("Terminal identity changed; observe it again"));
             }
             Ok(observation)
         }
-        _ => Err("Unexpected terminal observation response".into()),
+        _ => Err(driver_error("Unexpected terminal observation response")),
     }
 }
 
 fn press_terminal(
     params: schema::AgentPressParams,
-    call: &mut impl FnMut(Method) -> Result<ResponseResult, String>,
+    call: &mut impl FnMut(Method) -> Result<ResponseResult, TransportError>,
     pause: &mut impl FnMut(),
 ) -> Result<Value, String> {
     let started = std::time::Instant::now();
@@ -100,7 +111,7 @@ fn press_terminal(
 
 fn press_terminal_with_elapsed(
     mut params: schema::AgentPressParams,
-    call: &mut impl FnMut(Method) -> Result<ResponseResult, String>,
+    call: &mut impl FnMut(Method) -> Result<ResponseResult, TransportError>,
     pause: &mut impl FnMut(),
     elapsed: &mut impl FnMut() -> Duration,
 ) -> Result<Value, String> {
@@ -116,7 +127,7 @@ fn press_terminal_with_elapsed(
             Ok(ResponseResult::TerminalPressed { press }) => press,
             other => {
                 let error = match other {
-                    Err(error) => error,
+                    Err(error) => error.message,
                     Ok(_) => "Unexpected terminal input response; outcome is uncertain".into(),
                 };
                 return match previous {
@@ -138,12 +149,7 @@ fn press_terminal_with_elapsed(
         // Bind even an explicitly selected plain pane after its first native
         // response, before following any redraw or continuing a selection.
         params.expected_terminal_id = Some(press.observation.terminal_id.clone());
-        let focus = match press
-            .observation
-            .focus
-            .clone()
-            .ok_or("Menu focus is not unique".to_owned())
-        {
+        let focus = match focus_identity(&press.observation) {
             Ok(focus) => focus,
             Err(error) => {
                 return press_result(press, keys, text_written, "selection_pending", Some(error))
@@ -157,13 +163,10 @@ fn press_terminal_with_elapsed(
             pause();
             match native_observe(&params.target, params.expected_terminal_id.as_deref(), call) {
                 Ok(observation) => {
-                    let next_focus = observation
-                        .focus
-                        .clone()
-                        .ok_or("Menu focus is not unique".to_owned());
+                    let next_focus = focus_identity(&observation);
                     press.observation = observation;
                     match next_focus {
-                        Ok(next_focus) if next_focus.1 != focus.1 => {
+                        Ok(next_focus) if next_focus != focus => {
                             moved = true;
                             break;
                         }
@@ -179,8 +182,10 @@ fn press_terminal_with_elapsed(
                         }
                     }
                 }
+                Err(error) if error.code.as_deref() == Some("terminal_observation_unavailable") => {
+                }
                 Err(error) => {
-                    return press_result(press, keys, text_written, "unknown", Some(error))
+                    return press_result(press, keys, text_written, "unknown", Some(error.message))
                 }
             }
         }
@@ -283,6 +288,7 @@ mod tests {
                 ["Install update now", "Continue", "Remind me later"][selected].into(),
             )),
             grid,
+            focus_occurrence: 0,
         }
     }
 
@@ -352,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn a_menu_that_did_not_redraw_receives_one_navigation_key_and_returns_its_screen() {
+    fn a_menu_whose_focus_did_not_move_receives_one_navigation_key_and_returns_its_screen() {
         let mut writes = 0;
         let mut reads = 0;
         let result = press_terminal(
@@ -529,5 +535,127 @@ mod tests {
         .unwrap();
         assert_eq!(resumed["keys"], json!(["enter"]));
         assert_eq!(resumed["outcome"], "selected");
+    }
+    #[test]
+    fn selecting_traverses_equal_intermediate_option_labels() {
+        fn duplicate(selected: usize) -> schema::TerminalObservation {
+            let mut result = observation(selected, 2);
+            for (row, label) in ["Continue", "Continue", "Done"].iter().enumerate() {
+                for cell in &mut result.grid.cells[row] {
+                    cell.symbol = " ".into();
+                }
+                for (col, ch) in format!("{}{}", if row == selected { "❯" } else { " " }, label)
+                    .chars()
+                    .enumerate()
+                {
+                    result.grid.cells[row][col].symbol = ch.to_string();
+                }
+            }
+            result.focus = Some((
+                selected,
+                if selected == 2 { "Done" } else { "Continue" }.into(),
+            ));
+            result.focus_occurrence = usize::from(selected == 1);
+            result.text = result.grid.text();
+            result
+        }
+        let mut script = VecDeque::from([
+            ResponseResult::TerminalPressed {
+                press: schema::TerminalPressResult {
+                    keys: vec!["down".into()],
+                    text_written: false,
+                    selection_pending: true,
+                    observation: duplicate(0),
+                },
+            },
+            ResponseResult::TerminalObserved {
+                observation: duplicate(1),
+            },
+            ResponseResult::TerminalPressed {
+                press: schema::TerminalPressResult {
+                    keys: vec!["down".into()],
+                    text_written: false,
+                    selection_pending: true,
+                    observation: duplicate(1),
+                },
+            },
+            ResponseResult::TerminalObserved {
+                observation: duplicate(2),
+            },
+            ResponseResult::TerminalPressed {
+                press: schema::TerminalPressResult {
+                    keys: vec!["enter".into()],
+                    text_written: false,
+                    selection_pending: false,
+                    observation: duplicate(2),
+                },
+            },
+        ]);
+        let result = press_terminal(
+            params(Some("Done")),
+            &mut |_| {
+                Ok(script
+                    .pop_front()
+                    .expect("selection stalled on equal label"))
+            },
+            &mut || {},
+        )
+        .unwrap();
+        assert!(script.is_empty());
+        assert_eq!(result["outcome"], "selected");
+        assert_eq!(result["keys"], json!(["down", "down", "enter"]));
+    }
+
+    #[test]
+    fn selection_waits_through_transient_observation_unavailability() {
+        let mut script = VecDeque::from([
+            Ok(pressed(0, true, "down")),
+            Err(TransportError {
+                code: Some("terminal_observation_unavailable".into()),
+                message: "Terminal is redrawing".into(),
+                definitely_rejected: false,
+            }),
+            Ok(ResponseResult::TerminalObserved {
+                observation: observation(1, 4),
+            }),
+            Ok(pressed(1, false, "enter")),
+        ]);
+        let result = press_terminal(
+            params(Some("Continue")),
+            &mut |_| script.pop_front().unwrap(),
+            &mut || {},
+        )
+        .unwrap();
+        assert!(script.is_empty());
+        assert_eq!(result["outcome"], "selected");
+        assert_eq!(result["keys"], json!(["down", "enter"]));
+    }
+
+    #[test]
+    fn selection_does_not_retry_uncertain_transport_errors_or_failed_writes() {
+        for failed_after_navigation in [false, true] {
+            let mut calls = 0;
+            let result = press_terminal(
+                params(Some("Continue")),
+                &mut |_| {
+                    calls += 1;
+                    if failed_after_navigation && calls == 1 {
+                        Ok(pressed(0, true, "down"))
+                    } else {
+                        Err(driver_error("connection lost"))
+                    }
+                },
+                &mut || {},
+            );
+            if failed_after_navigation {
+                let receipt = result.unwrap();
+                assert_eq!(receipt["outcome"], "unknown");
+                assert_eq!(receipt["keys"], json!(["down"]));
+                assert_eq!(calls, 2);
+            } else {
+                assert!(result.unwrap_err().contains("connection lost"));
+                assert_eq!(calls, 1);
+            }
+        }
     }
 }
