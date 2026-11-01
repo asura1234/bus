@@ -71,7 +71,7 @@ impl BusState {
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
         request_state.foreign_turn_settled_at_ms = None;
-        // Starts the idle clock for stall detection at the submission.
+        // Starts the idle recovery clock at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
         Ok(())
     }
@@ -187,13 +187,13 @@ impl BusState {
             .unwrap_or(0)
     }
 
-    /// Why `request` is stuck, once it has made no progress for a grace
+    /// Why `request` needs recovery once it has made no progress for a grace
     /// period, or `None`. Unattempted work waits through Working/Blocked:
     /// a long turn is normal, and a blocked one waits on an answer (see
-    /// `blocked_unanswered`). This only reports; the coordinator closes queued
-    /// stalls before delivery, while typed work needs explicit recovery.
+    /// `blocked_unanswered`). The coordinator closes expired queued requests
+    /// before delivery and failed unconfirmed writes after reconciliation.
     /// Definitely rejected queued work has its own fixed deadline.
-    pub(crate) fn stall_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
+    pub(crate) fn recovery_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
         if request.settled() {
             return None;
         }
@@ -221,7 +221,7 @@ impl BusState {
             return None;
         }
         match lead.phase {
-            RequestPhase::Completed | RequestPhase::Abandoned => None,
+            RequestPhase::Completed | RequestPhase::Abandoned | RequestPhase::Active => None,
             // This is a deliberate wait on developer-owned input, not a failed
             // delivery. Persisting the reason also protects the queue on restart.
             RequestPhase::Queued
@@ -264,7 +264,7 @@ impl BusState {
                     .or_else(|| agent.wait_reason().map(Into::into))
                     .unwrap_or_else(|| "not_submitted".into())
             }),
-            RequestPhase::Submitting | RequestPhase::Active => {
+            RequestPhase::Submitting => {
                 let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
                 let invalidated =
                     agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
@@ -282,14 +282,8 @@ impl BusState {
                 Some(
                     if invalidated {
                         "session_invalidated"
-                    } else if lead.phase == RequestPhase::Submitting {
-                        "submission_unconfirmed"
-                    } else if !lead.trusted_start_bound {
-                        "no_start_hook"
                     } else {
-                        // The turn started and the agent is idle, yet no
-                        // final reply matched the provider's transcript.
-                        "transcript_unmatched"
+                        "submission_unconfirmed"
                     }
                     .into(),
                 )
@@ -419,7 +413,7 @@ impl BusState {
             .filter_map(|agent| self.unbound_request(*agent))
             .filter(|request| request.phase == RequestPhase::Submitting)
             .filter(|request| {
-                self.stall_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
+                self.recovery_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
             })
             .map(|request| (request.id, request.agent_id, request.prompt.id))
             .collect();
@@ -733,7 +727,7 @@ impl BusState {
     }
 }
 
-/// The stall reason for a native refusal to type a request. The native
+/// The recovery reason for a native refusal to type a request. The native
 /// server (`src/server/api/agents/prompt.rs`) shares one `agent_not_ready` code for
 /// several causes, so the message tells them apart.
 pub(crate) fn rejection_reason(message: &str) -> &'static str {

@@ -1,4 +1,4 @@
-//! Close queued stalls before delivery/status, and unconfirmed writes only after reconciliation.
+//! Close expired queued requests before delivery/status, and unconfirmed writes only after reconciliation.
 use super::{diagnostics, io, Worker};
 
 /// Extra time for a due notice's native dialog read to recover. Anchored to

@@ -280,11 +280,6 @@ impl BusState {
                     .is_none_or(|a| a.deletion_pending);
             let outcome = self.outcome_to_post(&request, now_ms, expected_end);
             if let Some((class, reason)) = outcome {
-                if class == "ended" {
-                    // A terminal closer replaces an earlier stall sample. The
-                    // replacement is the only outcome this request keeps.
-                    let _withdrawn = self.withdraw_stall_outcomes(&request, now_ms).is_ok();
-                }
                 let idle = request.turn_ended_at_ms.map_or("", |_| "; went idle");
                 self.record_request_event(
                     &request,
@@ -365,34 +360,6 @@ impl BusState {
         self.suppress_outcome(request, now_ms, &closer)
     }
 
-    /// Drop stall samples for `request` so a terminal closer is the only outcome.
-    fn withdraw_stall_outcomes(
-        &mut self,
-        request: &Request,
-        now_ms: u64,
-    ) -> Result<(), super::ModelError> {
-        let group = reply_key(request).0;
-        let exact = format!("stalled:{group}");
-        let prefix = format!("stalled:{group}:");
-        let keys: Vec<String> = self
-            .worker_events
-            .keys()
-            .filter(|key| *key == &exact || key.starts_with(&prefix))
-            .cloned()
-            .collect();
-        let mut notices = std::collections::BTreeSet::new();
-        for key in keys {
-            if let Some(event) = self.worker_events.remove(&key) {
-                if let ReplyRoute::Routed(id) = event.route {
-                    if self.request(id).is_some_and(|notice| !notice.settled()) {
-                        notices.insert(id);
-                    }
-                }
-            }
-        }
-        self.refresh_withdrawn(notices, now_ms)
-    }
-
     fn refresh_withdrawn(
         &mut self,
         notices: std::collections::BTreeSet<RequestId>,
@@ -404,39 +371,25 @@ impl BusState {
         Ok(())
     }
 
-    /// One stall or one abandon for this request, never both, and never a
-    /// second sample of a stall that was already posted. A terminal closer
-    /// still posts when an earlier stall sample exists; a quiet abandon does not.
+    /// Publish a named terminal closer once, unless the request's result
+    /// already accounts for a quiet no-reply outcome.
     fn outcome_to_post(
         &self,
         request: &Request,
         now_ms: u64,
         expected_end: bool,
     ) -> Option<(&'static str, String)> {
-        if self.posted_class(request, "ended") {
+        if request.phase != RequestPhase::Abandoned
+            || expected_end
+            || self.posted_class(request, "ended")
+        {
             return None;
         }
-        if request.phase == RequestPhase::Abandoned {
-            if expected_end {
-                return None;
-            }
-            let closer = self.named_abandon_reason(request);
-            if self.suppress_outcome(request, now_ms, &closer) {
-                return None;
-            }
-            if self.posted_class(request, "stalled") && quiet_reason(&closer) {
-                return None;
-            }
-            Some(("ended", format!("abandoned: {closer}")))
-        } else if self.posted_class(request, "stalled") {
-            None
-        } else {
-            let reason = self.stall_reason(request, now_ms)?;
-            if self.suppress_outcome(request, now_ms, &reason) {
-                return None;
-            }
-            Some(("stalled", format!("stalled: {reason}")))
+        let closer = self.named_abandon_reason(request);
+        if self.suppress_outcome(request, now_ms, &closer) {
+            return None;
         }
+        Some(("ended", format!("abandoned: {closer}")))
     }
 
     /// `abandoned: abandoned` names nothing. Use the recorded closer, or say
@@ -571,10 +524,10 @@ impl BusState {
         detail: Option<&str>,
     ) {
         let group = reply_key(request);
-        // A resumed background turn can go idle or stall again. Persist its
+        // A resumed background turn can go idle again. Persist its
         // busy revision so stable polls/restarts dedup, while new work has its
         // own fact and cannot be hidden by an earlier printed status.
-        let episode = (kind == WorkerEventKind::Idle || class == "stalled")
+        let episode = (kind == WorkerEventKind::Idle)
             .then(|| self.agent(request.agent_id).map_or(0, |a| a.busy_revision));
         let key = match episode {
             Some(episode) => format!("{class}:{}:{episode}", group.0),

@@ -61,7 +61,7 @@ fn next_busy_delay(delay: Duration) -> Duration {
 /// recipient's request replied or closed), with no deadline. Orchestrators
 /// run it as a background tool call and are woken when it exits, so a long
 /// task must never time out. A blocked recipient keeps it waiting. It fails
-/// when a request is abandoned, an unfinished turn stalls, or the message is gone.
+/// when a request is abandoned or the message is gone.
 pub(super) fn follow_message(
     id: &str,
     message: &Value,
@@ -135,8 +135,7 @@ pub(super) fn follow_message(
 
 /// `Some(Ok)` once the message is complete, `Some(Err)` with an error code
 /// when Bus abandoned a recipient's request (other than one settled as
-/// `reply_not_captured`) or an unsettled one stalled, `None` while any
-/// recipient's request is still open.
+/// `reply_not_captured`), `None` while any recipient's request is still open.
 ///
 /// An ended turn is not enough: unclaimed steering must surface its uncertain
 /// outcome rather than borrow the group's answer, and an interrupt can still
@@ -151,10 +150,7 @@ fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
     if status["complete"] == true {
         return Some(Ok(()));
     }
-    let settled = |r: &Value| r["stage"] == "replied" || settled_without_reply(r);
-    delivery_failure(status)
-        .or_else(|| stalled(status, |r| !settled(r)))
-        .map(Err)
+    delivery_failure(status).map(Err)
 }
 
 /// Stop the waiter, retaining requests and their original IDs for recovery.
@@ -236,35 +232,6 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
         format!(
             "Bus abandoned message {} for agent {agent}; inspect message status and the agent's terminal",
             status["message_id"],
-        ),
-    ))
-}
-
-/// The first stalled request (among those `relevant`) as a `message_stalled`
-/// error with its reason.
-fn stalled(status: &Value, relevant: impl Fn(&Value) -> bool) -> Option<(&'static str, String)> {
-    let request = status["requests"]
-        .as_array()?
-        .iter()
-        .find(|r| r["stage"] == "stalled" && relevant(r))?;
-    if request["reason"] == "submission_unconfirmed" {
-        return Some((
-            "message_stalled",
-            unconfirmed_guidance(
-                status,
-                request,
-                request["agent_name"].as_str().unwrap_or("unknown"),
-            ),
-        ));
-    }
-    Some((
-        "message_stalled",
-        format!(
-            "message {} stalled for agent {} while {}: {}; inspect message status, then fix the agent or run request recover",
-            status["message_id"],
-            request["agent_name"].as_str().unwrap_or("unknown"),
-            request["stalled_from"].as_str().unwrap_or("unknown"),
-            request["reason"].as_str().unwrap_or("unknown"),
         ),
     ))
 }
@@ -444,12 +411,6 @@ pub(super) fn execute_with_pause(
             .is_some_and(|agents| !agents.is_empty())
         {
             return dialog_response(&id, response.result);
-        }
-        // Bounded waits need the captured reply; async waits use async_outcome above.
-        if let Some((code, message)) = deadline.and_then(|_| stalled(&response.result, |_| true)) {
-            let mut failure = Response::failure(&id, code, message);
-            failure.result = response.result;
-            return failure;
         }
         last_status = response.result;
         pause_pending_poll(deadline, &mut poll_delay, pause);

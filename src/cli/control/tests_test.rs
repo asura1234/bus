@@ -1313,11 +1313,6 @@ fn waits_started_after_reply_not_captured_settlement_preserve_async_and_bounded_
     assert!(sent.ok);
 }
 
-fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
-    json!({"request_id": 40 + agent, "agent_id": agent, "agent_name": format!("a{agent}"),
-        "stage": "stalled", "stalled_from": from, "reason": reason, "turn_ended": turn_ended})
-}
-
 fn exit_code(outcome: &io::Result<()>) -> Option<i32> {
     outcome
         .as_ref()
@@ -1328,77 +1323,25 @@ fn exit_code(outcome: &io::Result<()>) -> Option<i32> {
 }
 
 #[test]
-fn send_async_exits_early_with_the_stalled_code_and_reason() {
-    let (outcome, lines, _, _) = run_async(
-        &[],
-        [
-            status(vec![recipient(1, "queued", false)]),
-            status(vec![stalled_recipient(
-                1,
-                "queued",
-                "input_box_not_empty",
-                false,
-            )]),
-        ],
-    );
-    assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE));
-    let error = outcome.unwrap_err().to_string();
-    assert!(
-        error.contains("message 19 stalled for agent a1 while queued: input_box_not_empty"),
-        "{error}"
-    );
-    assert_eq!(lines[0]["error"]["code"], "message_stalled");
-}
-
-#[test]
 fn send_async_unconfirmed_submission_explains_safe_recovery() {
-    for stage in ["stalled", "abandoned"] {
-        let mut request = stalled_recipient(1, "submitting", "submission_unconfirmed", false);
-        request["stage"] = json!(stage);
-        request["uncertain_outcome"] = json!(true);
-        request["detail"] = json!("The draft was left because it was edited");
-        let (outcome, lines, _, _) = run_async(&[], [status(vec![request])]);
-        assert_eq!(
-            exit_code(&outcome),
-            Some(if stage == "stalled" {
-                STALLED_EXIT_CODE
-            } else {
-                1
-            })
-        );
-        let message = lines[0]["error"]["message"].as_str().unwrap();
-        for guidance in [
-            "submission_unconfirmed",
-            "draft was left because it was edited",
-            "may have run",
-            "transcript",
-            "composer",
-            "before resending",
-        ] {
-            assert!(
-                message.contains(guidance),
-                "{stage}: missing {guidance}: {message}"
-            );
-        }
-        assert_eq!(lines[0]["result"]["requests"][0]["uncertain_outcome"], true);
+    let mut request = recipient(1, "abandoned", false);
+    request["reason"] = json!("submission_unconfirmed");
+    request["uncertain_outcome"] = json!(true);
+    request["detail"] = json!("The draft was left because it was edited");
+    let (outcome, lines, _, _) = run_async(&[], [status(vec![request])]);
+    assert_eq!(exit_code(&outcome), Some(1));
+    let message = lines[0]["error"]["message"].as_str().unwrap();
+    for guidance in [
+        "submission_unconfirmed",
+        "draft was left because it was edited",
+        "may have run",
+        "transcript",
+        "composer",
+        "before resending",
+    ] {
+        assert!(message.contains(guidance), "missing {guidance}: {message}");
     }
-}
-
-/// Settlement closes an ended turn without a captured reply as
-/// `reply_not_captured`, which is done; one still open when it stalls is not.
-#[test]
-fn send_async_reports_a_finished_turn_that_stalled_without_settling() {
-    let (outcome, lines, _, _) = run_async(
-        &[],
-        [status(vec![stalled_recipient(
-            1,
-            "delivered",
-            "transcript_unmatched",
-            true,
-        )])],
-    );
-    assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE));
-    assert_eq!(lines[0]["error"]["code"], "message_stalled");
+    assert_eq!(lines[0]["result"]["requests"][0]["uncertain_outcome"], true);
 }
 
 #[test]
@@ -1441,30 +1384,6 @@ fn send_async_accepts_a_captured_group_reply_after_uncertain_steering() {
 fn an_abandoned_async_send_exits_one_with_a_clear_reason() {
     let (outcome, _, _, _) = run_async(&[], [status(vec![recipient(1, "abandoned", false)])]);
     assert_eq!(exit_code(&outcome), Some(1));
-}
-
-#[test]
-fn wait_exits_early_when_a_recipient_stalls() {
-    let mut output = Vec::new();
-    let outcome = run_with(
-        &["wait", "--message", "19", "--timeout", "600"].map(String::from),
-        &mut output,
-        |request, _| {
-            Ok(Response::success(
-                &request.id,
-                status(vec![stalled_recipient(
-                    1,
-                    "awaiting_start",
-                    "no_start_hook",
-                    false,
-                )]),
-            ))
-        },
-    );
-    assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE));
-    let response: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(response["error"]["code"], "message_stalled");
-    assert_eq!(response["result"]["requests"][0]["reason"], "no_start_hook");
 }
 
 #[test]
@@ -2428,50 +2347,6 @@ fn bounded_wait_reports_recorded_abandonment_as_failure() {
 }
 
 #[test]
-fn wait_async_and_send_async_agree_on_invalidated_joined_stalls() {
-    let mut snapshot = restart_statuses()["joined"].clone();
-    snapshot["requests"][0]["stage"] = json!("stalled");
-    snapshot["requests"][0]["stalled_from"] = json!("joined");
-    snapshot["requests"][0]["reason"] = json!("session_invalidated");
-    let message = snapshot["message_id"].to_string();
-    let (outcome, response) =
-        run_captured(&["wait", "--message", &message, "--async"], |request, _| {
-            Ok(Response::success(&request.id, snapshot.clone()))
-        });
-    assert_eq!(exit_code(&outcome), Some(3));
-    let sent = follow_message(
-        "send-follow",
-        &snapshot["message_id"],
-        &mut |request, _| Ok(Response::success(&request.id, snapshot.clone())),
-        &mut |_| panic!("invalidated stall is terminal"),
-    );
-    assert!(!sent.ok);
-    assert_eq!(response["error"]["code"], sent.error.unwrap().code);
-    assert_eq!(response["result"], sent.result);
-}
-
-/// A turn that ended yet stalled was never settled, so it is not done; the
-/// wait reports the stall even while another recipient still works.
-#[test]
-fn wait_async_reports_a_finished_stall_while_other_recipients_work() {
-    let mut finished = recipient(1, "stalled", true);
-    finished["stalled_from"] = json!("delivered");
-    finished["reason"] = json!("transcript_unmatched");
-    let mut reads = 0;
-    let (outcome, response) =
-        run_captured(&["wait", "--message", "19", "--async"], |request, _| {
-            reads += 1;
-            Ok(Response::success(
-                &request.id,
-                status(vec![finished.clone(), recipient(2, "delivered", false)]),
-            ))
-        });
-    assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE), "{response}");
-    assert_eq!(response["error"]["code"], "message_stalled");
-    assert_eq!(reads, 1);
-}
-
-#[test]
 fn async_wait_and_send_share_settlement_across_recipient_stages() {
     for stage in [
         "queued",
@@ -2481,7 +2356,6 @@ fn async_wait_and_send_share_settlement_across_recipient_stages() {
         "joined",
         "replied",
         "abandoned",
-        "stalled",
     ] {
         for ended in [false, true] {
             let snapshot = status(vec![recipient(1, stage, ended)]);

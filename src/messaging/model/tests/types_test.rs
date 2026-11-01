@@ -118,7 +118,6 @@ fn feishu_prunes_delivery_guards_after_their_history_is_removed() {
     state
         .attention_episodes
         .insert("exit:999:old-launch".into());
-    state.attention_episodes.insert("stall:999".into());
     assert!(state.prune_attention());
     assert!(state.attention_delivery.handled.is_empty());
     assert!(state.attention_delivery.interrupted.is_empty());
@@ -127,26 +126,17 @@ fn feishu_prunes_delivery_guards_after_their_history_is_removed() {
 }
 
 #[test]
-fn operational_notice_stalled_requests_keep_status_without_bus_chat() {
+fn operational_notice_requests_stay_queued_without_bus_chat() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     state.confirm_hook_setup(agent).unwrap();
     let request = submit_text(&mut state, room, agent, "queued");
     let master = state.ensure_master_room();
-    for now in [10 + QUEUED_STALL_MS, 10 + QUEUED_STALL_MS + 1] {
-        state.record_stalled_errors(now).unwrap();
+    for _ in [10 + QUEUED_STALL_MS, 10 + QUEUED_STALL_MS + 1] {
         assert_eq!(state.notices(master).count(), 0);
-        assert_eq!(
-            state
-                .stall_reason(state.request(request).unwrap(), now)
-                .as_deref(),
-            Some("not_submitted")
-        );
     }
     assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
-    let mut reloaded: BusState =
-        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
-    reloaded.record_stalled_errors(u64::MAX).unwrap();
+    let reloaded: BusState = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
     assert_eq!(reloaded.notices(master).count(), 0);
     assert_eq!(reloaded.request(request).unwrap().prompt.text, "queued");
 }
@@ -377,12 +367,12 @@ fn idle_with_queued(at: u64, text: &str) -> (BusState, AgentId, RequestId) {
     (state, agent, request)
 }
 
-fn stall_at(state: &BusState, request: RequestId, now_ms: u64) -> Option<String> {
-    state.stall_reason(state.request(request).unwrap(), now_ms)
+fn recovery_at(state: &BusState, request: RequestId, now_ms: u64) -> Option<String> {
+    state.recovery_reason(state.request(request).unwrap(), now_ms)
 }
 
 #[test]
-fn native_refusals_map_to_stall_reasons() {
+fn native_refusals_map_to_recovery_reasons() {
     // The exact texts `src/server/api/agents/prompt.rs` sends.
     for (message, reason) in [
         (

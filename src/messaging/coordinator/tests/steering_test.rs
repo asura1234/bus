@@ -669,10 +669,9 @@ fn a_captured_claude_stop_reports_the_turn_ended_despite_running_shells() {
     assert_eq!(status["requests"][0]["turn_ended"], true, "{status}");
 }
 
-/// A delivered Stop answer cannot later become a stalled request merely
-/// because its background shells keep running.
+/// A delivered Stop answer stays complete while its background shells run.
 #[test]
-fn a_delivered_claude_stop_answer_never_becomes_stalled() {
+fn a_delivered_claude_stop_answer_stays_completed() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     fixture.record(
         json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}),
@@ -688,19 +687,14 @@ fn a_delivered_claude_stop_answer_never_becomes_stalled() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
-    let status = fixture
-        .worker
-        .control_message_at(fixture.request(lead).prompt.id, fixture.now)
-        .unwrap();
-    assert_ne!(status["requests"][0]["stage"], "stalled", "{status}");
 }
 
 /// A paste the agent keeps refusing (Bus retries every
-/// `PROMPT_NOT_SHOWN_RETRY`) never reaches the agent, so the queued stall
+/// `PROMPT_NOT_SHOWN_RETRY`) never reaches the agent, so queued recovery
 /// still closes the message `QUEUED_STALL_MS` after it was sent; the retries
 /// themselves are not progress.
 #[test]
-fn a_message_whose_paste_is_refused_on_every_retry_still_expires_as_queued_stalled() {
+fn a_message_whose_paste_is_refused_on_every_retry_still_expires_as_queued() {
     use crate::messaging::model::{SubmissionOutcome, QUEUED_STALL_MS};
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let sent_at = fixture.now;

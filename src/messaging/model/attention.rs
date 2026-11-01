@@ -55,12 +55,6 @@ impl BusState {
             .attention_episodes
             .iter()
             .filter(|key| {
-                if let Some(id) = key
-                    .strip_prefix("stall:")
-                    .and_then(|id| id.parse::<u64>().ok())
-                {
-                    return self.request(super::RequestId(id)).is_some();
-                }
                 if let Some((id, launch)) = key
                     .strip_prefix("exit:")
                     .and_then(|value| value.split_once(':'))
@@ -194,48 +188,6 @@ impl BusState {
              Check the agent's transcript and composer before resending. Inspect: bus message status {}",
             prompt.0, prompt.0
         )
-    }
-
-    pub(crate) fn record_stalled_errors(&mut self, now_ms: u64) -> Result<(), super::ModelError> {
-        let observed: Vec<_> = self
-            .requests
-            .values()
-            .filter(|request| request.group.is_none() && !request.settled())
-            .map(|request| {
-                (
-                    request.id,
-                    request.prompt.id,
-                    request.agent_id,
-                    self.stall_reason(request, now_ms),
-                )
-            })
-            .collect();
-        // A request keeps its alert marker through Working/Idle flaps.
-        // prune_attention removes it only after the request leaves history.
-        for (request, prompt, agent, reason) in observed {
-            if let Some(reason) = reason {
-                let message = if reason == "submission_unconfirmed" {
-                    Self::unconfirmed_submission_message(prompt)
-                } else {
-                    format!("Agent stalled past its timeout on message {} ({reason}). Inspect: bus message status {}", prompt.0, prompt.0)
-                };
-                if self
-                    .attention_episodes
-                    .insert(format!("stall:{}", request.0))
-                {
-                    tracing::warn!(
-                        event = "bus.message.stalled",
-                        request_id = request.0,
-                        message_id = prompt.0,
-                        agent_id = agent.0,
-                        reason,
-                        detail = message,
-                        "Request is stalled; inspect message status"
-                    );
-                }
-            }
-        }
-        Ok(())
     }
 
     pub(crate) fn record_error_episode(&mut self, key: String) -> bool {

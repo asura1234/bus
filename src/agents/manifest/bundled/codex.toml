@@ -7,7 +7,7 @@ updated_at = "2026-10-24T18:04:42Z"
 # node launcher keeps the pane's process looking like Codex. Without this rule
 # the updater's output fell through to the idle fallback (or the stale OSC
 # title), so Bus showed an agent that was gone as Idle. Working, so queued
-# messages wait through a slow install instead of being closed as stalled. A
+# messages wait through a slow install instead of expiring from the queue. A
 # relaunched Codex draws its prompt below this text, which ends the match.
 [[rules]]
 id = "self_update_running"

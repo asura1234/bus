@@ -4,7 +4,7 @@ use {
 };
 
 impl RoomAgent {
-    /// Pure delivery eligibility; callers decide whether to log or stall.
+    /// Pure delivery eligibility; callers decide whether to log or recover.
     pub(crate) fn wait_reason(&self) -> Option<&'static str> {
         let identity = &self.runtime_identity;
         if self.deletion_pending {

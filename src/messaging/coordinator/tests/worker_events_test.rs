@@ -510,7 +510,7 @@ fn pending_autonomous_burst_survives_restart_and_duplicate_turn_callbacks() {
 }
 
 #[test]
-fn stalled_request_notifies_with_its_reason() {
+fn expired_queued_request_notifies_with_its_reason() {
     let mut f = Fixture::new();
     let orch = f.orch;
     let source = f.send(Author::Agent(orch), "not submitted");
@@ -1009,10 +1009,6 @@ fn long_failure_reason_keeps_event_and_original_reference_in_the_short_notice() 
         .contains(&reason));
 }
 
-fn earlier_background_request(f: &mut Fixture, shell: bool) -> RequestId {
-    earlier_background_request_at(f, shell, io::now_ms())
-}
-
 fn earlier_background_request_at(f: &mut Fixture, shell: bool, now: u64) -> RequestId {
     ready_worker_at(f, now - 30_000);
     let mut state = f.worker.state.clone();
@@ -1089,65 +1085,6 @@ fn an_initially_idle_worker_with_a_new_queued_request_does_not_warn() {
     state.route_worker_replies(now, &BTreeSet::new()).unwrap();
     f.worker.save(state).unwrap();
     assert!(f.notices().is_empty());
-}
-
-fn continue_background_work(f: &mut Fixture, at: u64) {
-    let mut state = f.worker.state.clone();
-    let mut start = callback(f, "held-next", 20, CallbackEventKind::PromptStarted);
-    start.occurred_at_ms = at;
-    start.prompt_payload = Some("background continuation".into());
-    assert_eq!(
-        state.accept_callback(start),
-        CallbackDisposition::AcceptedContinuation
-    );
-    state
-        .observe_status(f.agent, RuntimeStatus::Working, at)
-        .unwrap();
-    let mut pending = callback(f, "held-next", 21, CallbackEventKind::BackgroundPending);
-    pending.occurred_at_ms = at + 1_000;
-    state.accept_callback(pending);
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, at + 2_000)
-        .unwrap();
-    f.worker.save(state).unwrap();
-}
-
-#[test]
-fn one_stall_per_request_does_not_repost_after_work_resumes() {
-    let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
-    let first_at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
-    let mut state = f.worker.state.clone();
-    state.retain_worker_outcomes(first_at);
-    let old: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("No reply (stalled:"))
-        .map(|(key, _)| key)
-        .collect();
-    assert_eq!(old.len(), 1);
-    state
-        .see_worker_outcomes(source, f.orch, &old, first_at)
-        .unwrap();
-    f.worker.save(state).unwrap();
-    continue_background_work(&mut f, first_at + 1_000);
-    let mut state = f.worker.state.clone();
-    let second_at = first_at + crate::messaging::model::DELIVERED_STALL_MS + 4_000;
-    state.retain_worker_outcomes(second_at);
-    state
-        .see_worker_outcomes(source, f.orch, &old, second_at)
-        .unwrap();
-    let current: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("No reply (stalled:"))
-        .map(|(key, _)| key)
-        .collect();
-    assert!(
-        current.is_empty(),
-        "the same request posts one stall; a later episode is not a second notice: {current:?}"
-    );
-    assert_eq!(state.request(source).unwrap().phase, RequestPhase::Active);
 }
 
 fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {
@@ -1430,63 +1367,9 @@ fn explicit_send_then_same_provider_final_adds_no_second_body() {
 }
 
 #[test]
-fn five_polls_of_the_same_stall_post_one_notice() {
+fn an_aged_request_posts_one_named_abandon_outcome() {
     let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
-    let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
-    let mut state = f.worker.state.clone();
-    for poll in 0..5 {
-        state.retain_worker_outcomes(at + poll);
-    }
-    let stalls: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("No reply (stalled:"))
-        .collect();
-    assert_eq!(stalls.len(), 1, "{stalls:?}");
-    state
-        .route_worker_replies(at + 10_000, &BTreeSet::new())
-        .unwrap();
-    let notices = state
-        .requests()
-        .filter(|request| request.prompt.text.contains("No reply (stalled:"))
-        .count();
-    assert_eq!(notices, 1);
-}
-
-#[test]
-fn working_agent_with_an_older_queued_request_posts_no_stall() {
-    let mut f = Fixture::new();
-    let now = io::now_ms();
-    ready_worker_at(&mut f, now - 30_000);
-    let mut state = f.worker.state.clone();
-    let queued = state
-        .submit_message_from(
-            f.room,
-            Draft {
-                text: "older queued work".into(),
-                files: vec![],
-                recipient_ids: [f.agent].into(),
-            },
-            Author::Agent(f.orch),
-            now - crate::messaging::model::QUEUED_STALL_MS - 10_000,
-        )
-        .unwrap()[0];
-    state
-        .observe_status(f.agent, RuntimeStatus::Working, now - 1_000)
-        .unwrap();
-    state.retain_worker_outcomes(now);
-    let outcomes = state.worker_outcomes_for(state.request(queued).unwrap());
-    assert!(
-        outcomes.iter().all(|(_, text)| !text.contains("No reply")),
-        "a Working agent posts no stall for an older queued request: {outcomes:?}"
-    );
-}
-
-#[test]
-fn a_stall_and_a_later_abandon_post_one_outcome() {
-    let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
+    let source = earlier_background_request_at(&mut f, false, io::now_ms());
     let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
     let mut state = f.worker.state.clone();
     state.retain_worker_outcomes(at);
@@ -1494,10 +1377,17 @@ fn a_stall_and_a_later_abandon_post_one_outcome() {
     state.retain_worker_outcomes(at + 1_000);
     let outcomes = state.worker_outcomes_for(state.request(source).unwrap());
     assert_eq!(outcomes.len(), 1, "{outcomes:?}");
-    assert!(outcomes[0].1.contains("No reply (stalled:"), "{outcomes:?}");
     assert!(
-        outcomes.iter().all(|(_, text)| !text.contains("abandoned")),
+        outcomes[0].1.contains("No reply (abandoned: idle)"),
         "{outcomes:?}"
+    );
+    state.retain_worker_outcomes(at + 2_000);
+    assert_eq!(
+        state
+            .worker_outcomes_for(state.request(source).unwrap())
+            .len(),
+        1,
+        "the terminal outcome must not repeat"
     );
 }
 
@@ -1694,9 +1584,9 @@ fn identical_results_for_distinct_requests_each_wake_once() {
 }
 
 #[test]
-fn provider_error_replaces_an_earlier_stall_outcome() {
+fn provider_error_posts_after_an_aged_idle_request() {
     let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
+    let source = earlier_background_request_at(&mut f, false, io::now_ms());
     let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
     let mut state = f.worker.state.clone();
     state.retain_worker_outcomes(at);
@@ -1714,7 +1604,7 @@ fn provider_error_replaces_an_earlier_stall_outcome() {
     assert_eq!(outcomes.len(), 1, "{outcomes:?}");
     assert!(
         outcomes[0].1.contains("provider_error"),
-        "the terminal provider error must survive the earlier stall: {outcomes:?}"
+        "the terminal provider error must post after the idle interval: {outcomes:?}"
     );
 }
 

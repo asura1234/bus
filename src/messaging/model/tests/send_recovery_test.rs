@@ -8,7 +8,7 @@ fn recover_not_submitted_queued_request_releases_only_that_request() {
     let failed = submit_text(&mut state, room, agent, "not submitted");
     let next = submit_text(&mut state, room, agent, "next request");
     assert_eq!(
-        stall_at(&state, failed, 10 + QUEUED_STALL_MS).as_deref(),
+        recovery_at(&state, failed, 10 + QUEUED_STALL_MS).as_deref(),
         Some("not_submitted")
     );
     state.agents.get_mut(&agent).unwrap().delivery_rejection = Some("delivery_rejected".into());
@@ -232,28 +232,6 @@ fn grok_working_turn_keeps_a_follow_up_queued_instead_of_steering_it() {
 }
 
 #[test]
-fn invalidated_stalled_typed_request_can_be_recovered_explicitly() {
-    let (mut state, agent, request) = idle_with_queued(1_000, "go");
-    start_request(&mut state, request, "launch-codex", 5);
-    state.invalidate_agent_session(agent).unwrap();
-    state
-        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
-        .unwrap();
-    let stalled_at = 3_000 + DELIVERED_STALL_MS;
-    assert_eq!(
-        stall_at(&state, request, stalled_at).as_deref(),
-        Some("session_invalidated")
-    );
-    state
-        .recover_idle_request(request, stalled_at)
-        .expect("a session_invalidated stall is preserved for explicit recovery");
-    assert_eq!(
-        state.request(request).unwrap().phase,
-        RequestPhase::Abandoned
-    );
-}
-
-#[test]
 fn invalidated_unavailable_recovery_closes_joined_group_and_preserves_queue() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let lead = submit_text(&mut state, room, agent, "lead");
@@ -353,12 +331,11 @@ fn queued_request_expired_during_shutdown_preserves_failure_without_chat() {
     assert_eq!(
         expired,
         vec![request],
-        "the stalled request is closed on reopen"
+        "the expired request is closed on reopen"
     );
     state
         .observe_status(agent, RuntimeStatus::Unavailable, reopened_at)
         .unwrap();
-    state.record_stalled_errors(reopened_at + 500).unwrap();
     let master = state.ensure_master_room();
     let tagged = state
         .notices(master)

@@ -830,11 +830,11 @@ fn operational_notice_unconfirmed_write_retains_unknown_outcome_without_chat() {
     assert!(worker.state.request(lost).unwrap().uncertain_outcome);
     let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap()
         + crate::messaging::model::DELIVERED_STALL_MS;
-    let mut reported = worker.state.clone();
-    reported.record_stalled_errors(bound).unwrap();
-    assert!(reported
-        .master_room()
-        .is_none_or(|master| reported.notices(master.id).count() == 0));
+    assert!(worker.state.master_room().is_none_or(|master| worker
+        .state
+        .notices(master.id)
+        .count()
+        == 0));
     worker.expire_unconfirmed_submissions(bound - 1).unwrap();
     worker.expire_unconfirmed_submissions(bound).unwrap();
     let request = worker.state.request(lost).unwrap();
