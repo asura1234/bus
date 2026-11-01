@@ -138,7 +138,7 @@ impl BusState {
         // final still yields to any earlier copy, so an explicit send is not
         // posted again as Turn final.
         if self.final_text_already_posted(late, room, worker, text) {
-            self.note_result_posted(turn, callback.occurred_at_ms);
+            self.note_explicit_copy(group, room, worker, turn, text, callback.occurred_at_ms);
             return;
         }
         let Ok(message) =
@@ -166,6 +166,42 @@ impl BusState {
             },
         );
         self.note_result_posted(turn, callback.occurred_at_ms);
+    }
+
+    /// The worker already sent this turn's text. That send is the one delivery.
+    /// Remember a grouped final as seen so the quiet no-reply stays withdrawn,
+    /// without posting the body a second time.
+    fn note_explicit_copy(
+        &mut self,
+        group: Option<RequestId>,
+        room: RoomId,
+        worker: AgentId,
+        turn: String,
+        text: &str,
+        now_ms: u64,
+    ) {
+        if let Some(group) = group {
+            if let Some(message) = self.explicit_copy_message(room, worker, text) {
+                let key = format!(
+                    "final:{turn}:{}",
+                    crate::utils::time::digest(text.as_bytes())
+                );
+                self.worker_events
+                    .entry(key)
+                    .or_insert_with(|| WorkerEvent {
+                        agent: worker,
+                        room,
+                        group: Some(group),
+                        message,
+                        at_ms: now_ms,
+                        episode: None,
+                        kind: WorkerEventKind::Final,
+                        text: text.trim().to_owned(),
+                        route: ReplyRoute::Seen,
+                    });
+            }
+        }
+        self.note_result_posted(turn, now_ms);
     }
 
     /// The body is already the result. Remember the turn and drop a quiet
@@ -436,9 +472,7 @@ impl BusState {
             return true;
         }
         reason == "reply_not_captured"
-            && (self.captured_reply_already_sent(request)
-                || self.explicit_fallback_after_close(request)
-                || self.restart_covers(request, now_ms))
+            && (self.captured_reply_already_sent(request) || self.restart_covers(request, now_ms))
     }
 
     fn posted_class(&self, request: &Request, class: &str) -> bool {

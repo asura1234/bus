@@ -30,32 +30,6 @@ impl BusState {
             && self.assigned_copy_at(request, None).is_some()
     }
 
-    /// The worker posted its own answer after this request closed with no
-    /// captured reply. That send replaces `reply_not_captured`. A message from
-    /// before the close, a status line, and one owned by another request's
-    /// captured reply do not. A closed request cannot take `--reply-to`, so
-    /// the ordinary send is the delivery when it is actually the answer.
-    pub(super) fn explicit_fallback_after_close(&self, request: &Request) -> bool {
-        let Some(completed) = request.completed_at_ms else {
-            return false;
-        };
-        if request
-            .reply()
-            .is_some_and(|reply| !reply.text.trim().is_empty())
-        {
-            return false;
-        }
-        let end = completed.saturating_add(60_000);
-        self.worker_result_messages(request.room_id, request.agent_id)
-            .iter()
-            .any(|(at, text)| {
-                (completed..=end).contains(at)
-                    && !is_status_line(text)
-                    && !self.claimed_by_captured_reply(request, text, *at)
-                    && self.fallback_owner(request, *at) == Some(request.id)
-            })
-    }
-
     /// A restart line covers only requests that already existed when it was posted.
     pub(super) fn restart_covers(&self, request: &Request, now_ms: u64) -> bool {
         self.latest_restart_ms(request.room_id, now_ms)
@@ -311,72 +285,17 @@ impl BusState {
             })
     }
 
-    fn worker_result_messages(&self, room: RoomId, worker: AgentId) -> Vec<(u64, String)> {
-        let mut found = std::collections::BTreeMap::<PromptId, (u64, String)>::new();
-        let mut keep = |id: PromptId, at: u64, author: &Author, stored: &str| {
-            if author != &Author::Agent(worker) || is_wrapper(stored) || stored.trim().is_empty() {
-                return;
-            }
-            found
-                .entry(id)
-                .or_insert_with(|| (at, stored.trim().to_owned()));
-        };
-        for prompt in self.notices(room) {
-            keep(
-                prompt.id,
-                prompt.submitted_at_ms,
-                &prompt.author,
-                &prompt.text,
-            );
-        }
-        for request in self.requests().filter(|request| request.room_id == room) {
-            keep(
-                request.prompt.id,
-                request.prompt.submitted_at_ms,
-                &request.prompt.author,
-                &request.prompt.text,
-            );
-        }
-        let mut messages: Vec<_> = found.into_values().collect();
-        messages.sort_unstable();
-        messages
-    }
-
-    fn claimed_by_captured_reply(&self, request: &Request, text: &str, at: u64) -> bool {
-        self.requests().any(|other| {
-            other.id != request.id
-                && other.room_id == request.room_id
-                && other.agent_id == request.agent_id
-                && other
-                    .reply()
-                    .is_some_and(|reply| same_result_text(&reply.text, text))
-                && self.assigned_result_at(
-                    other.room_id,
-                    other.agent_id,
-                    other.prompt.submitted_at_ms,
-                    other.id,
-                    text,
-                    None,
-                ) == Some(at)
-        })
-    }
-
-    /// The latest request that closed without a reply in the minute before
-    /// `at` owns an unmatched post-close send.
-    fn fallback_owner(&self, request: &Request, at: u64) -> Option<RequestId> {
-        self.requests()
-            .filter(|other| {
-                other.room_id == request.room_id
-                    && other.agent_id == request.agent_id
-                    && other
-                        .reply()
-                        .is_none_or(|reply| reply.text.trim().is_empty())
-                    && other.completed_at_ms.is_some_and(|completed| {
-                        completed <= at && at <= completed.saturating_add(60_000)
-                    })
-            })
-            .max_by_key(|other| (other.completed_at_ms, other.id.0))
-            .map(|other| other.id)
+    /// The worker message that already carries `text`, when one is assigned.
+    pub(super) fn explicit_copy_message(
+        &self,
+        room: RoomId,
+        worker: AgentId,
+        text: &str,
+    ) -> Option<PromptId> {
+        self.worker_copies(room, worker, text.trim(), None)
+            .into_iter()
+            .next()
+            .map(|(_, id)| id)
     }
 }
 
@@ -391,14 +310,6 @@ fn is_wrapper(text: &str) -> bool {
         || text.starts_with("Turn final")
         || text.starts_with("Reply to message")
         || text.starts_with("Restarted ")
-}
-
-/// Narration of the turn is not the answer. The communication guide names
-/// "still working" as that kind of post, so it must leave the no-reply in place.
-fn is_status_line(text: &str) -> bool {
-    text.trim()
-        .to_ascii_lowercase()
-        .starts_with("still working")
 }
 
 fn same_result_text(stored: &str, text: &str) -> bool {
