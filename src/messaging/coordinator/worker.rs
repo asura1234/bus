@@ -648,7 +648,13 @@ impl Worker {
                         }
                     });
                     if let Some(reason) = reason {
-                        diagnostics::request(&self.state, id, "bus.message.recovered", reason);
+                        diagnostics::request_with_lead(
+                            &self.state,
+                            id,
+                            "bus.message.recovered",
+                            reason,
+                            lead.0,
+                        );
                     }
                 }
             }

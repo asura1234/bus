@@ -19,29 +19,81 @@ pub(crate) fn dev_enabled() -> bool {
 }
 
 pub(crate) fn request(state: &BusState, id: RequestId, event: &'static str, reason: &str) {
+    log_request(state, id, event, reason, None);
+}
+
+/// Same fields as [`request`], plus the settlement lead. After transcript
+/// recovery detaches a follower, `request.group` is `None`, so the lead id
+/// cannot be recovered from the request. It must be an event field: a
+/// `bus.settlement` span is a different callsite and can be missing from the
+/// formatted line while this INFO event is still recorded.
+pub(crate) fn request_with_lead(
+    state: &BusState,
+    id: RequestId,
+    event: &'static str,
+    reason: &str,
+    lead_id: u64,
+) {
+    log_request(state, id, event, reason, Some(lead_id));
+}
+
+fn log_request(
+    state: &BusState,
+    id: RequestId,
+    event: &'static str,
+    reason: &str,
+    lead_id: Option<u64>,
+) {
     let Some(request) = state.request(id) else {
         return;
     };
     let agent = state.agent(request.agent_id);
-    tracing::info!(
-        event, reason, request_id = id.0, prompt_id = request.prompt.id.0,
-        room_id = request.room_id.0, agent_id = request.agent_id.0,
-        provider = ?agent.map(|a| a.provider), phase = ?request.phase,
-        launch_id = ?agent.and_then(|a| a.runtime_identity.launch_id.as_deref()),
-        terminal_id = ?agent.and_then(|a| a.runtime_identity.terminal_id.as_deref()),
-        pane_id = ?agent.and_then(|a| a.runtime_identity.pane_id.as_deref()),
-        session_id = ?request.provider_session_id, turn_id = ?request.provider_turn_id,
-        boundary = ?request.submission_boundary,
-        completed_at_ms = ?request.completed_at_ms,
-        status = ?agent.map(|a| a.status), group = ?request.group,
-        start_bound = request.trusted_start_bound, steered = request.steered,
-        uncertain_outcome = request.uncertain_outcome,
-        turn_ended_at_ms = ?request.turn_ended_at_ms,
-        progress_at_ms = ?request.progress_at_ms,
-        pending_final_bytes = ?request.pending_final.as_ref().map(|answer| answer.text.len()),
-        elapsed_ms = super::storage::io::now_ms().saturating_sub(request.prompt.submitted_at_ms),
-        "Bus delivery"
-    );
+    let prompt_id = request.prompt.id.0;
+    let room_id = request.room_id.0;
+    let agent_id = request.agent_id.0;
+    let provider = agent.map(|a| a.provider);
+    let phase = request.phase;
+    let launch_id = agent.and_then(|a| a.runtime_identity.launch_id.as_deref());
+    let terminal_id = agent.and_then(|a| a.runtime_identity.terminal_id.as_deref());
+    let pane_id = agent.and_then(|a| a.runtime_identity.pane_id.as_deref());
+    let session_id = request.provider_session_id.as_deref();
+    let turn_id = request.provider_turn_id.as_deref();
+    let boundary = request.submission_boundary;
+    let completed_at_ms = request.completed_at_ms;
+    let status = agent.map(|a| a.status);
+    let group = request.group;
+    let start_bound = request.trusted_start_bound;
+    let steered = request.steered;
+    let uncertain_outcome = request.uncertain_outcome;
+    let turn_ended_at_ms = request.turn_ended_at_ms;
+    let progress_at_ms = request.progress_at_ms;
+    let pending_final_bytes = request
+        .pending_final
+        .as_ref()
+        .map(|answer| answer.text.len());
+    let elapsed_ms = super::storage::io::now_ms().saturating_sub(request.prompt.submitted_at_ms);
+    match lead_id {
+        Some(lead_id) => tracing::info!(
+            event, reason, request_id = id.0, prompt_id, room_id, agent_id,
+            provider = ?provider, phase = ?phase, launch_id = ?launch_id,
+            terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
+            turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
+            status = ?status, group = ?group, start_bound, steered, uncertain_outcome,
+            turn_ended_at_ms = ?turn_ended_at_ms, progress_at_ms = ?progress_at_ms,
+            pending_final_bytes = ?pending_final_bytes, elapsed_ms, lead_id,
+            "Bus delivery"
+        ),
+        None => tracing::info!(
+            event, reason, request_id = id.0, prompt_id, room_id, agent_id,
+            provider = ?provider, phase = ?phase, launch_id = ?launch_id,
+            terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
+            turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
+            status = ?status, group = ?group, start_bound, steered, uncertain_outcome,
+            turn_ended_at_ms = ?turn_ended_at_ms, progress_at_ms = ?progress_at_ms,
+            pending_final_bytes = ?pending_final_bytes, elapsed_ms,
+            "Bus delivery"
+        ),
+    }
 }
 
 /// Called after durable save, and separately when a new snapshot reaches the UI.
