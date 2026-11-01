@@ -140,7 +140,7 @@ fn codex_hook_bridge_executes_quoted_paths_and_rebinds_only_once() {
 }
 
 #[test]
-fn codex_callback_bridge_refuses_a_same_body_symlink_without_chmodding_its_target() {
+fn codex_hook_bridge_does_not_chmod_a_same_content_symlink_target() {
     let cleanup = BridgeScratch(scratch("same-body-symlink"));
     let root = &cleanup.0;
     let data = root.join("data");
@@ -152,7 +152,10 @@ fn codex_callback_bridge_refuses_a_same_body_symlink_without_chmodding_its_targe
     std::os::unix::fs::symlink(&outside, &bridge).unwrap();
     let result = codex_callback_binary(&data, &executable);
     let mode = std::fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o644, "following the same-body bridge symlink changed an outside target to {mode:o}; result={result:?}");
+    assert_eq!(
+        mode, 0o644,
+        "bridge creation changed the symlink target permissions; result={result:?}"
+    );
     assert!(
         result.is_err(),
         "an existing bridge symlink must be rejected"
