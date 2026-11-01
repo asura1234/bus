@@ -313,7 +313,7 @@ fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
     }
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(100, rows);
-    assert_eq!(ui.view.sidebar_max_scroll, 2);
+    assert_eq!(ui.view.sidebar_max_scroll, 3);
     ui.sidebar_scroll = usize::MAX;
     ui.compute_view(100, rows);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, rows));
@@ -658,17 +658,17 @@ fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
         assert!(row_text(1).starts_with("ROOMS"));
         // The agents header names the open room in the ROOMS `#` style.
         assert!(
-            row_text(4 + count).starts_with("# room"),
+            row_text(4 + count * 2).starts_with("# room"),
             "{}",
-            row_text(4 + count)
+            row_text(4 + count * 2)
         );
         let color = buffer[(27, 0)].fg;
         for x in 1..26 {
-            assert_eq!(buffer[(x, 3 + count)].symbol(), "─");
-            assert_eq!(buffer[(x, 3 + count)].fg, color);
+            assert_eq!(buffer[(x, 3 + count * 2)].symbol(), "─");
+            assert_eq!(buffer[(x, 3 + count * 2)].fg, color);
         }
         assert_eq!(buffer[(25, 1)].symbol(), "+");
-        assert_eq!(buffer[(25, 4 + count)].symbol(), "+");
+        assert_eq!(buffer[(25, 4 + count * 2)].symbol(), "+");
     }
 }
 
@@ -829,7 +829,7 @@ fn room_chrome_uses_shared_phosphor_green() {
     for (x, y, symbol) in [
         (1, 3, "#"),                       // Sidebar room hash.
         (30, 1, "#"),                      // Room title hash.
-        (1, 4, "─"),                       // Rooms/agents separator.
+        (1, 5, "─"),                       // Rooms/agents separator.
         (27, 0, "│"),                      // Column separator.
         (29, 2, "┌"),                      // Notes box.
         (29, 5, "─"),                      // History separator under one-row notes.
@@ -891,4 +891,39 @@ fn sidebar_build_hash_keeps_save_failure_notices_visible() {
     assert!(text(y - 3 - extra).starts_with("Ctrl+Q again within 5s"));
     assert!(text(y - 2 - extra).starts_with("May lose unsaved edits"));
     assert_eq!(ui.view.sidebar_body.bottom(), y - 3 - extra);
+}
+
+#[test]
+fn each_room_has_a_right_aligned_working_or_blocked_agent_count() {
+    let (mut ui, room, first) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.confirm_hook_setup(first).unwrap();
+    snapshot
+        .state
+        .observe_status(first, RuntimeStatus::Working, 1)
+        .unwrap();
+    for (name, status) in [
+        ("blocked", RuntimeStatus::Blocked),
+        ("idle", RuntimeStatus::Idle),
+        ("unavailable", RuntimeStatus::Unavailable),
+    ] {
+        let id = snapshot
+            .state
+            .create_agent(room, name, Provider::Codex, "/project".into(), None)
+            .unwrap();
+        snapshot.state.confirm_hook_setup(id).unwrap();
+        snapshot.state.observe_status(id, status, 1).unwrap();
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 30);
+    let row = render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() as u16 + 1;
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let line: String = (0..ui.view.sidebar.width)
+        .map(|x| buffer[(x, row)].symbol())
+        .collect();
+    assert!(line.starts_with(" Agents"), "{line}");
+    let count = line.find("2/4").expect("active/total count");
+    assert_eq!(count + 3, ui.view.sidebar.width as usize - 2, "{line}");
+    assert!(!line.contains("stalled"), "{line}");
 }
