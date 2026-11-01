@@ -82,7 +82,16 @@ state = "working"
 priority = 100
 region = "whole_recent"
 visible_working = true
-line_regex = ['^\s*(🌕|🌖|🌗|🌘|🌑|🌒|🌓|🌔)(\s*·\s*Tip: .*)?\s*$']
+line_regex = ['^\s*(🌕|🌖|🌗|🌘|🌑|🌒|🌓|🌔)\s*$']
+
+[[rules]]
+id = "moon_tip_spinner_working"
+state = "working"
+# A tip is fallback evidence; keep the live command rule eligible for its wire check.
+priority = 82
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\s*(🌕|🌖|🌗|🌘|🌑|🌒|🌓|🌔)\s*·\s*Tip: .*\s*$']
 
 [[rules]]
 id = "braille_spinner_working"
