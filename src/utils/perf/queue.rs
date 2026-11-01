@@ -112,6 +112,7 @@ impl<T> Permit<'_, T> {
     }
 }
 impl<T> Receiver<T> {
+    #[cfg(test)]
     pub(crate) fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let value = self.rx.try_recv()?;

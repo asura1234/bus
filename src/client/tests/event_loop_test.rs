@@ -61,8 +61,8 @@ fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
             state,
             #[cfg(unix)]
             will_query_host_cell_size: false,
-            deferred_event: None,
-            ignore_disconnects: 0,
+            connection_id: 0,
+            attached_server: None,
         },
         sent,
     )
@@ -139,7 +139,7 @@ fn a_restart_stop_shutdown_is_not_a_final_client_exit() {
     let sha = "ab".repeat(20);
     crate::utils::restart_record::write_json(
         &crate::utils::restart_record::build_path(&root),
-        &serde_json::json!({ "sha": sha, "binary": "/tmp/bus" }),
+        &serde_json::json!({ "sha": sha, "binary": "/tmp/bus", "pid": 22 }),
     )
     .unwrap();
     crate::utils::restart_record::write_json(
@@ -180,11 +180,47 @@ fn a_restart_stop_shutdown_is_not_a_final_client_exit() {
         }
     });
     let (mut driver, _) = driver(80);
-    let (event_tx, mut event_rx) = crate::utils::perf::queue::channel(8);
+    driver.attached_server = Some(crate::utils::restart_record::BuildStamp {
+        sha: sha.clone(),
+        binary: Some("/tmp/bus".into()),
+        pid: Some(11),
+    });
+    let pending = crate::utils::restart_record::outcome_path(&root);
+    let server_outcome = crate::utils::restart_record::RestartLog {
+        at_ms: 1,
+        who: "user:fixture".into(),
+        old_sha: sha.clone(),
+        new_sha: sha.clone(),
+        old_binary: "/tmp/bus".into(),
+        new_binary: "/tmp/bus".into(),
+        outcome: "restarted".into(),
+        reason: String::new(),
+    };
+    crate::utils::restart_record::write_json(&pending, &server_outcome).unwrap();
+    let (event_tx, _event_rx) = crate::utils::perf::queue::channel(8);
     let error = ClientError::ServerShutdown {
         reason: Some("server is shutting down".into()),
     };
-    let result = driver.recover_restart(&event_tx, &mut event_rx, &error);
+    let result = driver.recover_restart(&event_tx, &error);
+    let message = result.unwrap().unwrap_err();
+    assert!(message.contains("could not stay attached"), "{message}");
+    assert!(!message.contains("did not become ready"), "{message}");
+    let text = std::fs::read_to_string(crate::utils::restart_record::log_path(&root)).unwrap();
+    assert_eq!(
+        text.lines().count(),
+        1,
+        "one terminal failure per client recovery"
+    );
+    let failure: crate::utils::restart_record::RestartLog =
+        serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(failure.outcome, "client_attach_failed");
+    assert!(failure.who.starts_with("client:"));
+    assert_eq!(failure.old_sha, sha);
+    assert!(!failure.reason.is_empty());
+    assert_eq!(
+        crate::utils::restart_record::read_outcome(&pending).unwrap(),
+        Some(server_outcome)
+    );
     for _ in 0..6 {
         let _ = crate::platform::ipc::connect_local_stream(&socket);
     }
@@ -196,8 +232,45 @@ fn a_restart_stop_shutdown_is_not_a_final_client_exit() {
         }
     }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_shutdown_queued_by_the_replaced_connection_does_not_end_the_client() {
+    let (mut driver, _) = driver(80);
+    driver.connection_id = 1;
+    let mut timer = timer::ClientLoopTimer::new();
+    let result = driver.handle_event(
+        ClientLoopEvent::ServerMessage {
+            connection_id: 0,
+            message: Box::new(crate::protocol::wire::ServerMessage::ServerShutdown {
+                reason: Some("old server is shutting down".into()),
+            }),
+            payload_bytes: 0,
+        },
+        std::time::Instant::now(),
+        &mut timer,
+    );
     assert!(
-        result.is_some(),
-        "a restart stop must not be a final client exit"
+        matches!(result, Ok(false)),
+        "a queued shutdown from the replaced connection must not close the new connection: {result:?}"
+    );
+    assert!(driver.write_stream.is_connected());
+}
+
+#[test]
+fn a_disconnect_from_the_replacement_is_not_mistaken_for_the_old_reader() {
+    let (mut driver, _) = driver(80);
+    driver.connection_id = 1;
+    let mut timer = timer::ClientLoopTimer::new();
+    driver
+        .handle_event(
+            ClientLoopEvent::ServerDisconnected { connection_id: 1 },
+            std::time::Instant::now(),
+            &mut timer,
+        )
+        .unwrap();
+    assert!(
+        !driver.write_stream.is_connected(),
+        "a disconnect from the active replacement must close its connection"
     );
 }

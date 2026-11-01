@@ -96,7 +96,15 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         help::write_stdout_line(format_args!("{text}"));
         return Ok(());
     }
-    let invocation = parse_invocation(args).map_err(io::Error::other)?;
+    let invocation = match parse_invocation(args) {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            if error == session_pick::DEV_RESTART_REQUIRED {
+                return Err(restart::record_dev_required_refusal());
+            }
+            return Err(io::Error::other(error));
+        }
+    };
     if matches!(invocation.action, Action::Run | Action::Resume(_)) {
         crate::utils::launch_guard::guard_launch()?;
     }
@@ -940,6 +948,122 @@ mod tests {
             parse_invocation(&args(&["restart", "--help"])).unwrap_err(),
             refused
         );
+    }
+
+    #[test]
+    fn restart_without_dev_writes_a_refused_record() {
+        let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let root = crate::utils::test_temp::unique_temp_path("restart-refused");
+        let home = crate::utils::test_temp::unique_temp_path("restart-home");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let saved = [
+            ("BUS_DATA_DIR", std::env::var_os("BUS_DATA_DIR")),
+            ("HOME", std::env::var_os("HOME")),
+        ];
+        std::env::set_var("BUS_DATA_DIR", &root);
+        std::env::set_var("HOME", &home);
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in self.0.drain(..) {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(saved.into());
+        let error = crate::cli::run(&args(&["restart", "--binary", "/tmp/bus", "--confirm"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bus --dev restart"), "{error}");
+        let log = std::fs::read_to_string(crate::utils::restart_record::log_path(&root)).unwrap();
+        let record: crate::utils::restart_record::RestartLog =
+            serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        assert_eq!(record.outcome, "refused");
+        assert!(
+            record.reason.contains("bus --dev restart"),
+            "{}",
+            record.reason
+        );
+        assert_ne!(record.outcome, "restarted");
+        let pending = crate::utils::restart_record::outcome_path(&root);
+        assert!(!pending.exists(), "a no-dev refusal is log-only");
+        for outcome in ["restarted", "rolled_back", "rollback_failed"] {
+            let before = crate::utils::restart_record::RestartLog {
+                outcome: outcome.into(),
+                ..record.clone()
+            };
+            crate::utils::restart_record::write_json(&pending, &before).unwrap();
+            crate::utils::restart_record::write_json(
+                &crate::utils::restart_record::marker_path(&root),
+                &serde_json::json!({ "active": true }),
+            )
+            .unwrap();
+            let error = crate::cli::run(&args(&["restart"])).unwrap_err();
+            assert!(error.to_string().contains("bus --dev restart"));
+            assert_eq!(
+                crate::utils::restart_record::read_outcome(&pending).unwrap(),
+                Some(before),
+                "the refusal must preserve the unannounced {outcome} outcome"
+            );
+        }
+        let log_path = crate::utils::restart_record::log_path(&root);
+        assert_eq!(
+            std::fs::read_to_string(&log_path).unwrap().lines().count(),
+            4
+        );
+        std::fs::remove_file(&log_path).unwrap();
+        std::fs::create_dir(&log_path).unwrap();
+        let before = std::fs::read(&pending).unwrap();
+        let error = crate::cli::run(&args(&["restart"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("could not append restarts/log.jsonl"),
+            "{error}"
+        );
+        let diagnostic =
+            std::fs::read_to_string(crate::utils::restart_record::persist_error_path(&root))
+                .unwrap();
+        assert!(diagnostic.contains("could not append restarts/log.jsonl"));
+        assert_eq!(std::fs::read(&pending).unwrap(), before);
+        assert!(!home.join(".local/share/bus").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn restart_without_a_session_writes_no_record() {
+        let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let home = crate::utils::test_temp::unique_temp_path("restart-nosess");
+        std::fs::create_dir_all(&home).unwrap();
+        let saved = [
+            ("BUS_DATA_DIR", std::env::var_os("BUS_DATA_DIR")),
+            ("HOME", std::env::var_os("HOME")),
+        ];
+        std::env::remove_var("BUS_DATA_DIR");
+        std::env::set_var("HOME", &home);
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in self.0.drain(..) {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(saved.into());
+        let error = crate::cli::run(&args(&["restart"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bus --dev restart"), "{error}");
+        assert!(!home.join(".local/share/bus").exists());
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]

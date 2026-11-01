@@ -84,6 +84,20 @@ fn set_client_recv_timeout(
     stream.set_recv_timeout(timeout)
 }
 
+/// `set_recv_timeout` on a macOS unix socket whose peer has already closed
+/// returns `EINVAL`, which is not an invalid duration.
+fn closed_peer_timeout(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        err.raw_os_error() == Some(libc::EINVAL)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = err;
+        false
+    }
+}
+
 /// Bounds the whole hello frame by one deadline. A socket receive timeout alone bounds each
 /// read, so a client trickling bytes could keep an unregistered connection open indefinitely.
 struct HandshakeReader<'a> {
@@ -101,12 +115,20 @@ impl io::Read for HandshakeReader<'_> {
                 "client handshake deadline elapsed",
             ));
         }
-        set_client_recv_timeout(
+        if let Err(err) = set_client_recv_timeout(
             self.stream,
             Some(remaining),
             "client handshake read timeout unavailable",
             self.client_id,
-        )?;
+        ) {
+            if closed_peer_timeout(&err) {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "client disconnected before handshake",
+                ));
+            }
+            return Err(err);
+        }
         io::Read::read(self.stream, buf)
     }
 }
@@ -126,12 +148,20 @@ pub(crate) fn handle_client_handshake(
     }
 
     stream.set_nonblocking(false)?;
-    set_client_recv_timeout(
+    if let Err(err) = set_client_recv_timeout(
         &stream,
         Some(HANDSHAKE_TIMEOUT),
         "client handshake read timeout unavailable",
         client_id,
-    )?;
+    ) {
+        // macOS reports EINVAL when the peer already closed. A readiness
+        // probe does that. The next accept is the real client.
+        if closed_peer_timeout(&err) {
+            debug!(target: "bus::server::clients::transport", client_id, "client disconnected before handshake");
+            return Ok(());
+        }
+        return Err(err);
+    }
 
     let mut hello_reader = HandshakeReader {
         stream: &mut stream,
@@ -292,4 +322,33 @@ fn validate_endpoint_hello(
         return None;
     }
     Some(hello)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::handle_client_handshake;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn a_closed_peer_is_not_a_handshake_failure() {
+        let root = crate::utils::test_temp::unique_temp_path("hs-closed");
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("c.sock");
+        let listener = crate::platform::ipc::bind_local_listener(&socket).unwrap();
+        let peer = crate::platform::ipc::connect_local_stream(&socket).unwrap();
+        use interprocess::local_socket::traits::Listener as _;
+        let stream = listener.accept().unwrap();
+        drop(peer);
+        let (tx, _rx) = mpsc::channel(1);
+        let quit = Arc::new(AtomicBool::new(false));
+        let result = handle_client_handshake(stream, 1, &tx, &quit);
+        assert!(
+            result.is_ok(),
+            "a peer that already closed is not a handshake failure: {result:?}"
+        );
+        drop(listener);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

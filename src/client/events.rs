@@ -12,9 +12,12 @@ pub(super) enum ClientLoopEvent {
     Resize(u16, u16, u32, u32, bool),
     TerminalUnavailable(io::Error),
     ServerMessage {
+        connection_id: u64,
         message: Box<ServerMessage>,
         payload_bytes: u32,
     },
-    ServerDisconnected,
+    ServerDisconnected {
+        connection_id: u64,
+    },
     Timer,
 }

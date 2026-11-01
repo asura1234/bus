@@ -30,7 +30,7 @@ pub(super) fn event_stage(event: &ClientLoopEvent) -> &'static str {
         ClientLoopEvent::Resize(..) => "resize",
         ClientLoopEvent::TerminalUnavailable(_) => "terminal_unavailable",
         ClientLoopEvent::ServerMessage { .. } => "server_message",
-        ClientLoopEvent::ServerDisconnected => "server_disconnected",
+        ClientLoopEvent::ServerDisconnected { .. } => "server_disconnected",
         ClientLoopEvent::Timer => "timer",
     }
 }

@@ -84,7 +84,9 @@ fn set_handshake_recv_timeout(
 }
 
 #[derive(Debug)]
-pub(in crate::client) struct HandshakeResult;
+pub(in crate::client) struct HandshakeResult {
+    pub(in crate::client) server: Option<crate::utils::restart_record::BuildStamp>,
+}
 
 /// Performs the client→server handshake.
 ///
@@ -186,10 +188,22 @@ pub(in crate::client) fn do_handshake(
             error: "server has no compatible endpoint core; update this machine".into(),
         });
     }
+    // Startup publishes the serving identity before welcoming clients. Read
+    // it after the validated welcome so an early connect cannot retain the
+    // record left by the previous server.
+    let server = crate::utils::env::bus_data_dir().and_then(|root| {
+        crate::utils::restart_record::read_build_stamp(&crate::utils::restart_record::build_path(
+            &root,
+        ))
+    });
     info!(
         generation = welcome.generation,
         server_version = %welcome.server_version,
         "endpoint handshake succeeded"
     );
-    Ok(HandshakeResult)
+    Ok(HandshakeResult { server })
 }
+
+#[cfg(test)]
+#[path = "tests/handshake_test.rs"]
+mod tests;

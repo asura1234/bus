@@ -209,9 +209,50 @@ pub(super) fn refused_record(
     }
 }
 
+/// A restart that never reaches `--dev` still leaves a refused record when a
+/// session can be named. No session means no write, including no touch of a
+/// home Bus directory that this process was not given.
+pub(super) fn record_dev_required_refusal(reason: &str) -> io::Error {
+    let Some(root) = refusal_root() else {
+        return io::Error::other(reason.to_owned());
+    };
+    let (old_binary, old_sha) = match serving_target(&root) {
+        Ok((binary, sha)) => (binary.display().to_string(), sha),
+        Err(_) => (String::new(), "unknown".to_owned()),
+    };
+    let record = RestartLog {
+        at_ms: crate::utils::time::now_ms(),
+        who: restart_record::who_label(None, std::env::var("USER").ok().as_deref()),
+        old_sha,
+        new_sha: "unknown".to_owned(),
+        old_binary,
+        new_binary: "bus".to_owned(),
+        outcome: "refused".to_owned(),
+        reason: reason.to_owned(),
+    };
+    persist_refusal(&root, &record, false)
+}
+
+fn refusal_root() -> Option<PathBuf> {
+    if let Some(root) = crate::utils::env::bus_data_dir() {
+        return root.is_dir().then_some(root);
+    }
+    let base = crate::messaging::storage::sessions::default_base_dir().ok()?;
+    let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base);
+    registry
+        .last()
+        .ok()
+        .map(|session| session.root)
+        .filter(|root| root.is_dir())
+}
+
 pub(super) fn record_refused(root: &Path, record: &RestartLog) -> io::Error {
+    persist_refusal(root, record, record.reason != RESTART_BUSY)
+}
+
+fn persist_refusal(root: &Path, record: &RestartLog, publish_outcome: bool) -> io::Error {
     let log_error = restart_record::append_log(&restart_record::log_path(root), record).err();
-    let outcome_error = if record.reason == RESTART_BUSY {
+    let outcome_error = if !publish_outcome {
         None
     } else {
         restart_record::write_json(&restart_record::outcome_path(root), record).err()
