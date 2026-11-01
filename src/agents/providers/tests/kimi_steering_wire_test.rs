@@ -75,3 +75,45 @@ fn kimi_batched_wire_keeps_exact_text_boundaries_and_rejects_ambiguous_ids() {
         );
     }
 }
+
+#[test]
+fn kimi_stale_open_turn_and_background_notification_do_not_steal_the_committed_final() {
+    let old = serde_json::json!({"type":"turn.prompt","agentId":"main","turnId":2,"promptId":"old","input":[{"type":"text","text":"old unanswered task"}]});
+    let notify = serde_json::json!({"type":"turn.prompt","agentId":"main","turnId":4,"promptId":"notification","input":[{"type":"text","text":"<notification id=\"task:bash-1:completed\" />"}]});
+    let later = serde_json::json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"text","text":"foreign continuation"}]}}});
+    let wire = format!("{old}\n{WIRE}{notify}\n{later}\n");
+    assert_eq!(
+        committed_final(&wire, 3, GUIDANCE),
+        committed_final(WIRE, 3, GUIDANCE)
+    );
+    assert_eq!(committed_final(&wire, 2, "old unanswered task"), None);
+    assert_eq!(committed_final(&wire, 4, GUIDANCE), None);
+}
+
+#[test]
+fn kimi_synchronous_and_delayed_tools_share_only_their_attested_native_final() {
+    for background in [false, true] {
+        let mut rows: Vec<Value> = WIRE
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let tool = serde_json::json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"think","think":"tool"}],"toolCalls":[{"id":"bash-1","name":"Bash","arguments":{"command":"sleep 45","run_in_background":background}}]}}});
+        let result = serde_json::json!({"type":"agent.message.appended","message":{"meta":{"source":"tool"},"message":{"role":"tool","toolCallId":"bash-1","content":[{"type":"text","text": if background {"task_id: bash-1\nstatus: running\nautomatic_notification: true"} else {"/tmp/project\n"}}]}}});
+        let position = if background { 2 } else { 1 };
+        rows.splice(position..position, [tool, result]);
+        let open: String = rows[..rows.len() - 3]
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect();
+        assert_eq!(
+            committed_final(&open, 3, GUIDANCE),
+            None,
+            "tool result and assistant text alone never commit"
+        );
+        let complete: String = rows.iter().map(|row| format!("{row}\n")).collect();
+        assert_eq!(
+            committed_final(&complete, 3, GUIDANCE),
+            committed_final(WIRE, 3, GUIDANCE)
+        );
+    }
+}

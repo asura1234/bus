@@ -935,3 +935,14 @@ idle then deliver, and an approval card without `--yolo`.
   select Enter or guidance under the final content guard. Native guidance can
   batch multiple inputs: preserve its distinct text parts and require matching
   unique prompt IDs instead of attributing substrings of concatenated text.
+  For a legacy unsent Kimi composer, recover only through full native-editor
+  comparison against a regular pane-local Bus recovery file. Keep the withdrawn
+  bytes, spend that recovery proof once, and submit only the fresh request.
+  Edited, foreign or unmatched drafts remain untouched. Prove recovery both
+  directly and after one native Esc; require stopped/settled interrupt state
+  and a fresh captured reply. Retain a queued native follow-up across an old
+  final's Idle poll (including a silent final or missing Stop), until its own
+  Started/commit evidence or the existing submission-stall bound.
+  Save exact recovery-marker proof before the editor returns it, and remove that
+  proof only after the native composer is empty. A cancelled exchange can yield
+  to owned recovery; an unacknowledged active exchange keeps its file ownership.

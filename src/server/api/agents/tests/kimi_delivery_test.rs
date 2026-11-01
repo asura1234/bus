@@ -63,6 +63,11 @@ fn paint(app: &App, frame: &str, draft: &str, repaint: usize) {
         if rows.is_empty() {
             rows.push(" │ >                                                  │".into());
         }
+        if chars.len() > 1200 {
+            rows = rows.split_off(rows.len().saturating_sub(8));
+            rows[0] = rows[0].replacen("│   ", "│ > ", 1);
+            lines[top] = lines[top].replacen("────────", "─↑ more─", 1);
+        }
         lines.splice(top + 1..bottom, rows);
     }
     let frame = lines.join("\r\n");
@@ -171,8 +176,20 @@ async fn delivery_with_idle_transition(
     fault: u8,
     idle_before_submit: bool,
 ) {
+    delivery_body(frame, steer, fault, idle_before_submit, "from bus").await;
+}
+
+#[tokio::test]
+async fn kimi_long_clipped_editor_steer_verifies_the_complete_prompt() {
+    delivery_body(COMMAND, true, 0, false, &"long owned prompt ".repeat(120)).await;
+}
+
+async fn delivery_body(frame: &str, steer: bool, fault: u8, idle_before_submit: bool, body: &str) {
     let _scratch = Scratch::new();
-    let (mut app, method, mut writes, directory) = fixture(frame, steer);
+    let (mut app, mut method, mut writes, directory) = fixture(frame, steer);
+    if let Method::AgentPromptIfIdle(params) = &mut method {
+        params.text = body.into();
+    }
     let response = start(&mut app, method);
     let file = crate::utils::test_temp::unique_temp_path("kimi-native-editor");
     let mut draft = String::new();
@@ -186,14 +203,14 @@ async fn delivery_with_idle_transition(
         std::fs::write(&file, &draft).unwrap();
         crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
         draft = std::fs::read_to_string(&file).unwrap();
-        let marker = draft.strip_prefix("from bus").unwrap().to_owned();
+        let marker = draft.strip_prefix(body).unwrap().to_owned();
         assert!(!marker.is_empty());
         paint(&app, frame, &draft, round + 1);
         assert_eq!(
             next_or_response(&mut writes, &response).await.as_ref(),
             vec![0x7f; marker.len()]
         );
-        draft.truncate("from bus".len());
+        draft.truncate(body.len());
         if round == 1 && fault == 2 {
             release = Some(clock(&app).fail_next_write_completion(std::io::ErrorKind::Other));
         }
@@ -215,7 +232,9 @@ async fn delivery_with_idle_transition(
     );
     let submitted_frame = if idle_before_submit { IDLE } else { frame };
     if fault == 1 {
-        paint(&app, submitted_frame, &draft, 5);
+        paint(&app, submitted_frame, &draft, 6);
+        clock(&app).advance(Duration::from_millis(40));
+        tokio::time::sleep(Duration::from_millis(50)).await;
         clock(&app).advance(Duration::from_secs(20));
     } else {
         paint(&app, submitted_frame, "", 5);
@@ -265,12 +284,52 @@ async fn kimi_approval_never_receives_editor_or_submit_keys() {
 
 #[tokio::test]
 async fn kimi_stranded_owned_draft_is_withdrawn_before_fresh_delivery() {
+    stranded_delivery(false, false).await;
+}
+
+#[tokio::test]
+async fn kimi_interrupt_with_a_stranded_draft_allows_fresh_delivery() {
+    stranded_delivery(true, false).await;
+}
+
+async fn stranded_delivery(interrupt: bool, quarantined: bool) {
     let _scratch = Scratch::new();
     let (mut app, method, mut writes, directory) = fixture(IDLE, false);
     let old = "older Bus prompt that was never submitted";
     let exchange = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
     exchange.save_recovery(old).unwrap();
+    let saved = exchange.recovery().to_owned();
+    let mut previous: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("request.json")).unwrap()).unwrap();
     drop(exchange);
+    if quarantined {
+        std::fs::rename(&saved, saved.with_extension("recovered")).unwrap();
+        previous["operation"] = serde_json::json!("Cancelled");
+        std::fs::write(
+            directory.join("request.json"),
+            serde_json::to_vec(&previous).unwrap(),
+        )
+        .unwrap();
+    }
+    if interrupt {
+        clock(&app).pause();
+        paint(&app, COMMAND, old, 0);
+        let pane = app
+            .agent_info(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap()
+            .pane_id;
+        let result = app.handle_agent_send_keys(
+            "kimi-stop".into(),
+            AgentSendKeysParams {
+                target: pane,
+                keys: vec!["esc".into()],
+            },
+        );
+        assert!(!result.contains("error"), "{result}");
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b");
+        // Native control input observes the same three-second quiet policy.
+        clock(&app).advance(Duration::from_millis(3001));
+    }
     paint(&app, IDLE, old, 0);
     let response = start(&mut app, method);
     let file = crate::utils::test_temp::unique_temp_path("kimi-stranded-editor");
@@ -319,4 +378,93 @@ async fn kimi_foreign_draft_without_recovery_receives_no_keys() {
     assert!(!result.contains("agent_prompted"));
     assert!(writes.try_recv().is_err());
     assert!(!directory.exists());
+}
+
+#[tokio::test]
+async fn kimi_edited_stranded_draft_is_preserved_by_exact_editor_readback() {
+    let _scratch = Scratch::new();
+    let (mut app, method, mut writes, directory) = fixture(IDLE, false);
+    let old = "older Bus prompt";
+    let exchange = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
+    exchange.save_recovery(old).unwrap();
+    drop(exchange);
+    let edited = "older Bus prompt + developer edit";
+    paint(&app, IDLE, edited, 0);
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_or_response(&mut writes, &response).await.as_ref(),
+        b"\x07"
+    );
+    let file = crate::utils::test_temp::unique_temp_path("kimi-edited-editor");
+    std::fs::write(&file, edited).unwrap();
+    assert!(crate::platform::draft_editor::test_run_at(&directory, &file).is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
+    clock(&app).advance(Duration::from_millis(40));
+    let result = response.recv_timeout(WAIT).unwrap();
+    assert!(!result.contains("agent_prompted"), "{result}");
+    assert!(writes.try_recv().is_err());
+    assert!(std::fs::read_dir(&directory)
+        .unwrap()
+        .any(|e| std::fs::read_to_string(e.unwrap().path()).ok().as_deref() == Some(old)));
+    std::fs::remove_file(file).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn kimi_cancelled_exchange_with_a_quarantined_draft_can_recover() {
+    stranded_delivery(false, true).await;
+}
+
+#[tokio::test]
+async fn kimi_cancelled_exchange_active_owner_is_preserved() {
+    protected_exchange(false).await;
+}
+
+#[tokio::test]
+async fn kimi_cancelled_exchange_expired_unacknowledged_owner_is_preserved() {
+    protected_exchange(true).await;
+}
+
+async fn protected_exchange(expired: bool) {
+    let _scratch = Scratch::new();
+    let (mut app, method, mut writes, directory) = fixture(IDLE, false);
+    let exchange = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
+    exchange.save_recovery("older Bus prompt").unwrap();
+    exchange.request_verify().unwrap();
+    if expired {
+        let request_file = directory.join("request.json");
+        let mut request: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&request_file).unwrap()).unwrap();
+        request["expires_ms"] = serde_json::json!(0);
+        std::fs::write(request_file, serde_json::to_vec(&request).unwrap()).unwrap();
+    }
+    paint(&app, IDLE, "older Bus prompt", 0);
+    let result = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(result.contains("agent_composer_busy"), "{result}");
+    assert!(writes.try_recv().is_err());
+    assert_eq!(
+        std::fs::read_to_string(exchange.recovery()).unwrap(),
+        "older Bus prompt"
+    );
+}
+
+#[test]
+fn kimi_cancelled_exchange_retains_marker_proof_until_the_composer_is_empty() {
+    let scratch = Scratch::new();
+    let directory = scratch.root.join("marker-recovery");
+    let previous = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
+    previous.save_recovery("older Bus prompt").unwrap();
+    drop(previous);
+    let exchange = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
+    exchange.request_recover().unwrap();
+    let file = scratch.root.join("native-editor.txt");
+    std::fs::write(&file, "older Bus prompt").unwrap();
+    crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+    let marker = std::fs::read_to_string(&file).unwrap();
+    assert!(marker.starts_with("__BUS_DRAFT_END_"));
+    assert_eq!(
+        std::fs::read_to_string(exchange.recovery()).unwrap(),
+        marker,
+        "an interrupted readback must leave exact proof for the marker still in the composer"
+    );
 }

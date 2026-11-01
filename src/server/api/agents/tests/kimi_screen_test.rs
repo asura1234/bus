@@ -43,6 +43,9 @@ fn kimi_editor_ignores_working_chrome_but_requires_the_same_composer() {
     let repaint = COMMAND.replace('🌒', "🌕").replace("sleep 45", "sleep 44");
     assert_ne!(repaint, COMMAND);
     assert!(inspector.editor_frame_unchanged(COMMAND, &repaint));
+    let owned = COMMAND.replace("│ > ", "│ > from bus");
+    assert!(inspector.editor_frame_unchanged(&owned, &owned.replace('🌒', "🌕")));
+    assert!(!inspector.editor_frame_unchanged(&owned, &format!("{owned}\n│ → menu opened │")));
     assert!(!inspector.editor_frame_unchanged(COMMAND, APPROVAL));
     assert!(!inspector.editor_frame_unchanged(COMMAND, &repaint.replace("│ > ", "│ > edited")));
 }

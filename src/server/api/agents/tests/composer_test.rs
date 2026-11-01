@@ -21,6 +21,15 @@ fn kimi_accepts_the_current_framed_composer_while_idle_or_working() {
         observe(AgentKind::Kimi, &busy, "Bus task"),
         crate::terminal::runtime::InputObservation::Empty
     );
+    let busy_draft = format!("⠋ Working…\n{draft}");
+    assert_eq!(
+        observe(AgentKind::Kimi, &busy_draft, "Bus task"),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        observe(AgentKind::Kimi, &busy_draft, "foreign task"),
+        InputObservation::Unavailable
+    );
     let historical = format!("The earlier turn said Working… in its answer\n{frame}");
     assert_eq!(
         observe(AgentKind::Kimi, &historical, "Bus task"),

@@ -51,6 +51,16 @@ impl ObservedSubmission {
         let pristine = self
             .startup_suggestion_open
             .load(std::sync::atomic::Ordering::Acquire);
+        if initial != InputObservation::Empty && self.inspect.editor_frame_readable(&screen) {
+            if let Some(editor) = self
+                .inspect
+                .editor_submission()
+                .filter(|editor| Exchange::has_recoverable_draft(&editor.directory))
+            {
+                self.recover_editor_draft(&editor, &screen, lease)?;
+                return self.submit_through_editor(editor, delay, lease);
+            }
+        }
         let preservation = self
             .inspect
             .draft_preservation_since_launch(&screen, cursor, pristine);
@@ -352,6 +362,35 @@ impl ObservedSubmission {
             Ok(false)
         })?;
         result.ok_or_else(|| io::Error::other("Editor frame is unavailable"))
+    }
+
+    fn recover_editor_draft(
+        &self,
+        editor: &EditorSubmission,
+        screen: &str,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
+        let exchange = Exchange::begin_recovery(
+            editor.directory.clone(),
+            self.hard_deadline.saturating_duration_since(self.clock.now()),
+        ).map_err(|error| {
+            tracing::warn!(event = "bus.draft.recovery_wait", %error, "Existing editor ownership retained");
+            io::Error::other(PromptNotShown::ComposerBusy)
+        })?;
+        exchange.request_recover()?;
+        let result = (|| {
+            self.guarded_editor_key(editor.key.clone(), lease, false, |current| {
+                self.inspect.editor_frame_unchanged(screen, current)
+            })?;
+            self.wait_transfer(|| exchange.acknowledged())?;
+            self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
+            if self.observe("recovered_bus_draft") != InputObservation::Empty {
+                return Err(io::Error::other("Recovered composer is not empty"));
+            }
+            exchange.remove_recovery()?;
+            Ok(())
+        })();
+        result.map_err(|_: io::Error| io::Error::other(PromptNotShown::ComposerBusy))
     }
 
     fn submit_through_editor(

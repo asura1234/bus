@@ -83,8 +83,25 @@ fn committed_kimi_end(
             }),
             Some(wire::CommittedTurn {
                 outcome: wire::Outcome::NoReply,
-                ..
-            }) => Some(RecordedTurnEnd::NoReply),
+                prompts,
+            }) => {
+                // A silent lead can still precede an unclaimed queued turn.
+                // Keep its ownership anchor only when steering needs proof.
+                let steering = state.group_members(current).iter().any(|id| {
+                    state
+                        .request(*id)
+                        .is_some_and(|member| member.steered && !member.settled())
+                });
+                Some(if steering {
+                    RecordedTurnEnd::Final {
+                        turn_id: turn.into(),
+                        text: String::new(),
+                        prompts,
+                    }
+                } else {
+                    RecordedTurnEnd::NoReply
+                })
+            }
             Some(wire::CommittedTurn {
                 outcome: wire::Outcome::Failed(message),
                 ..

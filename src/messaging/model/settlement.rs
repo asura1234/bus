@@ -49,6 +49,16 @@ impl BusState {
         else {
             return false;
         };
+        // Kimi can start an already submitted next turn after an Idle poll.
+        // Reuse the submission stall bound; polling cannot renew this window.
+        let retain_until = (owner.provider == super::Provider::Kimi
+            && owner.status == RuntimeStatus::Idle)
+            .then(|| {
+                lead.completed_at_ms
+                    .unwrap_or(now_ms)
+                    .max(owner.status_since_ms)
+                    .saturating_add(super::DELIVERED_STALL_MS)
+            });
         let members = self.group_members(lead.id);
         if let Some(RecordedTurnEnd::Final {
             turn_id, prompts, ..
@@ -63,6 +73,13 @@ impl BusState {
                 continue;
             };
             self.recover_steered_answer(&lead, &member, &members, recorded_end(&member), now_ms);
+        }
+        if retain_until.is_some_and(|deadline| now_ms < deadline)
+            && members
+                .iter()
+                .any(|id| self.requests.get(id).is_some_and(|m| !m.settled()))
+        {
+            return true;
         }
         // A later member's transcript lookup can prove earlier inputs too.
         // Resolve all available evidence before declaring any member uncertain.
@@ -518,6 +535,14 @@ impl BusState {
         );
         if key.is_some_and(|key| self.consumed_provider_turns.contains(&key)) {
             return None;
+        }
+        if self.agents.get(&agent)?.provider == super::Provider::Kimi {
+            if let Some(turn) = answer.provider_turn_id.as_deref() {
+                self.bind_recorded_turn_inputs(agent, turn, prompts);
+            }
+            self.requests.get_mut(&id)?.pending_final = Some(answer);
+            self.complete_pending_final(agent, now_ms).ok()?;
+            return Some(id);
         }
         let members = self.group_members(id);
         let unproven: Vec<RequestId> = members

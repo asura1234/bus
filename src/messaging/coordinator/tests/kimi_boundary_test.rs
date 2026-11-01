@@ -138,3 +138,72 @@ fn kimi_interrupt_control_sends_esc_once_and_settles_after_idle() {
     assert_eq!(f.request(fresh).group, None);
     assert!(!f.typed().last().unwrap().1);
 }
+
+#[test]
+fn kimi_missing_stop_poll_retains_a_follow_up_after_answered_or_silent_completion() {
+    for answer in ["old final", ""] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = home(&f);
+        let lead = running(&mut f, "first task", "1");
+        let follow = f.send("later task", false);
+        f.deliver();
+        let typed = f.typed();
+        let old = native_turn(1, &typed[0].0, &[], answer);
+        std::fs::write(&wire, &old).unwrap();
+        f.status(RuntimeStatus::Idle);
+        f.consume(); // no Stop: only the periodic wire read sees completion
+        assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+        assert!(
+            !f.request(follow).settled(),
+            "{answer:?}: later turn has not started"
+        );
+        std::fs::write(
+            &wire,
+            format!("{old}{}", native_turn(2, &typed[1].0, &[], "later final")),
+        )
+        .unwrap();
+        f.started("2", "later task");
+        f.consume();
+        f.worker.settle_requests().unwrap();
+        assert_eq!(f.reply(follow).as_deref(), Some("later final"));
+        assert_eq!(
+            f.reply(lead).as_deref(),
+            (!answer.is_empty()).then_some(answer)
+        );
+    }
+}
+
+#[test]
+fn kimi_unclaimed_input_expires_without_replay_after_its_retention_window() {
+    let mut f = Fixture::new(Provider::Kimi);
+    let wire = home(&f);
+    let lead = running(&mut f, "old task", "1");
+    let follow = f.send("unclaimed input", false);
+    f.deliver();
+    std::fs::write(&wire, native_turn(1, &f.typed()[0].0, &[], "old final")).unwrap();
+    stop(&f);
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert!(!f.request(follow).settled());
+    assert_eq!(f.reply(lead).as_deref(), Some("old final"));
+    f.now = f
+        .request(lead)
+        .completed_at_ms
+        .unwrap()
+        .max(f.worker.state.agent(f.agent).unwrap().status_since_ms)
+        + crate::messaging::model::DELIVERED_STALL_MS
+        + 1;
+    f.status(RuntimeStatus::Idle);
+    f.worker.settle_requests().unwrap();
+    assert_eq!(
+        f.request(follow).failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(f.request(follow).uncertain_outcome);
+    assert_eq!(
+        f.typed().len(),
+        2,
+        "a possibly consumed input is never replayed"
+    );
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+}
