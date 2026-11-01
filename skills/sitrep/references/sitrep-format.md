@@ -24,9 +24,11 @@ starting point.
 The input to `render.py --state STATE.json` is one JSON object with exactly
 `blockers`, `ongoing`, `finished`, `deferred`. Each is an array; empty arrays
 render as `None`. Every string is nonempty, one line, and contains no control
-characters. `blockers` holds only actual blockers as plain strings; an empty
-list is the only way to render `None`. Each blocker must state what is stopping
-work or what is waiting on the developer. Never put caveats or non-blockers in
+characters. `blockers` holds hard blockers and bottlenecks slowing work as
+plain strings; an empty list is the only way to render `None`. Each entry must
+include evidence. A blocker states what is stopping work or waiting on the
+developer; a bottleneck states what is slowing work, such as a build-slot queue,
+review round, or disk pressure. Never put caveats or unrelated commentary in
 that section.
 
 The other arrays contain objects with exactly these keys:
@@ -49,11 +51,11 @@ Escape literal backslashes and unmatched brackets in PR titles for Markdown.
 
 The renderer outputs these headings in this order. Task fields are nested
 bullets; TLDR is one line and Context gives the full known context. Notes on
-missing evidence belong in a relevant task's Context, not the Blockers section
+missing evidence belong in a relevant task's Context, not the Blockers and bottlenecks section
 or an extra section.
 
 ```text
-## Blockers
+## Blockers and bottlenecks
 None
 
 ## Ongoing
@@ -75,7 +77,7 @@ None
   - Context: Full evidenced context.
 ```
 
-Malformed examples include extra commentary in Blockers, a Finished item that
+Malformed examples include extra commentary in Blockers and bottlenecks, a Finished item that
 does not match the computed Git log, an omitted or reordered open PR, multiline
 fields, omitted sections, unknown status values, and bare PR URLs.
 

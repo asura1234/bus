@@ -10,9 +10,11 @@ unavailable in Context. No source is permission to modify it. Apart from the
 collector's origin fetch and the final marker write, do not change Bus or
 repository state. Never include secrets or irrelevant private state.
 
-A blocker stops work or waits on the developer; name what must happen. Put
-non-blocking concerns under Ongoing, and use `None` alone when there are no
-blockers. A task can appear in Blockers and Ongoing when both describe the same
+A hard blocker stops work or waits on the developer; name what must happen. A
+bottleneck slows work; name the evidenced cause, such as a build-slot queue,
+review round, or disk pressure. Report each with evidence, put unrelated
+concerns under Ongoing, and use `None` alone only when neither exists. A task
+can appear in Blockers and bottlenecks and Ongoing when both describe the same
 active work. Deferred items are explicitly postponed, not merely incomplete.
 
 Finished is the computed default-branch Git history since the saved marker.

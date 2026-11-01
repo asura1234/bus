@@ -57,7 +57,7 @@ def render(data, state):
     blockers = [line(item) for item in data["blockers"]]
     if any(re.match(r"(?i)^none(?:\b|$)", item) for item in blockers):
         raise ValueError("use an empty blockers array for None")
-    sections = ["## Blockers\n" + ("\n".join("- " + item for item in blockers) if blockers else "None")]
+    sections = ["## Blockers and bottlenecks\n" + ("\n".join("- " + item for item in blockers) if blockers else "None")]
     titles = {"ongoing": "Ongoing", "finished": "Finished (since the last sitrep)", "deferred": "Deferred"}
     labels = {"tldr": "TLDR", "context": "Context", "status": "Status", "pr": "PR/MR"}
     actual_finished = []

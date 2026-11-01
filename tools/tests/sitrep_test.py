@@ -44,13 +44,14 @@ def computed_finished(name, sha):
 def test_empty_blockers_is_exactly_none():
     result = render(report([]))
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split("## Ongoing")[0] == "## Blockers\nNone\n\n"
+    assert result.stdout.split("## Ongoing")[0] == "## Blockers and bottlenecks\nNone\n\n"
 
 
-def test_blockers_are_only_bullets():
-    result = render(report(["Waiting for dependency", "Developer decision needed"]))
+def test_blockers_and_bottlenecks_are_only_bullets():
+    entries = ["Waiting for dependency", "Build-slot queue delayed CI by 12 minutes"]
+    result = render(report(entries))
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split("## Ongoing")[0] == "## Blockers\n- Waiting for dependency\n- Developer decision needed\n\n"
+    assert result.stdout.split("## Ongoing")[0] == "## Blockers and bottlenecks\n- Waiting for dependency\n- Build-slot queue delayed CI by 12 minutes\n\n"
 
 
 @pytest.mark.parametrize("blocker", ["None", "None for you right now, but work is ongoing", "first\ncommentary", "first\u0085commentary", "first\u2028commentary", "", "  "])

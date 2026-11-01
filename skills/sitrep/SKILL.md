@@ -1,6 +1,6 @@
 ---
 name: sitrep
-description: Use when a developer asks for a sitrep, status report, or a summary of blockers and work in a Bus room.
+description: Use when a developer asks for a sitrep, status report, or a summary of blockers, bottlenecks, and work in a Bus room.
 ---
 
 # Sitrep
