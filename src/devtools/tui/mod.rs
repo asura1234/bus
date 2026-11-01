@@ -545,10 +545,18 @@ fn wait(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         if output.ok() {
             return Ok(json!({"ok": true, "message": reply}));
         }
-        if let Some(exited) = bus_exited(name) {
-            return Ok(exited);
+        if reply["result"]["complete"] != true {
+            if let Some(exited) = bus_exited(name) {
+                return Ok(exited);
+            }
         }
-        let mut response = failure("timeout", format!("message {message} did not settle"));
+        if reply["ok"] == false && reply["error"].is_object() {
+            return Ok(json!({"ok": false, "error": reply["error"], "message": reply}));
+        }
+        let mut response = failure("wait_failed", "bus wait returned no usable error response");
+        response["exit_code"] = json!(output.status);
+        response["stderr"] = json!(output.stderr);
+        response["stdout"] = json!(output.stdout);
         response["message"] = reply;
         return Ok(response);
     }

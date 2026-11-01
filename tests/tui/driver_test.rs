@@ -17,6 +17,9 @@ mod native_restart;
 #[path = "startup_test.rs"]
 mod startup;
 
+#[path = "wait_outcome_test.rs"]
+mod wait_outcome;
+
 #[test]
 fn reply_delivery_survives_actual_server_restart_mid_request() {
     let output = Command::new("python3")
