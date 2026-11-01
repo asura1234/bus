@@ -54,7 +54,9 @@ def run_delayed_restart(tmp_path, completed_handoff):
     shutil.copy2(source, binary)
     env = {"HOME": str(home), "USERPROFILE": str(home), "BUS_DATA_DIR": str(data),
            "PATH": "/usr/bin:/bin", "TERM": "xterm-256color", "SHELL": "/bin/sh"}
-    identity = json.loads(subprocess.check_output([str(binary), "--identity"], env=env))
+    if profile := os.environ.get("LLVM_PROFILE_FILE"):
+        env["LLVM_PROFILE_FILE"] = profile
+    identity = json.loads(subprocess.check_output([str(binary), "--identity"], env=env, cwd=project))
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     client = subprocess.Popen([str(binary), "--dev", "--yolo"], cwd=project, env=env,
@@ -78,7 +80,7 @@ def run_delayed_restart(tmp_path, completed_handoff):
     helper_pid = None
     try:
         initial = wait_until(lambda: read_json(data / "restarts/build.json"))
-        paths = json.loads(subprocess.check_output([str(binary), "--paths"], env=env))
+        paths = json.loads(subprocess.check_output([str(binary), "--paths"], env=env, cwd=project))
         client_log = Path(paths["logs"]) / "herdr-client.log"
         wait_until(lambda: client_log.exists() and "endpoint handshake succeeded" in client_log.read_text())
         wait_until(lambda: (data / "control.sock").exists())
