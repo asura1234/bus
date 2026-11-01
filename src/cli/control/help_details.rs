@@ -7,7 +7,7 @@ pub(super) const CONTROL: &str = r#"JSON and common errors:
   Failure: {"id":"...","ok":false,"result":null,
             "error":{"code":"...","message":"actionable explanation"}}
   Some failures retain diagnostics or the last status in result. Require ok:true.
-  Exit 0 means success, 1 failure; wait and send --async use 3 for message_stalled.
+  Exit 0 means success, 1 failure.
   Help (-h or --help) prints text, exits 0, and never connects to a session.
   --request-id defaults to a generated unique ID (1-128 bytes). Reuse an ID with
   identical parameters for mutation retries while this process retains its receipt
@@ -425,8 +425,7 @@ Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
   reply, turn_ended, settling and group. No overall deadline.
   It waits through dialogs, unlike wait --async; succeeds only at complete:true,
   including abandonment as reply_not_captured. Provider turn end alone is not done.
-  Errors: message_stalled (exit 3): inspect stage/reason and recover typed work;
-  message_interrupted: inspect history; message_provider_error: repair/retry the
+  Errors: message_interrupted: inspect history; message_provider_error: repair/retry the
   provider; message_abandoned: fix startup/unavailability then explicitly resend
   closed work. bus_down: four consecutive transport failures; restore Bus then
   inspect this message. Async status overload/accepted disconnects retry with
@@ -471,7 +470,7 @@ missing --as for you, missing hooks or storage. Fix the named cause first."#;
 
 const STATUS: &str = r#"Read durable settlement once, without waiting or acknowledging delivery.
 Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],requests:
-  [{request_id,agent_id,agent_name,deleted,stage,stalled_from,reason,status,detail,
+  [{request_id,agent_id,agent_name,deleted,stage,reason,status,detail,
   uncertain_outcome,session_id,turn_id,start_bound,dialog,turn_ended,settling,group,
   queue,event_acks,events:[{key,text}],reply_ack,exit_snapshot,reply}]}.
   prompt includes author/text/files/recipients/time; files are absolute paths.
@@ -485,14 +484,11 @@ Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],reque
   event_acks lists acknowledgeable unseen own outcomes; reply_ack names unseen reply.
 Stages: queued persisted; submitting native write; awaiting_start typed but no
 trusted turn; delivered trusted start; joined same turn; replied answer captured;
-abandoned closed, will not run later; stalled typed work needs inspection/recovery.
-Stalls: queued untyped closes abandoned after 2m not working (input_box_not_empty,
-agent_not_ready/blocked, session_hook_missing, prior_request_active, unavailable).
-Typed idle stages stall after 3m: submitting submission_unconfirmed; awaiting_start
-no_start_hook; delivered/joined transcript_unmatched. Unavailable invalidated
-sessions stall as session_invalidated after 3m without progress. Working/Blocked
-never stall; after 5m blocked the reason is blocked_unanswered. A captured Stop
-answer finishes without waiting for background work.
+abandoned closed, will not run later. Queued untyped work may close abandoned after
+2m not working (input_box_not_empty, agent_not_ready/blocked, session_hook_missing,
+prior_request_active, unavailable). Recovery deadlines stay internal and never
+change the reported stage. After 5m blocked the reason is blocked_unanswered. A
+captured Stop answer finishes without waiting for background work.
 Settlement without a final closes as reply_not_captured, provider_error: MESSAGE,
 or agent_unavailable; conclusive pre-delivery startup failure is agent_startup_failed.
 Bus can abandon unclaimed steering after an autonomous turn ends and another
@@ -501,7 +497,7 @@ submission_unconfirmed may have run: inspect transcript/composer before resendin
 and clear remaining drafts. Guarded Enter retries never repaste uncertain writes;
 cleanup only clears an unchanged Bus draft and reports unconfirmed cleanup.
 Errors: command_failed for unknown/nonnumeric message; use the send receipt ID.
-Open, stalled and abandoned statuses themselves are successful reads (exit 0)."#;
+Open and abandoned statuses themselves are successful reads (exit 0)."#;
 
 const WAIT: &str = r#"Poll the same durable message status used by message status (see its --help for
 the result schema/stages). Bounded wait polls every 200ms, timeout 1-600s, default
@@ -520,7 +516,6 @@ alive. Anonymous waits and message status never suppress delivery. Killing the
 waiter leaves the request intact and its unseen events eligible for delivery.
 Errors: timeout (exit 1): retain result and continue inspecting; it does not
 cancel work. agent_waiting_on_dialog: observe/answer then wait again.
-message_stalled (exit 3): inspect reason/stalled_from; fix cause or recover the lead.
 message_abandoned: inspect reason; repair startup/provider and explicitly resend
 only closed work after checking effects. message_provider_error: provider failed,
 worth retrying after repair. message_interrupted: inspect history for who stopped it.

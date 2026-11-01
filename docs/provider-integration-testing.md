@@ -397,7 +397,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   `prompt_not_shown` on that ghost fails. After the busy work ends, deliver
   a second marker. `prompt_not_shown` until a person clears the box fails.
   `composer_busy` against an empty composer means a preserved `draft-*.txt`
-  from a failed editor handoff. That reason starts no queued stall clock, so a
+  from a failed editor handoff. That reason starts no queued recovery clock, so a
   "No reply" notice will not fire. Fail the cell. Do not delete live-session
   files, and do not paste over the empty composer.
 - [ ] Long idle, then deliver. Leave the agent idle long enough for a provider
@@ -435,7 +435,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   must clear it. `request recover` is a repair, not a pass, and is forbidden
   while the frame shows `[N tasks running]`, `Working…`, or `Running a command`.
   `transcript_unmatched` or `no_start_hook` with those markers visible is a
-  false stall.
+  false recovery diagnosis.
 - [ ] Locate the owned native transcript from the provider's callback metadata
   and scratch session, not by picking the latest file. Grok 1.0.70's Stop hook
   gives `transcriptPath` to the session's `updates.jsonl`: select the last text
@@ -803,9 +803,9 @@ idle then deliver, and an approval card without `--yolo`.
   send. Do not `request recover` while a busy marker is visible. A false
   `transcript_unmatched` is not a pass.
 - **2026-10-31 — preserved draft file:** Symptom: `composer_busy` for hours
-  with no stall notice, while the composer on screen was empty. Cause: a
+  with no recovery notice, while the composer on screen was empty. Cause: a
   failed editor handoff left `draft-*.txt`, the next exchange returns
-  `WouldBlock`, and `composer_busy` does not start the queued stall clock.
+  `WouldBlock`, and `composer_busy` does not start the queued recovery clock.
   Test: after a long paste or a failed handoff, the next send must not stay
   `composer_busy` against an empty composer. Rule: the blocker is the draft
   file, not the screen. Do not paste over it, and do not delete files under
