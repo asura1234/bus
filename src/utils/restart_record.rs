@@ -303,19 +303,31 @@ pub(crate) fn append_log(path: &Path, record: &RestartLog) -> Result<(), String>
     file.write_all(&line).map_err(|error| error.to_string())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildStamp {
+    pub(crate) sha: String,
+    pub(crate) binary: Option<String>,
+    /// Process that wrote this record. Absent on servers that predate the field.
+    pub(crate) pid: Option<u32>,
+}
+
 pub(crate) fn read_build_sha(path: &Path) -> Option<String> {
-    read_build(path).map(|(sha, _)| sha)
+    read_build_stamp(path).map(|stamp| stamp.sha)
 }
 
 /// The serving binary recorded beside its SHA, when that file still exists.
 pub(crate) fn read_build_binary(path: &Path) -> Option<PathBuf> {
-    read_build(path)
-        .and_then(|(_, binary)| binary)
+    read_build_stamp(path)
+        .and_then(|stamp| stamp.binary)
         .map(PathBuf::from)
         .filter(|binary| binary.is_file())
 }
 
-fn read_build(path: &Path) -> Option<(String, Option<String>)> {
+pub(crate) fn read_build_pid(path: &Path) -> Option<u32> {
+    read_build_stamp(path).and_then(|stamp| stamp.pid)
+}
+
+pub(crate) fn read_build_stamp(path: &Path) -> Option<BuildStamp> {
     let bytes = std::fs::read(path).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let sha = value.get("sha").and_then(|item| item.as_str())?.to_owned();
@@ -323,12 +335,18 @@ fn read_build(path: &Path) -> Option<(String, Option<String>)> {
         .get("binary")
         .and_then(|item| item.as_str())
         .map(str::to_owned);
-    Some((sha, binary))
+    let pid = value
+        .get("pid")
+        .and_then(|item| item.as_u64())
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0);
+    Some(BuildStamp { sha, binary, pid })
 }
 
-/// Records the binary that is serving this data directory. A failure must not
-/// stop the server: the next restart refuses, because there is no recorded
-/// binary to roll back to.
+/// Records the binary and process that are serving this data directory.
+/// A failure must not stop the server: the next restart refuses, because
+/// there is no recorded binary to roll back to. The pid is how a client tells
+/// this process from the one a same-binary restart is replacing.
 pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
     let Some(root) = root else {
         return;
@@ -338,17 +356,16 @@ pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
         .map(|exe| exe.display().to_string())
         .unwrap_or_default();
     let launch = current_launch_flags();
-    if let Err(error) = write_json(
-        &path,
-        &serde_json::json!({
-            "sha": sha,
-            "binary": binary,
-            "dev": launch.dev,
-            "yolo": launch.yolo,
-            "explicit_data_dir": launch.explicit_data_dir,
-            "session_id": launch.session_id,
-        }),
-    ) {
+    let body = serde_json::json!({
+        "sha": sha,
+        "binary": binary,
+        "pid": std::process::id(),
+        "dev": launch.dev,
+        "yolo": launch.yolo,
+        "explicit_data_dir": launch.explicit_data_dir,
+        "session_id": launch.session_id,
+    });
+    if let Err(error) = write_json(&path, &body) {
         tracing::warn!(path = %path.display(), %error, "could not record the server build");
     }
 }
@@ -739,5 +756,26 @@ mod tests {
         assert!(off.contains("started without --yolo"), "{off}");
         assert!(off.contains("rerun this command without --yolo"), "{off}");
         assert!(!off.contains("rerun this command with --yolo"), "{off}");
+    }
+
+    #[test]
+    fn write_build_sha_records_the_serving_pid() {
+        let root = crate::utils::test_temp::unique_temp_path("build-pid");
+        std::fs::create_dir_all(&root).unwrap();
+        let sha = "ab".repeat(20);
+        write_build_sha(Some(&root), &sha);
+        let stamp = read_build_stamp(&build_path(&root)).unwrap();
+        assert_eq!(stamp.sha, sha);
+        assert_eq!(stamp.pid, Some(std::process::id()));
+        assert!(stamp.binary.is_some());
+        write_json(
+            &build_path(&root),
+            &serde_json::json!({ "sha": sha, "binary": "/tmp/bus" }),
+        )
+        .unwrap();
+        let legacy = read_build_stamp(&build_path(&root)).unwrap();
+        assert_eq!(legacy.pid, None);
+        assert_eq!(legacy.binary.as_deref(), Some("/tmp/bus"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

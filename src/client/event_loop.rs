@@ -175,6 +175,30 @@ struct ClientLoopDriver {
     ignore_disconnects: u8,
 }
 
+struct AttachFailure {
+    message: String,
+    closed_early: bool,
+}
+
+fn connection_closed_early(error: &ClientError) -> bool {
+    match error {
+        ClientError::ConnectionLost(error) | ClientError::ConnectionFailed(error) => {
+            io_closed_early(error)
+        }
+        _ => false,
+    }
+}
+
+fn io_closed_early(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected
+    )
+}
+
 fn start_client_loop(
     initial: Option<(LocalStream, handshake::HandshakeResult)>,
     geometry: InitialClientGeometry,
@@ -373,10 +397,15 @@ impl ClientLoopDriver {
             return None;
         }
         crate::client::restart::restart_in_progress()?;
+        let previous_pid = crate::utils::env::bus_data_dir().and_then(|root| {
+            crate::utils::restart_record::read_build_pid(&crate::utils::restart_record::build_path(
+                &root,
+            ))
+        });
         let marker = match crate::client::restart::wait_for_restart(
             crate::client::restart::RECONNECT_WAIT,
             crate::client::restart::restart_in_progress,
-            crate::client::restart::client_socket_ready,
+            || crate::client::restart::replacement_server_ready(previous_pid),
         ) {
             Ok(marker) => marker,
             Err(marker) => {
@@ -386,14 +415,42 @@ impl ClientLoopDriver {
                 )));
             }
         };
+        if let Err(failure) = self.attach_restarted_server(event_tx, event_rx) {
+            // No recorded pid: one handshake, then return. The shutdown test
+            // drops every accept and is stuck if this waits for another one.
+            if previous_pid.is_none() || !failure.closed_early {
+                return Some(Err(crate::utils::restart_record::reattach_message(
+                    &marker,
+                    &failure.message,
+                )));
+            }
+            // Readiness opens and drops one socket. One more handshake is the
+            // next accept on that same server.
+            std::thread::sleep(Duration::from_millis(50));
+            if let Err(failure) = self.attach_restarted_server(event_tx, event_rx) {
+                let marker = crate::client::restart::restart_in_progress().unwrap_or(marker);
+                return Some(Err(crate::utils::restart_record::reattach_message(
+                    &marker,
+                    &failure.message,
+                )));
+            }
+        }
+        Some(Ok(()))
+    }
+
+    fn attach_restarted_server(
+        &mut self,
+        event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
+        event_rx: &mut crate::utils::perf::queue::Receiver<ClientLoopEvent>,
+    ) -> Result<(), AttachFailure> {
         let socket = crate::utils::socket_paths::client_socket_path();
         let mut stream = match crate::platform::ipc::connect_local_stream(&socket) {
             Ok(stream) => stream,
             Err(connect) => {
-                return Some(Err(crate::utils::restart_record::reattach_message(
-                    &marker,
-                    &connect.to_string(),
-                )));
+                return Err(AttachFailure {
+                    message: connect.to_string(),
+                    closed_early: io_closed_early(&connect),
+                });
             }
         };
         let (cols, rows) = self.state.reported_size;
@@ -417,10 +474,10 @@ impl ClientLoopDriver {
             false,
             self.state.mouse_capture_active,
         ) {
-            return Some(Err(crate::utils::restart_record::reattach_message(
-                &marker,
-                &handshake_error.to_string(),
-            )));
+            return Err(AttachFailure {
+                message: handshake_error.to_string(),
+                closed_early: connection_closed_early(&handshake_error),
+            });
         }
         let max_frame_size = if self.state.kitty_graphics_enabled {
             MAX_GRAPHICS_FRAME_SIZE
@@ -430,10 +487,10 @@ impl ClientLoopDriver {
         let transport = match start_endpoint_transport(stream, (), event_tx, max_frame_size) {
             Ok(transport) => transport,
             Err(connect) => {
-                return Some(Err(crate::utils::restart_record::reattach_message(
-                    &marker,
-                    &connect.to_string(),
-                )));
+                return Err(AttachFailure {
+                    message: connect.to_string(),
+                    closed_early: connection_closed_early(&connect),
+                });
             }
         };
         self.write_stream = endpoint::ServerConnection::new(transport);
@@ -443,23 +500,23 @@ impl ClientLoopDriver {
                 .send(&ClientMessage::ClientShellFocus { focused: true })
                 .is_err()
         {
-            return Some(Err(crate::utils::restart_record::reattach_message(
-                &marker,
-                "could not focus the new server",
-            )));
+            return Err(AttachFailure {
+                message: "could not focus the new server".into(),
+                closed_early: false,
+            });
         }
         if self
             .resize(cols, rows, cell_width_px, cell_height_px, exact)
             .is_err()
         {
-            return Some(Err(crate::utils::restart_record::reattach_message(
-                &marker,
-                "could not resize onto the new server",
-            )));
+            return Err(AttachFailure {
+                message: "could not resize onto the new server".into(),
+                closed_early: false,
+            });
         }
         self.drain_stale_disconnect(event_rx);
         self.ignore_disconnects = 1;
-        Some(Ok(()))
+        Ok(())
     }
 
     fn drain_stale_disconnect(

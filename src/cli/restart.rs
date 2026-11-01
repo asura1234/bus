@@ -44,6 +44,10 @@ pub(crate) trait HandoffIo {
     fn now_ms(&self) -> u64;
 }
 
+pub(crate) fn record_dev_required_refusal() {
+    prep::record_dev_required_refusal(super::session_pick::DEV_RESTART_REQUIRED);
+}
+
 pub(super) fn run(
     root: &Path,
     session_id: Option<&str>,
@@ -457,6 +461,33 @@ pub(crate) fn stop_if_listening(
     stop()
 }
 
+/// Socket the replacement server binds: `HERDR_SESSION=bus` and no socket override.
+fn restarted_api_socket() -> PathBuf {
+    crate::utils::paths::api_socket_path_for(Some(crate::messaging::coordinator::DEFAULT_SESSION))
+}
+
+/// `restarted` requires the new server to answer `agent.list`. A socket that
+/// accepts and never writes a JSON result is not an answer.
+fn server_answered(socket: &Path) -> bool {
+    server_answered_within(socket, Duration::from_millis(400))
+}
+
+fn server_answered_within(socket: &Path, timeout: Duration) -> bool {
+    let client = crate::protocol::api::client::ApiClient::for_target(
+        crate::protocol::api::client::ConnectionTarget::SocketPath(socket.to_path_buf()),
+    );
+    let request = crate::protocol::api::schema::Request {
+        id: "restart-health".into(),
+        method: crate::protocol::api::schema::Method::AgentList(
+            crate::protocol::api::schema::EmptyParams {},
+        ),
+    };
+    matches!(
+        client.request_value_with_timeout(&request, timeout),
+        Ok(value) if value.get("result").is_some()
+    )
+}
+
 struct LiveHandoff;
 
 impl HandoffIo for LiveHandoff {
@@ -495,7 +526,10 @@ impl HandoffIo for LiveHandoff {
                 });
             }
             let sha = restart_record::read_build_sha(&restart_record::build_path(&root));
-            if super::launch::is_server_listening() && sha.as_deref() == Some(expected_sha) {
+            if super::launch::is_server_listening()
+                && sha.as_deref() == Some(expected_sha)
+                && server_answered(&restarted_api_socket())
+            {
                 return Ok(());
             }
             if let Some(error) =
@@ -1218,5 +1252,56 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn server_answered_requires_a_json_result() {
+        use std::io::{BufRead, Write};
+        let root = crate::utils::test_temp::unique_temp_path("restart-answer");
+        std::fs::create_dir_all(&root).unwrap();
+        let silent = root.join("silent.sock");
+        let listener = crate::platform::ipc::bind_local_listener(&silent).unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            use interprocess::local_socket::traits::Listener as _;
+            let mut stream = listener.accept().unwrap();
+            let mut request = String::new();
+            std::io::BufReader::new(&mut stream)
+                .read_line(&mut request)
+                .unwrap();
+            ready_tx.send(request).unwrap();
+            let _ = done_rx.recv();
+        });
+        assert!(
+            !super::server_answered_within(&silent, Duration::from_millis(80)),
+            "an accepted socket that never writes is not an answer"
+        );
+        let request = ready_rx.recv().unwrap();
+        assert!(request.contains("agent.list"), "{request}");
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+
+        let speaking = root.join("speak.sock");
+        let listener = crate::platform::ipc::bind_local_listener(&speaking).unwrap();
+        let server = std::thread::spawn(move || {
+            use interprocess::local_socket::traits::Listener as _;
+            let mut stream = listener.accept().unwrap();
+            let mut request = String::new();
+            std::io::BufReader::new(&mut stream)
+                .read_line(&mut request)
+                .unwrap();
+            stream
+                .write_all(br#"{"id":"restart-health","result":[]}"#)
+                .unwrap();
+            stream.write_all(b"\n").unwrap();
+            let _ = stream.flush();
+        });
+        assert!(super::server_answered_within(
+            &speaking,
+            Duration::from_millis(400)
+        ));
+        server.join().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

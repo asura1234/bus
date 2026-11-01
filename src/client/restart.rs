@@ -43,17 +43,34 @@ pub(crate) fn wait_for_restart(
     }
 }
 
-pub(crate) fn client_socket_ready() -> bool {
-    if crate::platform::ipc::connect_local_stream(&crate::utils::socket_paths::client_socket_path())
-        .is_err()
-    {
-        return false;
-    }
+/// The replacement is ready when its build record is this restart's binary and,
+/// when the dying server recorded a pid, a different process. The socket is
+/// opened only after that, so a same-binary restart does not handshake with
+/// the server that is still exiting. A record with no pid keeps the old
+/// one-shot check.
+pub(crate) fn replacement_server_ready(previous_pid: Option<u32>) -> bool {
     let Some(root) = crate::utils::env::bus_data_dir() else {
         return false;
     };
-    restart_record::read_build_sha(&restart_record::build_path(&root))
-        .is_some_and(|sha| restart_record::valid_build_sha(&sha))
+    let Some(stamp) = restart_record::read_build_stamp(&restart_record::build_path(&root)) else {
+        return false;
+    };
+    if !restart_record::valid_build_sha(&stamp.sha) {
+        return false;
+    }
+    if let Some(marker) = restart_in_progress() {
+        if stamp.binary.as_deref() != Some(marker.binary.as_str()) {
+            return false;
+        }
+    }
+    match (previous_pid, stamp.pid) {
+        (Some(previous), Some(pid)) if pid != previous => {}
+        (None, Some(_)) => {}
+        (None, None) => {}
+        _ => return false,
+    }
+    crate::platform::ipc::connect_local_stream(&crate::utils::socket_paths::client_socket_path())
+        .is_ok()
 }
 
 /// SIGTERM the headless coordinator this restart started, and only that
@@ -108,5 +125,99 @@ mod tests {
         });
         let result = wait_for_restart(Duration::from_millis(30), || seen.clone(), || true);
         assert_eq!(result.unwrap().binary, "/new/bus");
+    }
+
+    #[test]
+    fn replacement_waits_for_a_new_server_pid_and_the_marker_binary() {
+        let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let root = crate::utils::test_temp::unique_temp_path("rrdy");
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("c.sock");
+        let saved = [
+            ("BUS_DATA_DIR", std::env::var_os("BUS_DATA_DIR")),
+            (
+                crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+                std::env::var_os(crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR),
+            ),
+        ];
+        std::env::set_var("BUS_DATA_DIR", &root);
+        std::env::set_var(
+            crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+            &socket,
+        );
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in self.0.drain(..) {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(saved.into());
+        let sha = "cd".repeat(20);
+        let build = restart_record::build_path(&root);
+        restart_record::write_json(
+            &build,
+            &serde_json::json!({ "sha": sha, "binary": "/tmp/bus", "pid": 11 }),
+        )
+        .unwrap();
+        restart_record::write_json(
+            &restart_record::marker_path(&root),
+            &RestartMarker {
+                binary: "/tmp/bus".into(),
+                session_id: None,
+                explicit_data_dir: true,
+                data_dir: root.display().to_string(),
+                dev: true,
+                yolo: true,
+            },
+        )
+        .unwrap();
+        assert!(
+            !replacement_server_ready(Some(11)),
+            "the dying server is not the replacement"
+        );
+        let listener = crate::platform::ipc::bind_local_listener(&socket).unwrap();
+        let accept = std::thread::spawn(move || {
+            use interprocess::local_socket::traits::Listener as _;
+            for _ in 0..4 {
+                if listener.accept().is_err() {
+                    break;
+                }
+            }
+        });
+        assert!(!replacement_server_ready(Some(11)));
+        restart_record::write_json(
+            &build,
+            &serde_json::json!({ "sha": sha, "binary": "/tmp/other", "pid": 22 }),
+        )
+        .unwrap();
+        assert!(
+            !replacement_server_ready(Some(11)),
+            "a different binary is not this restart"
+        );
+        restart_record::write_json(
+            &build,
+            &serde_json::json!({ "sha": sha, "binary": "/tmp/bus", "pid": 22 }),
+        )
+        .unwrap();
+        assert!(replacement_server_ready(Some(11)));
+        restart_record::write_json(
+            &build,
+            &serde_json::json!({ "sha": sha, "binary": "/tmp/bus" }),
+        )
+        .unwrap();
+        assert!(
+            replacement_server_ready(None),
+            "a record with no pid stays a one-shot socket check"
+        );
+        for _ in 0..4 {
+            let _ = crate::platform::ipc::connect_local_stream(&socket);
+        }
+        let _ = accept.join();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
