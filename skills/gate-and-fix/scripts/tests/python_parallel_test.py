@@ -67,6 +67,17 @@ def test_serial_override_keeps_the_same_test_inventory(tmp_path):
         assert '2 passed' in result.stdout
 
 
+def test_serial_override_wins_over_inherited_pytest_worker_options(tmp_path):
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools/example_test.py').write_text(
+        'def test_serial(request): assert not hasattr(request.config,"workerinput")\n'
+    )
+    env = runner.quality.child_env(PYTEST_ADDOPTS='-n 2')
+    result = subprocess.run(python_gate(tmp_path, 0).argv, cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize(('source', 'passed'), [('', True), ('def test_bad(): assert False\n', False),
                                                 ('raise RuntimeError("bad collection")\n', False)])
 def test_parallel_empty_failure_and_collection_error_remain_distinct(tmp_path, source, passed):
@@ -152,9 +163,10 @@ def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path, nested):
                 pass
 
 
-def test_missing_parallel_dependency_fails_before_launch(tmp_path):
+@pytest.mark.parametrize("workers", [0, 2])
+def test_missing_parallel_dependency_fails_before_launch(tmp_path, workers):
     (tmp_path / 'tools').mkdir()
     (tmp_path / 'tools/example_test.py').write_text('def test_example(): pass\n')
     with patch.object(runner.quality.importlib.util, 'find_spec', return_value=None):
         with pytest.raises(ValueError, match='requirements.txt'):
-            python_gate(tmp_path, 2)
+            python_gate(tmp_path, workers)
