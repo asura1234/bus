@@ -172,6 +172,74 @@ fn steered_input_recorded_in_the_lead_turn_shares_its_recorded_answer() {
 #[path = "codex_identical_steering_test.rs"]
 mod codex_identical_steering_tests;
 
+fn recover_detached_follower(
+    fixture: &mut Fixture,
+    rollout: &Path,
+) -> (
+    crate::messaging::model::RequestId,
+    crate::messaging::model::RequestId,
+) {
+    let lead = fixture.send("merge the PR", false);
+    fixture.deliver();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"merge the PR","transcript_path":rollout}),
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    let follow = fixture.send("then close the worktree", false);
+    fixture.deliver();
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append_lines(
+        rollout,
+        &(recorded_turn(fixture.now + 1, "turn-1", "merge the PR", "Merged.")
+            + &recorded_turn(fixture.now + 2, "turn-2", &typed, "Closed the worktree.")),
+    );
+    fixture.status(RuntimeStatus::Working);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += TURN_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    fixture.now += 5_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    (lead, follow)
+}
+
+fn assert_follower_recovery_names_the_lead(
+    log: &str,
+    lead: crate::messaging::model::RequestId,
+    follow: crate::messaging::model::RequestId,
+    fixture: &Fixture,
+) {
+    assert_eq!(
+        fixture.request(follow).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    let rows: Vec<_> = log
+        .lines()
+        .filter(|line| {
+            line.contains("bus.message.recovered")
+                && line.contains("reason=\"reply_not_captured\"")
+                && line.contains(&format!("request_id={} ", follow.0))
+        })
+        .collect();
+    assert_eq!(rows.len(), 1, "{log}");
+    assert!(
+        rows[0].contains(&format!("lead_id={}", lead.0)),
+        "{}",
+        rows[0]
+    );
+    assert!(
+        !log.lines()
+            .any(|line| line.contains("bus.message.recovered")
+                && line.contains("reason=\"reply_not_captured\"")
+                && line.contains(&format!("request_id={} ", lead.0))),
+        "the recovered lead was answered, not abandoned: {log}"
+    );
+}
+
 /// A steered follower that transcript recovery detaches from its group closes
 /// as `reply_not_captured`; its no-reply diagnostic must still name the lead.
 #[test]
@@ -179,56 +247,79 @@ fn reply_capture_diagnostics_record_a_follower_detached_by_transcript_recovery()
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         let (mut fixture, rollout) = with_session_rollout();
-        let lead = fixture.send("merge the PR", false);
-        fixture.deliver();
-        fixture.record(
-            json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
-            "turn_id":"turn-1","prompt":"merge the PR","transcript_path":rollout}),
-        );
-        fixture.consume();
-        fixture.status(RuntimeStatus::Working);
-        let follow = fixture.send("then close the worktree", false);
-        fixture.deliver();
-        let typed = fixture.typed().last().unwrap().0.clone();
-        append_lines(
-            &rollout,
-            &(recorded_turn(fixture.now + 1, "turn-1", "merge the PR", "Merged.")
-                + &recorded_turn(fixture.now + 2, "turn-2", &typed, "Closed the worktree.")),
-        );
-        fixture.status(RuntimeStatus::Working);
-        fixture.status(RuntimeStatus::Idle);
-        fixture.consume();
-        fixture.now += TURN_SETTLE_MS;
-        fixture.status(RuntimeStatus::Idle);
-        fixture.consume();
-        fixture.now += 5_000;
-        fixture.status(RuntimeStatus::Idle);
-        fixture.consume();
-        assert_eq!(
-            fixture.request(follow).failure_reason.as_deref(),
-            Some("reply_not_captured")
-        );
-        let log = capture.text();
-        let rows: Vec<_> = log
-            .lines()
-            .filter(|line| {
-                line.contains("bus.message.recovered")
-                    && line.contains("reason=\"reply_not_captured\"")
-                    && line.contains(&format!("request_id={} ", follow.0))
-            })
-            .collect();
-        assert_eq!(rows.len(), 1, "{log}");
-        assert!(
-            rows[0].contains(&format!("lead_id={}", lead.0)),
-            "{}",
-            rows[0]
-        );
-        assert!(
-            !log.lines()
-                .any(|line| line.contains("bus.message.recovered")
-                    && line.contains("reason=\"reply_not_captured\"")
-                    && line.contains(&format!("request_id={} ", lead.0))),
-            "the recovered lead was answered, not abandoned: {log}"
-        );
+        let (lead, follow) = recover_detached_follower(&mut fixture, &rollout);
+        assert_follower_recovery_names_the_lead(&capture.text(), lead, follow, &fixture);
     });
+}
+
+/// `lead_id` must live on the recovered event itself. The settlement span is
+/// a different callsite (`bus::messaging::coordinator::worker`) than the
+/// diagnostic (`bus::messaging::diagnostics`). Parallel `cargo test --bin bus`
+/// registers every `Capture::run` subscriber in process-wide
+/// `LOCKED_DISPATCHERS`, so the formatted event can omit the span prefix
+/// while the INFO line is still captured. A subscriber that records the
+/// event without that span is the deterministic form of the same gap.
+#[test]
+fn reply_capture_diagnostics_include_lead_id_without_settlement_span() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run_filtered("bus::messaging::diagnostics=info", || {
+        let (mut fixture, rollout) = with_session_rollout();
+        let (lead, follow) = recover_detached_follower(&mut fixture, &rollout);
+        assert_follower_recovery_names_the_lead(&capture.text(), lead, follow, &fixture);
+    });
+}
+
+/// A sibling with no subscriber can first-register the recovered-event
+/// callsite through tracing-core's JustOne path (`Interest::never`) while
+/// this thread's `Capture` is the only live dispatch. `Capture` keeps a
+/// second live dispatch for the process, and `log_request` uses one
+/// `tracing::info!` site (`lead_id` as `field::Empty` when absent), so the
+/// recovered line with `lead_id` must still be recorded.
+#[test]
+fn sibling_without_subscriber_can_omit_parent_span_fields_from_capture_on_request_with_lead() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let id = fixture.send("probe", true);
+        let state = fixture.worker.state.clone();
+        let started = std::sync::Barrier::new(2);
+        let registered = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                started.wait();
+                crate::messaging::diagnostics::request_with_lead(
+                    &state,
+                    id,
+                    "bus.message.recovered",
+                    "reply_not_captured",
+                    42,
+                );
+                registered.wait();
+            });
+            started.wait();
+            registered.wait();
+            crate::messaging::diagnostics::request_with_lead(
+                &fixture.worker.state,
+                id,
+                "bus.message.recovered",
+                "reply_not_captured",
+                7,
+            );
+        });
+    });
+    let text = capture.text();
+    let recovered: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("bus.message.recovered"))
+        .collect();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "recovered event dropped after sibling registered the request_with_lead callsite: {text}"
+    );
+    assert!(
+        recovered[0].contains("lead_id=7"),
+        "lead_id missing from recovered event: {}",
+        recovered[0]
+    );
 }

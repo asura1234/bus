@@ -55,7 +55,23 @@ pub(crate) struct ArchivePolicy {
 #[cfg(test)]
 pub(crate) mod test_capture {
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    /// Held for the whole test process so `Capture` never registers a callsite
+    /// through tracing-core's single-dispatch `JustOne` path.
+    ///
+    /// `Dispatch::new` (every `Capture::run`) lands in process-wide
+    /// `LOCKED_DISPATCHERS`. With one live dispatch, a new callsite is
+    /// registered against the *current thread's* default. A sibling without a
+    /// subscriber can therefore cache `Interest::never`; this `Capture` then
+    /// omits the whole event. A second live dispatch makes registration
+    /// consider every subscriber instead (same pattern as
+    /// `submission_diagnostics_test.rs`).
+    static PROCESS_INTEREST: OnceLock<tracing::Dispatch> = OnceLock::new();
+
+    fn hold_process_interest() {
+        PROCESS_INTEREST.get_or_init(|| tracing::Dispatch::new(tracing_subscriber::registry()));
+    }
 
     #[derive(Clone, Default)]
     pub(crate) struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -73,6 +89,7 @@ pub(crate) mod test_capture {
             self.run_filtered("trace", action);
         }
         pub(crate) fn run_filtered(&self, filter: &str, action: impl FnOnce()) {
+            hold_process_interest();
             let writer = self.clone();
             let subscriber = tracing_subscriber::fmt()
                 .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
@@ -95,6 +112,7 @@ pub(crate) mod test_capture {
         options: &super::LoggingOptions,
         action: impl FnOnce(),
     ) {
+        hold_process_interest();
         let writer = super::RotatingFileMakeWriter::new(dir, file_name, options).unwrap();
         let subscriber = tracing_subscriber::fmt()
             .with_env_filter(options.filter.clone())
