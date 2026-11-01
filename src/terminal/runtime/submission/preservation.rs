@@ -270,6 +270,11 @@ impl ObservedSubmission {
         if !valid(&screen) {
             return Err(io::Error::other("Composer changed during editor transfer"));
         }
+        let key = if confirmation {
+            self.inspect.editor_submit_key(&screen, &key)
+        } else {
+            key
+        };
         if self.clock.now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,

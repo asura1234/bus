@@ -2,6 +2,28 @@
 use super::styled_chars;
 use crate::terminal::runtime::InputObservation;
 
+pub(super) fn working(screen: &str) -> bool {
+    let plain = screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detected = crate::agents::manifest::detect_with_osc(
+        crate::agents::AgentKind::Kimi,
+        crate::agents::manifest::DetectionInput {
+            screen: &plain,
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    detected.visible_working && !detected.visible_blocker
+}
+
 pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
     let Some((rows, clipped)) = rows(screen) else {
         return InputObservation::Unavailable;

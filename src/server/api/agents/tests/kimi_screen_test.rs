@@ -57,3 +57,54 @@ fn kimi_busy_composer_with_a_draft_is_not_submission_acceptance() {
     );
     assert!(!inspector.editor_working(&COMMAND.replace("│ > ", "│ > from bus")));
 }
+
+#[test]
+fn kimi_idle_long_prompt_transfer_allows_transcript_reflow_but_not_draft_edits() {
+    let idle = include_str!("../../../../../tests/fixtures/kimi-steer/idle.txt");
+    let lines: Vec<_> = idle.lines().collect();
+    let top = lines
+        .iter()
+        .rposition(|line| line.trim().starts_with('╭'))
+        .unwrap();
+    let bottom = lines
+        .iter()
+        .rposition(|line| line.trim().starts_with('╰'))
+        .unwrap();
+    let draft: Vec<_> = (0..24)
+        .map(|n| format!("review request line {n:02}: keep this exact text"))
+        .collect();
+    let text = draft.join("\n");
+    assert!(text.len() > 1000, "exercise a long idle review request");
+    let mut composer = vec![lines[top].to_owned()];
+    composer.extend(
+        draft
+            .iter()
+            .enumerate()
+            .map(|(n, row)| format!(" │ {}{row:<49}│", if n == 0 { "> " } else { "  " })),
+    );
+    composer.extend(lines[bottom..].iter().map(|line| (*line).to_owned()));
+    let composer = composer.join("\n");
+    let before = format!(
+        "{}\n{composer}",
+        lines[top.saturating_sub(10)..top].join("\n")
+    );
+    // Growing the native composer scrolls/repaints transcript rows above it.
+    // Model the frame guard after native-editor verification of the full draft.
+    let after = format!(
+        "{}\n{composer}",
+        lines[top.saturating_sub(7)..top].join("\n")
+    );
+    let inspector = preserving_observer(AgentKind::Kimi, text, std::path::PathBuf::new(), vec![]);
+    assert_eq!(inspector.observe(&before), InputObservation::Pending);
+    assert_eq!(inspector.observe(&after), InputObservation::Pending);
+    assert_ne!(before, after);
+    assert!(
+        inspector.editor_frame_unchanged(&before, &after),
+        "benign reflow must not strand the verified long draft before Enter"
+    );
+    assert!(!inspector.editor_frame_unchanged(
+        &before,
+        &after.replace("review request line 23", "foreign draft line 23")
+    ));
+    assert!(!inspector.editor_frame_unchanged(&before, APPROVAL));
+}

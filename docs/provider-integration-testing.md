@@ -931,3 +931,7 @@ idle then deliver, and an approval card without `--yolo`.
   Started hook can rebind a request, reconcile the old committed final, even
   if Stop was lost. Repeat after scratch relaunch and verify ordered messages
   and a lost submit acknowledgment without an automatic duplicate.
+  Cover long idle-draft reflow and Working-to-Idle during editor verification;
+  select Enter or guidance under the final content guard. Native guidance can
+  batch multiple inputs: preserve its distinct text parts and require matching
+  unique prompt IDs instead of attributing substrings of concatenated text.

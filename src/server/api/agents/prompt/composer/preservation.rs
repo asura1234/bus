@@ -10,6 +10,7 @@ pub(super) struct PreservingComposer {
     expected: String,
     directory: PathBuf,
     keys: Vec<Bytes>,
+    steer: bool,
     native_draft: Mutex<Option<NativeDraft>>,
 }
 
@@ -31,8 +32,14 @@ impl PreservingComposer {
             expected,
             directory,
             keys,
+            steer: false,
             native_draft: Mutex::new(None),
         }
+    }
+
+    pub(super) fn with_steering(mut self, steer: bool) -> Self {
+        self.steer = steer;
+        self
     }
 }
 
@@ -148,31 +155,25 @@ impl SubmissionInspector for PreservingComposer {
                 && super::super::kimi::same_new_editor_frame(previous, current))
     }
 
+    fn editor_submit_key(&self, screen: &str, default: &Bytes) -> Bytes {
+        if self.kind == AgentKind::Kimi
+            && self.steer
+            && self.keys.len() == 3
+            && super::super::kimi::working(screen)
+        {
+            self.keys[0].clone()
+        } else {
+            default.clone()
+        }
+    }
+
     fn editor_working(&self, screen: &str) -> bool {
         if self.kind != AgentKind::Kimi {
             return false;
         }
-        let plain = screen
-            .lines()
-            .map(|line| {
-                super::styled_chars(line)
-                    .iter()
-                    .map(|c| c.character)
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let detected = crate::agents::manifest::detect_with_osc(
-            self.kind,
-            crate::agents::manifest::DetectionInput {
-                screen: &plain,
-                osc_title: "",
-                osc_progress: "",
-            },
-        );
         // Starting while already busy means another spinner frame proves
         // nothing. A visible owned/foreign draft must never confirm submit.
-        detected.visible_working && !detected.visible_blocker && input(self.kind, screen).is_none()
+        super::super::kimi::working(screen) && input(self.kind, screen).is_none()
     }
 
     fn draft_preservation(&self, screen: &str) -> Option<DraftPreservation> {

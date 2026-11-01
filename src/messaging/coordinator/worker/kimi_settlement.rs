@@ -1,5 +1,5 @@
 //! Read Kimi terminal evidence before settling a request.
-use super::{AgentId, BusState, Path};
+use super::{AgentId, BusState, Path, RuntimeStatus};
 
 pub(super) fn state_provider_is_kimi(state: &BusState, agent: AgentId) -> bool {
     state
@@ -10,6 +10,22 @@ pub(super) fn state_provider_is_kimi(state: &BusState, agent: AgentId) -> bool {
 /// A Kimi frame can be temporarily idle during tool work. Its own committed
 /// terminal wire, tied to the launch, session, turn and prompt, is the witness.
 pub(super) fn recorded_kimi_end(
+    data_dir: &Path,
+    state: &mut BusState,
+    agent: AgentId,
+) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
+    if !state.agent(agent).is_some_and(|owner| {
+        matches!(
+            owner.status,
+            RuntimeStatus::Idle | RuntimeStatus::Unavailable
+        )
+    }) {
+        return Ok(None);
+    }
+    committed_kimi_end(data_dir, state, agent)
+}
+
+fn committed_kimi_end(
     data_dir: &Path,
     state: &mut BusState,
     agent: AgentId,
@@ -84,6 +100,7 @@ impl super::Worker {
         state: &mut BusState,
         agent: AgentId,
     ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
-        recorded_kimi_end(&self.data_dir, state, agent)
+        // Stop and a later Started can arrive while the new turn is Working.
+        committed_kimi_end(&self.data_dir, state, agent)
     }
 }

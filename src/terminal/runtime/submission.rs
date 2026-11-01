@@ -136,6 +136,11 @@ pub(crate) trait SubmissionInspector: Send {
     fn editor_frame_unchanged(&self, previous: &str, current: &str) -> bool {
         previous == current
     }
+    /// Select an already encoded key from the same guarded frame that
+    /// authorizes submission; provider activity can change during editing.
+    fn editor_submit_key(&self, _screen: &str, default: &Bytes) -> Bytes {
+        default.clone()
+    }
     fn editor_working(&self, _screen: &str) -> bool {
         false
     }

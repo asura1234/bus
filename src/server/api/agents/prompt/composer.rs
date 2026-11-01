@@ -7,18 +7,29 @@ mod diagnostics;
 mod ownership;
 mod preservation;
 
+#[cfg(test)]
 pub(super) fn preserving_observer(
     kind: AgentKind,
     expected: String,
     directory: std::path::PathBuf,
     keys: Vec<bytes::Bytes>,
 ) -> impl crate::terminal::runtime::SubmissionInspector {
+    preserving_observer_for_submission(kind, expected, directory, keys, false)
+}
+
+pub(super) fn preserving_observer_for_submission(
+    kind: AgentKind,
+    expected: String,
+    directory: std::path::PathBuf,
+    keys: Vec<bytes::Bytes>,
+    steer: bool,
+) -> impl crate::terminal::runtime::SubmissionInspector {
     let keys = if kind == AgentKind::Claude && !preservation::default_claude_stash_binding() {
         Vec::new()
     } else {
         keys
     };
-    preservation::PreservingComposer::new(kind, expected, directory, keys)
+    preservation::PreservingComposer::new(kind, expected, directory, keys).with_steering(steer)
 }
 
 pub(super) fn observer(

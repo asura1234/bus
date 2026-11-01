@@ -470,17 +470,8 @@ fn queue_prompt_input(
     steer: bool,
 ) -> std::io::Result<InputCompletion> {
     use crate::agents::AgentKind;
-    let (mut encoded, mut enter) =
+    let (mut encoded, enter) =
         crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
-    if observe && kind == AgentKind::Kimi && steer {
-        // Enter queues a separate native prompt. Ctrl+S injects guidance
-        // into the active turn, whose committed wire will attest ownership.
-        enter = crate::server::api::input_encoding::encode_api_keys(runtime, &["ctrl+s".into()])
-            .map_err(|key| std::io::Error::other(format!("Invalid steer key: {key}")))?
-            .into_iter()
-            .flatten()
-            .collect();
-    }
     if kind == AgentKind::Codex && runtime.bracketed_paste_enabled() {
         let (images, remaining) = crate::agents::providers::codex::hooks::image_paste_parts(&text);
         if !images.is_empty() {
@@ -527,11 +518,12 @@ fn queue_prompt_input(
                 &["ctrl+s".into(), "ctrl+g".into(), "backspace".into()],
             )
             .map_err(|key| std::io::Error::other(format!("Invalid draft key: {key}")))?;
-            Box::new(composer::preserving_observer(
+            Box::new(composer::preserving_observer_for_submission(
                 kind,
                 text,
                 directory,
                 keys.into_iter().map(Bytes::from).collect(),
+                steer,
             ))
         } else {
             Box::new(composer::observer(kind, text))
@@ -586,7 +578,7 @@ pub(super) fn complete_agent_prompt(
     tracing::info!(target: "bus::server::api::agents", event = "bus.terminal.result", api_request_id = %id,
         pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
         elapsed_ms = started.elapsed().as_millis() as u64,
-        "Native prompt and Enter submission completed; this is not model acceptance");
+        "Native prompt submission completed; this is not model acceptance");
     match completed {
         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
         Ok(Err(err)) if crate::terminal::runtime::PromptNotShown::composer_busy(&err) => {

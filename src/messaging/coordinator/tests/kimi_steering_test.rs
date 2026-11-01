@@ -50,6 +50,69 @@ fn native_turn(turn: u64, prompt: &str, guidance: &[String], final_text: &str) -
     rows.into_iter().map(|row| format!("{row}\n")).collect()
 }
 
+fn native_batched_guidance_turn(
+    turn: u64,
+    prompt: &str,
+    guidance: &[String],
+    prompt_ids: &[String],
+    active_prompt: &str,
+    final_text: &str,
+) -> String {
+    let batch = json!({"type":"prompt.steered","agentId":"main","activePromptId":active_prompt,"promptIds":prompt_ids,"messageId":"batch","content":guidance.iter().map(|text| json!({"type":"text","text":text})).collect::<Vec<_>>()});
+    native_turn(turn, prompt, &[], final_text).replacen('\n', &format!("\n{batch}\n"), 1)
+}
+
+#[test]
+fn kimi_batched_guidance_requires_attested_part_and_prompt_boundaries() {
+    for case in 0..4 {
+        let mut fixture = Fixture::new(Provider::Kimi);
+        let wire = home(&fixture);
+        let lead = running(&mut fixture, "original task", "1");
+        let first = fixture.send("first correction", false);
+        let second = fixture.send("second correction", false);
+        fixture.deliver();
+        fixture.deliver();
+        let typed = fixture.typed();
+        let separate = vec![typed[1].0.clone(), typed[2].0.clone()];
+        let concatenated = vec![format!("{}{}", typed[1].0, typed[2].0)];
+        let ids = vec!["g1".to_owned(), "g2".to_owned()];
+        let (content, prompt_ids, active, owned) = match case {
+            0 => (concatenated, ids.clone(), "p1", false),
+            1 => (separate.clone(), ids[..1].to_vec(), "p1", false),
+            2 => (separate.clone(), ids.clone(), "other", false),
+            _ => (separate.clone(), ids.clone(), "p1", true),
+        };
+        let original = fixture.worker.state.render_request_payload(lead).unwrap();
+        std::fs::write(
+            &wire,
+            native_batched_guidance_turn(
+                1,
+                &original,
+                &content,
+                &prompt_ids,
+                active,
+                "batched guidance answer",
+            ),
+        )
+        .unwrap();
+        fixture.status(RuntimeStatus::Idle);
+        stop(&fixture);
+        fixture.consume();
+        assert_eq!(
+            fixture.reply(lead).as_deref(),
+            Some("batched guidance answer"),
+            "case {case}: lead"
+        );
+        for id in [first, second] {
+            assert_eq!(
+                fixture.reply(id).as_deref(),
+                owned.then_some("batched guidance answer"),
+                "case {case}: request {id:?}"
+            );
+        }
+    }
+}
+
 fn stop(fixture: &Fixture) {
     fixture.record(json!({"hook_event_name":"Stop","session_id":"session"}));
 }
@@ -191,6 +254,8 @@ fn queued_native_turn(stop_before_start: bool) {
     }
     fixture.started("2", "native queued follow-up");
     stop(&fixture);
+    fixture.status(RuntimeStatus::Working);
+    fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.reply(lead).as_deref(), Some("old final"));
@@ -274,6 +339,8 @@ fn kimi_mixed_guidance_and_queued_turn_keep_their_own_committed_replies() {
     stop(&fixture);
     fixture.started("2", "native queued follow-up");
     stop(&fixture);
+    fixture.status(RuntimeStatus::Working);
+    fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(
@@ -291,3 +358,36 @@ fn kimi_mixed_guidance_and_queued_turn_keep_their_own_committed_replies() {
     );
     assert_eq!(fixture.request(next).provider_turn_id.as_deref(), Some("2"));
 }
+
+#[test]
+fn kimi_queued_native_turn_can_start_after_an_old_final_poll() {
+    let mut fixture = Fixture::new(Provider::Kimi);
+    let wire = home(&fixture);
+    let lead = running(&mut fixture, "old task", "1");
+    let next = fixture.send("native queued follow-up", false);
+    fixture.deliver();
+    let typed = fixture.typed();
+    let old = native_turn(1, &typed[0].0, &[], "old final");
+    std::fs::write(&wire, &old).unwrap();
+    stop(&fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.consume();
+    assert_eq!(fixture.reply(lead).as_deref(), Some("old final"));
+    std::fs::write(
+        &wire,
+        format!("{}{}", old, native_turn(2, &typed[1].0, &[], "next final")),
+    )
+    .unwrap();
+    fixture.started("2", "native queued follow-up");
+    stop(&fixture);
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(next).as_deref(),
+        Some("next final"),
+        "a poll before the queued native turn starts must not lose its request"
+    );
+    assert_eq!(fixture.request(next).provider_turn_id.as_deref(), Some("2"));
+}
+
+#[path = "kimi_boundary_test.rs"]
+mod boundary_tests;

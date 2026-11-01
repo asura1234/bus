@@ -157,6 +157,20 @@ async fn kimi_accepted_guidance_with_a_lost_write_ack_is_never_definitely_reject
 }
 
 async fn delivery(frame: &str, steer: bool, fault: u8) {
+    delivery_with_idle_transition(frame, steer, fault, false).await;
+}
+
+#[tokio::test]
+async fn kimi_working_to_idle_before_submit_uses_enter() {
+    delivery_with_idle_transition(COMMAND, true, 0, true).await;
+}
+
+async fn delivery_with_idle_transition(
+    frame: &str,
+    steer: bool,
+    fault: u8,
+    idle_before_submit: bool,
+) {
     let _scratch = Scratch::new();
     let (mut app, method, mut writes, directory) = fixture(frame, steer);
     let response = start(&mut app, method);
@@ -183,15 +197,28 @@ async fn delivery(frame: &str, steer: bool, fault: u8) {
         if round == 1 && fault == 2 {
             release = Some(clock(&app).fail_next_write_completion(std::io::ErrorKind::Other));
         }
-        paint(&app, frame, &draft, round + 2);
+        let verified_frame = if idle_before_submit && round == 1 {
+            IDLE
+        } else {
+            frame
+        };
+        paint(&app, verified_frame, &draft, round + 2);
     }
     let key = next_or_response(&mut writes, &response).await;
-    assert_eq!(key.as_ref(), if steer { b"\x13" } else { b"\r" });
+    assert_eq!(
+        key.as_ref(),
+        if steer && !idle_before_submit {
+            b"\x13"
+        } else {
+            b"\r"
+        }
+    );
+    let submitted_frame = if idle_before_submit { IDLE } else { frame };
     if fault == 1 {
-        paint(&app, frame, &draft, 5);
+        paint(&app, submitted_frame, &draft, 5);
         clock(&app).advance(Duration::from_secs(20));
     } else {
-        paint(&app, frame, "", 5);
+        paint(&app, submitted_frame, "", 5);
     }
     if let Some(release) = release {
         release.send(()).unwrap();
@@ -232,6 +259,64 @@ async fn kimi_approval_never_receives_editor_or_submit_keys() {
     let (mut app, method, mut writes, directory) = fixture(APPROVAL, true);
     let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
     assert!(!response.contains("agent_prompted"));
+    assert!(writes.try_recv().is_err());
+    assert!(!directory.exists());
+}
+
+#[tokio::test]
+async fn kimi_stranded_owned_draft_is_withdrawn_before_fresh_delivery() {
+    let _scratch = Scratch::new();
+    let (mut app, method, mut writes, directory) = fixture(IDLE, false);
+    let old = "older Bus prompt that was never submitted";
+    let exchange = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
+    exchange.save_recovery(old).unwrap();
+    drop(exchange);
+    paint(&app, IDLE, old, 0);
+    let response = start(&mut app, method);
+    let file = crate::utils::test_temp::unique_temp_path("kimi-stranded-editor");
+    let mut draft = old.to_owned();
+    // Recover the full old owned draft, then restore and verify the new one.
+    for round in 0..3 {
+        assert_eq!(
+            next_or_response(&mut writes, &response).await.as_ref(),
+            b"\x07"
+        );
+        std::fs::write(&file, &draft).unwrap();
+        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+        draft = std::fs::read_to_string(&file).unwrap();
+        let expected = if round == 0 { "" } else { "from bus" };
+        let marker = draft.strip_prefix(expected).unwrap().to_owned();
+        assert!(marker.starts_with("__BUS_DRAFT_END_"));
+        paint(&app, IDLE, &draft, round);
+        assert_eq!(
+            next_or_response(&mut writes, &response).await.as_ref(),
+            vec![0x7f; marker.len()]
+        );
+        draft = expected.to_owned();
+        paint(&app, IDLE, &draft, round + 1);
+    }
+    assert_eq!(
+        next_or_response(&mut writes, &response).await.as_ref(),
+        b"\r"
+    );
+    paint(&app, IDLE, "", 5);
+    let result = response.recv_timeout(WAIT).unwrap();
+    assert!(result.contains("agent_prompted"), "{result}");
+    assert!(
+        writes.try_recv().is_err(),
+        "never submit or replay the stranded prompt"
+    );
+    std::fs::remove_file(file).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn kimi_foreign_draft_without_recovery_receives_no_keys() {
+    let _scratch = Scratch::new();
+    let (mut app, method, mut writes, directory) = fixture(IDLE, false);
+    paint(&app, IDLE, "developer's text", 0);
+    let result = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(!result.contains("agent_prompted"));
     assert!(writes.try_recv().is_err());
     assert!(!directory.exists());
 }

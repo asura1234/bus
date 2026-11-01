@@ -126,7 +126,7 @@ fn scan_committed_outcome(
             "prompt.steered" if owned && agent_outcome.is_none() => {
                 if let Some((id, text)) = guidance(&value, &prompt_id) {
                     if guidance_ids.insert(id) {
-                        prompts.push(text);
+                        prompts.extend(text);
                     }
                 }
             }
@@ -215,24 +215,38 @@ fn plain_text(value: &Value, field: &str) -> Option<String> {
     let [part] = parts.as_slice() else {
         return None;
     };
+    text_part(part)
+}
+
+fn text_part(part: &Value) -> Option<String> {
     if part.get("type")?.as_str()? != "text" {
         return None;
     }
     part.get("text")?.as_str().map(str::to_owned)
 }
 
-fn guidance(value: &Value, active: &str) -> Option<(String, String)> {
+fn guidance(value: &Value, active: &str) -> Option<(String, Vec<String>)> {
     if value.get("agentId")?.as_str()? != "main" || value.get("activePromptId")?.as_str()? != active
     {
         return None;
     }
     let id = value.get("messageId")?.as_str()?;
     let ids = value.get("promptIds")?.as_array()?;
-    if id.is_empty() || ids.is_empty() || ids.iter().any(|id| id.as_str().is_none_or(str::is_empty))
-    {
+    let unique: std::collections::HashSet<_> = ids.iter().filter_map(Value::as_str).collect();
+    if id.is_empty() || ids.is_empty() || unique.len() != ids.len() || unique.contains("") {
         return None;
     }
-    Some((id.to_owned(), plain_text(value, "content")?))
+    let parts = value.get("content")?.as_array()?;
+    if parts.len() != ids.len() {
+        return None;
+    }
+    // Kimi batches queued prompts by retaining each original text part.
+    // Never infer message ownership from substrings of a joined part.
+    let texts = parts.iter().map(text_part).collect::<Option<Vec<_>>>()?;
+    if texts.iter().any(String::is_empty) {
+        return None;
+    }
+    Some((id.to_owned(), texts))
 }
 
 fn terminal_outcome(
