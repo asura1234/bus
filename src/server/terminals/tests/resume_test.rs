@@ -1426,21 +1426,20 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
 
 #[test]
 fn startup_timeout_resume_never_turns_session_selectors_or_input_into_a_fresh_launch() {
-    use crate::messaging::coordinator::resume::NativeResumeFacts;
     for (kind, executable) in [
         ("claude", "claude"),
         ("cursor", "cursor-agent"),
         ("grok", "grok"),
     ] {
-        let facts = NativeResumeFacts {
-            agent_name: Some("bus-r1-a2".into()),
-            managed_agent: Some(kind.into()),
-            session: None,
+        let restore = |argv: &[String]| {
+            crate::server::terminals::unstarted_restore_plan(
+                Some("bus-r1-a2"),
+                crate::agents::parse_agent_label(kind),
+                Some(argv),
+            )
         };
         let valid = vec![executable.into(), "--model".into(), "fixture-model".into()];
-        assert!(
-            crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&valid)).is_some()
-        );
+        assert!(restore(&valid).is_some());
         for tail in [
             vec!["--resume", "00000000-0000-4000-8000-000000000001"],
             vec!["--continue"],
@@ -1451,11 +1450,7 @@ fn startup_timeout_resume_never_turns_session_selectors_or_input_into_a_fresh_la
                 .chain(tail)
                 .map(str::to_string)
                 .collect::<Vec<_>>();
-            assert!(
-                crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&argv))
-                    .is_none(),
-                "{kind}: {argv:?}"
-            );
+            assert!(restore(&argv).is_none(), "{kind}: {argv:?}");
         }
     }
 }
