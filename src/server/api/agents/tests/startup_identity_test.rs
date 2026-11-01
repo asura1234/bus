@@ -18,7 +18,7 @@ async fn startup_timeout_keeps_owned_terminal_readable_and_trust_chooser_address
     app.reconcile_managed_agents_at(now + Duration::from_secs(31));
     let before = app.agent_info(0, pane).unwrap();
     assert_eq!(before.name.as_deref(), Some("reviewer"));
-    assert!(before.launch_pending && !before.interactive_ready);
+    assert!(!before.launch_pending && !before.interactive_ready);
 
     // A startup blocker may become recognizable only after the deadline.
     app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes(

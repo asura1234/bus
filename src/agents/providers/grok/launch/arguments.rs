@@ -291,6 +291,21 @@ pub(crate) fn validate_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Normalize native aliases before deciding whether a fresh restore is safe.
+pub(super) fn validate_unstarted_options(args: &[String]) -> Result<(), String> {
+    validate_args(args)?;
+    let normalized = expanded_args(args);
+    if normalized.iter().any(|arg| arg == "--")
+        || resumable_options(&normalized) != normalized
+        || positions(&normalized)
+            .into_iter()
+            .any(|index| !normalized[index].starts_with('-'))
+    {
+        return Err("Unstarted Grok launch cannot select a session or submit input".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn runtime_additions(args: &[String]) -> Vec<String> {
     let args = expanded_args(args);
     let positions = positions(&args);

@@ -248,8 +248,9 @@ impl Worker {
                 continue;
             }
             let expired = now_ms.saturating_sub(startup.started_at_ms) >= STARTUP_TIMEOUT_MS;
-            // The native server releases a launch on timeout or process exit.
-            // A failed list request never reaches here, so silence is not failure.
+            // Startup confirmation is bounded independently of native ownership;
+            // only exit/replacement releases it. A failed list request never
+            // reaches here, so silence is not failure.
             if !startup.reported && !expired && info.is_some() && native_error.is_none() {
                 continue;
             }

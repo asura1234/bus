@@ -66,7 +66,7 @@ fn promptless_codex_keeps_its_startup_watch_until_the_deadline() {
     assert!(!terminal.managed_agent_interactive_ready());
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
     assert!(!terminal.managed_agent_interactive_ready());
-    assert!(terminal.managed_agent_launch_pending());
+    assert!(!terminal.managed_agent_launch_pending());
 }
 
 #[test]
@@ -398,7 +398,7 @@ fn startup_timeout_retains_owned_identity_for_every_provider() {
                 "{kind:?}"
             );
             assert_eq!(terminal.managed_agent_kind(), Some(kind));
-            assert!(terminal.managed_agent_launch_pending());
+            assert!(!terminal.managed_agent_launch_pending());
             assert!(!terminal.managed_agent_interactive_ready());
             assert_eq!(terminal.next_managed_agent_deadline(), None);
             assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_secs(32), false));
@@ -484,5 +484,48 @@ fn startup_timeout_still_releases_exited_or_replaced_provider() {
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(32), exited);
         assert!(terminal.agent_name.is_none());
         assert!(terminal.managed_agent_kind().is_none());
+    }
+}
+
+#[test]
+fn startup_timeout_ends_launching_without_disabling_late_startup_detection() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    for kind in [
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Cursor,
+        AgentKind::Grok,
+        AgentKind::Kimi,
+    ] {
+        let mut terminal = test_terminal();
+        let signal = Arc::new(AtomicBool::new(false));
+        terminal.bind_managed_launch_pending(signal.clone());
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "timed-out".into(),
+            kind,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_state(Some(kind), AgentState::Unknown);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+        assert!(
+            signal.load(Ordering::Acquire),
+            "{kind:?}: unmatched startup screens still need startup detection"
+        );
+        assert!(
+            !terminal.managed_agent_launch_pending(),
+            "{kind:?}: a timed-out launch must not remain launching"
+        );
+        assert_eq!(terminal.agent_name.as_deref(), Some("timed-out"));
+        assert!(!terminal.managed_agent_interactive_ready());
+        terminal.set_detected_state(Some(kind), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(32), false);
+        assert!(terminal.managed_agent_interactive_ready());
+        assert!(!signal.load(Ordering::Acquire));
     }
 }

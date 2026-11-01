@@ -1459,3 +1459,75 @@ fn startup_timeout_resume_never_turns_session_selectors_or_input_into_a_fresh_la
         }
     }
 }
+
+#[test]
+fn startup_timeout_ends_launching_and_restores_grok_short_options() {
+    use crate::agents::{AgentKind, AgentState};
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("grok-short-resume");
+    let pane = workspace.tabs[0].root_pane;
+    let id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.workspaces = vec![workspace];
+    app.state.ensure_test_terminals();
+    let terminal = app.state.terminals.get_mut(&id).unwrap();
+    let now = Instant::now();
+    assert!(crate::agents::providers::grok::launch::validate_args(&[
+        "-m".into(),
+        "grok-build".into()
+    ])
+    .is_ok());
+    terminal.launch_argv = Some(vec![
+        "/usr/bin/env".into(),
+        "GROK_HOME=/private/grok-fixture-home".into(),
+        "/opt/grok".into(),
+        "-m".into(),
+        "grok-build".into(),
+    ]);
+    terminal.begin_managed_agent(
+        "bus-r1-a2".into(),
+        AgentKind::Grok,
+        now,
+        Duration::ZERO,
+        Duration::from_secs(30),
+    );
+    terminal.set_detected_state(Some(AgentKind::Grok), AgentState::Unknown);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+    let was_launch_pending = terminal.managed_agent_launch_pending();
+    let snapshot = crate::server::persistence::capture(
+        &app.state.workspaces,
+        &app.state.terminals,
+        &app.terminal_runtimes,
+        Some(0),
+        0,
+    );
+    assert_eq!(
+        snapshot.workspaces[0].tabs[0].panes[&pane.raw()]
+            .agent_name
+            .as_deref(),
+        Some("bus-r1-a2")
+    );
+    let (tx, _) = tokio::sync::mpsc::channel(8);
+    let restored = crate::server::persistence::restore(
+        &snapshot,
+        None,
+        true,
+        tx,
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(crate::utils::render::signal::RenderSignal::default()),
+    );
+    let terminal = restored.terminals.values().next().unwrap();
+    assert_eq!(
+        terminal.agent_name.as_deref(),
+        Some("bus-r1-a2"),
+        "valid Grok -m must not restore a nameless shell"
+    );
+    assert!(terminal.pending_agent_resume_plan.is_some());
+    assert!(
+        !was_launch_pending,
+        "the prior attempt timed out before restart"
+    );
+}

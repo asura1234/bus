@@ -101,31 +101,27 @@ fn unstarted_provider_plan(
     };
     let executable = launch::executable(provider);
     let mut args = argv.unwrap_or_default().to_vec();
-    if provider == ProviderKind::Grok && args.first().map(String::as_str) == Some("/usr/bin/env") {
-        let home = args.get(1)?.strip_prefix("GROK_HOME=")?;
-        if !std::path::Path::new(home).is_absolute() || home.chars().any(char::is_control) {
-            return None;
-        }
-        args.drain(0..2);
-    }
     if !args.is_empty() {
-        if std::path::Path::new(&args.remove(0))
-            .file_name()?
-            .to_str()?
-            != executable
-        {
-            return None;
-        }
-        launch::validate_args(provider, &args).ok()?;
-        // Removing a selector/prompt would silently turn another conversation
-        // or submitted input into a fresh launch. Fail closed instead.
-        if args.iter().any(|arg| arg == "--")
-            || launch::resumable_options(provider, &args) != args
-            || launch::argument_positions(provider, &args)
-                .into_iter()
-                .any(|index| !args[index].starts_with('-'))
-        {
-            return None;
+        if provider == ProviderKind::Grok {
+            crate::agents::providers::grok::launch::validate_unstarted_argv(&args).ok()?;
+        } else {
+            if std::path::Path::new(&args.remove(0))
+                .file_name()?
+                .to_str()?
+                != executable
+            {
+                return None;
+            }
+            launch::validate_args(provider, &args).ok()?;
+            // Removing a selector/prompt must not invent a fresh conversation.
+            if args.iter().any(|arg| arg == "--")
+                || launch::resumable_options(provider, &args) != args
+                || launch::argument_positions(provider, &args)
+                    .into_iter()
+                    .any(|index| !args[index].starts_with('-'))
+            {
+                return None;
+            }
         }
     }
     Some(crate::agents::resume::catalog::AgentResumePlan {

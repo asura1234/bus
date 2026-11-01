@@ -32,7 +32,7 @@ impl TerminalState {
     fn sync_managed_launch_pending(&self) {
         if let Some(signal) = &self.managed_launch_pending_signal {
             signal.store(
-                self.managed_agent_launch_pending(),
+                self.managed_agent_awaiting_startup(),
                 std::sync::atomic::Ordering::Release,
             );
         }
@@ -94,8 +94,13 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.pending_agent_resume_plan.is_some()
-            || self.managed_agent_identity_unestablished()
+        self.pending_agent_resume_plan.is_some() || self.managed_agent_identity_unestablished()
+    }
+
+    /// Startup-only detection and input guards outlive a timed-out launch.
+    /// Public launch_pending ends at expiry; ownership still awaits readiness.
+    pub(crate) fn managed_agent_awaiting_startup(&self) -> bool {
+        self.managed_agent_launch_pending()
             || self
                 .managed_agent
                 .is_some_and(|managed| managed.phase == ManagedAgentPhase::TimedOut)
@@ -120,7 +125,7 @@ impl TerminalState {
     }
 
     pub(super) fn confirm_managed_agent_session_start(&mut self, kind: AgentKind) {
-        if self.managed_agent_launch_pending() && self.managed_agent_kind() == Some(kind) {
+        if self.managed_agent_awaiting_startup() && self.managed_agent_kind() == Some(kind) {
             self.update_managed_agent(Some(ManagedAgent {
                 kind,
                 phase: ManagedAgentPhase::Active,

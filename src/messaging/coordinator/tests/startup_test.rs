@@ -79,7 +79,7 @@ impl Transport for FailedLaunchNative {
                     argv: vec!["bus-provider-does-not-exist".into(), "--no-daemon".into()],
                 })
             }
-            // Native launch deadline elapsed and cleared the managed name.
+            // Simulate an exited or absent native launch.
             Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
