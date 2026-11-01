@@ -1,11 +1,33 @@
 # Sitrep format
 
-The input to `render.py` is one JSON object with exactly these keys: `blockers`,
-`ongoing`, `finished`, `deferred`. Each is an array; empty arrays render as
-`None`. Every string is nonempty, one line, and contains no control characters.
-`blockers` holds only actual blockers as plain strings; an empty list is the only
-way to render `None`. Each blocker must state what is stopping work or what is
-waiting on the developer. Never put caveats or non-blockers in that section.
+## Computed state
+
+`marker.py read --repo REPO` writes one JSON object with exactly `default_ref`,
+`head`, `finished`, and `open_prs`. `default_ref` is `origin/` plus the default
+branch, and `head` is its current 40-hex commit. Save this object unchanged for
+the renderer.
+
+`finished` is the ordered result of `git log SAVED..DEFAULT_REF`. Each entry
+has exactly `name` (the commit subject, including any `(#N)` in a squash merge)
+and `pr` (`landed` plus the commit's 40-hex SHA). The agent cannot add, drop,
+reorder, or rename these entries.
+
+`open_prs` is the mechanically listed sequence of open PR links. Each string is
+`[#N title](https://example.com/pr/N)`. Work without a PR is not in this array.
+
+Without a saved commit, `marker.py read` fails unless `--start` supplies an
+explicit 40-hex starting commit. There is no implicit 24-hour or other guessed
+starting point.
+
+## Report input
+
+The input to `render.py --state STATE.json` is one JSON object with exactly
+`blockers`, `ongoing`, `finished`, `deferred`. Each is an array; empty arrays
+render as `None`. Every string is nonempty, one line, and contains no control
+characters. `blockers` holds only actual blockers as plain strings; an empty
+list is the only way to render `None`. Each blocker must state what is stopping
+work or what is waiting on the developer. Never put caveats or non-blockers in
+that section.
 
 The other arrays contain objects with exactly these keys:
 
@@ -13,26 +35,22 @@ The other arrays contain objects with exactly these keys:
 - `finished`: `name`, `tldr`, `context`, `pr`.
 - `deferred`: `name`, `tldr`, `context`.
 
-A finished `pr` is merge evidence and nothing else. It is exactly
-`merged [#N title](https://example.com/pr/N)` for a PR merged in the window, or `landed` plus the
-40-hex SHA of a commit that landed on the default branch in the window. The
-renderer verifies the real state: `gh` must report the PR as `MERGED`, and the
-commit must be an ancestor of the fetched default branch. Wording alone is not
-evidence. Any other finished `pr`, failed lookup, or unmerged state is
-rejected; put that work under Ongoing. An empty finished array renders exactly
-`None`.
+The report's Finished entries must equal the computed state's entries in the
+same order and with the same `name` and `pr`. The agent supplies only their
+TLDR and context. The sequence of PR links in Ongoing must equal the state's
+`open_prs`; work without a PR uses `not opened yet (branch: BRANCH)` and may be
+interleaved with those entries. Supply the evidenced branch, or `unknown` when
+it is unavailable. Any computed-state mismatch, extra item, omitted item, or
+reordering is rejected.
 
 `status` is exactly `planning`, `in-development`, `test`, `review`, or
 `blocked`. In a blocked task, context names the dependency or developer action.
-On ongoing, `pr` is a Markdown link `[#N title](https://example.com/pr/N)` for an opened PR/MR. Escape literal
-backslashes and unmatched brackets in titles for Markdown. If none exists,
-use `not opened yet (branch: BRANCH)` and supply the evidenced branch; if the
-branch is unknown, use `not opened yet (branch: unknown)`.
+Escape literal backslashes and unmatched brackets in PR titles for Markdown.
 
 The renderer outputs these headings in this order. Task fields are nested
 bullets; TLDR is one line and Context gives the full known context. Notes on
-missing evidence and the initial 24-hour window belong in a relevant task's
-Context, not the Blockers section or an extra section.
+missing evidence belong in a relevant task's Context, not the Blockers section
+or an extra section.
 
 ```text
 ## Blockers
@@ -46,10 +64,10 @@ None
   - PR/MR: [#12 Title](https://example.com/pr/12)
 
 ## Finished (since the last sitrep)
-- Completed task
+- Completed task (#11)
   - TLDR: One-line summary.
   - Context: Full evidenced context.
-  - PR/MR: merged [#11 Title](https://example.com/pr/11)
+  - PR/MR: landed 7cd03ec7a69d4881223643e68064f69edc385369
 
 ## Deferred
 - Deferred task
@@ -57,20 +75,15 @@ None
   - Context: Full evidenced context.
 ```
 
-Malformed examples include `None for you right now, but ...` in Blockers,
-a Finished item whose PR is not `MERGED` or whose commit is not on the default
-branch, multiline fields, omitted sections, unknown status values, and bare PR
-URLs.
+Malformed examples include extra commentary in Blockers, a Finished item that
+does not match the computed Git log, an omitted or reordered open PR, multiline
+fields, omitted sections, unknown status values, and bare PR URLs.
 
-## Room marker
+## Repository marker
 
-Markers are keyed by repository, `BUS_SESSION_ID`, and numeric room ID so
-same-numbered rooms in different Bus sessions have independent windows. The
-marker JSON has exactly `timestamp` (UTC RFC 3339 with whole seconds and
-`Z`) and `items` (an array of nonempty stable task or PR identifiers). The
-marker helper read result contains `since`, `cutoff`, `initial`, `items`, and
-`revision`; the first run uses a 24-hour window and a null revision. Its write
-input has exactly `timestamp`, `items`, and the revision returned by read. A
-changed marker invalidates the stale write. Serialize reports for the same room;
-the revision check does not lock concurrent writers. A malformed marker is an
-error, not a first run.
+The marker is `<main-worktree>/temp/sitrep/last-sitrep-commit`. The main
+worktree is resolved from `git rev-parse --git-common-dir`, including when the
+command starts in a linked worktree. The file contains exactly one 40-hex
+commit and a trailing newline. `marker.py write --repo REPO` fetches the
+current default-branch head and saves it only after a report was produced. A
+missing or malformed marker is an error, not an implicit first run.

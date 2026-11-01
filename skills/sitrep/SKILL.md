@@ -11,59 +11,37 @@ Resolve `SKILL_DIR` to this skill's directory. Read [guide.md](guide.md) and
 ```text
 INPUT = optional room ID or name; otherwise use the room identified by the
 current Bus agent context. If the room cannot be established, ask for it.
-repo = git rev-parse --show-toplevel
-main = first worktree in `git worktree list --porcelain` for repo
+repo = absolute path from git rev-parse --show-toplevel
 room_id = numeric room ID from bus state (resolve a name uniquely)
-session_id = BUS_SESSION_ID from the current Bus agent environment
-marker = <main>/temp/.bus/sitrep-<session_id>-<room_id>.json
+state = a private temporary JSON file; remove it when the run ends
 
-Read marker FIRST, before gathering task or PR facts. Run:
-  python3 "$SKILL_DIR/scripts/marker.py" read --main "<main>" --room "<room_id>"
-Capture `since`, `cutoff`, `initial`, `items`, and `revision` from the JSON.
-If it fails, stop and report the error; never silently reset the marker. Serialize
-sitrep runs for a given room. The initial flag means the last 24 hours.
+Read computed state FIRST, before gathering task or PR facts. Run:
+  python3 "$SKILL_DIR/scripts/marker.py" read --repo "<repo>" > "$state"
+If it reports no saved commit, stop and ask for an explicit starting point, or
+derive one only from explicit evidence. Rerun with --start FULL_SHA; never guess
+a starting point. For any other failure, stop and report it. Serialize sitrep
+runs for the repository. Preserve the state JSON unchanged for rendering.
 
 Run `bus state`, identify the room and read its `notes` field. `bus room notes`
 is a write command in current Bus: never invoke it to read. Read recent
-`bus history --room <room_id> --limit 100`; paginate with --before when needed
-to cover since, or record that the history window is incomplete. Read only the
-orchestrator workflow files explicitly named by room notes. Record unavailable
-sources; do not write room notes or workflow files.
+`bus history --room <room_id> --limit 100`; paginate with --before when needed.
+Read only the orchestrator workflow files explicitly named by room notes.
+Record unavailable sources; do not write room notes or workflow files.
 
-Inspect Git state and the current branch read-only. Determine the host from
-`git remote get-url origin`. On GitHub, query open and merged PRs authored by
-the authenticated user in this repo using `gh pr list --repo <owner/name> --state
-open --author @me --limit 1000` and the equivalent `--state merged`, requesting
-number, title, url, state, headRefName and mergedAt where available. Resolve the
-repository from origin, never guess it. Limit merged entries to since < mergedAt
-<= cutoff; if either query reaches its limit, disclose possible truncation. An
-open PR is never Finished. Do not checkout, alter Git config, or create/update
-PRs. The renderer performs the required origin fetch for landed-commit
-verification. On Codeup, use the shared
-PR host supplied by the installed pr skill if it supports read-only listing;
-inspect its help first. If unavailable or listing is unsupported, skip and note
-it in the report. For other hosts or any failed query, note the limitation.
-
-Reconcile current room notes, workflow, recent history, Git and host evidence.
-Use the guide's evidence and status rules. Finished lists only work actually
-merged or landed after since and no later than cutoff: a merged PR as
-`merged [#N title](https://example.com/pr/N)`, or a commit that landed on the default branch as
-`landed` plus its 40-hex SHA. Ready, approved, gate-green, and waiting-to-merge
-items stay under Ongoing with their real status. If nothing merged or landed,
-finished is `[]`, which renders exactly `None`, with no "none merged, but..."
-caveat. The renderer rejects a Finished item without that evidence. Do not
-infer a completion time from an undated note. Keep task names, PR titles,
-URLs and branches grounded in their sources. For a missing marker, say the
-finished window is the last 24 hours in an appropriate Context field. If no
-other task can carry a required source or window note, include the current status
-report task in Ongoing with status `in-development` and that note in Context.
+Reconcile current room notes, workflow, recent history, and current Git state
+with the computed state. Finished names and landed SHAs come only from the
+state's ordered Git log; supply TLDR and context for exactly those entries.
+Open PR links come only from the state's ordered open_prs list; supply their
+task names, TLDR, context, and status without adding, dropping, or reordering
+the links. Work without a PR comes from the orchestrator's input and uses the
+format's branch notation. If evidence is missing, say so in Context.
 
 Prepare the format's JSON object in memory and pipe it to:
-  python3 "$SKILL_DIR/scripts/render.py"
-If rendering fails, correct the input and rerun; send the renderer's output
-verbatim in chat. Only after producing the report, pipe a JSON object containing
-`timestamp`: cutoff, `items`: stable identifiers of all reported tasks/PRs, and
-`revision`: the read result's revision to:
-  python3 "$SKILL_DIR/scripts/marker.py" write --main "<main>" --room "<room_id>"
-If it fails, report the failure and do not claim the marker was saved.
+  python3 "$SKILL_DIR/scripts/render.py" --state "$state"
+If rendering fails, correct only agent-owned fields and rerun; never edit the
+computed state to make a report pass. Send the renderer's output verbatim in
+chat. Only after producing the report, run:
+  python3 "$SKILL_DIR/scripts/marker.py" write --repo "<repo>"
+If it fails, report the failure and do not claim the marker was saved. The
+writer resolves the main worktree itself, including when repo is linked.
 ```
