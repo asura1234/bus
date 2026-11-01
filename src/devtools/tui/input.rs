@@ -1,6 +1,26 @@
 //! Bytes the driver writes to the Bus client's PTY: Bus's own key encoder for
 //! chords, and SGR 1006 mouse reports, the format the client enables.
-pub(super) use crate::terminal::driver::input::{encode_key, paste};
+pub(super) use crate::terminal::driver::input::paste;
+
+/// The UI's Kitty mode accepts unambiguous Esc; pane input keeps its live encoder.
+pub(super) fn encode_key(
+    name: &str,
+    protocol: crate::protocol::keys::KeyboardProtocol,
+) -> Result<Vec<u8>, String> {
+    crate::terminal::driver::input::encode_key_with(name, |key| {
+        if key.code == crossterm::event::KeyCode::Esc
+            && key.modifiers.is_empty()
+            && matches!(
+                protocol,
+                crate::protocol::keys::KeyboardProtocol::Kitty { .. }
+            )
+        {
+            b"\x1b[27u".to_vec()
+        } else {
+            crate::protocol::keys::encode_terminal_key(key, protocol)
+        }
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Button {

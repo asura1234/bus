@@ -4,7 +4,7 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) use crate::protocol::api::schema::driver::{Cell, Cursor, Grid};
 
 impl Grid {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "dev-tools"))]
     pub fn blank(cols: u16, rows: u16) -> Self {
         let cell = Cell {
             symbol: " ".into(),
