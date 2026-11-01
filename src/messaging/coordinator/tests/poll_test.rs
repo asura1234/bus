@@ -409,15 +409,9 @@ mod status_tests {
         let shown = |worker: &Worker| worker.state.agent(agent).unwrap().actionable_error.clone();
         worker.poll().unwrap();
         assert_eq!(shown(&worker).as_deref(), Some(error));
-        let request = queue(&mut worker, room, agent, "waits for the chooser");
+        queue(&mut worker, room, agent, "waits for the chooser");
         worker.poll().unwrap();
         assert_eq!(shown(&worker).as_deref(), Some(error));
-        assert_eq!(
-            worker
-                .state
-                .stall_reason(worker.state.request(request).unwrap(), u64::MAX),
-            None
-        );
         worker.poll().unwrap();
         assert_eq!(shown(&worker), None);
         drop(worker);

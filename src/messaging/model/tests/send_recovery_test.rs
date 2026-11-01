@@ -358,7 +358,6 @@ fn queued_request_expired_during_shutdown_preserves_failure_without_chat() {
     state
         .observe_status(agent, RuntimeStatus::Unavailable, reopened_at)
         .unwrap();
-    state.record_stalled_errors(reopened_at + 500).unwrap();
     let master = state.ensure_master_room();
     let tagged = state
         .notices(master)
@@ -448,4 +447,49 @@ fn an_uncertain_write_is_kept_while_the_agent_works_on_it() {
         RequestPhase::Submitting
     );
     assert_eq!(state.agent(agent).unwrap().current_request, Some(typed));
+}
+
+#[test]
+fn legacy_stall_outcome_is_not_routed_after_upgrade() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let orchestrator = master_agent(&mut state, "orch");
+    state.bind_orchestrator(orchestrator, room).unwrap();
+    let source = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "work".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(orchestrator),
+            1,
+        )
+        .unwrap()[0];
+    let message = state.request(source).unwrap().prompt.id;
+    let mut saved = serde_json::to_value(&state).unwrap();
+    saved["worker_events"][format!("stalled:{}:0", source.0)] = serde_json::json!({
+        "agent": agent,
+        "room": room,
+        "group": source,
+        "message": message,
+        "at_ms": 1,
+        "episode": 0,
+        "kind": "outcome",
+        "text": "No reply (stalled: transcript_unmatched)",
+        "route": "pending"
+    });
+    let mut restored: BusState = serde_json::from_value(saved).unwrap();
+
+    restored
+        .route_worker_replies(10_000, &std::collections::BTreeSet::new())
+        .unwrap();
+
+    let stalled = restored
+        .queued_requests(orchestrator)
+        .iter()
+        .filter_map(|id| restored.request(*id))
+        .filter(|request| request.prompt.text.contains("stalled"))
+        .count();
+    assert_eq!(stalled, 0, "a saved stall outcome was routed after upgrade");
 }

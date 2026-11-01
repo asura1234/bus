@@ -1,9 +1,9 @@
 use super::*;
 
-/// A status read returns the actual request stage with no stalled event to
+/// A status read returns the actual request stage with no outcome to
 /// acknowledge, and expiry of the author waiter's lease causes no wake.
 #[test]
-fn delivered_status_has_no_stall_ack_or_orchestrator_wake() {
+fn delivered_status_has_no_outcome_ack_or_orchestrator_wake() {
     let mut f = Fixture::new();
     let now = io::now_ms();
     let source = earlier_background_request_at(
@@ -36,8 +36,8 @@ fn delivered_status_has_no_stall_ack_or_orchestrator_wake() {
     collect(&mut f);
     let calls = f.calls.lock().unwrap();
     assert!(
-        !calls.iter().any(|text| text.contains("No reply (stalled")),
-        "a delivered status produced a stalled wake: {calls:?}"
+        !calls.iter().any(|text| text.contains("No reply (")),
+        "a delivered status produced an outcome wake: {calls:?}"
     );
 }
 

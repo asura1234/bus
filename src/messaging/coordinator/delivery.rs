@@ -7,7 +7,7 @@ use super::{
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
-/// queued stall closes ordinary requests after `QUEUED_STALL_MS`. Reply wakes
+/// queued recovery closes ordinary requests after `QUEUED_STALL_MS`. Reply wakes
 /// remain queued, but pause retries until fresh status, a new session or a
 /// change to the queue.
 pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Duration::from_secs(20);

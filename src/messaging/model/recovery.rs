@@ -167,7 +167,6 @@ impl BusState {
         &mut self,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.record_stalled_errors(now_ms)?;
         // Retained replies must stay available, but a refused wake must not
         // monopolize the recipient across conversation rooms. Keep FIFO within
         // each class and give unattempted work the next submission opportunity.
@@ -185,7 +184,7 @@ impl BusState {
                 queue.sort_by_key(|id| deferred.contains(id));
             }
         }
-        let stalled: Vec<_> = self
+        let expired_requests: Vec<_> = self
             .requests
             .values()
             .filter(|request| request.phase == RequestPhase::Queued)
@@ -207,7 +206,7 @@ impl BusState {
             })
             .collect();
         let mut expired = Vec::new();
-        for (id, reason) in stalled {
+        for (id, reason) in expired_requests {
             self.recover_idle_request(id, now_ms)?;
             let request = self
                 .requests

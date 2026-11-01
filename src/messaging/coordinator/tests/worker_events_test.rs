@@ -510,7 +510,7 @@ fn pending_autonomous_burst_survives_restart_and_duplicate_turn_callbacks() {
 }
 
 #[test]
-fn stalled_request_notifies_with_its_reason() {
+fn expired_queued_request_notifies_with_its_reason() {
     let mut f = Fixture::new();
     let orch = f.orch;
     let source = f.send(Author::Agent(orch), "not submitted");
@@ -1009,10 +1009,6 @@ fn long_failure_reason_keeps_event_and_original_reference_in_the_short_notice() 
         .contains(&reason));
 }
 
-fn earlier_background_request(f: &mut Fixture, shell: bool) -> RequestId {
-    earlier_background_request_at(f, shell, io::now_ms())
-}
-
 fn earlier_background_request_at(f: &mut Fixture, shell: bool, now: u64) -> RequestId {
     ready_worker_at(f, now - 30_000);
     let mut state = f.worker.state.clone();
@@ -1089,56 +1085,6 @@ fn an_initially_idle_worker_with_a_new_queued_request_does_not_warn() {
     state.route_worker_replies(now, &BTreeSet::new()).unwrap();
     f.worker.save(state).unwrap();
     assert!(f.notices().is_empty());
-}
-
-fn continue_background_work(f: &mut Fixture, at: u64) {
-    let mut state = f.worker.state.clone();
-    let mut start = callback(f, "held-next", 20, CallbackEventKind::PromptStarted);
-    start.occurred_at_ms = at;
-    start.prompt_payload = Some("background continuation".into());
-    assert_eq!(
-        state.accept_callback(start),
-        CallbackDisposition::AcceptedContinuation
-    );
-    state
-        .observe_status(f.agent, RuntimeStatus::Working, at)
-        .unwrap();
-    let mut pending = callback(f, "held-next", 21, CallbackEventKind::BackgroundPending);
-    pending.occurred_at_ms = at + 1_000;
-    state.accept_callback(pending);
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, at + 2_000)
-        .unwrap();
-    f.worker.save(state).unwrap();
-}
-
-#[test]
-fn resumed_work_does_not_create_stall_outcomes() {
-    let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
-    let first_at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
-    let mut state = f.worker.state.clone();
-    state.retain_worker_outcomes(first_at);
-    let old: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("No reply (stalled:"))
-        .map(|(key, _)| key)
-        .collect();
-    assert!(old.is_empty());
-    f.worker.save(state).unwrap();
-    continue_background_work(&mut f, first_at + 1_000);
-    let mut state = f.worker.state.clone();
-    let second_at = first_at + crate::messaging::model::DELIVERED_STALL_MS + 4_000;
-    state.retain_worker_outcomes(second_at);
-    let current: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("No reply (stalled:"))
-        .map(|(key, _)| key)
-        .collect();
-    assert!(current.is_empty());
-    assert_eq!(state.request(source).unwrap().phase, RequestPhase::Active);
 }
 
 fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {

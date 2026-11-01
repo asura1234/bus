@@ -431,7 +431,7 @@ impl Worker {
         self.save(state)
     }
 
-    /// `message status` as of `now_ms`, which stall detection measures against.
+    /// `message status` as of `now_ms`, which recovery deadlines measure against.
     pub(in crate::messaging::coordinator) fn control_message_at(
         &self,
         message: PromptId,
@@ -471,20 +471,15 @@ impl Worker {
             let agent = self.state.agent(r.agent_id);
             let outcomes = self.state.worker_outcomes_for(r);
             let worker_events = self.state.worker_events_for(r);
-            let phase_stage = if r.reply().is_some() { "replied" } else { match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" }};
-            // A stalled request reports why instead of its phase; `stalled_from`
-            // keeps the phase it stalled in.
-            let stall = self.state.stall_reason(r, now_ms);
-            let stage = if stall.is_some() { "stalled" } else { phase_stage };
+            let stage = if r.reply().is_some() { "replied" } else { match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" }};
             // The native server's last refusal explains a queued wait best.
-            let reason = stall
-                .or_else(|| r.failure_reason.clone())
+            let reason = r.failure_reason.clone()
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             let submission = if r.submission_notice().is_some() { r } else { r.group.and_then(|lead| self.state.request(lead)).unwrap_or(r) };
             let failure_detail = self.state.steered_turn_failure(r);
             let detail = failure_detail.as_ref().or_else(|| submission.submission_notice().and(submission.submission_error.as_ref()));
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"status":agent.map(|a|a.status),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
         }).collect::<Vec<_>>()}),
         )
     }

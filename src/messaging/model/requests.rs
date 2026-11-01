@@ -71,7 +71,7 @@ impl BusState {
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
         request_state.foreign_turn_settled_at_ms = None;
-        // Starts the idle clock for stall detection at the submission.
+        // Starts the idle recovery clock at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
         Ok(())
     }
@@ -185,11 +185,6 @@ impl BusState {
             })
             .max()
             .unwrap_or(0)
-    }
-
-    /// Requests have no stalled state. Recovery deadlines stay internal.
-    pub(crate) fn stall_reason(&self, _request: &Request, _now_ms: u64) -> Option<String> {
-        None
     }
 
     /// Why `request` needs recovery once it has made no progress for a grace
@@ -738,7 +733,7 @@ impl BusState {
     }
 }
 
-/// The stall reason for a native refusal to type a request. The native
+/// The recovery reason for a native refusal to type a request. The native
 /// server (`src/server/api/agents/prompt.rs`) shares one `agent_not_ready` code for
 /// several causes, so the message tells them apart.
 pub(crate) fn rejection_reason(message: &str) -> &'static str {

@@ -447,7 +447,7 @@ pub(crate) struct RoomAgent {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_pending: bool,
     /// When the agent entered its current `status`, or its visible dialog
-    /// last closed while Idle. Stall detection counts usable idle time.
+    /// last closed while Idle. Recovery deadlines counts usable idle time.
     #[serde(default)]
     pub(crate) status_since_ms: u64,
     /// When the agent's status was last polled. The model has no clock of its
@@ -625,7 +625,7 @@ pub(crate) struct Request {
     pub(crate) foreign_turn_settled_at_ms: Option<u64>,
     /// The last sign of life for this request since Bus typed it: the status
     /// poll before submission, then every accepted provider callback.
-    /// Stall detection counts idle time from here.
+    /// Recovery deadlines counts idle time from here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) progress_at_ms: Option<u64>,
     /// First settled observation after this turn, while reply capture catches up.
@@ -784,7 +784,7 @@ pub(crate) enum CallbackDisposition {
 }
 
 /// How long a queued message may wait on an agent that is not working before
-/// it counts as stalled. Delivery normally starts within a status tick of the
+/// it needs recovery. Delivery normally starts within a status tick of the
 /// agent going idle, so two minutes means something refuses it.
 pub(crate) const QUEUED_STALL_MS: u64 = 2 * 60 * 1000;
 /// How long a typed message may sit with its agent idle and no hook progress.

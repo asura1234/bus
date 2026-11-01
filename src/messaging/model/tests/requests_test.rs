@@ -443,43 +443,6 @@ fn a_queued_message_without_a_refusal_recovers_with_the_wait_reason() {
 }
 
 #[test]
-fn requests_do_not_report_a_stalled_state() {
-    let (mut state, agent, request) = idle_with_queued(1_000, "go");
-    assert_eq!(
-        state.stall_reason(state.request(request).unwrap(), 1_000 + QUEUED_STALL_MS),
-        None
-    );
-
-    submit_request(&mut state, request, "launch-codex", 5);
-    state
-        .observe_status(agent, RuntimeStatus::Idle, 2_000)
-        .unwrap();
-    assert_eq!(
-        state.stall_reason(state.request(request).unwrap(), 1_000 + DELIVERED_STALL_MS),
-        None
-    );
-
-    state
-        .requests
-        .get_mut(&request)
-        .unwrap()
-        .trusted_start_bound = true;
-    assert_eq!(
-        state.stall_reason(state.request(request).unwrap(), 1_000 + DELIVERED_STALL_MS),
-        None
-    );
-
-    state.invalidate_agent_session(agent).unwrap();
-    state
-        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
-        .unwrap();
-    assert_eq!(
-        state.stall_reason(state.request(request).unwrap(), 3_000 + DELIVERED_STALL_MS),
-        None
-    );
-}
-
-#[test]
 fn typed_messages_get_recovery_reasons_by_how_far_they_got_while_the_agent_idles() {
     // Typed with no response yet. The clock starts at the poll before
     // the submission (1_000), not at later idle polls.

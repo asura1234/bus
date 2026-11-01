@@ -200,7 +200,9 @@ impl BusState {
             });
         }
         for (key, event) in &self.worker_events {
-            if !selected(event.route, notice) {
+            if !selected(event.route, notice)
+                || matches!(event.kind, WorkerEventKind::Outcome) && !key.starts_with("ended:")
+            {
                 continue;
             }
             let author_waits = matches!(event.kind, WorkerEventKind::Outcome)

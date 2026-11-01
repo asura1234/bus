@@ -34,10 +34,6 @@ mod reply_diagnostics_tests;
 #[path = "control/tests/reply_seen_test.rs"]
 mod reply_seen_tests;
 
-/// The exit code of `wait` and `send --async` when a message stalled, so a
-/// caller can tell "stuck, look at it" from a failed command (1).
-pub(crate) const STALLED_EXIT_CODE: i32 = 3;
-
 /// Preserve a specific exit code after the failure reason is emitted in JSON,
 /// so process termination does not add a second plain-text error report.
 #[derive(Debug)]
@@ -173,11 +169,6 @@ fn run_with_pause(
         .map(|error| (error.code, error.message))
         .unwrap_or_else(|| (String::new(), "Command failed".into()));
     Err(io::Error::other(match code.as_str() {
-        "message_stalled" => CliExit {
-            code: STALLED_EXIT_CODE,
-            message,
-        }
-        .into(),
         "message_abandoned"
         | "message_provider_error"
         | "message_interrupted"
