@@ -145,12 +145,7 @@ pub(crate) fn codex_callback_binary(data_dir: &Path, executable: &Path) -> Resul
         let path = callbacks.join("codex-hook-bridge");
         let quoted = crate::platform::remote_reattach_program(&executable.to_string_lossy());
         let body = format!("#!/bin/sh\nexec {quoted} \"$@\"\n");
-        if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
-            files::atomic_write(&path, body.as_bytes()).map_err(|error| error.to_string())?;
-        }
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| error.to_string())?;
+        files::executable_bridge(&path, body.as_bytes()).map_err(|error| error.to_string())?;
         Ok(path)
     }
 }
