@@ -136,3 +136,23 @@ fn bounded_message_wait_preserves_an_invalid_message_error() {
     assert_eq!(result["error"], result["message"]["error"], "{result}");
     assert_ne!(result["error"]["code"], "timeout", "{result}");
 }
+
+#[test]
+fn bounded_message_wait_reports_confirmed_bus_exit() {
+    let session = Session::start("wd");
+    let (code, stopped) = parse(scratch_bus(&session, &["stop"]));
+    assert_eq!(code, 0, "{stopped}");
+    assert_eq!(stopped["stopped"], true, "{stopped}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let status = session.ok(&["status"]);
+        if status["alive"] == false {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{status}");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let (code, result) = tui(&session.0, &["wait", "--message", "1", "--timeout", "2s"]);
+    assert_eq!(code, 3, "{result}");
+    assert_eq!(result["error"]["code"], "bus_exited", "{result}");
+}
