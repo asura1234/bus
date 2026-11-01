@@ -106,14 +106,14 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
     )
 
 
-def run_gates(gates: Sequence[Gate], *, cwd: Path) -> list[GateResult]:
+def run_gates(gates: Sequence[Gate], *, cwd: Path, private_groups: bool = True) -> list[GateResult]:
     """Run independent gates in parallel, serialize writable resources, and isolate exclusive gates."""
     if not gates:
         raise ValueError("at least one gate is required")
     if len({gate.name for gate in gates}) != len(gates):
         raise ValueError("duplicate gate name")
 
-    children = Children()
+    children = Children(private_groups=private_groups)
     with ThreadPoolExecutor(
         max_workers=min(MAX_PARALLEL_GATES, len(gates)), thread_name_prefix="gate-and-fix"
     ) as executor:

@@ -14,7 +14,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import bus_quality as quality
-from coverage_run import Run
+from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
 from gate_and_fix import Gate, GateResult, run_gates
 from gate_process import Interrupted, interrupt_signals
 from suite_selection import Selection, changed_paths, select
@@ -42,6 +42,10 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
     instrumented = needs_profiles(selection)
     rust = selection.rust_filter != "none()"
     env = quality.child_env()
+    if selection.full and os.environ.get(PROFILE_DIR):
+        # The scheduler already owns the lint worker's process group. Its cargo
+        # children must stay in that group, following the existing quality runner contract.
+        env[EXTERNAL_RUN] = os.environ[PROFILE_DIR]
     target = quality.llvm_cov_target(env) if instrumented else quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
     if selection.full:
         build.append(Gate("lint", (sys.executable, SCRIPT, "lint"), env=env))
@@ -99,11 +103,11 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
     return build, tests
 
 
-def batch(gates: list[Gate]) -> list[GateResult]:
+def batch(gates: list[Gate], *, nested: bool = False) -> list[GateResult]:
     if not gates:
         return []
     print("Running concurrently: " + ", ".join(gate.name for gate in gates), flush=True)
-    results = run_gates(gates, cwd=quality.ROOT)
+    results = run_gates(gates, cwd=quality.ROOT, private_groups=not nested)
     results = [replace(result, exit_code=0, stdout=result.stdout +
                        "\npytest exit 5: empty selection, nothing to run\n")
                if result.name == "python" and result.exit_code == 5 else result for result in results]
@@ -115,18 +119,18 @@ def batch(gates: list[Gate]) -> list[GateResult]:
     return results
 
 
-def execute(selection: Selection) -> int:
+def execute(selection: Selection, *, nested: bool = False) -> int:
     started = time.monotonic()
     if selection.coverage_floor:
         for name in ("state.json", "rust.lcov", "summary.json"):
             (quality.OUTPUT / name).unlink(missing_ok=True)
     build, tests = commands(selection)
-    results = batch(build)
+    results = batch(build, nested=nested)
     failed_build = any(not result.passed and result.name != "lint" for result in results)
     # A failed instrumented build must not let Python use yesterday's binary.
     if failed_build:
         tests = [gate for gate in tests if gate.name == "dev-tools"]
-    results.extend(batch(tests))
+    results.extend(batch(tests, nested=nested))
     result = int(any(not entry.passed for entry in results))
     coverage_ms = None
     if selection.coverage_floor and not result:
@@ -182,8 +186,8 @@ def main(argv: list[str] | None = None) -> int:
         # Conservative fallback collects profiles in the same isolated way, but
         # only --full can publish a coverage floor verdict.
         coverage = Run(quality.ROOT, quality.OUTPUT, "ci") if needs_profiles(selection) else nullcontext()
-        with interrupt_signals(), coverage:
-            return execute(selection)
+        with interrupt_signals(), coverage as profiles:
+            return execute(selection, nested=bool(profiles and profiles.external))
     except Interrupted as error:
         print("Test run interrupted; children stopped and run profiles removed", file=sys.stderr)
         return 128 + error.signum
