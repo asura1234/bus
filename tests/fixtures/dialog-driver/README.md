@@ -71,7 +71,7 @@ be true, the fake completion marker, `OH_MY_ZSH_ANSWER:n` from the shell pane, a
 the driver's explicit correlated completion reply. Set
 `BUS_DIALOG_DRIVER_TIMEOUT` to change the default 600-second task deadline.
 
-Selected evidence is saved under `temp/tui-driver/acceptance/<full-head>/` before
+Selected evidence is saved under `temp/tui-driver/acceptance/<full-head>/run-<id>/` before
 the private server is stopped and its scratch directory removed. An unconfirmed
 stop retains the scratch directory and records its path. Native trust setup may
 leave the ordinary throwaway project trust entry through Kimi itself; this runner
@@ -82,3 +82,5 @@ specifies `labels`, zero-based `answer` and `selected`, optional `marker` (defau
 `›`) and `numbered` (default true). The screen places rows with `{{options}}`.
 Modes `text`, `number` and `key` specify an exact `answer`; text renders the draft
 at `{{answer}}` and completes on Enter. Number and key complete immediately.
+
+Each acceptance attempt gets its own evidence directory. A failed rerun cannot expose an older PASS as its result; earlier attempts remain archived.

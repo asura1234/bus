@@ -7,7 +7,9 @@ Reads the approved real Kimi login in place. Never copies provider credentials.
 No fixture answer is supplied by this runner: only real-driver startup trust.
 """
 
+import contextlib
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -17,9 +19,11 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -55,6 +59,64 @@ class AuditReaderTests(unittest.TestCase):
             self.assertEqual([row["id"] for row in audit_records(path.parent)], ["one", "two"])
 
 
+class AcceptanceEvidenceTests(unittest.TestCase):
+    def test_failed_rerun_does_not_report_a_previous_pass_as_its_summary(self):
+        module = sys.modules[__name__]
+        head = 'a' * 40
+        with tempfile.TemporaryDirectory(prefix='bus-acceptance-evidence-probe-') as directory:
+            root = Path(directory).resolve()
+            repo = root / 'repo'
+            evidence = repo / 'temp/tui-driver/acceptance' / head
+            evidence.mkdir(parents=True)
+            previous = {'head': head, 'result': 'PASS', 'dialogs': 15,
+                        'real_provider': 'kimi', 'shell_answer': 'n'}
+            (evidence / 'summary.json').write_text(json.dumps(previous))
+            binary = root / 'copied-bus'
+            binary.write_bytes(b'probe binary; never executed')
+            private = root / 'private-runtime'
+            captured = io.StringIO()
+            calls = []
+            def make_private(*args, **kwargs):
+                private.mkdir(mode=0o700)
+                return str(private)
+            def output(command, **kwargs):
+                calls.append(command)
+                if command[0] == 'git':
+                    return head + '\n' if command[1:3] == ['rev-parse', 'HEAD'] else ''
+                if command == [str(binary), '--version']:
+                    return 'bus v0.9.0 ' + head
+                raise AssertionError('Unexpected external call: ' + repr(command))
+            def reject_startup(command, **kwargs):
+                calls.append(command)
+                self.assertEqual(command[-1], '--paths')
+                return subprocess.CompletedProcess(command, 1, '', 'forced private-startup failure')
+            case = module.DialogDriverAcceptance('test_real_agent_clears_all_fake_dialogs_and_shell_prompt')
+            try:
+                with patch.object(module, 'REPO', repo), \
+                     patch.object(module.Path, 'home', return_value=root / 'private-home'), \
+                     patch.object(module.tempfile, 'mkdtemp', side_effect=make_private), \
+                     patch.object(module.os, 'access', side_effect=lambda p, m: str(p).endswith('/.kimi-code/bin/kimi')), \
+                     patch.object(module.subprocess, 'check_output', side_effect=output), \
+                     patch.object(module.subprocess, 'run', side_effect=reject_startup), \
+                     patch.object(module.terminal_module, 'Terminal', side_effect=AssertionError('No terminal may launch')), \
+                     patch.dict(os.environ, {'BUS_DIALOG_DRIVER_BINARY': str(binary), 'BUS_DIALOG_DRIVER_SHA': head}, clear=True), \
+                     contextlib.redirect_stdout(captured):
+                    with self.assertRaisesRegex(AssertionError, 'forced private-startup failure'):
+                        case.test_real_agent_clears_all_fake_dialogs_and_shell_prompt()
+            finally:
+                case.doCleanups()
+            self.assertFalse(private.exists(), 'the mocked private runtime was cleaned')
+            reported = [line.split('=', 1)[1] for line in captured.getvalue().splitlines()
+                        if line.startswith('acceptance_evidence=')]
+            self.assertEqual(len(reported), 1)
+            summary = Path(reported[0]) / 'summary.json'
+            observed = json.loads(summary.read_text()) if summary.exists() else None
+            self.assertFalse(observed is not None and observed.get('result') == 'PASS',
+                             'a failed attempt must not expose an earlier PASS as its own summary')
+
+            self.assertEqual(json.loads((evidence / "summary.json").read_text()), previous)
+
+
 @unittest.skipUnless(os.environ.get("BUS_DIALOG_DRIVER_BINARY") and
                      os.environ.get("BUS_DIALOG_DRIVER_SHA"), "opt-in real Kimi acceptance")
 class DialogDriverAcceptance(unittest.TestCase):
@@ -73,8 +135,8 @@ class DialogDriverAcceptance(unittest.TestCase):
         version = subprocess.check_output([str(binary), "--version"], text=True).strip()
         self.assertIn(sha, version)
         self.assertNotIn("-dirty", version)
-        evidence = REPO / "temp/tui-driver/acceptance" / sha
-        evidence.mkdir(parents=True, exist_ok=True)
+        evidence = REPO / "temp/tui-driver/acceptance" / sha / ("run-" + secrets.token_hex(8))
+        evidence.mkdir(parents=True, mode=0o700)
         evidence.chmod(0o700)
         root = Path(tempfile.mkdtemp(prefix="bus-dialog-driver-", dir="/private/tmp"))
         root.chmod(0o700)
