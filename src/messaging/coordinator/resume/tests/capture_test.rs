@@ -590,6 +590,32 @@ fn unstarted_kimi_resume_accepts_bus_bound_home_argv() {
 }
 
 #[test]
+fn unstarted_kimi_resume_accepts_update_disabled_argv() {
+    let facts = NativeResumeFacts {
+        agent_name: Some("bus-r1-a2".into()),
+        managed_agent: Some("kimi".into()),
+        session: None,
+    };
+    // Both pre-change snapshots and the new generated prefix can resume.
+    for setting in [None, Some("KIMI_CODE_NO_AUTO_UPDATE=1")] {
+        let mut argv: Vec<String> = [
+            "/usr/bin/env",
+            "KIMI_DISABLE_OAUTH_LOCK=0",
+            "KIMI_CODE_HOME=/private/kimi-home",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        argv.extend(setting.map(String::from));
+        argv.extend(["/bin/kimi".into(), "--yolo".into()]);
+        assert!(
+            crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&argv)).is_some(),
+            "saved Bus argv was rejected: {argv:?}"
+        );
+    }
+}
+
+#[test]
 fn unstarted_kimi_resume_rejects_attached_session_and_prompt_options() {
     let facts = NativeResumeFacts {
         agent_name: Some("bus-r1-a2".into()),

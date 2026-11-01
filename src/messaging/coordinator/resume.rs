@@ -34,6 +34,10 @@ pub(crate) fn unstarted_plan(
                     return None;
                 }
                 args.drain(0..3);
+                // Older Bus snapshots lack the generated update switch.
+                if args.first().map(String::as_str) == Some("KIMI_CODE_NO_AUTO_UPDATE=1") {
+                    args.remove(0);
+                }
             }
             let executable = args.first()?;
             if std::path::Path::new(executable)
