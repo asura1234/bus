@@ -10,7 +10,7 @@ PR = re.compile(rf"(?:{PR_LINK}|not opened yet \(branch: [^)\n]+\))\Z")
 MERGED_PR = re.compile(rf"merged {PR_LINK}\Z")
 LANDED_COMMIT = re.compile(r"landed [0-9a-fA-F]{40}\Z")
 UNMERGED_FINISHED = re.compile(
-    r"(?i)(?:waiting to merge|gate[- ]green|ready[- ]but[- ]unmerged|\bapproved\b|none merged|^none(?:\b|$))"
+    r"(?i)(?:\bready\b|\bwaiting[ -]to[ -]merge\b|\bnot[ -]opened[ -]yet\b|gate[- ]green|\bapproved\b|none merged|^none(?:\b|$))"
 )
 
 

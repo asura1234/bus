@@ -113,6 +113,32 @@ def test_finished_accepts_only_a_merged_pr_or_landed_commit():
     assert f"  - PR/MR: landed {sha}\n" in landed_result.stdout
 
 
+@pytest.mark.parametrize("field", ["name", "tldr", "context"])
+@pytest.mark.parametrize("claim", [
+    "Ready.",
+    "Ready to merge.",
+    "Waiting-to-merge.",
+    "The work is ready.",
+    "Not opened yet.",
+])
+def test_finished_rejects_unmerged_status_claims(field, claim):
+    data = report([])
+    item = {"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "merged [#11 Fix it](https://example.com/pr/11)"}
+    item[field] = claim
+    data["finished"] = [item]
+    result = render(data)
+    assert result.returncode != 0
+    assert not result.stdout
+
+
+def test_landed_commit_does_not_excuse_not_opened_yet():
+    data = report([])
+    data["finished"] = [{"name": "Fix", "tldr": "Not opened yet.", "context": "On the default branch.", "pr": "landed 7cd03ec7a69d4881223643e68064f69edc385369"}]
+    result = render(data)
+    assert result.returncode != 0
+    assert not result.stdout
+
+
 def test_unmerged_work_stays_under_ongoing():
     data = report([])
     data["ongoing"] = [{"name": "Feature", "tldr": "Waiting to merge.", "context": "Approved and gate-green.", "status": "review", "pr": "[#12 Add it](https://example.com/pr/12)"}]
