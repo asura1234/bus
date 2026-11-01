@@ -18,6 +18,7 @@ CANONICAL_SKILLS = {
     "rebase-origin-main",
     "review-plan",
     "review-pr",
+    "sitrep",
     "split-pr",
     "worktree-close",
     "worktree-new",
@@ -222,6 +223,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/pr/references/pr-template.md",
             "skills/_bus/docs/pr-template.md",
             "skills/_bus/docs/pull-request-template.md",
+            "skills/sitrep/references/sitrep-format.md",
             "skills/split-pr/references/split-plan-format.md",
             "skills/worktree-new/references/repo-profile-format.md",
         }
