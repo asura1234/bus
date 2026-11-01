@@ -155,7 +155,7 @@ fn delete_agent_enter_queues_once_and_escape_returns_to_the_same_terminal() {
     });
     ui.pending.clear();
     ui.compute_view(100, 30);
-    mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 25, 7);
+    mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 25, 8);
     assert!(room_screen(&mut ui, 100, 30).contains("Delete agent"));
     assert!(
         !ui.terminal_ready(Some("pane")),
@@ -165,7 +165,7 @@ fn delete_agent_enter_queues_once_and_escape_returns_to_the_same_terminal() {
     assert!(ui.terminal_ready(Some("pane")));
     assert!(ui.pending.is_empty());
     ui.compute_view(100, 30);
-    mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 25, 7);
+    mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 25, 8);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(ui.pending.len(), 1);
