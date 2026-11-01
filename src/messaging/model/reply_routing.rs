@@ -38,7 +38,7 @@ impl BusState {
     /// Reply wakes are ordinary messages to the original stable author ID.
     /// A wake's captured final must not bounce back automatically; an explicit
     /// recipient answer is still an intentional reply.
-    pub(crate) fn reply_recipient(&self, request: &Request) -> Option<AgentId> {
+    pub(super) fn reply_recipient(&self, request: &Request) -> Option<AgentId> {
         let Author::Agent(author) = request.prompt.author else {
             return None;
         };
@@ -82,7 +82,7 @@ impl BusState {
         self.reply_routes_by_request = true;
     }
 
-    pub(crate) fn reply_orchestrator(&self, request: &Request) -> Option<AgentId> {
+    pub(super) fn reply_orchestrator(&self, request: &Request) -> Option<AgentId> {
         let worker = self.agent(request.agent_id)?;
         let room = self.room(request.room_id)?;
         let orchestrator = self.orchestrator_of(room.id)?;

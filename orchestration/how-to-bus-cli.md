@@ -148,10 +148,10 @@ are not repeated, and Bus does not wrap results or post process-exit messages to
 MASTER. Worker-to-worker replies reach their author only. Interrupt/delete outcomes
 do not generate notices. There are no idle-worker/request nudges or room monitors.
 
-Replies and captured finals reach any agent requester through a live waiter or
-ordinary messages. Waiters defer only their own wakes and mark only flushed output seen;
-use `message seen` only after reading. A killed waiter loses its lease, resuming
-normal queued delivery with composer guards. Deleted requesters are not replaced.
+Agent requesters receive replies and captured finals through live waiters or queued
+messages. Captured finals of Bus-generated reply wakes do not produce more wakes.
+Waiters defer only their own wakes and mark only flushed output seen; use `message seen` only after reading.
+A killed waiter's lease expires, resuming delivery with composer guards. Deleted requesters are not replaced.
 stdout and native injection can expose an already-delivered wake.
 
 Event decisions, pending sources and batches persist together. Repeated callbacks,

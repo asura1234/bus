@@ -458,7 +458,8 @@ messages wait for a new turn. Blocked/launching recipients queue; accumulated
 ordinary messages form one ordered prompt/group with batch position/time headers.
 Explicit replies complete individually; the final answers outstanding requests
 without replacing earlier answers. Raw text/files remain queryable after restart.
-Replies and captured finals reach the requester through ordinary agent messages.
+Replies and captured finals reach an agent requester through ordinary messages,
+except captured finals of Bus-generated reply wakes, which do not create more wakes.
 An --as author async waiter renews a 3s lease deferring its reply wake
 (and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
