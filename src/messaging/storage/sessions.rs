@@ -100,6 +100,20 @@ impl LocalSessionRegistry {
         self.load(&id)
     }
 
+    /// The directory of one session, without recording it as last-opened.
+    /// An id that is not a stored registry session is `Ok(None)`. Invalid
+    /// metadata and other read failures stay errors.
+    pub(crate) fn root_of(&self, id: &str) -> Result<Option<PathBuf>, String> {
+        if validate_id(id).is_err() {
+            return Ok(None);
+        }
+        match self.load(id) {
+            Ok(session) => Ok(Some(session.root)),
+            Err(error) if error.contains("was not found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) fn list(&self) -> Result<Vec<LocalSessionSummary>, String> {
         let sessions_dir = self.base.join("sessions");
         let entries = match std::fs::read_dir(&sessions_dir) {

@@ -168,14 +168,46 @@ fn restart_session(
     };
     // Compare with the running server's root. Using `data_dir` as that root
     // would match every set directory, including one this command chose.
+    // Only a missing recorded session is an override. Invalid metadata, a
+    // missing session directory, an unreadable last-session file, and a
+    // registry lock error fail the restart, as they do with no data dir.
     let server_root = match fallback() {
         Ok((root, _)) => root,
-        Err(_) => return Ok((data_dir.to_path_buf(), None, true)),
+        Err(error)
+            if error
+                .to_string()
+                .contains("No local Bus session has been recorded yet") =>
+        {
+            return Ok((data_dir.to_path_buf(), None, true));
+        }
+        Err(error) => return Err(error),
     };
     let explicit =
         restart_command_overrides_data_dir(Some(data_dir), env_session.as_deref(), &server_root);
     let kept = if explicit { None } else { env_session };
     Ok((data_dir.to_path_buf(), kept, explicit))
+}
+
+/// Server root for a restart. A set data dir that still carries a session id
+/// belongs to that session's own directory, not whichever session was opened
+/// last. An id that is not a stored registry session falls through to last-opened.
+fn restart_fallback_session(
+    registry: &LocalSessionRegistry,
+    action: &Action,
+    data_dir_is_set: bool,
+) -> io::Result<(std::path::PathBuf, String)> {
+    if data_dir_is_set {
+        if let Some(id) = std::env::var("BUS_SESSION_ID")
+            .ok()
+            .filter(|id| !id.is_empty())
+        {
+            if let Some(root) = registry.root_of(&id).map_err(io::Error::other)? {
+                return Ok((root, id));
+            }
+        }
+    }
+    let session = last_session(registry, action)?;
+    Ok((session.root, session.id))
 }
 
 fn session_root(
@@ -221,12 +253,11 @@ fn session_root(
                 (session.root, Some(session.id))
             }
         },
-        // An inherited BUS_DATA_DIR is not an override when it is the registry
-        // session's root and that server's session id is still in the environment.
+        // An inherited BUS_DATA_DIR is not an override when it is that session's
+        // own directory. Last-opened can name a session opened later.
         Action::Restart(_) => {
             let (root, session, explicit) = restart_session(explicit_root.as_deref(), || {
-                let session = last_session(registry, &invocation.action)?;
-                Ok((session.root, session.id))
+                restart_fallback_session(registry, &invocation.action, explicit_root.is_some())
             })?;
             *restart_explicit_data_dir = explicit;
             (root, session)
@@ -640,6 +671,79 @@ mod tests {
         assert_eq!(root, other);
         assert!(explicit);
         assert_eq!(session, None);
+    }
+
+    #[test]
+    fn restart_with_a_data_dir_reports_invalid_session_metadata() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-meta");
+        let id = "0123456789abcdef";
+        let server = base.join("sessions").join(id);
+        std::fs::create_dir_all(&server).unwrap();
+        std::fs::write(server.join("session.json"), b"{}").unwrap();
+        std::fs::write(base.join("last-session"), id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(server.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let error = result
+            .expect("called")
+            .expect_err("invalid session metadata is not an override");
+        assert!(error.to_string().contains("metadata is invalid"), "{error}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_session_keeps_inherited_session_when_last_session_changes() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-multi");
+        let inherited_id = "0123456789abcdef";
+        let last_opened_id = "fedcba9876543210";
+        let inherited = base.join("sessions").join(inherited_id);
+        let last_opened = base.join("sessions").join(last_opened_id);
+        std::fs::create_dir_all(&inherited).unwrap();
+        std::fs::create_dir_all(&last_opened).unwrap();
+        let metadata = |id: &str| format!(r#"{{"version":1,"id":"{id}","created_at_ms":1}}"#);
+        std::fs::write(inherited.join("session.json"), metadata(inherited_id)).unwrap();
+        std::fs::write(last_opened.join("session.json"), metadata(last_opened_id)).unwrap();
+        std::fs::write(base.join("last-session"), last_opened_id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(inherited_id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(inherited.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let (root, session) = result
+            .expect("called")
+            .expect("inherited restart")
+            .expect("located");
+        assert_eq!(root, inherited);
+        assert!(
+            !explicit,
+            "the inherited target root must not be replaced by the global last-opened root"
+        );
+        assert_eq!(session.as_deref(), Some(inherited_id));
+        assert_eq!(
+            std::fs::read_to_string(base.join("last-session"))
+                .unwrap()
+                .trim(),
+            last_opened_id
+        );
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
