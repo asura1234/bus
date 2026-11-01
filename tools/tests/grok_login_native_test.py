@@ -8,10 +8,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from tools.acceptance.harness_test import Bus
 
@@ -45,6 +47,9 @@ class GrokLoginNativeTest(unittest.TestCase):
         env = {"HOME": "/Users/dylanliu", "SHELL": "/bin/bash",
                "PATH": f"{root}/bin:/usr/bin:/bin", "TERM": "xterm-256color",
                "BUS_DATA_DIR": str(root / "data")}
+        if os.environ.get("GROK_LOGIN_FORCE_NETWORK_ERROR") == "1":
+            env.update(HTTPS_PROXY="http://127.0.0.1:9", https_proxy="http://127.0.0.1:9",
+                       ALL_PROXY="http://127.0.0.1:9")
         for folder in env["PATH"].split(":"):
             assert not os.access(Path(folder) / "lark-cli", os.X_OK)
         subprocess.run(["/usr/bin/git", "init", "-q", str(root / "project")],
@@ -52,6 +57,9 @@ class GrokLoginNativeTest(unittest.TestCase):
         report = {"root": str(root), "binary": str(binary),
                   "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                   "commands": []}
+        columns = int(os.environ.get("GROK_LOGIN_TUI_COLUMNS", "160"))
+        rows = int(os.environ.get("GROK_LOGIN_TUI_ROWS", "45"))
+        report["requested_viewport"] = {"columns": columns, "rows": rows}
         print("SCRATCH_ROOT=" + str(root), flush=True)
         bus = RealHomeScratchBus(binary, root, env, workspace=root / "project")
 
@@ -69,7 +77,15 @@ class GrokLoginNativeTest(unittest.TestCase):
                 [str(binary), "--identity"], env=env, text=True)
             report["provider_version"] = subprocess.check_output(
                 [str(root / "bin/grok"), "--version"], env=env, text=True)
-            bus.start()
+            original_pack = struct.pack
+
+            def viewport_pack(fmt, *values):
+                if fmt == "HHHH" and values == (45, 160, 0, 0):
+                    return original_pack(fmt, rows, columns, 0, 0)
+                return original_pack(fmt, *values)
+
+            with mock.patch("tools.acceptance.harness_test.struct.pack", side_effect=viewport_pack):
+                bus.start()
             room = cli("room", "create", "login-test")["room_id"]
             agent = cli("agent", "add", "--room", room, "--name", "login-test",
                         "--provider", "grok", "--pwd", root / "project",
@@ -77,16 +93,17 @@ class GrokLoginNativeTest(unittest.TestCase):
             deadline = time.monotonic() + 50
             while time.monotonic() < deadline:
                 dialog = cli("agent", "dialog", agent)
-                if dialog.get("dialog") and "Grok login required" in dialog["dialog"]["text"]:
+                row = next(a for a in cli("diagnostics")["agents"] if a["agent_id"] == agent)
+                if (dialog.get("dialog") and "Grok login required" in dialog["dialog"]["text"]
+                        and row["status"] == "blocked"):
                     break
                 time.sleep(1)
-            self.assertIsNotNone(dialog.get("dialog"), "no login dialog; see " + str(root))
-            self.assertIn("Grok login required", dialog["dialog"]["text"])
-            row = next(a for a in cli("diagnostics")["agents"] if a["agent_id"] == agent)
-            self.assertEqual(row["status"], "blocked")
-            self.assertNotEqual(row.get("reason"), "session_hook_missing")
             report["visible"] = cli("agent", "read", agent, "--source", "visible")
             report["native"] = bus.native_agent(f"bus-r{room}-a{agent}")
+            self.assertEqual(row["status"], "blocked", "login did not become blocked; see " + str(root))
+            self.assertIsNotNone(dialog.get("dialog"), "no login dialog; see " + str(root))
+            self.assertIn("Grok login required", dialog["dialog"]["text"])
+            self.assertNotEqual(row.get("reason"), "session_hook_missing")
             message = cli("send", "--room", room, "--to", agent, "--text",
                           "Reply with GROK_LOGIN_QUEUED only.")["message_id"]
             # Cross the former session_hook_missing abandonment budget (120s).
@@ -95,11 +112,15 @@ class GrokLoginNativeTest(unittest.TestCase):
                 status = cli("message", "status", message)
                 self.assertFalse(status["complete"], str(status))
                 self.assertEqual(status["requests"][0]["stage"], "queued")
+                self.assertEqual(status["requests"][0]["status"], "blocked")
                 self.assertNotEqual(status["requests"][0]["reason"], "session_hook_missing")
                 if time.monotonic() >= until:
                     break
                 time.sleep(2)
             report["final_status"] = status
+            report["final_visible"] = cli("agent", "read", agent, "--source", "visible")
+            report["final_dialog"] = cli("agent", "dialog", agent)
+            self.assertIn("Grok login required", report["final_dialog"]["dialog"]["text"])
             report["history"] = cli("history", "--room", room, "--limit", 30)
         finally:
             report["cleanup"] = bus.stop()

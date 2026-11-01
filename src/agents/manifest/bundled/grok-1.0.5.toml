@@ -57,7 +57,8 @@ not = [{ regex = ['(?s)\s*[╭┌]─+[╮┐]\s*\n\s*│\s*❯[^\n]*\n(?:[^\n]*
 
 # Native login owns the full cwd/logo/control screen, even when it leaves an
 # empty composer underneath. Quoted labels or controls in a conversation do not
-# own this surface. The dialog parser uses this exact rule for its login reason.
+# own this surface. Diagnostics may wrap across a few rows, but cannot contain
+# another composer or input prompt. The dialog parser uses this exact rule.
 [[rules]]
 id = "login_unavailable"
 state = "blocked"
@@ -66,7 +67,7 @@ region = "whole_recent"
 visible_blocker = true
 any = [
   { regex = ['(?i)\A\s*(?:Log in to Grok|Sign in to Grok|Login required|Login with Grok)[ \t]*\n[ \t]*❯[^\n]*\n[ \t]*Shift\+Tab:mode[^\n]*Ctrl\+[x.]:shortcuts\s*\z'] },
-  { regex = ['\A\s*[^\n]+\n\s*(?:[ \t]*[\x{2800}-\x{28FF}][ \t\x{2800}-\x{28FF}]*\n){7}\s*(?:error sending request for url \([^\n]+\)\s*)?Login with Grok[ \t]+l[ \t]*\n[ \t]*Quit[ \t]+q\s*[╭┌]─+[╮┐][ \t]*\n[ \t]*│[ \t]*❯[ \t]*(?:Type a message\.\.\.)?[ \t]*│[ \t]*\n[ \t]*[╰└][^\n]*[╯┘]\s*Grok Build[ \t]+[0-9][0-9.]*\s*\z'] },
+  { regex = ['\A\s*[^\n]+\n\s*(?:[ \t]*[\x{2800}-\x{28FF}][ \t\x{2800}-\x{28FF}]*\n){7}\s*(?:[^\n╭┌│❯]*\n){0,4}\s*Login with Grok[ \t]+l[ \t]*\n[ \t]*Quit[ \t]+q\s*[╭┌]─+[╮┐][ \t]*\n[ \t]*│[ \t]*❯[ \t]*(?:Type a message\.\.\.)?[ \t]*│[ \t]*\n[ \t]*[╰└][^\n]*[╯┘]\s*Grok Build[ \t]+[0-9][0-9.]*\s*\z'] },
   { regex = ['\A\s*[^\n]+\n\s*(?:[ \t]*[\x{2800}-\x{28FF}][ \t\x{2800}-\x{28FF}]*\n){7}\s*Connecting(?:\.\.\.|…)\s*ctrl\+q[ \t]+quit\s*\z'] },
 ]
 

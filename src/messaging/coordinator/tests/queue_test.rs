@@ -7,6 +7,8 @@ fn grok_login_keeps_work_queued_until_authenticated_idle() {
     for screen in [
         include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
         include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-connecting.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-71col.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-61col.txt"),
     ] {
         let (mut worker, agent, room, dir, calls) = fixture(
             Provider::Grok,

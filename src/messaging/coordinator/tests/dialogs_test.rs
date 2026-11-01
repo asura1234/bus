@@ -238,6 +238,8 @@ fn grok_login_reason_is_inspectable_when_orchestrator_is_notified() {
     for capture in [
         include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
         include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-connecting.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-71col.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-61col.txt"),
     ] {
         let parsed = crate::agents::dialog::parse(capture).expect("native login dialog");
         let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);

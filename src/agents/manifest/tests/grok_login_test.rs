@@ -4,6 +4,10 @@ const LOGIN_ERROR: &str =
     include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error.txt");
 const CONNECTING: &str =
     include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-connecting.txt");
+const NARROW_ERROR: &str =
+    include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-71col.txt");
+const NARROW_REAL_HOME_ERROR: &str =
+    include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-61col.txt");
 const IDLE: &str = include_str!("../../../../tests/fixtures/grok-composer/native-1.0.70-empty.txt");
 
 #[test]
@@ -30,6 +34,18 @@ fn captured_grok_login_dialogs_explain_the_blocker() {
     for screen in [LOGIN_ERROR, CONNECTING] {
         let dialog = crate::agents::dialog::parse(screen).expect("login must be inspectable");
         assert!(dialog.text.contains("Grok login required"), "{dialog:?}");
+    }
+}
+
+#[test]
+fn captured_wrapped_grok_login_error_blocks_in_a_narrow_pane() {
+    assert!(
+        NARROW_ERROR.contains("openid-\n"),
+        "fixture lost its native wrap"
+    );
+    assert!(NARROW_REAL_HOME_ERROR.contains("well-known/\n"));
+    for screen in [NARROW_ERROR, NARROW_REAL_HOME_ERROR] {
+        assert_login_blocked(screen);
     }
 }
 
@@ -65,6 +81,8 @@ fn grok_conversation_quoting_login_controls_is_not_blocked() {
         "Connecting...\nctrl+q  quit",
         LOGIN_ERROR,
         CONNECTING,
+        NARROW_ERROR,
+        NARROW_REAL_HOME_ERROR,
     ] {
         let frame = &IDLE[IDLE.find("  ╭").unwrap()..];
         let conversation = format!("  /project\n\n❯ Explain the login screen\n\n{output}\n{frame}");
