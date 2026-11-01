@@ -1369,7 +1369,7 @@ fn explicit_send_then_same_provider_final_adds_no_second_body() {
 #[test]
 fn an_aged_request_posts_one_named_abandon_outcome() {
     let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
+    let source = earlier_background_request_at(&mut f, false, io::now_ms());
     let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
     let mut state = f.worker.state.clone();
     state.retain_worker_outcomes(at);
@@ -1586,7 +1586,7 @@ fn identical_results_for_distinct_requests_each_wake_once() {
 #[test]
 fn provider_error_posts_after_an_aged_idle_request() {
     let mut f = Fixture::new();
-    let source = earlier_background_request(&mut f, false);
+    let source = earlier_background_request_at(&mut f, false, io::now_ms());
     let at = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS;
     let mut state = f.worker.state.clone();
     state.retain_worker_outcomes(at);
