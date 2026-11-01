@@ -70,6 +70,8 @@ mod compression;
 mod detection;
 #[path = "io_test.rs"]
 mod io;
+#[path = "kimi_command_screen_test.rs"]
+mod kimi_command_screen;
 #[path = "shutdown_test.rs"]
 mod shutdown;
 #[path = "spawn_test.rs"]
