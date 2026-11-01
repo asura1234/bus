@@ -32,10 +32,15 @@ fn agent_add_requires_consent_only_when_project_hooks_would_change() {
                 Some(b"invalid JSON".to_vec())
             } else {
                 let other_binary = dir.join("another Bus executable");
+                let live_binary = if provider == ProviderKind::Codex {
+                    hook_json::codex_callback_binary(&dir, &binary).unwrap()
+                } else {
+                    binary.clone()
+                };
                 let expected_binary = if case == "outdated" {
                     &other_binary
                 } else {
-                    &binary
+                    &live_binary
                 };
                 let mut document = hook_json::merge_hooks(
                     json!({"user_setting":"keep"}),
