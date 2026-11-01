@@ -908,3 +908,26 @@ fn perf_archive_index_requires_known_version_and_consistent_bounds() {
     }
     fs::remove_dir_all(live.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn capture_keeps_a_callsite_first_registered_by_an_uncaptured_sibling() {
+    fn diagnostic() {
+        tracing::debug!(
+            event = "bus.capture.sibling_registration",
+            "captured diagnostic"
+        );
+    }
+    let capture = test_capture::Capture::default();
+    capture.run(|| {
+        std::thread::spawn(diagnostic).join().unwrap();
+        diagnostic();
+    });
+    assert!(
+        capture.text().contains("bus.capture.sibling_registration"),
+        "{}",
+        capture.text()
+    );
+    let filtered = test_capture::Capture::default();
+    filtered.run_filtered("error", diagnostic);
+    assert!(filtered.text().is_empty());
+}
