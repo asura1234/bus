@@ -761,11 +761,9 @@ fn scheduled_tasks_settle_due_managed_agent_deadline_so_idle_loop_does_not_spin(
     assert_eq!(
         server.app.state.terminals[&terminal_id].next_managed_agent_deadline(),
         None,
-        "a silent managed launch past its timeout should be released by the scheduler"
+        "a silent managed launch past its timeout must consume its deadline"
     );
-    assert!(server.app.state.terminals[&terminal_id]
-        .agent_name
-        .is_none());
+    assert_eq!(server.app.state.terminals[&terminal_id].agent_name.as_deref(), Some("worker"));
     let events = server.app.event_hub.events_after(0);
     assert_eq!(events.len(), 2);
     assert!(events.iter().all(|(_, event)| matches!(

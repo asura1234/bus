@@ -7,7 +7,7 @@ mod capture;
 pub(crate) use capture::load;
 pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, NativeResumeFacts};
 
-/// Sessionless Codex and Kimi keep the empty launch across restore.
+/// Sessionless managed providers keep their empty launch across restore.
 /// Snapshot argv must pass that provider's launch-argument check, so Kimi
 /// attached `-S<session>` and `-p<text>` cannot become a fresh plan.
 /// Never turn an adopted session into a new one.
@@ -15,13 +15,13 @@ pub(crate) fn unstarted_plan(
     facts: &NativeResumeFacts,
     argv: Option<&[String]>,
 ) -> Option<crate::agents::resume::catalog::AgentResumePlan> {
-    if !facts.is_bus_owned()
-        || !matches!(facts.managed_agent.as_deref(), Some("codex" | "kimi"))
-        || facts.session.is_some()
-    {
+    if !facts.is_bus_owned() || facts.session.is_some() {
         return None;
     }
     let kind = facts.managed_agent.as_deref()?;
+    if !matches!(kind, "codex" | "kimi") {
+        return unstarted_provider_plan(facts, argv);
+    }
     let mut args = argv.unwrap_or_default().to_vec();
     if !args.is_empty() {
         if kind == "kimi" {
@@ -86,12 +86,65 @@ pub(crate) fn unstarted_plan(
     })
 }
 
-/// Shared Codex/Kimi sessionless contract: no provider session yet, and no
+/// A timed-out fresh provider can restart without inventing a conversation.
+/// Snapshot argv only validates the plan; durable capture owns launch options.
+fn unstarted_provider_plan(
+    facts: &NativeResumeFacts,
+    argv: Option<&[String]>,
+) -> Option<crate::agents::resume::catalog::AgentResumePlan> {
+    use crate::agents::providers::{launch, ProviderKind};
+    let provider = match facts.managed_agent.as_deref()? {
+        "claude" => ProviderKind::ClaudeCode,
+        "cursor" => ProviderKind::Cursor,
+        "grok" => ProviderKind::Grok,
+        _ => return None,
+    };
+    let executable = launch::executable(provider);
+    let mut args = argv.unwrap_or_default().to_vec();
+    if provider == ProviderKind::Grok && args.first().map(String::as_str) == Some("/usr/bin/env") {
+        let home = args.get(1)?.strip_prefix("GROK_HOME=")?;
+        if !std::path::Path::new(home).is_absolute() || home.chars().any(char::is_control) {
+            return None;
+        }
+        args.drain(0..2);
+    }
+    if !args.is_empty() {
+        if std::path::Path::new(&args.remove(0))
+            .file_name()?
+            .to_str()?
+            != executable
+        {
+            return None;
+        }
+        launch::validate_args(provider, &args).ok()?;
+        // Removing a selector/prompt would silently turn another conversation
+        // or submitted input into a fresh launch. Fail closed instead.
+        if args.iter().any(|arg| arg == "--")
+            || launch::resumable_options(provider, &args) != args
+            || launch::argument_positions(provider, &args)
+                .into_iter()
+                .any(|index| !args[index].starts_with('-'))
+        {
+            return None;
+        }
+    }
+    Some(crate::agents::resume::catalog::AgentResumePlan {
+        agent: provider.label().into(),
+        argv: vec![executable.into()],
+        dedupe_key: format!("bus-unstarted\0{}", facts.agent_name.as_deref()?),
+    })
+}
+
+/// Sessionless contract: no provider session yet, and no
 /// request has reached provider input.
 fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
     matches!(
         agent.provider,
-        super::Provider::Codex | super::Provider::Kimi
+        super::Provider::Codex
+            | super::Provider::ClaudeCode
+            | super::Provider::Cursor
+            | super::Provider::Grok
+            | super::Provider::Kimi
     ) && agent.runtime_identity.session_id.is_none()
         && agent.current_request.is_none()
         && !state.requests().any(|request| {

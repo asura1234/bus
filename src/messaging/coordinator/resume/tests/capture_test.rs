@@ -1347,3 +1347,43 @@ fn yolo_resume_does_not_combine_codex_bypass_with_an_explicit_approval_policy() 
         failures.join("\n")
     );
 }
+
+#[test]
+fn startup_timeout_sessionless_capture_retains_provider_ownership() {
+    for provider in [Provider::ClaudeCode, Provider::Cursor] {
+        let mut fixture = Fixture::new(provider);
+        let mut identity = fixture
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .runtime_identity
+            .clone();
+        identity.session_id = None;
+        fixture
+            .state
+            .set_agent_runtime_identity(fixture.agent, identity)
+            .unwrap();
+        fixture.facts.session = None;
+        fixture.plan =
+            crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
+        fixture.save();
+        let extras = fixture.load().unwrap();
+        assert_eq!(extras.env, fixture.expected_env());
+        assert!(extras.session.is_none());
+        // A copied name alone cannot change the saved provider owner.
+        fixture.facts.managed_agent = Some(
+            if provider == Provider::ClaudeCode {
+                "cursor"
+            } else {
+                "claude"
+            }
+            .into(),
+        );
+        fixture.plan =
+            crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
+        assert_eq!(
+            fixture.load().unwrap_err(),
+            "Bus resume has no matching unstarted provider owner"
+        );
+    }
+}

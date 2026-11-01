@@ -908,3 +908,13 @@ idle then deliver, and an approval card without `--yolo`.
   `sbus` must pass
   `SHELL`. `agent add` reads the source `config.toml`; a scratch
   `.kimi-code` without that file fails with `No such file or directory`.
+
+- **2026-11-01 — startup expiry retains ownership:** A live provider stuck on
+  onboarding must keep its managed name after the startup deadline. Check the
+  same pane and terminal with `agent read` and `agent dialog`, then answer the
+  chooser through Bus and confirm readiness without replacing the agent.
+  Cursor's workspace-trust card uses `[a] Trust this workspace` and `[q] Quit`;
+  the shortcuts act directly. A sessionless timed-out agent must retain its
+  ownership across a private-root relaunch, while terminal replacement still
+  fails the identity guard. Keep startup screen fixtures separate from live
+  model acceptance.

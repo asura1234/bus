@@ -1363,3 +1363,99 @@ fn original_provider_resume_preserves_argv_with_grok_environment_present() {
         assert_eq!(argv, expected, "{agent}");
     }
 }
+
+#[test]
+fn startup_timeout_identity_survives_restart_before_any_provider_session() {
+    use crate::agents::{AgentKind, AgentState};
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    for kind in [
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Cursor,
+        AgentKind::Grok,
+        AgentKind::Kimi,
+    ] {
+        let mut app = test_app();
+        let workspace = crate::server::workspaces::Workspace::test_new("timed-out");
+        let pane = workspace.tabs[0].root_pane;
+        let id = workspace.terminal_id(pane).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let terminal = app.state.terminals.get_mut(&id).unwrap();
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            kind,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_state(Some(kind), AgentState::Unknown);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+        let snapshot = crate::server::persistence::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            Some(0),
+            0,
+        );
+        let saved = &snapshot.workspaces[0].tabs[0].panes[&pane.raw()];
+        assert_eq!(saved.agent_name.as_deref(), Some("bus-r1-a2"), "{kind:?}");
+        assert_eq!(
+            saved.managed_agent_kind.as_deref(),
+            Some(crate::agents::agent_label(kind))
+        );
+        assert!(saved.agent_session.is_none());
+        let (tx, _) = tokio::sync::mpsc::channel(8);
+        let restored = crate::server::persistence::restore(
+            &snapshot,
+            None,
+            true,
+            tx,
+            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(crate::utils::render::signal::RenderSignal::default()),
+        );
+        let terminal = restored.terminals.values().next().unwrap();
+        assert_eq!(terminal.agent_name.as_deref(), Some("bus-r1-a2"));
+        assert_eq!(terminal.managed_agent_kind(), Some(kind));
+    }
+}
+
+#[test]
+fn startup_timeout_resume_never_turns_session_selectors_or_input_into_a_fresh_launch() {
+    use crate::messaging::coordinator::resume::NativeResumeFacts;
+    for (kind, executable) in [
+        ("claude", "claude"),
+        ("cursor", "cursor-agent"),
+        ("grok", "grok"),
+    ] {
+        let facts = NativeResumeFacts {
+            agent_name: Some("bus-r1-a2".into()),
+            managed_agent: Some(kind.into()),
+            session: None,
+        };
+        let valid = vec![executable.into(), "--model".into(), "fixture-model".into()];
+        assert!(
+            crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&valid)).is_some()
+        );
+        for tail in [
+            vec!["--resume", "00000000-0000-4000-8000-000000000001"],
+            vec!["--continue"],
+            vec!["--", "a task"],
+            vec!["a task"],
+        ] {
+            let argv = std::iter::once(executable)
+                .chain(tail)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            assert!(
+                crate::messaging::coordinator::resume::unstarted_plan(&facts, Some(&argv))
+                    .is_none(),
+                "{kind}: {argv:?}"
+            );
+        }
+    }
+}

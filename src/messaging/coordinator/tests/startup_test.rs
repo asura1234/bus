@@ -206,7 +206,13 @@ fn pending_info(worker: &Worker, agent: AgentId) -> schema::AgentInfo {
 
 #[test]
 fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_terminal() {
-    for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+    for provider in [
+        Provider::Codex,
+        Provider::ClaudeCode,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
         let (mut worker, agent, room, dir) = pending(provider);
         let info = pending_info(&worker, agent);
         let start = worker

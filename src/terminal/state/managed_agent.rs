@@ -94,11 +94,15 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.pending_agent_resume_plan.is_some() || self.managed_agent_identity_unestablished()
+        self.pending_agent_resume_plan.is_some()
+            || self.managed_agent_identity_unestablished()
+            || self
+                .managed_agent
+                .is_some_and(|managed| managed.phase == ManagedAgentPhase::TimedOut)
     }
 
-    /// A restored identity already belongs in snapshots, even while its process
-    /// waits for viewport/theme. Initial launches have no established identity.
+    /// Deferred restores and timed-out launches retain owned identity in
+    /// snapshots even without readiness. Only a new pending launch is omitted.
     pub fn managed_agent_identity_unestablished(&self) -> bool {
         self.managed_agent.is_some_and(|managed| {
             matches!(
@@ -175,6 +179,7 @@ impl TerminalState {
                 observed_expected, ..
             } => observed_expected || known_agent == Some(managed.kind),
             ManagedAgentPhase::Blocked
+            | ManagedAgentPhase::TimedOut
             | ManagedAgentPhase::Active
             | ManagedAgentPhase::Suspended => false,
         };
@@ -187,7 +192,10 @@ impl TerminalState {
             self.clear_agent_name();
             return true;
         }
-        if managed.phase == ManagedAgentPhase::Blocked {
+        if matches!(
+            managed.phase,
+            ManagedAgentPhase::Blocked | ManagedAgentPhase::TimedOut
+        ) {
             if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
                 self.update_managed_agent(Some(ManagedAgent {
                     kind: managed.kind,
@@ -212,7 +220,16 @@ impl TerminalState {
                 return true;
             }
             if now >= deadline {
-                self.clear_agent_name();
+                // Expiry is not a terminal replacement. Keep ownership and
+                // startup detection until positive readiness or a real exit,
+                // but consume the deadline so the scheduler cannot spin.
+                if let Some(resume) = self.native_resume.as_mut() {
+                    resume.error = Some("provider startup confirmation deadline elapsed".into());
+                }
+                self.update_managed_agent(Some(ManagedAgent {
+                    kind: managed.kind,
+                    phase: ManagedAgentPhase::TimedOut,
+                }));
                 return true;
             }
             if ready_after.is_none_or(|ready_after| now >= ready_after) {

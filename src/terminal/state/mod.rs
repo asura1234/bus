@@ -26,6 +26,7 @@ enum ManagedAgentPhase {
         observed_expected: bool,
     },
     Blocked,
+    TimedOut,
     Active,
     Suspended,
 }

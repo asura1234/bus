@@ -66,7 +66,7 @@ fn promptless_codex_keeps_its_startup_watch_until_the_deadline() {
     assert!(!terminal.managed_agent_interactive_ready());
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
     assert!(!terminal.managed_agent_interactive_ready());
-    assert!(!terminal.managed_agent_launch_pending());
+    assert!(terminal.managed_agent_launch_pending());
 }
 
 #[test]
@@ -249,8 +249,8 @@ fn managed_launch_signal_tracks_blocked_active_timeout_and_exit() {
         assert!(signal.load(Ordering::Acquire));
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), process_exited);
         assert!(
-            !signal.load(Ordering::Acquire),
-            "timeout/exit must close the window"
+            signal.load(Ordering::Acquire) != process_exited,
+            "only exit closes startup detection; timeout retains readiness gating"
         );
     }
     terminal.begin_managed_agent(
@@ -368,5 +368,121 @@ fn grok_saved_identity_is_not_ready_before_the_resume_process_starts() {
         assert!(!terminal.managed_agent_interactive_ready());
         terminal.pending_agent_resume_plan = None;
         assert!(terminal.managed_agent_interactive_ready());
+    }
+}
+
+#[test]
+fn startup_timeout_retains_owned_identity_for_every_provider() {
+    for kind in [
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Cursor,
+        AgentKind::Grok,
+        AgentKind::Kimi,
+    ] {
+        for detected in [None, Some(kind)] {
+            let mut terminal = test_terminal();
+            let now = Instant::now();
+            terminal.begin_managed_agent(
+                "timed-out".into(),
+                kind,
+                now,
+                Duration::ZERO,
+                Duration::from_secs(30),
+            );
+            terminal.set_detected_state(detected, AgentState::Unknown);
+            assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false));
+            assert_eq!(
+                terminal.agent_name.as_deref(),
+                Some("timed-out"),
+                "{kind:?}"
+            );
+            assert_eq!(terminal.managed_agent_kind(), Some(kind));
+            assert!(terminal.managed_agent_launch_pending());
+            assert!(!terminal.managed_agent_interactive_ready());
+            assert_eq!(terminal.next_managed_agent_deadline(), None);
+            assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_secs(32), false));
+            terminal.set_detected_state(Some(kind), AgentState::Blocked);
+            assert_eq!(terminal.agent_name.as_deref(), Some("timed-out"));
+            assert!(!terminal.managed_agent_interactive_ready());
+            terminal.set_detected_state(Some(kind), AgentState::Idle);
+            terminal.reconcile_managed_agent_at(now + Duration::from_secs(33), false);
+            assert!(
+                terminal.managed_agent_interactive_ready(),
+                "{kind:?}: late idle confirms startup"
+            );
+        }
+    }
+}
+
+#[test]
+fn startup_timeout_accepts_a_late_session_start_for_every_provider() {
+    for kind in [
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Cursor,
+        AgentKind::Grok,
+        AgentKind::Kimi,
+    ] {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "late-hook".into(),
+            kind,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_state(Some(kind), AgentState::Working);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+        let label = crate::agents::agent_label(kind);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                format!("herdr:{label}"),
+                label.into(),
+                crate::agents::resume::catalog::AgentSessionRef::id("late-session"),
+                Some(1),
+                Some("startup".into()),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            terminal.agent_name.as_deref(),
+            Some("late-hook"),
+            "{kind:?}"
+        );
+        assert!(terminal.managed_agent_interactive_ready(), "{kind:?}");
+        assert_eq!(terminal.state, AgentState::Working);
+    }
+}
+
+#[test]
+fn startup_timeout_still_releases_exited_or_replaced_provider() {
+    for exited in [false, true] {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "original".into(),
+            AgentKind::Claude,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Unknown);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
+        assert_eq!(terminal.agent_name.as_deref(), Some("original"));
+        terminal.set_detected_state_with_visible_blocker(
+            Some(if exited {
+                AgentKind::Claude
+            } else {
+                AgentKind::Codex
+            }),
+            AgentState::Idle,
+            false,
+            exited,
+        );
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(32), exited);
+        assert!(terminal.agent_name.is_none());
+        assert!(terminal.managed_agent_kind().is_none());
     }
 }
