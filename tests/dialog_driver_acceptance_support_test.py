@@ -71,7 +71,11 @@ def route_records(path):
 
 
 FIELDS = re.compile(r'([a-zA-Z_]+)=(?:"([^"]*)"|([^\s{}]+))')
-FORBIDDEN = {"agent.send-keys", "agent.send_keys", "agent.choose", "agent.answer", "pane.send_input", "pane.send-input"}
+FORBIDDEN = {
+    "agent.send-keys", "agent.send_keys", "agent.choose", "agent.answer",
+    "pane.send_input", "pane.send-input", "pane.send_text", "pane.send-text",
+    "pane.send_keys", "pane.send-keys",
+}
 
 
 def driver_route_proof(traces, records, expected, fake_terminal, shell_terminal, setup_ids):

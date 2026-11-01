@@ -296,6 +296,18 @@ class AcceptanceEvidenceTests(unittest.TestCase):
             alternate = proof(records, lines + ['INFO bus.control.command{control_request_id=old method=agent.choose}: result'])
             self.assertFalse(alternate["passed"])
             self.assertEqual(alternate["alternate_input_methods"][0]["methods"], ["agent.choose"])
+            for method in ["pane.send_input", "pane.send_text", "pane.send_keys"]:
+                with self.subTest(native_input=method):
+                    bypass = proof(records, lines + [
+                        f'DEBUG api event="api.request.start" method="{method}" request_id="unapproved"'
+                    ])
+                    self.assertFalse(bypass["passed"], method + " must invalidate driver provenance")
+                    self.assertEqual(bypass["alternate_input_methods"][0]["methods"], [method])
+            for method in ["pane.send-text", "pane.send-keys"]:
+                with self.subTest(wrapper_input=method):
+                    bypass = proof(records + [{"method": method}], lines)
+                    self.assertFalse(bypass["passed"], method + " must invalidate driver provenance")
+                    self.assertEqual(bypass["alternate_input_methods"][0]["methods"], [method])
 
     def test_private_wrapper_records_receipts_without_answer_contents(self):
         from types import SimpleNamespace
