@@ -75,6 +75,23 @@ def child_env(**overrides: str) -> dict:
     return {**env, **overrides}
 
 
+def python_test_command(files: list[str]) -> tuple[str, ...]:
+    """Bound Python concurrency; PYTEST_WORKERS=0 reproduces the serial lane."""
+    try:
+        workers = int(os.environ.get("PYTEST_WORKERS", "4"))
+    except ValueError as error:
+        raise ValueError("PYTEST_WORKERS must be a nonnegative integer") from error
+    if workers < 0:
+        raise ValueError("PYTEST_WORKERS must be a nonnegative integer")
+    if importlib.util.find_spec("xdist") is None:
+        raise ValueError("missing pytest-xdist; install scripts/requirements.txt from this skill")
+    if files:
+        workers = min(workers, len(files)) if len(files) > 1 else 0
+    parallel = ("-n", str(workers), "--dist", "loadfile", "--max-worker-restart=0")
+    return (sys.executable, "-m", "pytest", "-q", "-o", "python_files=*_test.py",
+            *parallel, "--durations=20", *files)
+
+
 def run(*argv: str, env: dict | None = None) -> int:
     print("+ " + subprocess.list2cmdline(argv), flush=True)
     children = Children(private_groups=not bool(os.environ.get(EXTERNAL_RUN)))
@@ -368,7 +385,7 @@ def unit() -> int:
         raise ValueError("no Python tests found")
     # Python here is developer and agent tooling, not the product: its tests
     # must pass, but a percentage target would only reward coverage-only tests.
-    python = run(sys.executable, "-m", "pytest", "-q", *tests, env=test_env)
+    python = run(*python_test_command(tests), env=test_env)
     value["unit"] = not (rust or cli or python or not value["unit_profraw"])
     save_state(value)
     return int(not value["unit"])
@@ -547,6 +564,8 @@ def coverage() -> int:
 
 
 def run_lane(lane: str) -> int:
+    if lane in ("unit", "ci"):
+        python_test_command([])  # Reject missing tools/settings before any Rust build.
     required = ("ruff", "pytest") if lane == "lint" else ("pytest",)
     if any(importlib.util.find_spec(name) is None for name in required):
         raise ValueError("missing Python gate tools; install scripts/requirements.txt from this skill")

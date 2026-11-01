@@ -1,6 +1,7 @@
 """Affected selection narrows proven owners in the actual Bus repository."""
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -8,6 +9,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import suite_selection as selection  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[4]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def shared_repository_index():
+    # Every case queries the same unchanged checkout; build its source graph once.
+    root = Path(__file__).resolve().parents[4]
+    index = selection.References(root)
+    with patch.object(selection, "References", return_value=index):
+        yield
 
 
 @pytest.mark.parametrize("path, expected", [

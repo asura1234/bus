@@ -34,7 +34,8 @@ def test_python_only_selection_does_not_start_cargo():
     build, tests = runner.commands(Selection(False, "none()", ("skills/best-of-n",), False, "pure tooling"))
     assert not build
     assert len(tests) == 1 and tests[0].name == "python"
-    assert all(path.startswith("skills/best-of-n/") for path in tests[0].argv[6:])
+    files = [arg for arg in tests[0].argv if arg.endswith("_test.py") and not arg.startswith("python_files=")]
+    assert files and all(path.startswith("skills/best-of-n/") for path in files)
 
 
 def test_empty_python_owner_does_not_launch_pytest(tmp_path):

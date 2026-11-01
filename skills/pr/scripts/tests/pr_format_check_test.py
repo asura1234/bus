@@ -402,7 +402,7 @@ class PrFormatCheckTest(unittest.TestCase):
             non_goal.write_text("无\n", encoding="utf-8")
             blank.write_text(" \n", encoding="utf-8")
             for origin, message in ((None, "--origin-file"), (blank, "origin 不得为空")):
-                with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, message):
+                with self.subTest(origin=str(origin) if origin else None), self.assertRaisesRegex(ValueError, message):
                     prepare_context(
                         branch="feat/room",
                         output_path=root / "pr-goal-context.md",
@@ -488,7 +488,7 @@ class PrFormatCheckTest(unittest.TestCase):
 
             # Re-locking to a different goal without appending the ruling is refused.
             for origin_path in (None, origin_lock):
-                with self.subTest(origin=origin_path), self.assertRaisesRegex(ValueError, "追加开发者裁决"):
+                with self.subTest(origin=str(origin_path) if origin_path else None), self.assertRaisesRegex(ValueError, "追加开发者裁决"):
                     prepare_context(goal_path=goal, non_goal_path=non_goal, origin_path=origin_path, **kw)
 
             origin.write_text(

@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 
 
 class Interrupted(BaseException):
@@ -59,6 +60,23 @@ def cleanup_signals():
                 raise Interrupted(signum)
 
 
+def group_running(group: int) -> bool:
+    result = subprocess.run(("ps", "-axo", "pgid=,stat="),
+                            capture_output=True, text=True, check=True, timeout=2)
+    rows = [line.split() for line in result.stdout.splitlines()]
+    if not rows or any(len(row) != 2 or not row[0].isdecimal() for row in rows):
+        raise OSError(f"cannot inspect process group {group}")
+    return any(int(pgid) == group and not state.startswith("Z") for pgid, state in rows)
+
+
+def wait_group_exit(group: int):
+    deadline = time.monotonic() + 2
+    while group_running(group):
+        if time.monotonic() >= deadline:
+            raise OSError(f"process group {group} did not exit after SIGKILL")
+        time.sleep(.01)
+
+
 def signal_group(group: int, signum: int):
     try:
         os.killpg(group, signum)
@@ -67,12 +85,7 @@ def signal_group(group: int, signum: int):
     except PermissionError:
         # macOS cannot signal a zombie-only group. Inspection errors and live
         # members must retain a failure, rather than authorize cleanup.
-        result = subprocess.run(("ps", "-axo", "pgid=,stat="),
-                                capture_output=True, text=True, check=True)
-        rows = [line.split() for line in result.stdout.splitlines()]
-        if not rows or any(len(row) != 2 for row in rows):
-            raise OSError(f"cannot inspect process group {group}")
-        if any(int(pgid) == group and not state.startswith("Z") for pgid, state in rows):
+        if group_running(group):
             raise
 
 
@@ -139,6 +152,8 @@ class Children:
             failures.append(error)
         try:
             process.wait(timeout=2)
+            if group:
+                wait_group_exit(process.pid)
         except Exception as error:
             failures.append(error)
         finally:
