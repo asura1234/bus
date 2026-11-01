@@ -27,6 +27,9 @@ pub struct AgentSendKeysParams {
 #[serde(deny_unknown_fields)]
 pub struct AgentObserveParams {
     pub target: String,
+    /// Scope focus to this option's menu while following selection redraws.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

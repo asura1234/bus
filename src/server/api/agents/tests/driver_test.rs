@@ -46,6 +46,7 @@ async fn universal_driver_answers_shell_prompt_without_agent_metadata() {
         "read".into(),
         AgentObserveParams {
             target: target.clone(),
+            selection_label: None,
         },
     ))
     .unwrap();
@@ -296,4 +297,52 @@ async fn universal_driver_empty_text_keeps_outstanding_navigation() {
         writes.try_recv().is_err(),
         "empty text must not release an unapplied arrow"
     );
+}
+
+#[tokio::test]
+async fn universal_driver_select_ignores_quoted_text_outside_inverse_menu() {
+    let (mut app, target, mut writes) = shell(b"> quoted context\r\n\x1b[7mYes\x1b[0m\r\nNo");
+    let mut params = press(&target);
+    params.select = Some("Yes".into());
+    let result: Value =
+        serde_json::from_str(&app.handle_agent_press("select".into(), params)).unwrap();
+    assert_eq!(
+        result["result"]["press"]["keys"],
+        serde_json::json!(["enter"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\r");
+}
+
+#[tokio::test]
+async fn universal_driver_selection_redraw_retains_menu_context() {
+    let (mut app, target, mut writes) = shell(b"> quoted context\r\n\x1b[7mYes\x1b[0m\r\nNo");
+    let mut params = press(&target);
+    params.select = Some("No".into());
+    let first: Value =
+        serde_json::from_str(&app.handle_agent_press("first".into(), params.clone())).unwrap();
+    assert_eq!(
+        first["result"]["press"]["keys"],
+        serde_json::json!(["down"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[2J\x1b[H> quoted context\r\nYes\r\n\x1b[7mNo\x1b[0m");
+    let observed: Value = serde_json::from_str(&app.handle_agent_observe(
+        "redraw".into(),
+        AgentObserveParams {
+            target: target.clone(),
+            selection_label: Some("No".into()),
+        },
+    ))
+    .unwrap();
+    assert_eq!(observed["result"]["observation"]["focus"][1], "No");
+    let final_press: Value =
+        serde_json::from_str(&app.handle_agent_press("final".into(), params)).unwrap();
+    assert_eq!(
+        final_press["result"]["press"]["keys"],
+        serde_json::json!(["enter"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\r");
 }

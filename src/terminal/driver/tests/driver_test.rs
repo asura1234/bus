@@ -174,3 +174,30 @@ fn inverse_style_does_not_resolve_ambiguous_explicit_markers() {
     grid.cells[1][2].attrs.push("inverse".into());
     assert!(selection_focus(&grid).is_err());
 }
+
+#[tokio::test]
+async fn driver_select_scopes_quoted_text_outside_the_requested_menu() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 5);
+    runtime.test_process_pty_bytes(b"> quoted context\r\n\x1b[7mYes\x1b[0m\r\nNo");
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(selection_step(&grid, "Yes"), Ok(SelectionStep::Confirm));
+    assert_eq!(selection_step(&grid, "No"), Ok(SelectionStep::Move("down")));
+}
+
+#[tokio::test]
+async fn driver_select_scopes_inverse_toolbar_outside_the_requested_menu() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 5);
+    runtime.test_process_pty_bytes("\x1b[7mSTATUS\x1b[0m\r\n❯Yes\r\n No".as_bytes());
+    let (grid, _) = observe(&runtime).unwrap();
+    assert!(
+        selection_focus(&grid).is_err(),
+        "unscoped conflicting blocks are ambiguous"
+    );
+    assert_eq!(selection_step(&grid, "No"), Ok(SelectionStep::Move("down")));
+}
+
+#[test]
+fn driver_menu_block_preserves_number_widths_and_explanatory_gaps() {
+    let grid = menu("Choose:\n❯ 1. Yes\n  additional detail\n\n  10. No");
+    assert_eq!(selection_step(&grid, "No"), Ok(SelectionStep::Move("down")));
+}

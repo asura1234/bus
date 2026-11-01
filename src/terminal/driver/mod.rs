@@ -8,8 +8,10 @@ mod selection;
 pub(crate) use grid::Grid;
 pub(super) use press::DriverState;
 pub(crate) use press::{press, validate_press};
+#[cfg(test)]
+pub(crate) use selection::selection_focus;
 pub(crate) use selection::{
-    selection_focus, selection_identity, selection_step, SelectionIdentity, SelectionStep,
+    selection_focus_for_label, selection_identity, selection_step, SelectionIdentity, SelectionStep,
 };
 
 use crate::terminal::TerminalRuntime;

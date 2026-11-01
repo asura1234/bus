@@ -34,7 +34,7 @@ pub(crate) fn press(
         .pending
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    let focus = selection_identity(&observation.grid).ok();
+    let focus = selection_identity(&observation.grid, params.select.as_deref()).ok();
     let (mut keys, selection_pending) = if let Some(label) = &params.select {
         let step =
             selection_step(&observation.grid, label).map_err(|e| ("selection_unavailable", e))?;

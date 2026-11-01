@@ -23,10 +23,11 @@ impl Worker {
         };
         if method == "agent.observe" {
             let cells = optional_bool(p, "cells")?;
-            let observation = native_observe(&target, managed_terminal.as_deref(), &mut |method| {
-                self.transport.request(method)
-            })
-            .map_err(|error| error.message)?;
+            let observation =
+                native_observe(&target, managed_terminal.as_deref(), None, &mut |method| {
+                    self.transport.request(method)
+                })
+                .map_err(|error| error.message)?;
             return serde_json::to_value(observation)
                 .map(|observation| observation_json(observation, cells))
                 .map_err(|error| error.to_string());
@@ -85,10 +86,12 @@ fn driver_error(message: &str) -> TransportError {
 fn native_observe(
     target: &str,
     expected_terminal: Option<&str>,
+    selection_label: Option<&str>,
     call: &mut impl FnMut(Method) -> Result<ResponseResult, TransportError>,
 ) -> Result<schema::TerminalObservation, TransportError> {
     match call(Method::AgentObserve(schema::AgentObserveParams {
         target: target.into(),
+        selection_label: selection_label.map(str::to_owned),
     }))? {
         ResponseResult::TerminalObserved { observation } => {
             if expected_terminal.is_some_and(|expected| expected != observation.terminal_id) {
@@ -161,7 +164,12 @@ fn press_terminal_with_elapsed(
                 return selection_pending_result(press, keys, text_written);
             }
             pause();
-            match native_observe(&params.target, params.expected_terminal_id.as_deref(), call) {
+            match native_observe(
+                &params.target,
+                params.expected_terminal_id.as_deref(),
+                params.select.as_deref(),
+                call,
+            ) {
                 Ok(observation) => {
                     let next_focus = focus_identity(&observation);
                     press.observation = observation;
@@ -341,6 +349,11 @@ mod tests {
         )
         .unwrap();
         assert!(script.is_empty());
+        for method in &methods {
+            if let Method::AgentObserve(observe) = method {
+                assert_eq!(observe.selection_label.as_deref(), Some("Remind me later"));
+            }
+        }
         assert!(matches!(
             &methods[..],
             [

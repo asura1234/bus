@@ -20,7 +20,7 @@ impl App {
             Ok(resolved) => resolved,
             Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
         };
-        match self.driver_observation(&resolved) {
+        match self.driver_observation(&resolved, params.selection_label.as_deref()) {
             Ok(observation) => encode_success(id, ResponseResult::TerminalObserved { observation }),
             Err(error) => encode_error(id, "terminal_observation_unavailable", error),
         }
@@ -49,7 +49,7 @@ impl App {
                 "Terminal changed; observe the intended pane again",
             );
         }
-        let observation = match self.driver_observation(&resolved) {
+        let observation = match self.driver_observation(&resolved, params.select.as_deref()) {
             Ok(observation) => observation,
             Err(error) => return encode_error(id, "terminal_observation_unavailable", error),
         };
@@ -85,6 +85,7 @@ impl App {
     fn driver_observation(
         &self,
         resolved: &crate::server::workspaces::ids::TerminalTarget,
+        selection_label: Option<&str>,
     ) -> Result<TerminalObservation, String> {
         let runtime = self
             .lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
@@ -98,8 +99,9 @@ impl App {
             pane_id,
             content_revision,
             text: grid.text(),
-            focus: driver::selection_focus(&grid).ok(),
-            focus_occurrence: driver::selection_identity(&grid).map_or(0, |focus| focus.occurrence),
+            focus: driver::selection_focus_for_label(&grid, selection_label).ok(),
+            focus_occurrence: driver::selection_identity(&grid, selection_label)
+                .map_or(0, |focus| focus.occurrence),
             grid,
         })
     }
