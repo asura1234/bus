@@ -12,6 +12,7 @@ import subprocess
 import termios
 import threading
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 E2E = ROOT / "temp/e2e"
@@ -40,6 +41,8 @@ def scrubbed_env(environ, data_dir):
     env = {k: v for k, v in environ.items() if not k.startswith(SCRUB_PREFIXES) and k not in SCRUB_NAMES}
     home = str(Path(data_dir).with_name(Path(data_dir).name + "-home"))
     env.update(BUS_DATA_DIR=str(data_dir), HOME=home, USERPROFILE=home, TERM="xterm-256color")
+    # Dev-tools scratch servers sample their fixture, including real-provider runs.
+    env["BUS_TUI_OWNER"] = uuid.uuid4().hex
     env.setdefault("TEST_BUS_PROTECTED_HOME", environ.get("HOME", str(Path.home())))
     return env
 
