@@ -430,7 +430,7 @@ fn kimi_answered_steer_completes_a_silent_lead_after_a_synchronous_tool() {
         .unwrap();
     let lead_prompt = state.render_request_payload(lead).unwrap();
     let follow_prompt = state.render_request_payload(follow).unwrap();
-    let events = vec![
+    let events = [
         json!({"type":"turn.prompt","agentId":"main","turnId":0,"promptId":"p0","input":[{"type":"text","text":lead_prompt}]}),
         json!({"type":"agent.message.appended","message":{"message":{"role":"assistant","content":[],"toolCalls":[{"id":"sync-pwd","name":"Bash","arguments":{"command":"pwd"}}]},"meta":{"source":"llm"}}}),
         json!({"type":"agent.message.appended","message":{"message":{"role":"tool","toolCallId":"sync-pwd","content":[{"type":"text","text":"/tmp/project\n"}]},"meta":{"source":"tool"}}}),
