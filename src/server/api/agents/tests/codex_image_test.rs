@@ -98,6 +98,7 @@ async fn codex_image_fallback_drafts_receive_exactly_one_enter() {
             std::time::Duration::ZERO,
             None,
             None,
+            false,
         )
         .unwrap();
         let paste =

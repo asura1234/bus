@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn kimi_captured_moon_with_a_tip_is_working() {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    for screen in [
+        include_str!("../../../../tests/fixtures/kimi-steer/thinking-tip.txt"),
+        include_str!("../../../../tests/fixtures/kimi-steer/command-tip.txt"),
+    ] {
+        let detection = evaluate_loaded_manifest(
+            DetectionInput {
+                screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+            &loaded,
+            true,
+        );
+        assert_eq!(detection.state, AgentState::Working);
+        assert!(detection.visible_working);
+    }
+}
+
+#[test]
 fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());

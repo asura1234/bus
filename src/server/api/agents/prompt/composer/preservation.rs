@@ -140,7 +140,9 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn editor_frame_unchanged(&self, previous: &str, current: &str) -> bool {
-        previous == current
+        (self.kind != AgentKind::Kimi && previous == current)
+            || (self.kind == AgentKind::Kimi
+                && super::super::kimi::same_editor_frame(previous, current))
             || (self.kind == AgentKind::Kimi
                 && self.expected == "/new"
                 && super::super::kimi::same_new_editor_frame(previous, current))
@@ -168,7 +170,9 @@ impl SubmissionInspector for PreservingComposer {
                 osc_progress: "",
             },
         );
-        detected.visible_working && !detected.visible_blocker
+        // Starting while already busy means another spinner frame proves
+        // nothing. A visible owned/foreign draft must never confirm submit.
+        detected.visible_working && !detected.visible_blocker && input(self.kind, screen).is_none()
     }
 
     fn draft_preservation(&self, screen: &str) -> Option<DraftPreservation> {

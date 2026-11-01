@@ -918,3 +918,16 @@ idle then deliver, and an approval card without `--yolo`.
   ownership across a private-root relaunch, while terminal replacement still
   fails the identity guard. Keep startup screen fixtures separate from live
   model acceptance.
+
+
+- **2026-11-01 — Kimi steering:** A real 56-column working screen was rejected
+  before any input because its moon spinner disabled composer inspection. At
+  131 columns the same spinner carried a tip and was incorrectly detected as
+  Idle. Test thinking and foreground shell work at both widths. Use Kimi's
+  Ctrl+S guidance action after full editor readback, permit working chrome to
+  repaint while preserving the composer and input lease, and never confirm a
+  still-visible draft from a spinner alone. Require `prompt.steered` ownership
+  and the complete terminal wire chain for grouped replies. Before a later
+  Started hook can rebind a request, reconcile the old committed final, even
+  if Stop was lost. Repeat after scratch relaunch and verify ordered messages
+  and a lost submit acknowledgment without an automatic duplicate.

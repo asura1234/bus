@@ -26,6 +26,27 @@ pub(super) fn input(screen: &str) -> Option<String> {
     Some(rows(screen)?.0.join("\n"))
 }
 
+/// Transcript output, spinners and the footer can repaint while the native
+/// editor is open. Only the live composer and any extra controls must match;
+/// exact hidden text was read back through the editor under the input lease.
+pub(super) fn same_editor_frame(previous: &str, current: &str) -> bool {
+    fn fingerprint(screen: &str) -> Option<Vec<String>> {
+        rows(screen)?;
+        let (lines, top, bottom) = frame(screen)?;
+        let mut result = lines[top..=bottom].to_vec();
+        result.extend(lines[bottom + 1..].iter().filter_map(|line| {
+            let text = line.trim();
+            (!text.is_empty() && !text.contains("thinking:") && !text.starts_with("context:"))
+                .then(|| text.to_owned())
+        }));
+        Some(result)
+    }
+    match (fingerprint(previous), fingerprint(current)) {
+        (Some(previous), Some(current)) => previous == current,
+        _ => false,
+    }
+}
+
 /// `/new` can open its completion menu after the editor has closed. Only that
 /// known repaint is allowed; the full draft was verified in the native editor
 /// and the input lease must still be held by the caller.
@@ -111,11 +132,23 @@ fn matches_rows(rows: &[String], expected: &str) -> bool {
     positions.contains(&expected.len())
 }
 
-fn rows(screen: &str) -> Option<(Vec<String>, bool)> {
+fn frame(screen: &str) -> Option<(Vec<String>, usize, usize)> {
     let lines: Vec<String> = screen
         .lines()
         .map(|line| styled_chars(line).iter().map(|c| c.character).collect())
         .collect();
+    let plain = lines.join("\n");
+    let detection = crate::agents::manifest::detect_with_osc(
+        crate::agents::AgentKind::Kimi,
+        crate::agents::manifest::DetectionInput {
+            screen: &plain,
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    if detection.visible_blocker || crate::agents::dialog::parse(screen).is_some() {
+        return None;
+    }
     let bottom = lines
         .iter()
         .rposition(|line| line.trim().starts_with('╰') && line.contains('╯'))?;
@@ -129,29 +162,20 @@ fn rows(screen: &str) -> Option<(Vec<String>, bool)> {
     if preceding.iter().any(|line| {
         let line = line.trim();
         let lowercase = line.to_lowercase();
-        let mut chars = line.chars();
-        let first = chars.next().unwrap_or_default();
-        let rest = chars.as_str().trim_start().to_lowercase();
-        let active_spinner = (('\u{2800}'..='\u{28ff}').contains(&first)
-            && [
-                "thinking…",
-                "thinking...",
-                "working…",
-                "working...",
-                "using ",
-            ]
-            .iter()
-            .any(|prefix| rest.starts_with(prefix)))
-            || (matches!(first, '🌕' | '🌖' | '🌗' | '🌘' | '🌑' | '🌒' | '🌓' | '🌔')
-                && rest.is_empty());
-        active_spinner
-            || lowercase.contains("trust this folder?")
+        lowercase.contains("trust this folder?")
             || lowercase.contains("run this command?")
             || lowercase.contains("write this file?")
             || lowercase.contains("askuserquestion")
     }) {
         return None;
     }
+    // The last box must actually be a composer, not the welcome card.
+    lines[top + 1].trim_start().strip_prefix("│ > ")?;
+    Some((lines, top, bottom))
+}
+
+fn rows(screen: &str) -> Option<(Vec<String>, bool)> {
+    let (lines, top, bottom) = frame(screen)?;
     let first = lines[top + 1].trim_start().strip_prefix("│ > ")?;
     let first = first.strip_suffix('│')?.trim_end();
     let mut rows = vec![first.to_owned()];

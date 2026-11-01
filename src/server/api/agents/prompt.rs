@@ -230,7 +230,7 @@ impl App {
         let api_request_id = request.id.clone();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false, hard_deadline)
+                self.queue_agent_prompt(request.id, params, false, hard_deadline, false)
             }
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
@@ -309,6 +309,7 @@ impl App {
             },
             true,
             hard_deadline,
+            false,
         )
     }
 
@@ -341,6 +342,7 @@ impl App {
             },
             true,
             hard_deadline,
+            params.steer,
         )
     }
 
@@ -350,6 +352,7 @@ impl App {
         params: AgentPromptParams,
         observe: bool,
         hard_deadline: std::time::Instant,
+        steer: bool,
     ) -> Result<
         (
             String,
@@ -449,6 +452,7 @@ impl App {
             submit_delay,
             submit_deadline,
             Some(crate::platform::draft_editor::directory(&agent.pane_id)),
+            steer,
         )
         .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         Ok((id, agent, completion))
@@ -463,10 +467,20 @@ fn queue_prompt_input(
     delay: Duration,
     deadline: Option<std::time::Instant>,
     draft_directory: Option<std::path::PathBuf>,
+    steer: bool,
 ) -> std::io::Result<InputCompletion> {
     use crate::agents::AgentKind;
-    let (mut encoded, enter) =
+    let (mut encoded, mut enter) =
         crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
+    if observe && kind == AgentKind::Kimi && steer {
+        // Enter queues a separate native prompt. Ctrl+S injects guidance
+        // into the active turn, whose committed wire will attest ownership.
+        enter = crate::server::api::input_encoding::encode_api_keys(runtime, &["ctrl+s".into()])
+            .map_err(|key| std::io::Error::other(format!("Invalid steer key: {key}")))?
+            .into_iter()
+            .flatten()
+            .collect();
+    }
     if kind == AgentKind::Codex && runtime.bracketed_paste_enabled() {
         let (images, remaining) = crate::agents::providers::codex::hooks::image_paste_parts(&text);
         if !images.is_empty() {

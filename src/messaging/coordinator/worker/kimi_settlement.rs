@@ -1,5 +1,5 @@
 //! Read Kimi terminal evidence before settling a request.
-use super::{AgentId, BusState, Path, RuntimeStatus};
+use super::{AgentId, BusState, Path};
 
 pub(super) fn state_provider_is_kimi(state: &BusState, agent: AgentId) -> bool {
     state
@@ -19,12 +19,7 @@ pub(super) fn recorded_kimi_end(
     let Some(owner) = state.agent(agent).cloned() else {
         return Ok(None);
     };
-    if owner.provider != crate::agents::providers::ProviderKind::Kimi
-        || !matches!(
-            owner.status,
-            RuntimeStatus::Idle | RuntimeStatus::Unavailable
-        )
-    {
+    if owner.provider != crate::agents::providers::ProviderKind::Kimi {
         return Ok(None);
     }
     let Some(current) = owner.current_request else {
@@ -61,15 +56,34 @@ pub(super) fn recorded_kimi_end(
     };
     let home = launch::saved_home(&hooks)?;
     Ok(
-        match wire::resolve_outcome(&home, &owner.cwd, session, turn, &prompt)? {
-            Some(wire::Outcome::Final(text)) => Some(RecordedTurnEnd::Final {
+        match wire::resolve_turn(&home, &owner.cwd, session, turn, &prompt)? {
+            Some(wire::CommittedTurn {
+                outcome: wire::Outcome::Final(text),
+                prompts,
+            }) => Some(RecordedTurnEnd::Final {
                 turn_id: turn.into(),
                 text,
-                prompts: vec![prompt],
+                prompts,
             }),
-            Some(wire::Outcome::NoReply) => Some(RecordedTurnEnd::NoReply),
-            Some(wire::Outcome::Failed(message)) => Some(RecordedTurnEnd::Error(message)),
+            Some(wire::CommittedTurn {
+                outcome: wire::Outcome::NoReply,
+                ..
+            }) => Some(RecordedTurnEnd::NoReply),
+            Some(wire::CommittedTurn {
+                outcome: wire::Outcome::Failed(message),
+                ..
+            }) => Some(RecordedTurnEnd::Error(message)),
             None => None,
         },
     )
+}
+
+impl super::Worker {
+    pub(in crate::messaging::coordinator) fn recorded_kimi_end(
+        &self,
+        state: &mut BusState,
+        agent: AgentId,
+    ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
+        recorded_kimi_end(&self.data_dir, state, agent)
+    }
 }

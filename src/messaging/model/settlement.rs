@@ -54,18 +54,7 @@ impl BusState {
             turn_id, prompts, ..
         }) = recorded_end(&lead)
         {
-            if lead.provider_turn_id.as_deref() == Some(&turn_id) {
-                for id in &members {
-                    if self.requests.get(id).is_some_and(|member| {
-                        member.steered
-                            && !member.trusted_start_bound
-                            && !member.settled()
-                            && self.recorded_for(member, lead.id, &members, &prompts)
-                    }) {
-                        self.bind_recorded_member(*id, lead.provider_session_id.clone(), &turn_id);
-                    }
-                }
-            }
+            self.bind_recorded_turn_inputs(agent, &turn_id, &prompts);
         }
         let _ = self.complete_pending_final(agent, now_ms);
         let mut uncertain = None;
@@ -95,6 +84,42 @@ impl BusState {
             owner.actionable_error = uncertain.map(Self::unconfirmed_submission_message);
         }
         true
+    }
+
+    /// Bind only inputs the committed turn actually contains, before a later
+    /// Started callback can move unclaimed steering to another turn.
+    pub(crate) fn bind_recorded_turn_inputs(
+        &mut self,
+        agent: AgentId,
+        turn: &str,
+        prompts: &[String],
+    ) {
+        let Some(lead) = self
+            .agents
+            .get(&agent)
+            .and_then(|owner| owner.current_request)
+            .and_then(|request| self.requests.get(&request))
+            .filter(|request| request.provider_turn_id.as_deref() == Some(turn))
+            .cloned()
+        else {
+            return;
+        };
+        let members = self.group_members(lead.id);
+        let proved: Vec<_> = members
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.requests.get(id).is_some_and(|member| {
+                    member.steered
+                        && !member.trusted_start_bound
+                        && !member.settled()
+                        && self.recorded_for(member, lead.id, &members, prompts)
+                })
+            })
+            .collect();
+        for id in proved {
+            self.bind_recorded_member(id, lead.provider_session_id.clone(), turn);
+        }
     }
 
     fn bind_recorded_member(&mut self, id: RequestId, session: Option<String>, turn: &str) {

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn kimi_only_accepts_the_current_idle_framed_composer() {
+fn kimi_accepts_the_current_framed_composer_while_idle_or_working() {
     let frame = "╭────────────────────╮\n│ >                │\n╰────────────────────╯\nK2.8 Preview thinking: max";
     assert_eq!(
         observe(AgentKind::Kimi, frame, "Bus task"),
@@ -19,7 +19,7 @@ fn kimi_only_accepts_the_current_idle_framed_composer() {
     let busy = format!("⠋ Working…\n{frame}");
     assert_eq!(
         observe(AgentKind::Kimi, &busy, "Bus task"),
-        crate::terminal::runtime::InputObservation::Unavailable
+        crate::terminal::runtime::InputObservation::Empty
     );
     let historical = format!("The earlier turn said Working… in its answer\n{frame}");
     assert_eq!(
@@ -29,7 +29,7 @@ fn kimi_only_accepts_the_current_idle_framed_composer() {
     let moon = format!("🌕\n{frame}");
     assert_eq!(
         observe(AgentKind::Kimi, &moon, "Bus task"),
-        crate::terminal::runtime::InputObservation::Unavailable
+        crate::terminal::runtime::InputObservation::Empty
     );
 }
 
@@ -1312,6 +1312,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         std::time::Duration::ZERO,
         Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
         None,
+        false,
     )
     .unwrap();
     let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())

@@ -462,3 +462,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/codex_image_test.rs"]
 mod codex_image_tests;
+
+#[cfg(test)]
+#[path = "../tests/kimi_screen_test.rs"]
+mod kimi_screen_tests;

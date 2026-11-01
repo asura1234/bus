@@ -363,9 +363,9 @@ impl Worker {
                 session,
                 turn,
                 prompt,
-            } => Some(completion::started_callback(
-                record, id, session, turn, prompt,
-            )),
+            } => {
+                Some(self.started_request_callback(id, &mut state, record, session, turn, prompt)?)
+            }
             Parsed::CompletionCandidate { session, turn } => {
                 return self.completion_callback(id, state, path, record, session, Some(turn));
             }
