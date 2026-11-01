@@ -200,7 +200,9 @@ pub(super) fn default_pane_shell() -> String {
 
 #[cfg(not(windows))]
 pub(super) fn default_pane_shell() -> String {
-    "/bin/sh".into()
+    let mut command = CommandBuilder::new_default_prog();
+    command.env_remove("SHELL");
+    command.get_shell()
 }
 
 #[derive(Clone, Copy)]

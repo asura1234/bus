@@ -48,14 +48,15 @@ impl ShellIntegration {
     ) -> io::Result<Option<Self>> {
         // Only a pane created with Bus-owned identity or explicit launch identity
         // opts in; never inject into an arbitrary existing shell.
-        let agent_launch = matches!(
-            &launch_env.identity,
-            super::spawn::PaneLaunchIdentity::Managed { .. }
-        ) || launch_env
+        let agent_launch = launch_env
             .extra
             .iter()
             .any(|(key, value)| key == "BUS_LAUNCH_ID" && !value.is_empty());
-        if !agent_launch {
+        let owned_pane = matches!(
+            &launch_env.identity,
+            super::spawn::PaneLaunchIdentity::Managed { .. }
+        );
+        if !owned_pane && !agent_launch {
             return Ok(None);
         }
         let shell = if cmd.is_default_prog() {
@@ -74,6 +75,14 @@ impl ShellIntegration {
             .to_ascii_lowercase();
         let powershell = super::spawn::is_powershell_shell(&shell);
         if !matches!(name.as_str(), "zsh" | "bash" | "fish") && !powershell {
+            if agent_launch {
+                tracing::warn!(event = "bus.agent.unsupported_shell", shell = %shell,
+                    "Agent launch rejected before spawning an unsupported shell");
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("Cannot launch an agent in shell {shell:?}: Bus shell integration requires zsh, bash, fish or PowerShell. Configure terminal.default_shell to a supported shell; no launch input was sent"),
+                ));
+            }
             return Ok(None);
         }
         let token = format!(

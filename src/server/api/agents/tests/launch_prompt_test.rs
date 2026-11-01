@@ -230,10 +230,11 @@ async fn launch_prompt_zsh_login_honors_zdotdir_and_waits_for_zlogin() {
 async fn launch_prompt_unsupported_shell_keeps_process_gate() {
     let dir = crate::utils::test_temp::unique_temp_path("bus-sh-prompt");
     std::fs::create_dir_all(&dir).unwrap();
-    let runtime = fixture_shell(
+    let runtime = fixture_shell_with_launch_identity(
         "/bin/sh",
         crate::utils::config::ShellModeConfig::NonLogin,
         &dir,
+        false,
     );
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while available_shell_name(&runtime).is_none() {

@@ -137,6 +137,18 @@ fn pane_shell_falls_back_to_shell_env() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pane_shell_without_env_uses_account_login_shell() {
+    // Independent account lookup: the builder ignores the inherited SHELL.
+    let mut account = CommandBuilder::new_default_prog();
+    account.env_remove("SHELL");
+    let account_shell = account.get_shell();
+    for shell_env in [None, Some("  ".to_owned())] {
+        assert_eq!(pane_shell_from("", shell_env), account_shell);
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn pane_shell_ignores_shell_env_on_windows() {

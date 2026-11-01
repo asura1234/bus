@@ -952,3 +952,12 @@ idle then deliver, and an approval card without `--yolo`.
   internal end cannot freeze the answer or exclude later attested guidance. Keep
   the last nonempty text within an iteration, including a trailing think-only
   fragment, while a new silent iteration must not reuse an earlier answer.
+
+- **2026-11-01 — missing SHELL:** Symptom: a Bus started without `SHELL`
+  selected `/bin/sh`, so agent launch had no shell integration. Cause: the pane
+  default bypassed portable-pty's account-shell lookup. Test: leave
+  `terminal.default_shell` empty, start a private Bus with `SHELL` unset, and
+  require a real provider launch and reply. Empty Unix defaults use the account
+  login shell before the final `/bin/sh` fallback. An unsupported agent shell
+  must return a named, logged error before spawning; ordinary terminal panes
+  may still use that shell.

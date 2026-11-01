@@ -212,3 +212,18 @@ fn unowned_panes_are_never_modified_and_plain_sh_has_no_editor_integration() {
         assert_eq!(cmd.get_argv(), &before);
     }
 }
+
+#[test]
+fn managed_agent_launch_rejects_unsupported_shell_with_named_error() {
+    let launch = super::super::spawn::PaneLaunchEnv::from_extra(vec![(
+        "BUS_LAUNCH_ID".into(),
+        "unsupported-shell-launch".into(),
+    )]);
+    for shell in ["/bin/sh", "/bin/cat"] {
+        let mut command = CommandBuilder::new(shell);
+        let error = ShellIntegration::install_for_agent_launch(&mut command, &launch)
+            .expect_err("unsupported agent shells must fail before a pane is spawned");
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains(shell), "{error}");
+    }
+}
