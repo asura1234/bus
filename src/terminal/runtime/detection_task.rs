@@ -31,10 +31,11 @@ use crate::terminal::runtime::detection_process::ProcessProbeInput;
 use crate::terminal::runtime::AgentDetection;
 use crate::utils::ids::PaneId;
 use crate::utils::render::signal::RenderSignal;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU32};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
@@ -157,6 +158,7 @@ pub(super) fn spawn_detection_task(
     detection_content_seq: Arc<AtomicU64>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
+    kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
 ) -> (Arc<AtomicBool>, Option<tokio::task::AbortHandle>) {
     let managed_launch_pending = Arc::new(AtomicBool::new(false));
     if agent_detection != AgentDetection::Enabled {
@@ -171,6 +173,7 @@ pub(super) fn spawn_detection_task(
         managed_launch_pending: managed_launch_pending.clone(),
         render_notify,
         render_dirty,
+        kimi_code_home,
     };
     let handle = tokio::spawn(task.run(initial_agent));
     (managed_launch_pending, Some(handle.abort_handle()))
@@ -189,6 +192,8 @@ struct DetectionTask {
     managed_launch_pending: Arc<AtomicBool>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
+    /// Current managed Kimi home, rebound by native launches into this pane.
+    kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
 }
 
 struct DetectionState {
@@ -214,6 +219,7 @@ struct DetectionState {
     /// The identified agent job's leader process, kept until its exit is published.
     agent_leader: Option<crate::platform::ProcessInstance>,
     pending_idle: PendingIdleConfirmation,
+    kimi_turn_cache: crate::agents::providers::kimi::wire::MainTurnCache,
 }
 
 impl DetectionState {
@@ -240,6 +246,7 @@ impl DetectionState {
             agent_startup_grace_until: None,
             agent_leader: None,
             pending_idle: PendingIdleConfirmation::default(),
+            kimi_turn_cache: crate::agents::providers::kimi::wire::MainTurnCache::default(),
         }
     }
 }
@@ -575,7 +582,7 @@ impl DetectionTask {
 
         let osc_title = self.terminal.agent_osc_title();
         let osc_progress = self.terminal.agent_osc_progress();
-        let Some(screen_detection) = detection_update_for_publish_with_osc(
+        let Some(mut screen_detection) = detection_update_for_publish_with_osc(
             agent,
             &content,
             &osc_title,
@@ -586,6 +593,13 @@ impl DetectionTask {
             status.pending_idle.clear();
             return;
         };
+        if agent == Some(AgentKind::Kimi) && !process_exited {
+            let Some(adjusted) = self.kimi_command_screen(status, &content, screen_detection)
+            else {
+                return;
+            };
+            screen_detection = adjusted;
+        }
         let decision = decide_screen_detection_publish(
             ScreenDetectionPublishInput {
                 screen_detection,
@@ -602,6 +616,30 @@ impl DetectionTask {
         );
         self.publish_screen_detection(status, agent, decision, now)
             .await;
+    }
+
+    fn kimi_command_screen(
+        &self,
+        status: &mut DetectionState,
+        content: &str,
+        screen_detection: crate::agents::AgentDetection,
+    ) -> Option<crate::agents::AgentDetection> {
+        let home = self
+            .kimi_code_home
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let adjusted = classify_kimi_command_screen(
+            &self.terminal,
+            home.as_deref(),
+            &mut status.kimi_turn_cache,
+            content,
+            screen_detection,
+        );
+        if adjusted.is_none() {
+            status.pending_idle.clear();
+        }
+        adjusted
     }
 
     async fn publish_screen_detection(
@@ -650,4 +688,34 @@ impl DetectionTask {
             }
         }
     }
+}
+
+/// Resolve the command marker against native wire evidence, or its strict
+/// styled-header fallback. `None` means the remaining screen is a viewer.
+pub(super) fn classify_kimi_command_screen(
+    terminal: &PaneTerminal,
+    home: Option<&std::path::Path>,
+    cache: &mut crate::agents::providers::kimi::wire::MainTurnCache,
+    content: &str,
+    screen_detection: crate::agents::AgentDetection,
+) -> Option<crate::agents::AgentDetection> {
+    if !crate::agents::manifest::kimi_running_command_is_winner(content) {
+        return Some(screen_detection);
+    }
+    let turn = crate::agents::providers::kimi::activity::refresh_running_command_turn(home, cache);
+    let has_command_suffix =
+        crate::agents::providers::kimi::activity::running_command_has_command_suffix(content);
+    let ansi = turn.is_none().then(|| terminal.visible_ansi());
+    let line_is_bold = ansi
+        .as_deref()
+        .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
+    if crate::agents::providers::kimi::activity::running_command_text_is_live(
+        turn,
+        line_is_bold,
+        has_command_suffix,
+    ) {
+        return Some(screen_detection);
+    }
+    let adjusted = crate::agents::manifest::kimi_screen_without_running_command(content);
+    (!adjusted.skip_state_update).then_some(adjusted)
 }

@@ -65,25 +65,210 @@ fn kimi_cache_expiry_chooser_is_blocked() {
     assert!(detection.visible_blocker);
 }
 
+fn kimi_frame(footer: &str) -> String {
+    format!(
+        "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\n{footer}\n                               context: 3% (24.4k/1M)"
+    )
+}
+
+fn kimi_detection(screen: &str) -> Detected {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    detect_loaded(
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+    )
+}
+
 #[test]
-fn kimi_idle_composer_remains_ready_with_background_tasks() {
+fn kimi_live_tracking_agents_running_footer_is_working() {
+    let detection = kimi_detection(&kimi_frame("kimi thinking [2 agents running]"));
+    assert_eq!(detection.state, AgentState::Working);
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agent_status_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_tasks_running_is_working() {
+    let detection = kimi_detection(&kimi_frame(
+        "Ask When Needed  K2.8 Preview thinking: max  [2 tasks running]",
+    ));
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_tasks_running_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_steer_footer_is_working() {
+    let detection = kimi_detection(&kimi_frame("↑ to edit · ctrl-s to steer"));
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_steer_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_running_a_command_is_working() {
+    let detection = kimi_detection(&kimi_frame("Running a command"));
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_running_command_above_composer_is_working() {
+    let screen = "\
+● Running a command · $ sleep 45\n\
+╭──────────────────────────────────────────────────╮\n\
+│ >                                                │\n\
+╰──────────────────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 3% (24.4k/1M)";
+    let detection = kimi_detection(screen);
+    assert_eq!(
+        detection.state,
+        AgentState::Working,
+        "matched {:?}",
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+    );
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+}
+
+#[test]
+fn kimi_live_tracking_effort_footer_without_busy_marker_stays_idle() {
+    for footer in [
+        "K3.1 Pro thinking: high  …/tmp/project  master",
+        "● Ran a command · $ sleep 45\nK3.1 Pro thinking: high  …/tmp/project  master",
+    ] {
+        let detection = kimi_detection(&kimi_frame(footer));
+        assert_eq!(
+            detection.state,
+            AgentState::Idle,
+            "{footer:?} matched {:?}",
+            detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
+        );
+        assert!(detection.visible_idle, "{footer:?}");
+    }
+}
+
+#[test]
+fn kimi_standalone_running_command_reply_is_idle_once_the_turn_is_not_live() {
+    // Captured shape: final reply "● Running a command" above an empty composer.
+    // Text alone still matches the live header. The turn wire, or a non-bold
+    // line when that wire cannot be read, is what makes this Idle.
+    let screen = "\
+ ● Running a command\n\
+╭──────────────────────────────────────╮\n\
+│ >                                    │\n\
+╰──────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 2% (17.9k/1M)";
+    let live = kimi_detection(screen);
+    assert_eq!(live.state, AgentState::Working);
+    assert_eq!(
+        live.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+    assert!(super::super::kimi_running_command_is_winner(screen));
+    let settled = super::super::kimi_screen_without_running_command(screen);
+    assert_eq!(settled.state, AgentState::Idle);
+    assert!(settled.visible_idle);
+
+    let tasks = kimi_frame("Ask When Needed  K2.8 Preview thinking: max  [1 task running]");
+    assert!(!super::super::kimi_running_command_is_winner(&tasks));
+    let still_working = super::super::kimi_screen_without_running_command(&tasks);
+    assert_eq!(still_working.state, AgentState::Working);
+    assert!(still_working.visible_working);
+}
+
+#[test]
+fn kimi_live_command_header_above_approved_and_spinner_tip_is_working() {
+    // Real Kimi 2.4.1 while sleep 45 runs: the header sits above Approved
+    // and a moon tip, so a 6-line footer window misses it.
+    let screen = "\
+ ● Running a command · $ sleep 45\n\
+   Approved: Running: sleep 45\n\
+  🌒 · Tip: /goal for multi-step work with a clear finish line\n\
+╭──────────────────────────────────────╮\n\
+│ >                                    │\n\
+╰──────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 2% (12.8k/1M)";
+    let detection = kimi_detection(screen);
+    assert_eq!(detection.state, AgentState::Working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+    assert!(super::super::kimi_running_command_is_winner(screen));
+    assert!(crate::agents::providers::kimi::activity::running_command_has_command_suffix(screen));
+}
+
+#[test]
+fn kimi_idle_composer_with_command_phrase_in_finished_reply_stays_idle() {
+    let detection = kimi_detection(&kimi_frame(
+        "Running a command is the in-progress label.\n✻ Thinking 9 times\nK3.1 Pro thinking: high  …/tmp/project  master",
+    ));
+    assert_eq!(detection.state, AgentState::Idle);
+    assert!(detection.visible_idle);
+}
+
+#[test]
+fn kimi_tasks_running_footer_is_working() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
     for tasks in ["[1 task running]", "[2 tasks running]"] {
         let frame = format!(
             "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\nAsk When Needed  K2.8 Preview thinking: max  {tasks}\n                               context: 3% (24.4k/1M)"
         );
-        let detection = evaluate_loaded_manifest(
+        let detection = detect_loaded(
             DetectionInput {
                 screen: &frame,
                 osc_title: "",
                 osc_progress: "",
             },
             &loaded,
-            true,
         );
-        assert_eq!(detection.state, AgentState::Idle, "{tasks}");
-        assert!(detection.visible_idle, "{tasks}");
+        assert_eq!(detection.state, AgentState::Working, "{tasks}");
+        assert!(detection.visible_working, "{tasks}");
+        assert_eq!(
+            detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("footer_tasks_running_working"),
+            "{tasks}"
+        );
     }
 }
 

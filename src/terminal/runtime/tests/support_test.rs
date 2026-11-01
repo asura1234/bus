@@ -83,6 +83,19 @@ pub(super) struct DialogWaitTest {
 
 #[cfg(test)]
 impl TerminalRuntime {
+    pub(crate) fn test_kimi_command_detection(&self) -> Option<crate::agents::AgentDetection> {
+        let content = self.terminal.detection_text();
+        let screen = crate::agents::detect_agent_with_osc(Some(AgentKind::Kimi), &content, "", "");
+        let home = self.kimi_code_home.lock().unwrap().clone();
+        super::detection_task::classify_kimi_command_screen(
+            &self.terminal,
+            home.as_deref(),
+            &mut Default::default(),
+            &content,
+            screen,
+        )
+    }
+
     /// Arm a one-shot signal for the first unfinished frame the guard sees.
     /// Only this runtime's tests receive the generous completion budget.
     pub(crate) fn test_observe_dialog_redraw(
@@ -224,6 +237,7 @@ impl TerminalRuntime {
                 dialog_wait_test: Mutex::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
+                kimi_code_home: Arc::new(Mutex::new(None)),
                 preserve_processes_on_drop: true,
                 shell_integration: None,
                 launch_prompt_generation: Arc::new(AtomicU64::new(0)),

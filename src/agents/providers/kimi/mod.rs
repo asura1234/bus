@@ -1,3 +1,4 @@
+pub(crate) mod activity;
 pub(crate) mod hooks;
 pub(crate) mod launch;
 pub(crate) mod resume;

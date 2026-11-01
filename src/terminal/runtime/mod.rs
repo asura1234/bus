@@ -164,6 +164,7 @@ pub struct TerminalRuntime {
     dialog_wait_test: Mutex<tests::DialogWaitTest>,
     detection_content_seq: Arc<AtomicU64>,
     managed_launch_pending: Arc<AtomicBool>,
+    kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_prompt_generation: Arc<AtomicU64>,
@@ -193,6 +194,15 @@ pub enum WheelRouting {
 mod tests;
 
 impl TerminalRuntime {
+    /// Native launches into an existing shell must update the detector as well
+    /// as the command's environment.
+    pub(crate) fn bind_kimi_code_home(&self, home: Option<std::path::PathBuf>) {
+        *self
+            .kimi_code_home
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = home;
+    }
+
     #[cfg(test)]
     pub(crate) fn shell_prompt_diagnostics(&self) -> String {
         format!(

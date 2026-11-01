@@ -93,10 +93,42 @@ visible_working = true
 line_regex = ['(?i)^\s*[\u2800-\u28FF]+\s*(thinking(?:\.\.\.|…)|working(?:\.\.\.|…)|using )']
 
 [[rules]]
+id = "footer_tasks_running_working"
+state = "working"
+priority = 85
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['(?i)\[[1-9][0-9]*\s+tasks?\s+running\]']
+
+[[rules]]
+id = "footer_running_command_working"
+state = "working"
+priority = 84
+# The live tool header sits above the composer. A live run also prints
+# "Approved:" and a spinner tip, so the header is about the eighth
+# non-empty line. The same words can be a finished reply. This rule is
+# not proof of work by itself: the main wire's turn decides when available,
+# including settled replies with a command suffix or bold text. Without wire,
+# require both the `· $ command` suffix and bold styling of the live header.
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['(?i)^\s*(?:[●•]\s+)?running a command(?:\s*·.*)?\s*$']
+
+[[rules]]
+id = "footer_steer_working"
+state = "working"
+priority = 83
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['(?i)ctrl-s to steer', '↑ to edit']
+
+[[rules]]
 id = "current_empty_composer"
 state = "idle"
 priority = 70
-region = "bottom_non_empty_lines(5)"
+# A turn summary under the box (`✻ Thinking N times`) pushes the empty
+# composer one line above the old five-line window. Six still sees it.
+region = "bottom_non_empty_lines(6)"
 visible_idle = true
 contains = ["context:"]
 line_regex = ['^\s*│ >\s*│\s*$']

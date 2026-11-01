@@ -22,7 +22,7 @@ impl std::ops::Deref for Detected {
 pub(super) fn detect_input(agent: AgentKind, input: DetectionInput<'_>) -> Detected {
     let detection = detect_with_osc(agent, input);
     let matched_rule = load_manifest(agent).and_then(|loaded| {
-        matched_manifest_rule(input, &loaded, false).map(|rule| MatchedRule {
+        matched_manifest_rule(input, &loaded, false, None).map(|rule| MatchedRule {
             id: rule.id.clone(),
         })
     });
@@ -35,7 +35,7 @@ pub(super) fn detect_input(agent: AgentKind, input: DetectionInput<'_>) -> Detec
 pub(super) fn detect_loaded(input: DetectionInput<'_>, loaded: &LoadedManifest) -> Detected {
     Detected {
         detection: evaluate_loaded_manifest(input, loaded, false),
-        matched_rule: matched_manifest_rule(input, loaded, false).map(|rule| MatchedRule {
+        matched_rule: matched_manifest_rule(input, loaded, false, None).map(|rule| MatchedRule {
             id: rule.id.clone(),
         }),
     }
@@ -149,7 +149,7 @@ fn no_matching_rule_does_not_prove_managed_startup_readiness() {
         osc_title: "",
         osc_progress: "",
     };
-    assert!(matched_manifest_rule(input, &loaded, true).is_none());
+    assert!(matched_manifest_rule(input, &loaded, true, None).is_none());
     let result = evaluate_loaded_manifest(input, &loaded, true);
     assert_eq!(result.state, AgentState::Unknown);
     assert!(!result.visible_idle);
@@ -182,7 +182,7 @@ fn a_provider_ready_rule_still_confirms_a_managed_launch() {
         osc_title: "",
         osc_progress: "",
     };
-    assert!(matched_manifest_rule(input, &loaded, true).is_some());
+    assert!(matched_manifest_rule(input, &loaded, true, None).is_some());
     assert_eq!(
         evaluate_loaded_manifest(input, &loaded, true).state,
         AgentState::Idle
