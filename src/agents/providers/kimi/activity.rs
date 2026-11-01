@@ -5,6 +5,10 @@
 //! turn is over. A finished reply can show the same words in normal text.
 use super::wire::{MainTurn, MainTurnCache};
 
+/// Matches `footer_running_command_working`'s footer window, including the
+/// Approved line and spinner tip that sit under a live Bash header.
+const RUNNING_COMMAND_FOOTER_LINES: usize = 12;
+
 /// A `· $ command` suffix is the live Bash header. Wire completion then
 /// decides a bare phrase; without a wire, only a bold status line is live.
 pub(crate) fn running_command_text_is_live(
@@ -28,7 +32,7 @@ pub(crate) fn running_command_has_command_suffix(screen: &str) -> bool {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .collect();
-    let start = non_empty.len().saturating_sub(6);
+    let start = non_empty.len().saturating_sub(RUNNING_COMMAND_FOOTER_LINES);
     non_empty[start..]
         .iter()
         .any(|line| is_running_command_line(line) && line.contains('·'))
@@ -50,7 +54,7 @@ pub(crate) fn running_command_line_is_bold(ansi: &str) -> Option<bool> {
         .iter()
         .filter(|line| !line.plain.trim().is_empty())
         .collect();
-    let start = non_empty.len().saturating_sub(6);
+    let start = non_empty.len().saturating_sub(RUNNING_COMMAND_FOOTER_LINES);
     let mut saw = false;
     let mut bold = false;
     for line in &non_empty[start..] {

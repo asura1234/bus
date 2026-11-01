@@ -215,6 +215,29 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
 }
 
 #[test]
+fn kimi_live_command_header_above_approved_and_spinner_tip_is_working() {
+    // Real Kimi 2.4.1 while sleep 45 runs: the header sits above Approved
+    // and a moon tip, so a 6-line footer window misses it.
+    let screen = "\
+ ● Running a command · $ sleep 45\n\
+   Approved: Running: sleep 45\n\
+  🌒 · Tip: /goal for multi-step work with a clear finish line\n\
+╭──────────────────────────────────────╮\n\
+│ >                                    │\n\
+╰──────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 2% (12.8k/1M)";
+    let detection = kimi_detection(screen);
+    assert_eq!(detection.state, AgentState::Working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+    assert!(super::super::kimi_running_command_is_winner(screen));
+    assert!(crate::agents::providers::kimi::activity::running_command_has_command_suffix(screen));
+}
+
+#[test]
 fn kimi_idle_composer_with_command_phrase_in_finished_reply_stays_idle() {
     let detection = kimi_detection(&kimi_frame(
         "Running a command is the in-progress label.\n✻ Thinking 9 times\nK3.1 Pro thinking: high  …/tmp/project  master",
