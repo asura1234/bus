@@ -14,6 +14,12 @@ mod kimi;
 #[cfg(test)]
 pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SUBMIT_DELAY;
 
+pub(super) fn detection_composer(
+    kind: crate::agents::AgentKind,
+) -> impl crate::terminal::runtime::SubmissionInspector {
+    composer::observer(kind, String::new())
+}
+
 struct StyledChar {
     character: char,
     faint: bool,

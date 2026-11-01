@@ -76,6 +76,7 @@ impl Worker {
             // Native ids change with question/command text and options, but
             // ignore selection redraws. A changed id needs another answer.
             let mut verified_shape = wait.clone();
+            let mut open_dialog = wait.as_deref() != Some(BLOCKED);
             if wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
                 // AgentList metadata can outlive an answer or manual close.
                 // Never open a pending panel or send keys while verifying.
@@ -85,13 +86,35 @@ impl Worker {
                     else {
                         continue;
                     };
-                    if current.dialog.is_none() && !current.pending_question {
+                    if current.dialog.is_none()
+                        && !current.pending_question
+                        && wait.as_deref() != Some(BLOCKED)
+                    {
                         if steady {
                             self.finish_closed_dialog(id)?;
                         } else {
                             self.clear_automatic_dialog_answer(id)?;
                         }
                         continue;
+                    }
+                    // Blocked is itself the detector's published observation.
+                    // A missing provider parser cannot close this generic wait.
+                    if wait.as_deref() == Some(BLOCKED) {
+                        if current.dialog.is_none() && !current.pending_question {
+                            match self.blocked_screen_is_current(
+                                &pane,
+                                &terminal,
+                                session.as_deref(),
+                            ) {
+                                Some(true) => {}
+                                Some(false) => {
+                                    self.finish_closed_dialog(id)?;
+                                    continue;
+                                }
+                                None => continue,
+                            }
+                        }
+                        open_dialog = true;
                     }
                     // Missing list metadata can be an unreadable redraw. An
                     // open dialog or pending question keeps earlier help live.
@@ -136,7 +159,7 @@ impl Worker {
                 continue;
             }
             let mut state = self.state.clone();
-            let to = post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
+            let to = post_blocked(&mut state, id, open_dialog)?;
             state
                 .set_dialog_notice(id, wait)
                 .map_err(|error| error.to_string())?;
@@ -148,6 +171,36 @@ impl Worker {
         let state = &self.state;
         self.dialog_seen.retain(|id, _| state.agent(*id).is_some());
         Ok(())
+    }
+
+    /// The list can still carry the Blocked frame from a dialog just closed.
+    /// Verify its native state rather than using parser-null as either proof.
+    fn blocked_screen_is_current(
+        &mut self,
+        pane: &str,
+        terminal: &str,
+        session: Option<&str>,
+    ) -> Option<bool> {
+        let super::ResponseResult::AgentInfo { agent } = self
+            .transport
+            .request(super::Method::AgentGet(super::schema::AgentTarget {
+                target: pane.to_owned(),
+            }))
+            .ok()?
+        else {
+            return None;
+        };
+        if agent.pane_id != pane
+            || agent.terminal_id != terminal
+            || agent
+                .agent_session
+                .as_ref()
+                .map(|session| session.value.as_str())
+                != session
+        {
+            return None;
+        }
+        Some(agent.agent_status == super::schema::AgentStatus::Blocked)
     }
 }
 

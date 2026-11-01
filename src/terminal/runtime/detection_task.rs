@@ -159,6 +159,7 @@ pub(super) fn spawn_detection_task(
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
+    detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
 ) -> (Arc<AtomicBool>, Option<tokio::task::AbortHandle>) {
     let managed_launch_pending = Arc::new(AtomicBool::new(false));
     if agent_detection != AgentDetection::Enabled {
@@ -174,6 +175,7 @@ pub(super) fn spawn_detection_task(
         render_notify,
         render_dirty,
         kimi_code_home,
+        detection_context,
     };
     let handle = tokio::spawn(task.run(initial_agent));
     (managed_launch_pending, Some(handle.abort_handle()))
@@ -190,6 +192,7 @@ struct DetectionTask {
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
     managed_launch_pending: Arc<AtomicBool>,
+    detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     /// Current managed Kimi home, rebound by native launches into this pane.
@@ -207,6 +210,7 @@ struct DetectionState {
     has_process_probe: bool,
     acquisition_started_at: Option<Instant>,
     last_content_change_at: Option<Instant>,
+    last_pty_activity_at: Option<Instant>,
     pending_foreground_shell_clear: bool,
     foreground_shell_exit_reported: bool,
     pending_restore_probe: bool,
@@ -216,6 +220,7 @@ struct DetectionState {
     last_detection_text: String,
     last_screen_scan_detection_content_seq: Option<u64>,
     agent_startup_grace_until: Option<Instant>,
+    managed_launch_pending_seen: bool,
     /// The identified agent job's leader process, kept until its exit is published.
     agent_leader: Option<crate::platform::ProcessInstance>,
     pending_idle: PendingIdleConfirmation,
@@ -235,6 +240,7 @@ impl DetectionState {
             has_process_probe: false,
             acquisition_started_at: None,
             last_content_change_at: None,
+            last_pty_activity_at: None,
             pending_foreground_shell_clear: false,
             foreground_shell_exit_reported: false,
             pending_restore_probe: initial_agent.is_some(),
@@ -244,6 +250,7 @@ impl DetectionState {
             last_detection_text: String::new(),
             last_screen_scan_detection_content_seq: None,
             agent_startup_grace_until: None,
+            managed_launch_pending_seen: false,
             agent_leader: None,
             pending_idle: PendingIdleConfirmation::default(),
             kimi_turn_cache: crate::agents::providers::kimi::wire::MainTurnCache::default(),
@@ -294,6 +301,11 @@ impl DetectionTask {
             let process_exited = status.pending_foreground_shell_clear
                 && agent.is_some()
                 && !status.foreground_shell_exit_reported;
+            let launch_pending = self.managed_launch_pending.load(Ordering::Acquire);
+            if launch_pending && !status.managed_launch_pending_seen {
+                status.agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
+            }
+            status.managed_launch_pending_seen = launch_pending;
             if self.startup_grace_blocks_read(&mut status, now, process_exited) {
                 continue;
             }
@@ -543,6 +555,13 @@ impl DetectionTask {
         process_exited: bool,
         now: Instant,
     ) {
+        let managed_launch_pending = self.managed_launch_pending.load(Ordering::Acquire);
+        let has_obligation = managed_launch_pending
+            || self
+                .detection_context
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .obligation;
         let current_detection_content_seq = if agent.is_some() {
             Some(self.detection_content_seq.load(Ordering::Relaxed))
         } else {
@@ -551,7 +570,7 @@ impl DetectionTask {
         match decide_detection_screen_read(DetectionScreenReadInput {
             state: status.state,
             agent,
-            pending_idle_active: status.pending_idle.active(),
+            pending_idle_active: status.pending_idle.active() || has_obligation,
             agent_changed,
             process_exited,
             current_detection_content_seq,
@@ -565,6 +584,9 @@ impl DetectionTask {
         status.last_screen_scan_detection_content_seq = current_detection_content_seq;
         let content_changed = content != status.last_detection_text;
         status.last_detection_text.clone_from(&content);
+        if content_changed && status.state == AgentState::Working {
+            status.last_pty_activity_at = Some(now);
+        }
         // A confirmed process exit is not a screen inference, so a retained
         // viewer must not hold it back.
         if !process_exited && agents::should_skip_state_update(agent, &content) {
@@ -588,7 +610,7 @@ impl DetectionTask {
             &osc_title,
             &osc_progress,
             process_exited,
-            self.managed_launch_pending.load(Ordering::Acquire),
+            managed_launch_pending,
         ) else {
             status.pending_idle.clear();
             return;
@@ -599,6 +621,10 @@ impl DetectionTask {
                 return;
             };
             screen_detection = adjusted;
+        }
+        if !process_exited {
+            screen_detection =
+                self.obligation_detection(status, agent, screen_detection, has_obligation, now);
         }
         let decision = decide_screen_detection_publish(
             ScreenDetectionPublishInput {
@@ -616,6 +642,38 @@ impl DetectionTask {
         );
         self.publish_screen_detection(status, agent, decision, now)
             .await;
+    }
+
+    fn obligation_detection(
+        &self,
+        status: &DetectionState,
+        agent: Option<AgentKind>,
+        screen_detection: crate::agents::AgentDetection,
+        has_obligation: bool,
+        now: Instant,
+    ) -> crate::agents::AgentDetection {
+        let screen = self.terminal.visible_ansi();
+        let cursor = self
+            .terminal
+            .cursor_state()
+            .map(|cursor| (cursor.x, cursor.y));
+        let context = self
+            .detection_context
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let ready = context
+            .ready(agent, &screen, cursor)
+            .unwrap_or(screen_detection.visible_idle);
+        let pty_working = status.state == AgentState::Working
+            && status.last_pty_activity_at.is_some_and(|at| {
+                now.saturating_duration_since(at) < super::detection_policy::AGENT_PENDING_IDLE_CAP
+            });
+        super::detection_policy::apply_obligation_detection(
+            screen_detection,
+            has_obligation,
+            ready,
+            context.working(now) || pty_working,
+        )
     }
 
     fn kimi_command_screen(
@@ -718,4 +776,121 @@ pub(super) fn classify_kimi_command_screen(
     }
     let adjusted = crate::agents::manifest::kimi_screen_without_running_command(content);
     (!adjusted.skip_state_update).then_some(adjusted)
+}
+
+#[cfg(test)]
+mod blocked_tests {
+    use super::*;
+
+    // The update chooser has no provider-specific dialog parser. Resume/Quit
+    // represents the same generic stop with no safe automatic submission.
+    const UPDATE: &str = "New version available: 2.4.1\n❯ Install update now\n  Continue with current version\n↑/↓ to select, Enter to confirm";
+
+    async fn scan_with_obligation(
+        screen: &str,
+        startup: bool,
+        obligation: bool,
+    ) -> (AgentState, bool) {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+        runtime.set_detection_context(AgentKind::Kimi, obligation, None, |_: &str| {
+            super::super::InputObservation::Unavailable
+        });
+        runtime
+            .managed_launch_pending
+            .store(startup, Ordering::Release);
+        let result = runtime
+            .test_scan_detection_context(AgentKind::Kimi, AgentState::Unknown)
+            .await;
+        assert!(writes.try_recv().is_err());
+        result
+    }
+
+    impl super::super::TerminalRuntime {
+        pub(crate) async fn test_scan_detection_context(
+            &self,
+            kind: AgentKind,
+            previous: AgentState,
+        ) -> (AgentState, bool) {
+            let (events, mut received) = mpsc::channel(16);
+            let task = DetectionTask {
+                pane_id: self.pane_id,
+                child_pid: self.child_pid.clone(),
+                terminal: self.terminal.clone(),
+                state_events: events,
+                detection_content_seq: self.detection_content_seq.clone(),
+                managed_launch_pending: self.managed_launch_pending.clone(),
+                detection_context: self.detection_context.clone(),
+                render_notify: Arc::new(Notify::new()),
+                render_dirty: Arc::new(RenderSignal::default()),
+                kimi_code_home: Arc::new(Mutex::new(None)),
+            };
+            let mut status = DetectionState::new(Some(kind));
+            status.state = previous;
+            status.last_visible_idle = false;
+            task.scan_screen(&mut status, Some(kind), false, false, false, Instant::now())
+                .await;
+            let published = received.try_recv().ok().is_some_and(|event| {
+                matches!(
+                    event,
+                    TerminalEvent::StateChanged {
+                        state: AgentState::Blocked,
+                        ..
+                    }
+                )
+            });
+            (status.state, published)
+        }
+    }
+
+    async fn scan(screen: &str, startup: bool) -> (AgentState, bool) {
+        scan_with_obligation(screen, startup, false).await
+    }
+
+    #[tokio::test]
+    async fn unknown_startup_update_is_published_blocked_before_timeout() {
+        assert!(crate::agents::dialog::parse(UPDATE).is_none());
+        assert_eq!(scan(UPDATE, true).await, (AgentState::Blocked, true));
+        assert_eq!(
+            scan("Resume\nQuit", true).await,
+            (AgentState::Blocked, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn no_request_generic_screen_stays_idle() {
+        assert_eq!(scan(UPDATE, false).await, (AgentState::Idle, false));
+    }
+
+    #[tokio::test]
+    async fn current_request_generic_dialog_is_published_blocked() {
+        assert_eq!(
+            scan_with_obligation(UPDATE, false, true).await,
+            (AgentState::Blocked, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn visible_kimi_work_wins_over_generic_blocked_fallback() {
+        assert_eq!(
+            scan("kimi-k2.5 thinking [2 agents running]", true).await,
+            (AgentState::Working, false)
+        );
+    }
+
+    #[tokio::test]
+    async fn pty_activity_keeps_an_existing_working_turn_working() {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        runtime.set_detection_context(AgentKind::Kimi, true, None, |_: &str| {
+            super::super::InputObservation::Unavailable
+        });
+        runtime.test_process_pty_bytes(b"Tool output is still arriving\r\n");
+        assert_eq!(
+            runtime
+                .test_scan_detection_context(AgentKind::Kimi, AgentState::Working)
+                .await,
+            (AgentState::Working, false)
+        );
+        assert!(writes.try_recv().is_err());
+    }
 }

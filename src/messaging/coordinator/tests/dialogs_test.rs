@@ -81,6 +81,15 @@ impl Transport for FakeServer {
             });
         }
         match method {
+            Method::AgentGet(params) => Ok(ResponseResult::AgentInfo {
+                agent: serde_json::from_value(json!({
+                    "terminal_id": "terminal", "pane_id": params.target, "name": "bus-r1-a2",
+                    "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
+                    "interactive_ready": true, "revision": 1,
+                    "agent_status": if screen.dialog || screen.blocked { "blocked" } else { "idle" },
+                    "dialog_id": screen.current_dialog().map(|dialog| dialog.id),
+                })).unwrap(),
+            }),
             Method::AgentList(_) => Ok(ResponseResult::AgentList {
                 agents: vec![serde_json::from_value(json!({
                     "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
@@ -299,16 +308,28 @@ fn polls(worker: &mut Worker, count: usize) {
 }
 
 #[test]
-fn stale_blocked_metadata_without_an_open_dialog_does_not_notify() {
+fn parser_null_blocked_worker_notifies_its_orchestrator_once() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent), []);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(
+            vec![orchestrator.unwrap()],
+            expected_blocked(&worker, agent)
+        )]
+    );
     assert!(worker
-        .state
-        .queued_requests(orchestrator.unwrap())
-        .is_empty());
-    assert_eq!(worker.state.requests().count(), 0);
+        .native_dialog("pane", "terminal", None, false)
+        .unwrap()
+        .dialog
+        .is_none());
+    assert!(
+        !screen.lock().unwrap().answer_sent,
+        "an unparsed screen must receive no automatic key"
+    );
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod common;
 pub mod copy;
+pub mod detection_context;
 pub mod events;
 pub mod layout;
 pub mod methods;
@@ -15,6 +16,7 @@ pub use self::events::*;
 pub use self::session::*;
 pub use agents::*;
 pub use common::*;
+pub use detection_context::*;
 pub use panes::*;
 pub use responses::*;
 pub use server::*;

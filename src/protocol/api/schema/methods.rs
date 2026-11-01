@@ -73,6 +73,8 @@ pub enum Method {
     TabClose(TabTarget),
     #[serde(rename = "agent.list")]
     AgentList(EmptyParams),
+    #[serde(rename = "agent.list_with_detection_context")]
+    AgentListWithDetectionContext(super::AgentDetectionContexts),
     #[serde(rename = "agent.get")]
     AgentGet(AgentTarget),
     #[serde(rename = "agent.startup_snapshot")]
@@ -187,6 +189,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::TabRename(_) => "tab.rename",
         Method::TabClose(_) => "tab.close",
         Method::AgentList(_) => "agent.list",
+        Method::AgentListWithDetectionContext(_) => "agent.list_with_detection_context",
         Method::AgentGet(_) => "agent.get",
         Method::AgentStartupSnapshot(_) => "agent.startup_snapshot",
         Method::AgentRead(_) => "agent.read",

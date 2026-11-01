@@ -136,6 +136,7 @@ use tokio::sync::watch;
 #[cfg(all(test, unix))]
 use tokio::sync::Notify;
 
+mod detection_context;
 mod detection_policy;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,6 +165,7 @@ pub struct TerminalRuntime {
     dialog_wait_test: Mutex<tests::DialogWaitTest>,
     detection_content_seq: Arc<AtomicU64>,
     managed_launch_pending: Arc<AtomicBool>,
+    detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,

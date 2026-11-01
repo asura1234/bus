@@ -159,6 +159,9 @@ impl App {
     fn dispatch_agent_api_method(&mut self, id: String, method: Method) -> String {
         match method {
             Method::AgentList(_) => self.handle_agent_list(id),
+            Method::AgentListWithDetectionContext(params) => {
+                self.handle_agent_list_with_detection_context(id, params)
+            }
             Method::AgentGet(target) => self.handle_agent_get(id, target),
             Method::AgentStartupSnapshot(params) => self.handle_agent_startup_snapshot(id, params),
             Method::AgentFocus(target) => self.handle_agent_focus(id, target),
