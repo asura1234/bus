@@ -592,10 +592,12 @@ impl DetectionTask {
         }
 
         let content = self.terminal.detection_text();
+        let pty_activity = current_detection_content_seq
+            .is_some_and(|seq| seq != status.last_screen_scan_detection_content_seq.unwrap_or(0));
         status.last_screen_scan_detection_content_seq = current_detection_content_seq;
         let content_changed = content != status.last_detection_text;
         status.last_detection_text.clone_from(&content);
-        if content_changed && status.state == AgentState::Working {
+        if pty_activity && status.state == AgentState::Working {
             status.last_pty_activity_at = Some(now);
         }
         // A confirmed process exit is not a screen inference, so a retained
@@ -903,8 +905,16 @@ mod blocked_tests {
         );
     }
 
-    #[tokio::test]
-    async fn pty_activity_keeps_an_existing_working_turn_working() {
+    fn feed_pty(runtime: &super::super::TerminalRuntime, bytes: &[u8]) {
+        runtime.test_process_pty_bytes(bytes);
+        // Match the production read callback, including escape-only reads.
+        super::super::detection_policy::observe_detection_content_change(
+            bytes,
+            &runtime.detection_content_seq,
+        );
+    }
+
+    async fn assert_pty_activity_keeps_working(initial: &[u8], update: &[u8]) -> (String, String) {
         let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
         runtime.set_detection_context(
             AgentKind::Kimi,
@@ -914,14 +924,94 @@ mod blocked_tests {
                 super::super::InputObservation::Unavailable
             })),
         );
-        runtime.test_process_pty_bytes(b"Tool output is still arriving\r\n");
+        feed_pty(&runtime, initial);
+        let initial_text = runtime.detection_text();
+        let (events, _received) = mpsc::channel(16);
+        let task = DetectionTask {
+            pane_id: runtime.pane_id,
+            child_pid: runtime.child_pid.clone(),
+            terminal: runtime.terminal.clone(),
+            state_events: events,
+            detection_content_seq: runtime.detection_content_seq.clone(),
+            managed_launch_pending: runtime.managed_launch_pending.clone(),
+            detection_context: runtime.detection_context.clone(),
+            render_notify: Arc::new(Notify::new()),
+            render_dirty: Arc::new(RenderSignal::default()),
+            kimi_code_home: Arc::new(Mutex::new(None)),
+        };
+        let started = Instant::now();
+        let mut status = DetectionState::new(Some(AgentKind::Kimi));
+        status.state = AgentState::Working;
+        status.last_visible_idle = false;
+        for elapsed_ms in [0, 100, 200, 300, 800, 900, 1000, 1100] {
+            if elapsed_ms > 0 {
+                feed_pty(&runtime, update);
+            }
+            task.scan_screen(
+                &mut status,
+                Some(AgentKind::Kimi),
+                false,
+                false,
+                false,
+                started + Duration::from_millis(elapsed_ms),
+            )
+            .await;
+            assert_eq!(
+                status.state,
+                AgentState::Working,
+                "raw PTY activity at {elapsed_ms}ms must preserve Working"
+            );
+        }
+        // Scans without any new reads must allow the hold and confirmations to expire.
+        for elapsed_ms in [1800, 1900, 2000, 2100] {
+            task.scan_screen(
+                &mut status,
+                Some(AgentKind::Kimi),
+                false,
+                false,
+                false,
+                started + Duration::from_millis(elapsed_ms),
+            )
+            .await;
+        }
         assert_eq!(
-            runtime
-                .test_scan_detection_context(AgentKind::Kimi, AgentState::Working)
-                .await,
-            (AgentState::Working, false)
+            status.state,
+            AgentState::Blocked,
+            "quiet output must not renew Working"
         );
         assert!(writes.try_recv().is_err());
+        (initial_text, runtime.detection_text())
+    }
+
+    #[tokio::test]
+    async fn pty_activity_keeps_an_existing_working_turn_working() {
+        let (before, after) = assert_pty_activity_keeps_working(
+            b"Tool output is still arriving\r\n",
+            b"More tool output\r\n",
+        )
+        .await;
+        assert_ne!(before, after);
+    }
+
+    #[tokio::test]
+    async fn raw_pty_activity_keeps_working_when_detection_text_is_unchanged() {
+        let (before, after) =
+            assert_pty_activity_keeps_working(b"Tool output is still arriving\r\n", b"\x1b[31m")
+                .await;
+        assert_eq!(
+            before, after,
+            "ANSI-only reads leave normalized text unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_matched_dialog_waits_for_pty_output_to_go_quiet() {
+        let (before, after) = assert_pty_activity_keeps_working(
+            b"Trust this folder?\r\nTrust and continue\r\n",
+            b"\x1b[31m",
+        )
+        .await;
+        assert_eq!(before, after);
     }
 
     #[tokio::test]

@@ -319,8 +319,8 @@ pub(super) fn detection_update_for_publish_with_osc(
 }
 
 /// A live obligation needs either a ready composer or positive work evidence.
-/// Keep parsed blockers and working rules authoritative; this fills only the
-/// otherwise idle/unknown screen, without adding another dialog parser.
+/// Working rules stay authoritative; even a matched blocker waits for activity
+/// to go quiet, without adding another dialog parser.
 pub(super) fn apply_obligation_detection(
     mut detection: AgentDetection,
     obligation: bool,
@@ -329,7 +329,8 @@ pub(super) fn apply_obligation_detection(
 ) -> AgentDetection {
     if !obligation
         || detection.skip_state_update
-        || !matches!(detection.state, AgentState::Idle | AgentState::Unknown)
+        || detection.state == AgentState::Working
+        || (detection.state == AgentState::Blocked && !activity_working)
     {
         return detection;
     }
