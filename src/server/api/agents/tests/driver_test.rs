@@ -64,16 +64,35 @@ async fn universal_driver_answers_shell_prompt_without_agent_metadata() {
 }
 
 #[tokio::test]
-async fn universal_driver_select_never_enters_the_initial_update_row() {
+async fn universal_driver_select_waits_for_outstanding_navigation_across_calls() {
     let (mut app, target, mut writes) =
         shell("❯ 1. Install update now\r\n  2. Continue with current version".as_bytes());
     let mut params = press(&target);
     params.select = Some("Continue with current version".into());
     let result: Value =
-        serde_json::from_str(&app.handle_agent_press("select".into(), params)).unwrap();
+        serde_json::from_str(&app.handle_agent_press("select".into(), params.clone())).unwrap();
     assert!(result.get("error").is_none(), "{result}");
     assert_eq!(result["result"]["press"]["selection_pending"], true);
     assert_eq!(writes.recv().await.unwrap().as_ref(), b"\x1b[B");
+    assert!(writes.try_recv().is_err());
+    let repeated: Value =
+        serde_json::from_str(&app.handle_agent_press("continue".into(), params.clone())).unwrap();
+    assert_eq!(repeated["result"]["press"]["keys"], serde_json::json!([]));
+    assert_eq!(repeated["result"]["press"]["selection_pending"], true);
+    assert!(
+        writes.try_recv().is_err(),
+        "the first arrow has not applied yet"
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(
+            "\x1b[2J\x1b[H  1. Install update now\r\n❯ 2. Continue with current version".as_bytes(),
+        );
+    let confirmed: Value =
+        serde_json::from_str(&app.handle_agent_press("confirm".into(), params)).unwrap();
+    assert_eq!(confirmed["result"]["press"]["selection_pending"], false);
+    assert_eq!(writes.recv().await.unwrap().as_ref(), b"\r");
     assert!(writes.try_recv().is_err());
 }
 

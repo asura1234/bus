@@ -78,10 +78,13 @@ impl App {
                 "Terminal runtime is unavailable",
             );
         };
+        let mut pending = runtime
+            .pending_driver_selection
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let (mut keys, selection_pending) = if let Some(label) = &params.select {
-            match driver::selection_step(&observation.grid, label) {
-                Ok(SelectionStep::Move(key)) => (vec![key.to_owned()], true),
-                Ok(SelectionStep::Confirm) => (vec!["enter".into()], false),
+            match selection_keys(&observation, label, pending.as_deref()) {
+                Ok(step) => step,
                 Err(error) => return encode_error(id, "selection_unavailable", error),
             }
         } else {
@@ -98,6 +101,13 @@ impl App {
         }
         if let Err(error) = write_input(runtime, params.text.as_deref(), encoded, params.submit) {
             return encode_error(id, "terminal_write_failed", error);
+        }
+        if params.select.is_some() && !keys.is_empty() {
+            *pending = if selection_pending {
+                observation.focus.as_ref().map(|(_, label)| label.clone())
+            } else {
+                None
+            };
         }
         encode_success(
             id,
@@ -134,6 +144,21 @@ impl App {
     }
 }
 
+fn selection_keys(
+    observation: &TerminalObservation,
+    label: &str,
+    pending: Option<&str>,
+) -> Result<(Vec<String>, bool), String> {
+    let step = driver::selection_step(&observation.grid, label)?;
+    if pending.is_some() && pending == observation.focus.as_ref().map(|(_, label)| label.as_str()) {
+        return Ok((Vec::new(), true));
+    }
+    Ok(match step {
+        SelectionStep::Move(key) => (vec![key.to_owned()], true),
+        SelectionStep::Confirm => (vec!["enter".into()], false),
+    })
+}
+
 fn write_input(
     runtime: &crate::terminal::TerminalRuntime,
     text: Option<&str>,
@@ -144,6 +169,9 @@ fn write_input(
         driver::input::paste(text, runtime.bracketed_paste_enabled())
     });
     bytes.extend(encoded.into_iter().flatten());
+    if bytes.is_empty() && !submit {
+        return Ok(());
+    }
     let enter = || {
         runtime.encode_terminal_key(
             crossterm::event::KeyEvent::new(

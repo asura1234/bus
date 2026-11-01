@@ -161,6 +161,8 @@ pub struct TerminalRuntime {
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
     draft_input: draft_input::SharedDraftInput,
+    /// A navigation key awaiting a logical focus change, retained across API calls.
+    pub(crate) pending_driver_selection: Mutex<Option<String>>,
     #[cfg(test)]
     dialog_wait_test: Mutex<tests::DialogWaitTest>,
     detection_content_seq: Arc<AtomicU64>,
