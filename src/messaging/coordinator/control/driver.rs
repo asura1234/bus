@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 
 const REDRAW_POLLS: usize = 20;
 const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+// Leave room for a native RPC to settle before the control reply's 15s deadline.
+const SELECTION_BUDGET: Duration = Duration::from_secs(8);
 
 impl Worker {
     pub(super) fn execute_driver(&mut self, method: &str, p: &Value) -> Result<Value, String> {
@@ -88,14 +90,33 @@ fn native_observe(
 }
 
 fn press_terminal(
+    params: schema::AgentPressParams,
+    call: &mut impl FnMut(Method) -> Result<ResponseResult, String>,
+    pause: &mut impl FnMut(),
+) -> Result<Value, String> {
+    let started = std::time::Instant::now();
+    press_terminal_with_elapsed(params, call, pause, &mut || started.elapsed())
+}
+
+fn press_terminal_with_elapsed(
     mut params: schema::AgentPressParams,
     call: &mut impl FnMut(Method) -> Result<ResponseResult, String>,
     pause: &mut impl FnMut(),
+    elapsed: &mut impl FnMut() -> Duration,
 ) -> Result<Value, String> {
     let mut keys = Vec::new();
     let mut text_written = false;
     let mut previous = None;
     loop {
+        if let Some(press) = previous.take_if(|_| elapsed() >= SELECTION_BUDGET) {
+            return press_result(
+                press,
+                keys,
+                text_written,
+                "selection_pending",
+                Some("Selection is still pending; continue from the returned screen".into()),
+            );
+        }
         let response = call(Method::AgentPress(params.clone()));
         let mut press = match response {
             Ok(ResponseResult::TerminalPressed { press }) => press,
@@ -136,6 +157,15 @@ fn press_terminal(
         };
         let mut moved = false;
         for _ in 0..REDRAW_POLLS {
+            if elapsed() >= SELECTION_BUDGET {
+                return press_result(
+                    press,
+                    keys,
+                    text_written,
+                    "selection_pending",
+                    Some("Selection is still pending; continue from the returned screen".into()),
+                );
+            }
             pause();
             match native_observe(&params.target, params.expected_terminal_id.as_deref(), call) {
                 Ok(observation) => {
@@ -145,7 +175,7 @@ fn press_terminal(
                         .ok_or("Menu focus is not unique".to_owned());
                     press.observation = observation;
                     match next_focus {
-                        Ok(next_focus) if next_focus != focus => {
+                        Ok(next_focus) if next_focus.1 != focus.1 => {
                             moved = true;
                             break;
                         }
@@ -190,6 +220,17 @@ fn press_result(
 ) -> Result<Value, String> {
     press.keys = keys;
     press.text_written = text_written;
+    let input_mode = if press.selection_pending || outcome == "selected" {
+        "select"
+    } else if text_written {
+        "text"
+    } else {
+        "keys"
+    };
+    tracing::info!(event = "bus.terminal.driver.result",
+        terminal_id = %press.observation.terminal_id, pane_id = %press.observation.pane_id,
+        input_mode, outcome, reason = ?error, key_count = press.keys.len(), text_written,
+        "Terminal driver input result");
     let mut result = serde_json::to_value(press).map_err(|error| error.to_string())?;
     result["observation"] = observation_json(result["observation"].take(), false);
     result["outcome"] = json!(outcome);
@@ -417,5 +458,74 @@ mod tests {
         assert_eq!(compact["rows"], 4);
         let styled = observation_json(native.clone(), true);
         assert_eq!(styled["grid"], native["grid"]);
+    }
+
+    #[test]
+    fn relocating_the_focused_row_does_not_send_a_second_navigation_key() {
+        let mut relocated = observation(0, 4);
+        relocated
+            .grid
+            .cells
+            .insert(0, relocated.grid.cells[3].clone());
+        relocated.grid.rows += 1;
+        relocated.focus = Some((1, "Install update now".into()));
+        relocated.text = relocated.grid.text();
+        let mut script = VecDeque::from([
+            pressed(0, true, "down"),
+            ResponseResult::TerminalObserved {
+                observation: relocated,
+            },
+            ResponseResult::TerminalObserved {
+                observation: observation(1, 6),
+            },
+            pressed(1, false, "enter"),
+        ]);
+        let result = press_terminal(
+            params(Some("Continue")),
+            &mut |_| Ok(script.pop_front().unwrap()),
+            &mut || {},
+        )
+        .unwrap();
+        assert_eq!(result["keys"], json!(["down", "enter"]));
+        assert_eq!(result["outcome"], "selected");
+        assert!(script.is_empty());
+    }
+
+    #[test]
+    fn a_slow_selection_returns_its_receipt_before_the_control_deadline() {
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let mut script = VecDeque::from([
+            pressed(0, true, "down"),
+            ResponseResult::TerminalObserved {
+                observation: observation(0, 4),
+            },
+            ResponseResult::TerminalObserved {
+                observation: observation(1, 6),
+            },
+            pressed(1, true, "down"),
+            ResponseResult::TerminalObserved {
+                observation: observation(1, 8),
+            },
+        ]);
+        let result = press_terminal_with_elapsed(
+            params(Some("Remind me later")),
+            &mut |_| Ok(script.pop_front().unwrap()),
+            &mut || elapsed.set(elapsed.get() + Duration::from_secs(3)),
+            &mut || elapsed.get(),
+        )
+        .unwrap();
+        assert_eq!(result["keys"], json!(["down", "down"]));
+        assert_eq!(result["outcome"], "selection_pending");
+        assert_eq!(result["observation"]["focus"][1], "Continue");
+        assert!(elapsed.get() < Duration::from_secs(15));
+        assert!(script.is_empty());
+        let resumed = press_terminal(
+            params(Some("Remind me later")),
+            &mut |_| Ok(pressed(2, false, "enter")),
+            &mut || {},
+        )
+        .unwrap();
+        assert_eq!(resumed["keys"], json!(["enter"]));
+        assert_eq!(resumed["outcome"], "selected");
     }
 }
