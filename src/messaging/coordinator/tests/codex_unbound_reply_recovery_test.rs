@@ -268,3 +268,58 @@ fn reply_capture_diagnostics_include_lead_id_without_settlement_span() {
         assert_follower_recovery_names_the_lead(&capture.text(), lead, follow, &fixture);
     });
 }
+
+/// A sibling with no subscriber can first-register the recovered-event
+/// callsite through tracing-core's JustOne path (`Interest::never`) while
+/// this thread's `Capture` is the only live dispatch. `Capture` keeps a
+/// second live dispatch for the process, and `log_request` uses one
+/// `tracing::info!` site (`lead_id` as `field::Empty` when absent), so the
+/// recovered line with `lead_id` must still be recorded.
+#[test]
+fn sibling_without_subscriber_can_omit_parent_span_fields_from_capture_on_request_with_lead() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let id = fixture.send("probe", true);
+        let state = fixture.worker.state.clone();
+        let started = std::sync::Barrier::new(2);
+        let registered = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                started.wait();
+                crate::messaging::diagnostics::request_with_lead(
+                    &state,
+                    id,
+                    "bus.message.recovered",
+                    "reply_not_captured",
+                    42,
+                );
+                registered.wait();
+            });
+            started.wait();
+            registered.wait();
+            crate::messaging::diagnostics::request_with_lead(
+                &fixture.worker.state,
+                id,
+                "bus.message.recovered",
+                "reply_not_captured",
+                7,
+            );
+        });
+    });
+    let text = capture.text();
+    let recovered: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("bus.message.recovered"))
+        .collect();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "recovered event dropped after sibling registered the request_with_lead callsite: {text}"
+    );
+    assert!(
+        recovered[0].contains("lead_id=7"),
+        "lead_id missing from recovered event: {}",
+        recovered[0]
+    );
+}

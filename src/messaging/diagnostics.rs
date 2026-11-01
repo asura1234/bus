@@ -72,28 +72,19 @@ fn log_request(
         .as_ref()
         .map(|answer| answer.text.len());
     let elapsed_ms = super::storage::io::now_ms().saturating_sub(request.prompt.submitted_at_ms);
-    match lead_id {
-        Some(lead_id) => tracing::info!(
-            event, reason, request_id = id.0, prompt_id, room_id, agent_id,
-            provider = ?provider, phase = ?phase, launch_id = ?launch_id,
-            terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
-            turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
-            status = ?status, group = ?group, start_bound, steered, uncertain_outcome,
-            turn_ended_at_ms = ?turn_ended_at_ms, progress_at_ms = ?progress_at_ms,
-            pending_final_bytes = ?pending_final_bytes, elapsed_ms, lead_id,
-            "Bus delivery"
-        ),
-        None => tracing::info!(
-            event, reason, request_id = id.0, prompt_id, room_id, agent_id,
-            provider = ?provider, phase = ?phase, launch_id = ?launch_id,
-            terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
-            turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
-            status = ?status, group = ?group, start_bound, steered, uncertain_outcome,
-            turn_ended_at_ms = ?turn_ended_at_ms, progress_at_ms = ?progress_at_ms,
-            pending_final_bytes = ?pending_final_bytes, elapsed_ms,
-            "Bus delivery"
-        ),
-    }
+    // One callsite: `Option<u64>` records the integer, or `field::Empty` when
+    // absent. A second `tracing::info!` would be a new site that a sibling
+    // without a subscriber can cache as `Interest::never`.
+    tracing::info!(
+        event, reason, request_id = id.0, prompt_id, room_id, agent_id,
+        provider = ?provider, phase = ?phase, launch_id = ?launch_id,
+        terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
+        turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
+        status = ?status, group = ?group, start_bound, steered, uncertain_outcome,
+        turn_ended_at_ms = ?turn_ended_at_ms, progress_at_ms = ?progress_at_ms,
+        pending_final_bytes = ?pending_final_bytes, elapsed_ms, lead_id,
+        "Bus delivery"
+    );
 }
 
 /// Called after durable save, and separately when a new snapshot reaches the UI.
