@@ -319,7 +319,7 @@ fn the_query_has_its_own_field_after_a_dim_label() {
         .map(|x| buffer[(x, field.y + 1)].symbol())
         .collect();
     assert_eq!(label.trim(), "Find:");
-    let hint_grey = buffer[(panel.x + 1, panel.y + 4)].fg;
+    let hint_grey = buffer[(panel.x + 1, panel.y + 6)].fg;
     assert_eq!(buffer[(panel.x + 1, field.y + 1)].fg, hint_grey);
     let query = buffer[(field.x + 1, field.y + 1)].clone();
     assert_eq!(query.symbol(), "n");
