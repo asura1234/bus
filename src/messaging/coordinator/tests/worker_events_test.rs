@@ -2177,6 +2177,62 @@ fn explicit_answer_without_a_late_callback_suppresses_reply_not_captured() {
     let orch = f.orch;
     let source = running(&mut f, Author::Agent(orch));
     let mut state = f.worker.state.clone();
+    let message = state.request(source).unwrap().prompt.id;
+    state
+        .answer_message(
+            message,
+            f.agent,
+            "The actual answer despite capture failure.".into(),
+            io::now_ms(),
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let now = io::now_ms() + 120_000;
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let answered = f.worker.state.request(source).unwrap();
+    assert!(
+        answered
+            .reply()
+            .is_some_and(|reply| reply.text.contains("The actual answer")),
+        "the --reply-to answer is stored on the request"
+    );
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
+        "a --reply-to answer completes the request: {notices:?}"
+    );
+    assert_eq!(
+        notices.len(),
+        1,
+        "the completed reply is delivered once: {notices:?}"
+    );
+    assert!(
+        notices[0].prompt.text.contains("Reply to message")
+            && notices[0].prompt.text.contains("The actual answer"),
+        "the first delivery of the --reply-to answer is Reply to message: {notices:?}"
+    );
+}
+
+#[test]
+fn in_turn_plain_send_of_the_answer_keeps_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let mut state = f.worker.state.clone();
     state
         .submit_message_from(
             f.room,
@@ -2190,7 +2246,6 @@ fn explicit_answer_without_a_late_callback_suppresses_reply_not_captured() {
         )
         .unwrap();
     f.worker.save(state).unwrap();
-    // The send is minutes before settlement, outside the same-minute window.
     let now = io::now_ms() + 120_000;
     let mut state = f.worker.state.clone();
     state
@@ -2210,18 +2265,13 @@ fn explicit_answer_without_a_late_callback_suppresses_reply_not_captured() {
         notices
             .iter()
             .any(|notice| notice.prompt.text.contains("The actual answer")),
-        "the explicit send is the delivery: {notices:?}"
+        "the plain send is still delivered: {notices:?}"
     );
     assert!(
         notices
             .iter()
-            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
-        "a send during the turn is that request's result: {notices:?}"
-    );
-    assert_eq!(
-        notices.len(),
-        1,
-        "settlement wakes exactly once: {notices:?}"
+            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+        "a plain send never completes the original request: {notices:?}"
     );
 }
 
@@ -2268,6 +2318,49 @@ fn post_settlement_send_of_the_answer_keeps_reply_not_captured() {
             .iter()
             .any(|notice| notice.prompt.text.contains("reply_not_captured")),
         "a send after the turn closes is not that request's result: {notices:?}"
+    );
+}
+
+#[test]
+fn in_turn_progress_does_not_hide_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Still working on the request.".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms(),
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let now = io::now_ms() + 120_000;
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+        "in-turn progress is not the request's final result: {notices:?}"
     );
 }
 

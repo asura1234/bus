@@ -166,7 +166,6 @@ impl BusState {
             request_ids.push(request_id);
             self.abandon_failed_startup_queue(agent_id, now_ms);
         }
-        self.note_send_issued_during(&prompt.author, prompt.id, now_ms, bus_generated);
         let room_state = self
             .rooms
             .get_mut(&room)

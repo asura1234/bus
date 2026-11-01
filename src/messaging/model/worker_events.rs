@@ -204,59 +204,6 @@ impl BusState {
         self.note_result_posted(turn, now_ms);
     }
 
-    /// An explicit send while this agent still owns an open turn is that turn's
-    /// result. Record the request id once. A bus-generated notice is not a send,
-    /// and a send after the turn closes stays unstamped.
-    pub(super) fn note_send_issued_during(
-        &mut self,
-        author: &Author,
-        message: PromptId,
-        now_ms: u64,
-        bus_generated: bool,
-    ) {
-        let Some((agent_id, group, room)) = self.open_turn_for_send(author, bus_generated) else {
-            return;
-        };
-        let key = format!("issued:{}", group.0);
-        self.worker_events
-            .entry(key)
-            .or_insert_with(|| WorkerEvent {
-                agent: agent_id,
-                room,
-                group: Some(group),
-                message,
-                at_ms: now_ms,
-                episode: None,
-                kind: WorkerEventKind::Final,
-                text: String::new(),
-                route: ReplyRoute::Seen,
-            });
-    }
-
-    fn open_turn_for_send(
-        &self,
-        author: &Author,
-        bus_generated: bool,
-    ) -> Option<(AgentId, RequestId, RoomId)> {
-        if bus_generated {
-            return None;
-        }
-        let Author::Agent(agent_id) = *author else {
-            return None;
-        };
-        let current = self.agent(agent_id)?.current_request?;
-        let request = self.request(current)?;
-        if request.agent_id != agent_id
-            || !matches!(
-                request.phase,
-                RequestPhase::Submitting | RequestPhase::Active
-            )
-        {
-            return None;
-        }
-        Some((agent_id, request.reply_key(), request.room_id))
-    }
-
     /// The body is already the result. Remember the turn and drop a quiet
     /// no-reply that this result replaces.
     fn note_result_posted(&mut self, turn: String, now_ms: u64) {
@@ -525,9 +472,7 @@ impl BusState {
             return true;
         }
         reason == "reply_not_captured"
-            && (self.captured_reply_already_sent(request)
-                || self.restart_covers(request, now_ms)
-                || self.issued_send_covers(request))
+            && (self.captured_reply_already_sent(request) || self.restart_covers(request, now_ms))
     }
 
     fn posted_class(&self, request: &Request, class: &str) -> bool {
