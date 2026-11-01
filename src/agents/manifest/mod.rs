@@ -70,7 +70,8 @@ fn evaluate_loaded_manifest_skipping(
     managed_launch_pending: bool,
     skip_rules: Option<&[&str]>,
 ) -> AgentDetection {
-    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending, skip_rules) else {
+    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending, skip_rules)
+    else {
         return fallback_detection(managed_launch_pending);
     };
     let state = rule
