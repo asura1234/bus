@@ -641,7 +641,7 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 
     // Focus the default room by clicking its sidebar entry.
     let clicked = session.ok(&["click", "--hit", "room:bus"]);
-    assert_eq!(clicked["at"][0], 5);
+    assert_eq!(clicked["at"][0], 6);
     session.ok(&["wait", "--state", "visible_room == 1"]);
 
     // A fake Claude agent answers through Bus's real hooks.

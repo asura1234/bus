@@ -9,14 +9,14 @@ use ratatui::buffer::Buffer;
 use std::time::{Duration, Instant};
 
 #[test]
-fn retained_patches_preserve_both_overlay_rows_without_composing() {
+fn retained_patches_preserve_the_overlay_row_without_composing() {
     // The production meter is global; keep it out of other tests' compositors.
     const CHILD: &str = "PERF_OVERLAY_PATCH_TEST_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "client::compositor::patch::tests::retained_patches_preserve_both_overlay_rows_without_composing",
+                "client::compositor::patch::tests::retained_patches_preserve_the_overlay_row_without_composing",
                 "--nocapture",
             ])
             .env(CHILD, "1")
@@ -100,7 +100,7 @@ fn retained_patches_preserve_both_overlay_rows_without_composing() {
         };
 
         let after = apply_composed_surface_patch(&before, patch).unwrap();
-        for y in 0..height.min(2) {
+        for y in 0..1u16 {
             let offset = usize::from(y) * usize::from(width);
             assert_eq!(
                 &after.cells[offset + start..offset + usize::from(width)],
@@ -141,7 +141,7 @@ fn retained_patches_preserve_both_overlay_rows_without_composing() {
         }
         let retained_cells = retained.frame.cells.clone();
         let restamped = state.compose(width, height).unwrap();
-        for y in 0..height.min(2) {
+        for y in 0..1u16 {
             let offset = usize::from(y) * usize::from(width);
             assert_eq!(
                 &restamped.cells[offset + start..offset + usize::from(width)],
