@@ -13,6 +13,8 @@ use std::{
 
 const HOME_FILE: &str = "kimi-home.json";
 const EXECUTABLE_FILE: &str = "kimi-executable.json";
+// Kimi 2.4's startup chooser is independent of [upgrade].auto_install.
+const NO_AUTO_UPDATE_ENV: &str = "KIMI_CODE_NO_AUTO_UPDATE";
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 struct Stamp {
@@ -125,10 +127,12 @@ fn resolve_executable(source: &Path) -> Result<PathBuf, String> {
         .ok_or("Kimi Code is not installed")?;
     stamp(&path)?;
     let version = std::process::Command::new(&path)
+        .env(NO_AUTO_UPDATE_ENV, "1")
         .arg("--version")
         .output()
         .map_err(|e| e.to_string())?;
     let help = std::process::Command::new(&path)
+        .env(NO_AUTO_UPDATE_ENV, "1")
         .arg("--help")
         .output()
         .map_err(|e| e.to_string())?;
@@ -479,6 +483,7 @@ pub(crate) fn bind_home(mut argv: Vec<String>, home: &Path) -> Result<Vec<String
         .to_str()
         .filter(|value| home.is_absolute() && !value.chars().any(char::is_control))
         .ok_or("Invalid Kimi private home")?;
+    argv.insert(0, format!("{NO_AUTO_UPDATE_ENV}=1"));
     argv.insert(0, format!("KIMI_CODE_HOME={home}"));
     argv.insert(0, "KIMI_DISABLE_OAUTH_LOCK=0".into());
     argv.insert(0, "/usr/bin/env".into());
@@ -536,6 +541,8 @@ fn environment_for(
     env.insert("PATH".into(), path);
     env.insert("KIMI_CODE_HOME".into(), home.to_string_lossy().into_owned());
     env.insert("KIMI_DISABLE_OAUTH_LOCK".into(), "0".into());
+    // Recomputed on resume too, including captures made before this setting.
+    env.insert(NO_AUTO_UPDATE_ENV.into(), "1".into());
     Ok(env)
 }
 
@@ -598,6 +605,10 @@ pub(crate) fn prepare(
         env,
     })
 }
+
+#[cfg(all(test, unix))]
+#[path = "update_test.rs"]
+mod update_test;
 
 #[cfg(all(test, unix))]
 mod tests {
