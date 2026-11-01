@@ -273,10 +273,11 @@ async fn verified_launch_plain_sh_fails_before_input_with_supported_shell_guidan
     let dir = crate::utils::test_temp::unique_temp_path("plain-shell-editor");
     std::fs::create_dir_all(&dir).unwrap();
     install_fake_provider(&dir);
-    let runtime = fixture_shell(
+    let runtime = fixture_shell_with_launch_identity(
         "/bin/sh",
         crate::utils::config::ShellModeConfig::NonLogin,
         &dir,
+        false,
     );
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while available_shell_name(&runtime).is_none() {

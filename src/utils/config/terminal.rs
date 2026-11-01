@@ -36,7 +36,8 @@ pub enum ShellModeConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct TerminalConfig {
-    /// Executable used for new interactive panes. Empty means SHELL, then /bin/sh.
+    /// Executable for new panes. Empty uses PowerShell on Windows, or SHELL,
+    /// the account login shell, then /bin/sh on Unix.
     pub default_shell: String,
     /// Startup mode for new interactive pane shells.
     pub shell_mode: ShellModeConfig,
