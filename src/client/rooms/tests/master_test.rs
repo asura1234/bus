@@ -559,8 +559,18 @@ fn a_master_agent_cannot_be_added_without_a_free_work_room() {
         *cwd = editor::Editor::new("/repo".into());
     }
     ui.action(render::Action::Provider(Provider::Codex));
-    ui.action(render::Action::Add);
-    assert!(room_screen(&mut ui, 100, 30).contains("Orchestrates room is required"));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.action(render::Action::Add));
+    assert!(!room_screen(&mut ui, 100, 30).contains("Orchestrates room is required"));
+    let logs = capture.text();
+    assert_eq!(
+        logs.matches("bus.form.validation_failed").count(),
+        1,
+        "{logs}"
+    );
+    assert!(logs.contains("field=\"orchestrates\""), "{logs}");
+    assert!(logs.contains("agent=\"spare\""), "{logs}");
+    assert!(logs.contains("Orchestrates room is required"), "{logs}");
     assert!(!ui.pending.iter().any(|p| matches!(
         p.command,
         BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(_)
