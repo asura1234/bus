@@ -3,6 +3,14 @@ use crate::messaging::{
     coordinator::BusCommand,
     model::{AgentId, RoomId},
 };
+use std::collections::BTreeMap;
+
+pub(super) struct AgentNotices {
+    error: Option<String>,
+    directory_error: Option<String>,
+    orchestration_unavailable: bool,
+    orchestration_target: Option<RoomId>,
+}
 
 impl BusUi {
     pub(super) fn record_command_failure(
@@ -41,11 +49,21 @@ impl BusUi {
     }
 
     pub(super) fn sync_agent_notices(&mut self) {
-        let agents: Vec<_> = self.snapshot.state.agents().collect();
-        for agent in &agents {
+        let mut observed = BTreeMap::new();
+        for agent in self.snapshot.state.agents() {
+            let current = AgentNotices {
+                error: agent.actionable_error.clone(),
+                directory_error: agent.working_directory_error.clone(),
+                orchestration_unavailable: self.snapshot.state.orchestration_is_unavailable(agent),
+                orchestration_target: agent
+                    .orchestrates
+                    .or(agent.unavailable_orchestration_target),
+            };
             let previous = self.observed_agent_notices.get(&agent.id);
-            if previous.is_none_or(|(error, _, _)| error != &agent.actionable_error) {
-                if let Some(error) = &agent.actionable_error {
+            if current.error != current.directory_error
+                && previous.is_none_or(|previous| previous.error != current.error)
+            {
+                if let Some(error) = &current.error {
                     tracing::warn!(
                         event = "bus.agent.notice",
                         agent_id = agent.id.0,
@@ -55,8 +73,8 @@ impl BusUi {
                     );
                 }
             }
-            if previous.is_none_or(|(_, error, _)| error != &agent.working_directory_error) {
-                if let Some(error) = &agent.working_directory_error {
+            if previous.is_none_or(|previous| previous.directory_error != current.directory_error) {
+                if let Some(error) = &current.directory_error {
                     tracing::warn!(
                         event = "bus.agent.working_directory_failed",
                         agent_id = agent.id.0,
@@ -67,46 +85,55 @@ impl BusUi {
                     );
                 }
             }
-            let missing_room = agent
-                .orchestrates
-                .filter(|room| self.snapshot.state.room(*room).is_none());
-            if previous.is_none_or(|(_, _, previous)| previous != &missing_room) {
-                if let Some(target) = missing_room {
-                    tracing::warn!(
-                        event = "bus.agent.orchestration_room_unavailable",
-                        agent_id = agent.id.0,
-                        agent = %agent.name,
-                        room_id = agent.room_id.0,
-                        target_room_id = target.0,
-                        error = "Orchestrated room is unavailable",
-                    );
-                }
+            if current.orchestration_unavailable
+                && previous.is_none_or(|previous| {
+                    !previous.orchestration_unavailable
+                        || previous.orchestration_target != current.orchestration_target
+                })
+            {
+                let target = current
+                    .orchestration_target
+                    .map_or_else(|| "unassigned".into(), |room| room.0.to_string());
+                tracing::warn!(
+                    event = "bus.agent.orchestration_room_unavailable",
+                    agent_id = agent.id.0,
+                    agent = %agent.name,
+                    room_id = agent.room_id.0,
+                    target_room_id = %target,
+                    error = "Orchestrated room is unavailable",
+                );
             }
+            observed.insert(agent.id, current);
         }
-        self.observed_agent_notices = agents
-            .into_iter()
-            .map(|agent| {
-                let missing_room = agent
-                    .orchestrates
-                    .filter(|room| self.snapshot.state.room(*room).is_none());
-                (
-                    agent.id,
-                    (
-                        agent.actionable_error.clone(),
-                        agent.working_directory_error.clone(),
-                        missing_room,
-                    ),
-                )
-            })
-            .collect();
+        self.observed_agent_notices = observed;
     }
 
-    pub(super) fn sync_snapshot_error(&self, previous: Option<&str>) {
+    pub(super) fn sync_snapshot_error(&mut self) {
         let error = self.snapshot.error.as_deref();
-        if error == previous {
+        if error == self.observed_snapshot_error.as_deref() {
             return;
         }
         if let Some(error) = error {
+            let mut awaiting_acknowledgement = false;
+            for pending in self
+                .pending
+                .iter()
+                .filter(|pending| pending.id <= self.snapshot.last_command_id)
+            {
+                match &pending.result {
+                    Some(Err(cause)) if cause == error => {
+                        // The contextual command record owns this projection,
+                        // including coalesced snapshots of later commands.
+                        self.observed_snapshot_error = Some(error.into());
+                        return;
+                    }
+                    None => awaiting_acknowledgement = true,
+                    _ => {}
+                }
+            }
+            if awaiting_acknowledgement {
+                return;
+            }
             let event = if super::storage_paused_error(error) {
                 "bus.storage.paused"
             } else {
@@ -118,6 +145,7 @@ impl BusUi {
                 %error,
             );
         }
+        self.observed_snapshot_error = error.map(str::to_owned);
     }
 }
 

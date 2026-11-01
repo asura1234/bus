@@ -569,6 +569,7 @@ fn a_master_agent_cannot_be_added_without_a_free_work_room() {
         "{logs}"
     );
     assert!(logs.contains("field=\"orchestrates\""), "{logs}");
+    assert!(logs.contains("path=\"/repo\""), "{logs}");
     assert!(logs.contains("agent=spare"), "{logs}");
     assert!(logs.contains("Orchestrates room is required"), "{logs}");
     assert!(!ui.pending.iter().any(|p| matches!(
@@ -853,6 +854,7 @@ fn system_prompt_validation_is_log_only_and_keeps_the_form_open() {
     let logs = capture.text();
     assert!(logs.contains("bus.form.validation_failed"), "{logs}");
     assert!(logs.contains("field=\"system_prompt\""), "{logs}");
+    assert!(logs.contains("path=\"/repo\""), "{logs}");
     assert!(logs.contains("agent=orch"), "{logs}");
     assert!(
         logs.contains(&format!("room_id=Some({})", master.0)),
@@ -1106,6 +1108,7 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     let logs = capture.text();
     assert!(logs.contains("bus.form.validation_failed"), "{logs}");
     assert!(logs.contains("field=\"model\""), "{logs}");
+    assert!(logs.contains("path=\"/repo\""), "{logs}");
     assert!(
         logs.contains(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED),
         "{logs}"

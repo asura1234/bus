@@ -20,9 +20,7 @@ const BLOCKED_MID: Color = Color::Rgb(205, 64, 72);
 const BLOCKED_DIM: Color = Color::Rgb(128, 44, 52);
 
 fn agent_status(state: &BusState, agent: &RoomAgent) -> &'static str {
-    if agent
-        .orchestrates
-        .is_some_and(|room| state.room(room).is_none())
+    if state.orchestration_is_unavailable(agent)
         || !agent.hook_setup_confirmed
             && !agent.session_binding_invalidated
             && !agent.deletion_pending

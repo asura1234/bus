@@ -391,13 +391,13 @@ impl BusUi {
             return;
         };
         let room = self.room;
-        let log_rejection = |field: &str, error: &str, path: Option<&str>| {
+        let log_rejection = |field: &str, error: &str| {
             tracing::warn!(
                 event = "bus.form.validation_failed",
                 room_id = ?room.map(|room| room.0),
                 agent = %name.text,
                 field,
-                path = path.unwrap_or(""),
+                path = cwd.text.as_str(),
                 %error,
             );
         };
@@ -422,14 +422,13 @@ impl BusUi {
                 .map(|(_, error)| error)
                 .collect::<Vec<_>>()
                 .join(" ");
-            log_rejection(&fields, &error, Some(&cwd.text));
+            log_rejection(&fields, &error);
             return;
         }
         if orchestrates.is_some_and(|choice| choice.0.is_none()) {
             log_rejection(
                 "orchestrates",
                 "Orchestrates room is required: create a work room without an orchestrator first.",
-                None,
             );
             return;
         }
@@ -437,7 +436,7 @@ impl BusUi {
         // the coordinator, which refuses it too, in step.
         if let (Some(_), Some(provider)) = (orchestrates, provider) {
             if let Err(error) = crate::messaging::orchestration::check_new_orchestrator(provider) {
-                log_rejection("model", &error, None);
+                log_rejection("model", &error);
                 return;
             }
         }
@@ -446,7 +445,7 @@ impl BusUi {
             .as_ref()
             .is_some_and(|text| text.trim().is_empty())
         {
-            log_rejection("system_prompt", "System prompt is required.", None);
+            log_rejection("system_prompt", "System prompt is required.");
             return;
         }
         self.error = None;

@@ -52,8 +52,6 @@ pub(super) struct Pending {
     pub result: Option<Result<(), String>>,
 }
 
-type ObservedAgentNotices = BTreeMap<AgentId, (Option<String>, Option<String>, Option<RoomId>)>;
-
 pub(in crate::client) struct BusUi {
     pub handle: Option<BusHandle>,
     pub snapshot: Arc<BusSnapshot>,
@@ -69,7 +67,8 @@ pub(in crate::client) struct BusUi {
     pub(super) send_queued: bool,
     pub error: Option<String>,
     /// Agent errors last written to the client log, so each is logged once.
-    pub(super) observed_agent_notices: ObservedAgentNotices,
+    pub(super) observed_agent_notices: BTreeMap<AgentId, super::notices::AgentNotices>,
+    pub(super) observed_snapshot_error: Option<String>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
@@ -173,7 +172,7 @@ impl BusUi {
             .map(|r| (r.id, LocalRoom::from(r)))
             .collect();
         let seed_first_room = snapshot.state.is_pristine();
-        Self {
+        let mut ui = Self {
             handle: None,
             clipboard_image_reader,
             snapshot,
@@ -187,6 +186,7 @@ impl BusUi {
             recovered_storage_failures: BTreeSet::new(),
             error: None,
             observed_agent_notices: BTreeMap::new(),
+            observed_snapshot_error: None,
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -239,7 +239,9 @@ impl BusUi {
             system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
             outer_focused: None,
-        }
+        };
+        ui.sync_snapshot_error();
+        ui
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
     pub(super) fn toggle_color_blind_mode(&mut self) {
@@ -528,7 +530,7 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
-        self.sync_snapshot_error(previous.error.as_deref());
+        self.sync_snapshot_error();
         if let Some(config) = &self.sound_config {
             let alerts = crate::messaging::model::new_developer_notifications(
                 &previous.state,
@@ -555,6 +557,7 @@ impl BusUi {
     }
 
     pub fn settle(&mut self) {
+        self.sync_snapshot_error();
         while self
             .pending
             .front()
