@@ -11,18 +11,22 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+static NEXT_FIXTURE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub(super) fn unique_test_dir() -> PathBuf {
+    unique_test_dir_at(SystemTime::now())
+}
+
+pub(super) fn unique_test_dir_at(timestamp: SystemTime) -> PathBuf {
     #[cfg(unix)]
     let root = PathBuf::from("/tmp"); // Keep private socket paths below sockaddr_un limits.
     #[cfg(windows)]
     let root = std::env::temp_dir();
     root.join(format!(
-        "bus-room-screen-{}-{}",
+        "bus-room-screen-{}-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        timestamp.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+        NEXT_FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
 }
 
