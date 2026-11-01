@@ -1,6 +1,7 @@
 """The shared entrypoint preserves full-gate scope and parallel build ownership."""
 import json
 import os
+import select as io_select
 import signal
 import subprocess
 import sys
@@ -123,6 +124,44 @@ def test_lane_environment_drops_live_session_but_keeps_explicit_test_binary():
     assert python.env["BUS_TEST_BINARY"].endswith("/debug/bus.exe" if os.name == "nt" else "/debug/bus")
 
 
+def _pid_readiness_script(ready):
+    pending = ready.with_suffix(".tmp")
+    return (
+        f"Path({str(pending)!r}).write_text(str(os.getpid()));"
+        f"Path({str(pending)!r}).replace({str(ready)!r})"
+    )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pipe readiness")
+def test_child_pid_is_published_only_after_its_write_finishes(tmp_path):
+    ready = tmp_path / "ready"
+    script = (
+        "import os,sys;from pathlib import Path\n"
+        "real_open=Path.open\n"
+        "def paused_open(path,*args,**kwargs):\n"
+        "    handle=real_open(path,*args,**kwargs)\n"
+        "    print('opened',flush=True)\n"
+        "    assert sys.stdin.buffer.read(1)==b'x'\n"
+        "    return handle\n"
+        "Path.open=paused_open\n"
+        f"{_pid_readiness_script(ready)}\n"
+    )
+    process = subprocess.Popen([sys.executable, "-c", script], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        # Hold the real open-before-write window until visibility is checked.
+        assert io_select.select([process.stdout], [], [], 5)[0], "writer did not open its file"
+        assert process.stdout.readline() == b"opened\n"
+        assert not ready.exists(), "readiness became visible before its PID was written"
+        _, stderr = process.communicate(input=b"x", timeout=5)
+        assert process.returncode == 0, stderr
+        assert ready.read_text() == str(process.pid)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=5)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group teardown")
 def test_interrupt_parallel_entrypoint_stops_child_before_deleting_profiles(tmp_path):
     scripts = Path(__file__).resolve().parents[1]
@@ -131,7 +170,7 @@ def test_interrupt_parallel_entrypoint_stops_child_before_deleting_profiles(tmp_
         "import os,signal,time;from pathlib import Path;"
         "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
         "(Path(os.environ['BUS_COVERAGE_PROFILE_DIR'])/'unit.profraw').write_bytes(b'counters');"
-        f"Path({str(ready)!r}).write_text(str(os.getpid()));time.sleep(60)"
+        f"{_pid_readiness_script(ready)};time.sleep(60)"
     )
     script = (
         f"import sys;sys.path.insert(0,{str(scripts)!r});import suite_run as r;"
