@@ -4,18 +4,32 @@ pub(crate) use crate::platform::fs::private_dir;
 pub(crate) use crate::utils::time::{now_ms, now_ns};
 use std::{fs::File, io, path::Path};
 
-pub(crate) fn lock(path: &Path) -> io::Result<File> {
+/// Creates a private lock file when needed, rejects a symlink, and opens it
+/// read/write. `lock` and `lock_wait` share this so both enforce one contract.
+fn open_lock(path: &Path) -> io::Result<File> {
     if !path.exists() {
         match crate::platform::create_private_state_file(path) {
             Ok(file) => file.sync_all()?,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
         }
     }
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(io::Error::other("Bus lock is a symlink"));
     }
-    crate::platform::fs::lock_file(path)
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+}
+
+pub(crate) fn lock(path: &Path) -> io::Result<File> {
+    let file = open_lock(path)?;
+    file.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
+        std::fs::TryLockError::Error(error) => error,
+    })?;
+    Ok(file)
 }
 
 pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
@@ -32,20 +46,7 @@ pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
 /// Blocks until this process holds the exclusive lock. `append_lock` gives up
 /// after 3s, which is too short for a critical section that copies the skill tree.
 pub(crate) fn lock_wait(path: &Path) -> io::Result<File> {
-    if !path.exists() {
-        match crate::platform::create_private_state_file(path) {
-            Ok(file) => file.sync_all()?,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    }
-    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::other("Bus lock is a symlink"));
-    }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?;
+    let file = open_lock(path)?;
     loop {
         match file.lock() {
             Ok(()) => return Ok(file),
