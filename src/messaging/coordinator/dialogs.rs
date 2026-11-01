@@ -99,23 +99,10 @@ impl Worker {
                     }
                     // Blocked is itself the detector's published observation.
                     // A missing provider parser cannot close this generic wait.
-                    if wait.as_deref() == Some(BLOCKED) {
-                        if current.dialog.is_none() && !current.pending_question {
-                            match self.blocked_screen_is_current(
-                                &pane,
-                                &terminal,
-                                session.as_deref(),
-                            ) {
-                                Some(true) => {}
-                                Some(false) => {
-                                    self.finish_closed_dialog(id)?;
-                                    continue;
-                                }
-                                None => continue,
-                            }
-                        }
-                        open_dialog = true;
+                    if !self.retain_unparsed_blocked_wait(id, wait.as_deref(), &current)? {
+                        continue;
                     }
+                    open_dialog |= wait.as_deref() == Some(BLOCKED);
                     // Missing list metadata can be an unreadable redraw. An
                     // open dialog or pending question keeps earlier help live.
                     if wait.is_none() {
@@ -171,6 +158,29 @@ impl Worker {
         let state = &self.state;
         self.dialog_seen.retain(|id, _| state.agent(*id).is_some());
         Ok(())
+    }
+
+    fn retain_unparsed_blocked_wait(
+        &mut self,
+        id: AgentId,
+        wait: Option<&str>,
+        current: &super::schema::AgentDialogObservation,
+    ) -> Result<bool, String> {
+        if wait != Some(BLOCKED) || current.dialog.is_some() || current.pending_question {
+            return Ok(true);
+        }
+        match self.blocked_screen_is_current(
+            &current.pane_id,
+            &current.terminal_id,
+            current.session_id.as_deref(),
+        ) {
+            Some(true) => Ok(true),
+            Some(false) => {
+                self.finish_closed_dialog(id)?;
+                Ok(false)
+            }
+            None => Ok(false),
+        }
     }
 
     /// The list can still carry the Blocked frame from a dialog just closed.
