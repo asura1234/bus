@@ -212,9 +212,9 @@ pub(super) fn refused_record(
 /// A restart that never reaches `--dev` still leaves a refused record when a
 /// session can be named. No session means no write, including no touch of a
 /// home Bus directory that this process was not given.
-pub(super) fn record_dev_required_refusal(reason: &str) {
+pub(super) fn record_dev_required_refusal(reason: &str) -> io::Error {
     let Some(root) = refusal_root() else {
-        return;
+        return io::Error::other(reason.to_owned());
     };
     let (old_binary, old_sha) = match serving_target(&root) {
         Ok((binary, sha)) => (binary.display().to_string(), sha),
@@ -230,8 +230,7 @@ pub(super) fn record_dev_required_refusal(reason: &str) {
         outcome: "refused".to_owned(),
         reason: reason.to_owned(),
     };
-    let _ = restart_record::append_log(&restart_record::log_path(&root), &record);
-    let _ = restart_record::write_json(&restart_record::outcome_path(&root), &record);
+    persist_refusal(&root, &record, false)
 }
 
 fn refusal_root() -> Option<PathBuf> {
@@ -248,8 +247,12 @@ fn refusal_root() -> Option<PathBuf> {
 }
 
 pub(super) fn record_refused(root: &Path, record: &RestartLog) -> io::Error {
+    persist_refusal(root, record, record.reason != RESTART_BUSY)
+}
+
+fn persist_refusal(root: &Path, record: &RestartLog, publish_outcome: bool) -> io::Error {
     let log_error = restart_record::append_log(&restart_record::log_path(root), record).err();
-    let outcome_error = if record.reason == RESTART_BUSY {
+    let outcome_error = if !publish_outcome {
         None
     } else {
         restart_record::write_json(&restart_record::outcome_path(root), record).err()

@@ -44,8 +44,8 @@ pub(crate) trait HandoffIo {
     fn now_ms(&self) -> u64;
 }
 
-pub(crate) fn record_dev_required_refusal() {
-    prep::record_dev_required_refusal(super::session_pick::DEV_RESTART_REQUIRED);
+pub(crate) fn record_dev_required_refusal() -> io::Error {
+    prep::record_dev_required_refusal(super::session_pick::DEV_RESTART_REQUIRED)
 }
 
 pub(super) fn run(

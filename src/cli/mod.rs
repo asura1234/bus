@@ -100,7 +100,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         Ok(invocation) => invocation,
         Err(error) => {
             if error == session_pick::DEV_RESTART_REQUIRED {
-                restart::record_dev_required_refusal();
+                return Err(restart::record_dev_required_refusal());
             }
             return Err(io::Error::other(error));
         }
@@ -989,12 +989,47 @@ mod tests {
             record.reason
         );
         assert_ne!(record.outcome, "restarted");
-        let outcome = crate::utils::restart_record::read_outcome(
-            &crate::utils::restart_record::outcome_path(&root),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(outcome, record);
+        let pending = crate::utils::restart_record::outcome_path(&root);
+        assert!(!pending.exists(), "a no-dev refusal is log-only");
+        for outcome in ["restarted", "rolled_back", "rollback_failed"] {
+            let before = crate::utils::restart_record::RestartLog {
+                outcome: outcome.into(),
+                ..record.clone()
+            };
+            crate::utils::restart_record::write_json(&pending, &before).unwrap();
+            crate::utils::restart_record::write_json(
+                &crate::utils::restart_record::marker_path(&root),
+                &serde_json::json!({ "active": true }),
+            )
+            .unwrap();
+            let error = crate::cli::run(&args(&["restart"])).unwrap_err();
+            assert!(error.to_string().contains("bus --dev restart"));
+            assert_eq!(
+                crate::utils::restart_record::read_outcome(&pending).unwrap(),
+                Some(before),
+                "the refusal must preserve the unannounced {outcome} outcome"
+            );
+        }
+        let log_path = crate::utils::restart_record::log_path(&root);
+        assert_eq!(
+            std::fs::read_to_string(&log_path).unwrap().lines().count(),
+            4
+        );
+        std::fs::remove_file(&log_path).unwrap();
+        std::fs::create_dir(&log_path).unwrap();
+        let before = std::fs::read(&pending).unwrap();
+        let error = crate::cli::run(&args(&["restart"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("could not append restarts/log.jsonl"),
+            "{error}"
+        );
+        let diagnostic =
+            std::fs::read_to_string(crate::utils::restart_record::persist_error_path(&root))
+                .unwrap();
+        assert!(diagnostic.contains("could not append restarts/log.jsonl"));
+        assert_eq!(std::fs::read(&pending).unwrap(), before);
         assert!(!home.join(".local/share/bus").exists());
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&home).unwrap();
