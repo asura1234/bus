@@ -191,7 +191,7 @@ impl BusState {
     /// period, or `None`. Unattempted work waits through Working/Blocked:
     /// a long turn is normal, and a blocked one waits on an answer (see
     /// `blocked_unanswered`). The coordinator closes expired queued requests
-    /// before delivery, while typed work needs explicit recovery.
+    /// before delivery and failed unconfirmed writes after reconciliation.
     /// Definitely rejected queued work has its own fixed deadline.
     pub(crate) fn recovery_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
         if request.settled() {
@@ -221,7 +221,7 @@ impl BusState {
             return None;
         }
         match lead.phase {
-            RequestPhase::Completed | RequestPhase::Abandoned => None,
+            RequestPhase::Completed | RequestPhase::Abandoned | RequestPhase::Active => None,
             // This is a deliberate wait on developer-owned input, not a failed
             // delivery. Persisting the reason also protects the queue on restart.
             RequestPhase::Queued
@@ -264,7 +264,7 @@ impl BusState {
                     .or_else(|| agent.wait_reason().map(Into::into))
                     .unwrap_or_else(|| "not_submitted".into())
             }),
-            RequestPhase::Submitting | RequestPhase::Active => {
+            RequestPhase::Submitting => {
                 let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
                 let invalidated =
                     agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
@@ -282,14 +282,8 @@ impl BusState {
                 Some(
                     if invalidated {
                         "session_invalidated"
-                    } else if lead.phase == RequestPhase::Submitting {
-                        "submission_unconfirmed"
-                    } else if !lead.trusted_start_bound {
-                        "no_start_hook"
                     } else {
-                        // The turn started and the agent is idle, yet no
-                        // final reply matched the provider's transcript.
-                        "transcript_unmatched"
+                        "submission_unconfirmed"
                     }
                     .into(),
                 )

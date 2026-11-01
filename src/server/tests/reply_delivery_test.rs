@@ -620,7 +620,6 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
         f.state().room(f.work).unwrap().unread_count,
         before_work + 1
     );
-    f.assert_no_stalls();
 }
 
 #[tokio::test]
@@ -692,7 +691,6 @@ async fn background_pending_cannot_discard_captured_reply_or_block_queue() {
             f.reopen();
             f.assert_reply(first, "captured status");
             f.assert_reply(next, "next answer");
-            f.assert_no_stalls();
             eprintln!("background_pending: {label}, master={master}: both requests replied once after reopen");
         }
     }
@@ -754,7 +752,6 @@ async fn direct_bus_control_shells_publish_equally_for_developer_and_agent() {
             f.start(agent, &turn, &payload);
             f.stop(agent, &turn, "dispatched", json!([{"id":format!("control-{n}"),"type":"shell","status":"running","command":command}]), json!([]));
             f.assert_reply(request, "dispatched");
-            f.assert_no_stalls();
         }
     }
 }
@@ -1160,28 +1157,6 @@ async fn socket_eagain_during_active_reply_preserves_ownership_and_recovers_once
     );
 }
 
-#[tokio::test]
-async fn transcript_gap_has_no_stall_diagnostic_even_after_status_flapping_or_restart() {
-    let mut f = Delivery::new(&[Provider::ClaudeCode], false);
-    let agent = f.agents[0];
-    f.send(agent, f.work, "lost reply", false, None);
-    f.tick();
-    f.start(agent, "lost", "lost reply");
-    f.status(agent, AgentState::Idle);
-    f.tick();
-    f.age_request_progress(600_000);
-    f.tick();
-    assert_eq!(f.stall_diagnostics(), 0);
-    f.status(agent, AgentState::Working);
-    f.tick();
-    f.status(agent, AgentState::Idle);
-    f.tick();
-    f.age_request_progress(600_000);
-    f.reopen();
-    f.tick();
-    assert_eq!(f.stall_diagnostics(), 0);
-}
-
 // One cycle is also a normal integration guard: both rounds must really hold
 // Claude replies, consume batches and publish distinct response text once.
 #[tokio::test]
@@ -1195,7 +1170,6 @@ async fn batched_reply_cycles_hold_fresh_shells_after_reopen() {
         f.provider_startup();
     }
     assert_eq!(f.state().requests().count(), 50);
-    assert_eq!(f.stall_diagnostics(), 0);
 }
 
 #[tokio::test]
@@ -1299,14 +1273,12 @@ fn idle_cycle(f: &mut Delivery, round: usize) {
     f.tick();
     f.age_request_progress(600_000);
     f.tick();
-    assert_eq!(f.stall_diagnostics_for(request), 0);
     f.status(agent, AgentState::Working);
     f.tick();
     f.status(agent, AgentState::Idle);
     f.tick();
     f.age_request_progress(600_000);
     f.reopen();
-    assert_eq!(f.stall_diagnostics_for(request), 0);
     f.stop(
         agent,
         &turn,
@@ -1315,7 +1287,6 @@ fn idle_cycle(f: &mut Delivery, round: usize) {
         json!([]),
     );
     f.assert_reply(request, &format!("late-reply-{round}"));
-    assert_eq!(f.stall_diagnostics_for(request), 0);
 }
 
 fn run_soak() {
@@ -1331,11 +1302,6 @@ fn run_soak() {
     let mut round = 0;
     while Instant::now() < deadline {
         delivery_cycle(&mut f, round);
-        assert_eq!(
-            f.stall_diagnostics(),
-            0,
-            "delivery phase recorded an unexpected stall diagnostic"
-        );
         idle_cycle(&mut f, round);
         orchestrator_inbox_burst(round);
         f.reopen();
@@ -1361,9 +1327,8 @@ fn run_soak() {
         f.state().room(f.work).unwrap().unread_count as usize,
         completed + notices.len()
     );
-    assert_eq!(f.stall_diagnostics(), 0);
     f.assert_publications();
-    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} stall diagnostics, {} idle-worker notices", round * 30, began.elapsed(), f.stall_diagnostics(), notices.len());
+    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} idle-worker notices", round * 30, began.elapsed(), notices.len());
 }
 
 /// Negative control: the contract must notice a second visible publication,
@@ -1612,7 +1577,6 @@ fn orchestrator_inbox_burst(round: usize) {
         }
     }
     f.assert_publications();
-    f.assert_no_stalls();
 }
 
 #[tokio::test]

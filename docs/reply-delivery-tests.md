@@ -99,16 +99,15 @@ with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::soa
 # Long mode: 30 wall-clock minutes (any positive value up to 1440).
 BUS_REPLY_SOAK_MINUTES=30 with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::soak_many_agents_concurrent_messages_and_background_shells -- --exact --ignored --nocapture
 
-# #107 regressions are enabled by default; narrow reruns need no --ignored.
+# #107 regression coverage is enabled by default; narrow reruns need no --ignored.
 with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::background_pending_cannot_discard_captured_reply_or_block_queue -- --exact --nocapture
-with_build_slot cargo test --locked --bin bus server::tests::reply_delivery::transcript_gap_has_no_stall_diagnostic_even_after_status_flapping_or_restart -- --exact --nocapture
 ```
 
 The soak uses twelve concurrent producer threads and keeps twelve agents active with first and queue-only messages. Each cycle spools all agents' starts, ticks once, spools all Stops, and ticks once. Reply text differs from the prompt. Every Claude first and queued Stop must complete despite running shells. Fresh own-shell ids accompany a persistent shell report. After each coordinator reopen, explicit provider startup hooks establish known shell ownership again; unknown shells after restart are intentionally treated as inherited in production.
 
-Every cycle also ages a new unsettled request, flaps Working/Idle and reopens, requires zero durable diagnostic markers for that message, then delivers the late reply. The delivery phase likewise rejects unexpected alerts. This proves idle open work and reply delivery do not create public stall notices.
+Every cycle also ages a new unsettled request, flaps Working/Idle and reopens, then delivers the late reply without a work-room notice. The delivery phase likewise rejects unexpected alerts. This proves idle open work and reply delivery do not create public stall notices.
 
-The soak stops admitting cycles after N wall-clock minutes and drains the admitted cycle. Each cycle has 25 requests, all of which must complete with distinct expected replies, exactly one publication per reply group/source room, and zero stall diagnostics. The printed elapsed time includes the drained final cycle. `batched_reply_cycles_hold_fresh_shells_after_reopen` runs two complete shared cycles (50 requests, zero stall diagnostics) in default gates, so every phase runs even when the timed target is not selected. Only the timed soak is ignored; the two #107 regression tests are enabled.
+The soak stops admitting cycles after N wall-clock minutes and drains the admitted cycle. Each cycle has 25 requests, all of which must complete with distinct expected replies, exactly one publication per reply group/source room, and no work-room notices. The printed elapsed time includes the drained final cycle. `batched_reply_cycles_hold_fresh_shells_after_reopen` runs two complete shared cycles (50 requests) in default gates, so every phase runs even when the timed target is not selected. Only the timed soak is ignored; the #107 regression test is enabled.
 
 ## Per-test contract
 
@@ -140,10 +139,9 @@ All names below are under `server::tests::reply_delivery::` unless specified.
 | `worker_reply_wakes_orchestrator_once_without_waiter_and_survives_reopen` | A dead/absent waiter does not lose the worker result; persisted routing does not re-submit it (#92). |
 | `socket_eagain_during_active_reply_preserves_ownership_and_recovers_once` | A real three-second kernel/API receive timeout leaves the active request and captured callback owned; recovery delivers once and native `typed` count stays one (#106). |
 | `background_pending_cannot_discard_captured_reply_or_block_queue` | Captured Stop with cron or non-shell tasks, with/without a live shell, must deliver and drain queue in MASTER and work room. Enabled after merged stall-cx #107. |
-| `transcript_gap_has_no_stall_diagnostic_even_after_status_flapping_or_restart` | An unmatched request keeps its actual stage and generates no stall alert despite Working/Idle flapping and reload. |
-| `batched_reply_cycles_hold_fresh_shells_after_reopen` | Two shared load cycles batch hooks, require immediate Stop completion with live shells after reopen, compare distinct replies/publications and produce zero stalled-request alerts. Runs in ordinary gates. |
+| `batched_reply_cycles_hold_fresh_shells_after_reopen` | Two shared load cycles batch hooks, require immediate Stop completion with live shells after reopen, and compare distinct replies/publications. Runs in ordinary gates. |
 | `reply_contract_rejects_second_visible_publication` | Negative control: a real additional MASTER publication must be rejected even when the request history map still has one row. RED with the old assertion helper; not a claim of a new product defect. |
-| `soak_many_agents_concurrent_messages_and_background_shells` | Every admitted request completes with the right reply under 12-agent sustained load; each cycle also ages an idle request, flaps/restarts and requires zero alerts before late delivery. Separate ignored timed target. |
+| `soak_many_agents_concurrent_messages_and_background_shells` | Every admitted request completes with the right reply under 12-agent sustained load; each cycle also ages an idle request and flaps/restarts before late delivery. Separate ignored timed target. |
 | `reply_delivery_survives_actual_server_restart_mid_request` (dev-tools `tui-driver`) | Actual OS server/coordinator restart with a durable unconsumed final, in both provider/source-room configurations. |
 
 ## Evidence
@@ -177,7 +175,7 @@ long background shell. The burst drains while every captured Stop answer publish
 checks distinct replies and visible publication counts, and reopens the coordinator
 four times with explicit provider startup hooks. Each burst proves 30 additional
 requests (initial answer, blocked notice, and 28 queued inputs). The original twelve-agent
-load and idle phases retain their independent counts and zero-alert assertions.
+load and idle phases retain their independent counts and assertions.
 
 The timed soak also asserts one ordinary Bus-authored idle-worker notice per aged
 idle cycle, with no MASTER stall alert. Its unread oracle

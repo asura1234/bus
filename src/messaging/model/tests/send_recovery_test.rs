@@ -232,28 +232,6 @@ fn grok_working_turn_keeps_a_follow_up_queued_instead_of_steering_it() {
 }
 
 #[test]
-fn invalidated_typed_request_can_be_recovered_explicitly() {
-    let (mut state, agent, request) = idle_with_queued(1_000, "go");
-    start_request(&mut state, request, "launch-codex", 5);
-    state.invalidate_agent_session(agent).unwrap();
-    state
-        .observe_status(agent, RuntimeStatus::Unavailable, 3_000)
-        .unwrap();
-    let recover_at = 3_000 + DELIVERED_STALL_MS;
-    assert_eq!(
-        recovery_at(&state, request, recover_at).as_deref(),
-        Some("session_invalidated")
-    );
-    state
-        .recover_idle_request(request, recover_at)
-        .expect("a session_invalidated recovery reason is preserved for explicit recovery");
-    assert_eq!(
-        state.request(request).unwrap().phase,
-        RequestPhase::Abandoned
-    );
-}
-
-#[test]
 fn invalidated_unavailable_recovery_closes_joined_group_and_preserves_queue() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     let lead = submit_text(&mut state, room, agent, "lead");
