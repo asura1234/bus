@@ -23,6 +23,12 @@ fn record_build_identity() {
         println!("cargo:rustc-env=BUS_BUILD_CHECKOUT={}", root.display());
     }
     if let Some(root) = manifest.as_ref().filter(|root| root.join(".git").exists()) {
+        let git_entry = root.join(".git");
+        if git_entry.is_file() {
+            // A worktree can keep its checkout path while its Git directory
+            // changes. Watching only the previous gitdir's HEAD misses that.
+            println!("cargo:rerun-if-changed={}", git_entry.display());
+        }
         let marker = env::var_os("BUS_CHECKOUT_ROOT")
             .map(PathBuf::from)
             .expect("BUS_CHECKOUT_ROOT is missing; run Cargo from the checkout so .cargo/config.toml is loaded");
@@ -52,6 +58,20 @@ fn record_build_identity() {
             .and_then(|out| String::from_utf8(out.stdout).ok())
             .map(|s| s.trim().to_string())
     };
+    if let Some(gitdir) = git(&["rev-parse", "--absolute-git-dir"]) {
+        let gitdir = PathBuf::from(gitdir);
+        let commondir = gitdir.join("commondir");
+        if commondir.is_file() {
+            // This pointer selects the shared refs directory independently of
+            // both the checkout's .git entry and its worktree-specific HEAD.
+            println!("cargo:rerun-if-changed={}", commondir.display());
+        } else {
+            // Detect a pointer introduced after an ordinary checkout was built.
+            // Other Git metadata writes may invalidate that checkout too; linked
+            // worktrees already have commondir and keep the narrower file watch.
+            println!("cargo:rerun-if-changed={}", gitdir.display());
+        }
+    }
     let sha = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=BUS_BUILD_SHA={sha}");
     println!(

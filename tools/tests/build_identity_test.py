@@ -386,15 +386,17 @@ class BuildIdentityTests(unittest.TestCase):
         )
 
 
-    def test_staging_an_unrelated_file_keeps_a_clean_dev_build_cached(self) -> None:
+    def test_staging_an_unrelated_file_preserves_identity_and_caches_the_next_build(self) -> None:
         build = self.cargo_fixture()
         short = self.git(self.repo, "rev-parse", "--short", "HEAD")
         self.assertEqual(build()[0], short)
         (self.repo / "notes.md").write_text("staged unrelated edit\n")
         self.git(self.repo, "add", "notes.md")
-        text, fresh = build()
+        text, _ = build()
         self.assertEqual(text, short)
-        self.assertTrue(fresh, "staging an unrelated file recompiled the crate")
+        # An ordinary checkout watches its Git directory to detect creation of
+        # commondir. Staging can invalidate it once; unchanged repeats must cache.
+        self.assertEqual(build(), (short, True))
 
 
 class BuildIdentityCacheProbeTests(BuildIdentityTests):
