@@ -185,6 +185,15 @@ fn kimi_live_tracking_effort_footer_without_busy_marker_stays_idle() {
 }
 
 #[test]
+fn kimi_idle_composer_with_command_phrase_in_finished_reply_stays_idle() {
+    let detection = kimi_detection(&kimi_frame(
+        "Running a command is the in-progress label.\n✻ Thinking 9 times\nK3.1 Pro thinking: high  …/tmp/project  master",
+    ));
+    assert_eq!(detection.state, AgentState::Idle);
+    assert!(detection.visible_idle);
+}
+
+#[test]
 fn kimi_tasks_running_footer_is_working() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());

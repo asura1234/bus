@@ -104,11 +104,12 @@ line_regex = ['(?i)\[[1-9][0-9]*\s+tasks?\s+running\]']
 id = "footer_running_command_working"
 state = "working"
 priority = 84
-# The live bullet sits above the composer. Bottom-five lines are the box,
-# the effort footer (`thinking: high`, also shown when idle), and context.
-region = "whole_recent"
+# The live bullet is the line above the composer. With the box, the effort
+# footer, and context, that is the sixth non-empty line. Match that status
+# line, not a finished reply that only mentions the phrase.
+region = "bottom_non_empty_lines(6)"
 visible_working = true
-line_regex = ['(?i)\brunning a command\b']
+line_regex = ['(?i)^\s*(?:[●•]\s+)?running a command(?:\s*·.*)?\s*$']
 
 [[rules]]
 id = "footer_steer_working"
@@ -122,7 +123,9 @@ line_regex = ['(?i)ctrl-s to steer', '↑ to edit']
 id = "current_empty_composer"
 state = "idle"
 priority = 70
-region = "bottom_non_empty_lines(5)"
+# A turn summary under the box (`✻ Thinking N times`) pushes the empty
+# composer one line above the old five-line window. Six still sees it.
+region = "bottom_non_empty_lines(6)"
 visible_idle = true
 contains = ["context:"]
 line_regex = ['^\s*│ >\s*│\s*$']
