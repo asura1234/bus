@@ -103,3 +103,19 @@ def test_explicit_repo_sys_path_resolves_a_cross_root_import(tmp_path):
     source(tmp_path, 'tools/helper.py', 'def run(): return 1\n')
     source(tmp_path, 'packaging/case_test.py', 'import sys\nfrom pathlib import Path\nROOT=Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(ROOT / "tools"))\nfrom helper import run\n')
     assert select(['tools/helper.py'], root=tmp_path).full
+
+
+def test_rust_manifest_relative_script_tracks_transitive_python_helpers(tmp_path):
+    source(tmp_path, 'Cargo.toml', '[[test]]\nname="tui-driver"\npath="tests/driver_test.rs"\n')
+    source(tmp_path, 'tests/driver_test.rs', 'fn case() { Command::new("python3").arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tools/scenario_test.py")); }')
+    source(tmp_path, 'tools/scenario_test.py', 'from .helper import run\n')
+    source(tmp_path, 'tools/helper.py', 'from .leaf import run\n')
+    source(tmp_path, 'tools/leaf.py', 'def run(): pass\n')
+    assert select(['tools/scenario_test.py'], root=tmp_path).full
+    assert select(['tools/leaf.py'], root=tmp_path).full
+
+
+def test_manifest_path_inside_rust_fixture_string_is_not_a_reference(tmp_path):
+    source(tmp_path, 'tests/fixture_test.rs', 'const SAMPLE: &str = r#"concat!(env!("CARGO_MANIFEST_DIR"), "/tools/local_test.py")"#;')
+    source(tmp_path, 'tools/local_test.py', 'def test_case(): pass\n')
+    assert not select(['tools/local_test.py'], root=tmp_path).full

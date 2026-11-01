@@ -29,6 +29,9 @@ helpers, and resolves literal includes relative to the containing file. Python
 imports use exact package/source directories and explicit repository `sys.path`
 entries; path expressions require a known anchor such as `Path(__file__).parents`.
 Temporary fixture paths and matching basenames do not create repository edges.
+Rust runtime file literals resolve to exact repository/source paths, including
+`concat!(env!("CARGO_MANIFEST_DIR"), ...)` script arguments. Python helper imports
+are followed transitively so a script's Rust test consumers also force full fallback.
 The index also follows Python imports when selected tests need `BUS_TEST_BINARY`.
 Missing ownership and cross-owner references fall back to every suite. Embedded
 skill resources include directory symlinks, with the collector's test exclusions;

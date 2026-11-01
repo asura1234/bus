@@ -15,6 +15,7 @@ LITERAL = r'r(?P<hash>\#*)"(?P<raw>.*?)"(?P=hash)|"(?:\\.|[^"\\])*"'
 QUOTED = re.compile(LITERAL, re.S)
 INCLUDE = re.compile(r'\binclude(?:_str|_bytes)?\s*!\s*\(\s*(' + LITERAL + ')', re.S)
 MODULE_EDGE = re.compile(r'\bmod\s+\w+\s*;|\binclude\s*!\s*\(')
+MANIFEST_PATH = re.compile(r'\bconcat\s*!\s*\(\s*env\s*!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*(' + LITERAL + r')\s*,?\s*\)', re.S)
 
 
 def owner(name: str) -> tuple[str, ...]:
@@ -95,6 +96,7 @@ class References:
                 target = self.relative(self.root / Path(name).parent / value)
                 if target:
                     self.edges[name].add(target)
+        self.runtime_files(name, source, code)
         if name == 'build.rs':
             # Rebuild watches do not mean every watched file enters the binary.
             # Only directories actually passed to the resource collector do.
@@ -105,6 +107,26 @@ class References:
                         self.prefixes.append((name, target))
                     else:
                         self.uncertain = True
+
+    def runtime_files(self, name: str, source: str, code: str):
+        text = self.mask_rust(source, mask_literals=False)
+        candidates = []
+        for match in QUOTED.finditer(text):
+            value = literal(match.group())
+            if value and '/' in value and not value.startswith('/') and '\n' not in value and '\0' not in value:
+                candidates.extend((self.root / value, self.root / Path(name).parent / value))
+        for match in MANIFEST_PATH.finditer(text):
+            if code[match.start():].startswith('concat'):
+                value = literal(match.group(1))
+                if value is not None:
+                    candidates.append(self.root / value.lstrip('/'))
+        for path in candidates:
+            try:
+                target = self.relative(path)
+                if target in self.paths and path.is_file():
+                    self.edges[name].add(target)
+            except (OSError, ValueError):
+                continue
 
     def python(self, name: str, source: str):
         targets = python_edges(self.root, name, source, self.paths)
@@ -145,7 +167,20 @@ class References:
         }
 
     def cross_owner(self, name: str) -> bool:
-        return any(owner(source) != owner(name) for source in self.incoming(name))
+        pending, seen = [name], set()
+        while pending:
+            target = pending.pop()
+            if target in seen:
+                continue
+            seen.add(target)
+            for source in self.incoming(target):
+                if owner(source) != owner(name):
+                    return True
+                # Python helpers can be imported by a script launched from Rust.
+                # Rust module containers are covered by their namespace selection.
+                if name.endswith('.py'):
+                    pending.append(source)
+        return False
 
     def reachable(self, start: str) -> set[str]:
         seen, pending = set(), [start]

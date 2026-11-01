@@ -25,3 +25,13 @@ def test_owned_test_file_narrows_on_real_repo(path, expected):
 def test_tools_test_narrows_on_real_repo():
     plan = selection.select(["tools/tests/sitrep_test.py"], root=ROOT)
     assert not plan.full and plan.python == ("tools",), plan
+
+
+@pytest.mark.parametrize("path", [
+    "tools/acceptance/reply_restart_test.py",
+    "tools/acceptance/native_restart_test.py",
+    "tools/acceptance/harness_test.py",
+])
+def test_python_scenario_run_by_tui_driver_selects_dev_tools(path):
+    plan = selection.select([path], root=ROOT)
+    assert plan.full or plan.dev_tools, plan
