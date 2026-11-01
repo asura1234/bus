@@ -65,6 +65,41 @@ class ChildrenStopTest(unittest.TestCase):
             for child in (first, second):
                 reap(child)
 
+    def test_stop_waits_for_descendants_after_the_leader_has_exited(self):
+        import threading
+
+        script = (
+            "import subprocess,sys;"
+            f"p=subprocess.Popen((sys.executable,'-c',{IGNORE_TERM!r}),stdout=subprocess.PIPE);"
+            "p.stdout.readline();print(p.pid,flush=True)"
+        )
+        children = Children()
+        leader = children.start((sys.executable, "-c", script), stdout=subprocess.PIPE)
+        descendant = int(leader.stdout.readline())
+        leader.wait(timeout=5)
+        signal_group = processes.signal_group
+        pending = []
+
+        def asynchronous_exit(group, signum):
+            if signum == signal.SIGKILL:
+                # A successful signal send does not mean the descendant has exited.
+                timer = threading.Timer(.2, signal_group, (group, signum))
+                pending.append(timer)
+                timer.start()
+            else:
+                signal_group(group, signum)
+
+        try:
+            self.assertTrue(alive(descendant))
+            with patch.object(processes, "signal_group", side_effect=asynchronous_exit):
+                children.stop()
+            self.assertFalse(alive(descendant), "stop returned while its descendant was alive")
+        finally:
+            for timer in pending:
+                timer.join(timeout=5)
+            signal_group(leader.pid, signal.SIGKILL)
+            reap(leader)
+
     def test_stop_continues_after_failure_and_preserves_it_over_a_repeat_signal(self):
         for repeated_signal in (False, True):
             with self.subTest(repeated_signal=repeated_signal):

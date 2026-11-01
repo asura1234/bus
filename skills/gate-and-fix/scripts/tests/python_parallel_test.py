@@ -97,12 +97,15 @@ def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path, nested):
         'import os\nfrom pathlib import Path\n'
         'def pytest_sessionstart(session):\n'
         '    if hasattr(session.config,"workerinput"):\n'
-        f'        Path({str(tmp_path)!r},session.config.workerinput["workerid"]).write_text(str(os.getpid()))\n'
+        f'        ready=Path({str(tmp_path)!r},session.config.workerinput["workerid"])\n'
+        '        pending=ready.with_name("."+ready.name+".tmp")\n'
+        '        pending.write_text(str(os.getpid()));pending.replace(ready)\n'
     )
     child = (
         'import os,signal,time;from pathlib import Path;'
         'signal.signal(signal.SIGTERM,signal.SIG_IGN);'
-        f'Path({str(tmp_path / "child")!r}).write_text(str(os.getpid()));time.sleep(60)'
+        f'ready=Path({str(tmp_path / "child")!r});pending=ready.with_suffix(".tmp");'
+        'pending.write_text(str(os.getpid()));pending.replace(ready);time.sleep(60)'
     )
     (tools / 'example_test.py').write_text(
         'import subprocess,sys,time\nfrom pathlib import Path\n'

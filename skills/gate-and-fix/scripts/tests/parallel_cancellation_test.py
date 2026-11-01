@@ -27,7 +27,9 @@ def test_nested_parallel_workers_stop_before_profiles_are_removed(tmp_path, sign
         'signal.signal(signal.SIGTERM,signal.SIG_IGN);'
         'profile=Path(os.environ["LLVM_PROFILE_FILE_NAME"].replace("%4m","probe"));'
         'profile.write_bytes(b"counters");'
-        'Path(sys.argv[1]).write_text(json.dumps({"pid":os.getpid(),"pgid":os.getpgrp(),"profile":str(profile)}));'
+        'ready=Path(sys.argv[1]);pending=ready.with_suffix(".tmp");'
+        'pending.write_text(json.dumps({"pid":os.getpid(),"pgid":os.getpgrp(),"profile":str(profile)}));'
+        'pending.replace(ready);'
         'time.sleep(60)'
     )
     inner = (
@@ -69,7 +71,10 @@ def test_nested_parallel_workers_stop_before_profiles_are_removed(tmp_path, sign
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
-        for path in ready.iterdir():
+        for stage in ('unit', 'integration'):
+            path = ready / stage
+            if not path.exists():
+                continue
             item = json.loads(path.read_text())
             if running(item['pid']) and os.getpgid(item['pid']) == item['pgid'] != os.getpgrp():
                 try:
