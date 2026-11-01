@@ -115,13 +115,15 @@ impl Worker {
             Ok(result) => Response::success(&request.id, result),
             Err(error) => {
                 // Detailed domain diagnostics remain available via state and log IDs.
-                self.reply_conflict_response(request).unwrap_or_else(|| {
-                    Response::failure(
-                        &request.id,
-                        "command_failed",
-                        error.chars().take(700).collect::<String>(),
-                    )
-                })
+                self.master_reserved_response(request)
+                    .or_else(|| self.reply_conflict_response(request))
+                    .unwrap_or_else(|| {
+                        Response::failure(
+                            &request.id,
+                            "command_failed",
+                            error.chars().take(700).collect::<String>(),
+                        )
+                    })
             }
         };
         tracing::info!(

@@ -89,9 +89,9 @@ fn open_messaging_unique_names_route_globally_and_exact_ids_win_over_numeric_nam
 fn open_messaging_all_agent_payloads_name_the_sender_and_its_home_room() {
     let (mut w, room, author, dir) = fixture();
     let peer = add(&mut w, room, &dir, "peer");
-    let master = w.state.master_room().unwrap().id;
+    let other = w.state.create_room("other").unwrap();
     // The conversation's room need not be the sender's home room.
-    assert!(send(&mut w, master, author, &peer.0.to_string(), "hello").ok);
+    assert!(send(&mut w, other, author, &peer.0.to_string(), "hello").ok);
     let id = w.state.requests().last().unwrap().id;
     let expected = format!("codex1 (room {}):\nhello", room.0);
     assert_eq!(

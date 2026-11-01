@@ -129,6 +129,9 @@ impl Worker {
                 )?,
             ),
         };
+        if let Some(error) = self.master_send_refusal(room, author) {
+            return Err(error);
+        }
         let selected = p
             .get("to")
             .and_then(Value::as_array)
@@ -202,6 +205,42 @@ impl Worker {
             );
         }
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
+    }
+
+    /// Only new agent sends are restricted. Correlated answers take their room
+    /// from the original request in `control_reply`, as do captured turn finals.
+    fn master_send_refusal(&self, room: RoomId, author: Option<AgentId>) -> Option<String> {
+        let master = self.state.master_room()?;
+        if room != master.id {
+            return None;
+        }
+        let agent = self.state.agent(author?)?;
+        if agent.room_id == master.id && agent.orchestrates.is_some() {
+            return None;
+        }
+        let home_name = self
+            .state
+            .room(agent.room_id)
+            .map_or("unknown room", |home| home.name.as_str());
+        Some(format!(
+            "MASTER (room {}) is reserved for orchestrators and the developer. Send from your own room instead: --room {} ({}).",
+            master.id.0, agent.room_id.0, home_name,
+        ))
+    }
+
+    /// Preserve the send refusal's structured code without parsing error text.
+    pub(super) fn master_reserved_response(&self, command: &ControlRequest) -> Option<Response> {
+        if command.method != "message.send" || command.params.get("reply_to").is_some() {
+            return None;
+        }
+        let room = self
+            .control_room(required(&command.params, "room").ok()?)
+            .ok()?;
+        let author = self
+            .control_author(room, required(&command.params, "as").ok()?)
+            .ok()?;
+        self.master_send_refusal(room, Some(author))
+            .map(|error| Response::failure(&command.id, "master_reserved", error))
     }
 
     fn control_reply(&mut self, p: &Value) -> Result<Value, String> {

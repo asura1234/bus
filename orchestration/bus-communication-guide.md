@@ -25,6 +25,7 @@ would leave the receiver doing exactly what it was already doing, don't send it.
 in MASTER, not even to their own orchestrator: send from your own work room
 (`bus send --room <your room> --to orchestrator ...`). Peers in other rooms are
 reached from your own room too; names resolve across rooms.
+Bus refuses new worker sends in MASTER; replies to requests received there remain allowed.
 
 ## Peer to peer first
 

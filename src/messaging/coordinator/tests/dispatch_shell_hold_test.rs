@@ -12,6 +12,8 @@ fn master_reply(author_is_agent: bool, command: &str) {
             None,
         )
         .unwrap();
+    let work_room = state.create_room("desktop").unwrap();
+    state.bind_orchestrator(sender, work_room).unwrap();
     f.worker.save(state).unwrap();
     f.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"startup"}));
     f.consume();

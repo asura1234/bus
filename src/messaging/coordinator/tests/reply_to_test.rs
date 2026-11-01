@@ -33,6 +33,56 @@ fn status(f: &mut Fixture, id: RequestId) -> Value {
 }
 
 #[test]
+fn master_guard_worker_explicit_and_turn_final_replies_land_in_the_request_room() {
+    for explicit in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let master = f.worker.state.master_room().unwrap().id;
+        let sent = f.worker.control_response_with_events(
+            &ControlRequest {
+                id: "master-question".into(),
+                method: "message.send".into(),
+                params: json!({"room":"master","to":[f.agent.0.to_string()],"text":"developer question"}),
+            },
+            None,
+        );
+        assert!(sent.ok, "{sent:?}");
+        let request = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
+        let message = f.request(request).prompt.id;
+        f.deliver();
+        let payload = f.typed().last().unwrap().0.clone();
+        f.started("master-answer", &payload);
+        f.consume();
+        assert!(f.request(request).trusted_start_bound);
+        if explicit {
+            let agent = f.agent;
+            let reply = answer(&mut f, message, agent, "worker answer");
+            assert!(reply.ok, "{reply:?}");
+            assert_eq!(reply.result["stage"], "replied");
+        } else {
+            f.stopped("master-answer", "worker answer");
+            f.consume();
+            f.status(RuntimeStatus::Idle);
+            f.worker.settle_requests().unwrap();
+        }
+        assert_eq!(
+            status(&mut f, request)["requests"][0]["reply"]["text"],
+            "worker answer"
+        );
+        let reply = &f.worker.state.room(master).unwrap().latest_replies[&f.agent];
+        assert_eq!(reply.request_id, request);
+        assert_eq!(reply.text, "worker answer");
+        assert!(f
+            .worker
+            .state
+            .room(f.room)
+            .unwrap()
+            .latest_replies
+            .is_empty());
+        assert_eq!(f.worker.state.requests().count(), 1);
+    }
+}
+
+#[test]
 fn reply_to_completes_the_lead_without_ending_its_turn_or_stopping_later_steering() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     let lead = start(&mut f, "standing watcher");

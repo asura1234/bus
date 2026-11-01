@@ -13,6 +13,8 @@ mod identity_tests;
 mod inspect_tests;
 #[path = "large_history_test.rs"]
 mod large_history_tests;
+#[path = "master_guard_test.rs"]
+mod master_guard_tests;
 #[path = "messages_test.rs"]
 mod messages_tests;
 #[path = "open_messaging_test.rs"]
