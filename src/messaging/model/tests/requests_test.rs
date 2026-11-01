@@ -427,9 +427,9 @@ fn kimi_wire_steer_settles_each_request_with_its_own_reply() {
     let wire = format!(
         concat!(
             "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{lead}}}]}}\n",
-            "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"working\"}}],\"toolCalls\":[{{\"name\":\"bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
             "{{\"type\":\"prompt.steered\",\"agentId\":\"main\",\"content\":[{{\"type\":\"text\",\"text\":{follow}}}]}}\n",
             "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{follow}}}]}}\n",
+            "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"working\"}}],\"toolCalls\":[{{\"name\":\"bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
             "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"STEER-DONE\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
             "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
             "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",

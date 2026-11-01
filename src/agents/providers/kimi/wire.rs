@@ -251,11 +251,14 @@ fn note_assistant(turn: &mut OpenTurn, value: &Value) {
         return;
     };
     if tool_call {
+        // Kimi 2.4 appends the lead's tool message after prompt.steered.
+        // That call still belongs to the bound turn, so a later non-Bus
+        // continuation can be the lead's own answer.
+        turn.saw_lead_tool = true;
         if turn.after_steer {
             turn.steer_answer = None;
         } else {
             turn.lead_answer = None;
-            turn.saw_lead_tool = true;
         }
     } else if !text.is_empty() {
         if turn.after_steer {
@@ -947,6 +950,63 @@ mod tests {
             capture.steered,
             vec![(steered.to_owned(), "STEER-REPLY".into())]
         );
+    }
+
+    #[test]
+    fn delayed_lead_tool_after_steer_holds_for_a_non_bus_continuation() {
+        let original = "[Bus message 5 from you]\nstart sleep 45 then reply LEAD-DONE";
+        let steered = "[Bus message 7 from you]\nreply STEER-REPLY";
+        let notify = "<notification id=\"task:bash-1:completed\" />";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"prompt.steered\",\"agentId\":\"main\",\"content\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
+                "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"think\",\"think\":\"tool\"}}],\"toolCalls\":[{{\"name\":\"Bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"STEER-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":{notify}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"LEAD-DONE\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            steered = serde_json::to_string(steered).unwrap(),
+            notify = serde_json::to_string(notify).unwrap(),
+        );
+        let before_continuation = wire
+            .lines()
+            .take_while(|line| !line.contains("turnId\":1"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let held = session_capture_lines(
+            before_continuation.lines().map(|line| Ok(line.to_owned())),
+            0,
+            original,
+        )
+        .unwrap()
+        .expect("bound turn committed before the continuation");
+        assert_eq!(
+            held.lead, None,
+            "a delayed lead tool must not close as NoReply"
+        );
+        assert_eq!(held.continuation, None);
+        assert_eq!(
+            held.steered,
+            vec![(steered.to_owned(), "STEER-REPLY".into())]
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 0, original)
+                .unwrap()
+                .expect("continuation committed");
+        assert_eq!(capture.lead, None);
+        assert_eq!(
+            capture.steered,
+            vec![(steered.to_owned(), "STEER-REPLY".into())]
+        );
+        assert_eq!(capture.continuation, Some((1, "LEAD-DONE".into())));
     }
 
     #[test]
