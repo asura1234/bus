@@ -233,6 +233,43 @@ fn expected_blocked(worker: &Worker, id: AgentId) -> String {
     }
 }
 
+#[test]
+fn grok_login_reason_is_inspectable_when_orchestrator_is_notified() {
+    for capture in [
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-connecting.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-71col.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-61col.txt"),
+    ] {
+        let parsed = crate::agents::dialog::parse(capture).expect("native login dialog");
+        let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+        {
+            let mut screen = screen.lock().unwrap();
+            screen.dialog = true;
+            screen.blocked = true;
+            screen.text = Some(parsed.text.clone());
+        }
+        for _ in 0..3 {
+            worker.poll().unwrap();
+        }
+        let notices = sent_by(&worker, room, agent);
+        assert_eq!(
+            notices,
+            vec![(
+                vec![orchestrator.unwrap()],
+                expected_blocked(&worker, agent)
+            )]
+        );
+        let observation = worker
+            .native_dialog("pane", "terminal", None, false)
+            .unwrap();
+        assert_eq!(observation.dialog.unwrap().text, parsed.text);
+        assert!(parsed.text.contains("Grok login required"));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// Worker blocks stay in their work room, signed by Bus, never by the worker.
 fn assert_only_bus_signed_notices(worker: &Worker) {
     assert!(worker

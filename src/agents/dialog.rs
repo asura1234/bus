@@ -14,6 +14,7 @@ mod composer;
 mod fingerprint;
 pub(crate) use fingerprint::trace as trace_fingerprint;
 mod grok;
+mod grok_login;
 mod kimi;
 mod style;
 mod title;
@@ -336,6 +337,9 @@ fn is_hint(line: &str) -> bool {
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let (texts, styles) = styled_lines(screen);
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
+    if let Some(dialog) = grok_login::parse(&lines) {
+        return Some(dialog);
+    }
     // A current Grok surface owns the decision even if its options are
     // incomplete. Never resurrect a generic approval from transcript history.
     if grok::current_card(&lines) {

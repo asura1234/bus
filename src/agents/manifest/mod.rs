@@ -30,6 +30,21 @@ pub fn detect_with_osc(agent: AgentKind, input: DetectionInput<'_>) -> AgentDete
     detect_with_launch_context(agent, input, false)
 }
 
+/// Share the login rule with the dialog observer, so a blocked native screen
+/// also exposes its reason through the existing orchestrator notice path.
+pub(crate) fn grok_login_required(screen: &str) -> bool {
+    let input = DetectionInput {
+        screen,
+        osc_title: "",
+        osc_progress: "",
+    };
+    load_manifest(AgentKind::Grok).is_some_and(|loaded| {
+        matched_manifest_rule(input, &loaded, false).is_some_and(|rule| {
+            rule.id == "login_unavailable" && rule.state == Some(schema::ManifestState::Blocked)
+        })
+    })
+}
+
 pub(crate) fn detect_with_launch_context(
     agent: AgentKind,
     input: DetectionInput<'_>,
@@ -129,6 +144,8 @@ mod tests {
     mod engine;
     #[path = "grok_test.rs"]
     mod grok;
+    #[path = "grok_login_test.rs"]
+    mod grok_login;
     #[path = "others_test.rs"]
     mod others;
     #[path = "regions_test.rs"]
