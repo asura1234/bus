@@ -559,7 +559,12 @@ impl Worker {
         input: &AddAgent,
         id: AgentId,
     ) -> Result<(launch::PreparedLaunch, HookContext), String> {
-        let binary = std::env::current_exe().map_err(|e| e.to_string())?;
+        let current = std::env::current_exe().map_err(|e| e.to_string())?;
+        let binary = if input.provider == Provider::Codex {
+            crate::agents::providers::hook_json::codex_callback_binary(&self.data_dir, &current)?
+        } else {
+            current
+        };
         let launch_id = crate::utils::time::digest(
             format!(
                 "{}:{}:{}",
