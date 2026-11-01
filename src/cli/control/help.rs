@@ -176,7 +176,18 @@ fn restart_command() -> Command {
     Command::new("restart")
         .about("Restart the session server onto another Bus binary")
         .long_about(details::RESTART)
-        .args(run_flags())
+        .arg(
+            Arg::new("dev")
+                .long("dev")
+                .action(clap::ArgAction::SetTrue)
+                .help("Required to run this command. Does not change the running server's recorded --dev mode"),
+        )
+        .arg(
+            Arg::new("yolo")
+                .long("yolo")
+                .action(clap::ArgAction::SetTrue)
+                .help("Turn --yolo on for the restarted server. Omit to keep the running server's --yolo setting"),
+        )
         .arg(
             Arg::new("binary")
                 .long("binary")

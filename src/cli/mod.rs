@@ -135,6 +135,188 @@ fn last_session(
     .map_err(io::Error::other)
 }
 
+/// A restart treats `BUS_DATA_DIR` as an explicit data-dir override only when
+/// this command set it. An inherited value equal to the running server's root
+/// still carries that server's session id, and that keeps the recorded session.
+/// A different root, or the same root with the session id removed, is the
+/// override and clears the recorded session.
+fn restart_command_overrides_data_dir(
+    data_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+    server_root: &std::path::Path,
+) -> bool {
+    let Some(data_dir) = data_dir else {
+        return false;
+    };
+    if data_dir == server_root {
+        return !matches!(session_id, Some(id) if !id.is_empty());
+    }
+    true
+}
+
+fn restart_session(
+    explicit_root: Option<&std::path::Path>,
+    fallback: impl FnOnce() -> io::Result<(std::path::PathBuf, String)>,
+) -> io::Result<(std::path::PathBuf, Option<String>, bool)> {
+    let env_session = std::env::var("BUS_SESSION_ID")
+        .ok()
+        .filter(|id| !id.is_empty());
+    // No data dir on this command: the registry session is the server.
+    let Some(data_dir) = explicit_root else {
+        let (root, id) = fallback()?;
+        return Ok((root, env_session.or(Some(id)), false));
+    };
+    // Only a missing recorded session is an override. Invalid metadata, a
+    // missing session directory, an unreadable last-session file, and a
+    // registry lock error fail the restart, as they do with no data dir.
+    // A successful lookup can be the global last-opened session. When this
+    // command still carries BUS_SESSION_ID, that id is the server being
+    // restarted. session_root drops it only when the data dir is not that
+    // session's own directory.
+    match fallback() {
+        Ok(_) => {}
+        Err(error)
+            if error
+                .to_string()
+                .contains("No local Bus session has been recorded yet") =>
+        {
+            return Ok((data_dir.to_path_buf(), None, true));
+        }
+        Err(error) => return Err(error),
+    }
+    if env_session.is_some() {
+        return Ok((data_dir.to_path_buf(), env_session, false));
+    }
+    Ok((data_dir.to_path_buf(), None, true))
+}
+
+/// A set data dir overrides only when it is not the directory of the session
+/// this command inherited. Last-opened is not that session.
+fn clear_restart_session_if_data_dir_is_not_its_root(
+    registry: &LocalSessionRegistry,
+    data_dir: Option<&std::path::Path>,
+    session: &mut Option<String>,
+    explicit: &mut bool,
+) -> io::Result<()> {
+    if *explicit {
+        return Ok(());
+    }
+    let (Some(dir), Some(id)) = (data_dir, session.as_deref().filter(|id| !id.is_empty())) else {
+        return Ok(());
+    };
+    let Some(root) = registry
+        .root_of(id)
+        .map_err(|error| restart_registry_error(error, Some(dir)))?
+    else {
+        return Ok(());
+    };
+    if restart_command_overrides_data_dir(Some(dir), Some(id), &root) {
+        *explicit = true;
+        *session = None;
+    }
+    Ok(())
+}
+
+/// Server root for a restart. A set data dir that carries a registry session
+/// id belongs to that session. A missing directory or invalid record for that
+/// id fails the restart and names the id. Last-opened is used only when this
+/// command has no session id, or the id is not a registry id.
+fn restart_fallback_session(
+    registry: &LocalSessionRegistry,
+    action: &Action,
+    explicit_root: Option<&std::path::Path>,
+) -> io::Result<(std::path::PathBuf, String)> {
+    if explicit_root.is_some() {
+        if let Some(id) = std::env::var("BUS_SESSION_ID")
+            .ok()
+            .filter(|id| !id.is_empty())
+        {
+            match registry.root_of(&id) {
+                Ok(Some(root)) => return Ok((root, id)),
+                Ok(None) => {}
+                Err(error) => return Err(restart_registry_error(error, explicit_root)),
+            }
+        }
+    }
+    let session = last_session(registry, action)?;
+    Ok((session.root, session.id))
+}
+
+/// A registry failure while resolving the inherited session. A missing
+/// directory names that session and the data dir on this command.
+fn restart_registry_error(error: String, data_dir: Option<&std::path::Path>) -> io::Error {
+    let message = match data_dir {
+        Some(dir) if error.contains("was not found") => format!("{error} at {}", dir.display()),
+        _ => error,
+    };
+    io::Error::other(message)
+}
+
+fn session_root(
+    invocation: &session_pick::Invocation,
+    explicit_root: Option<std::path::PathBuf>,
+    base: &std::path::Path,
+    registry: &LocalSessionRegistry,
+    restart_explicit_data_dir: &mut bool,
+) -> io::Result<Option<(std::path::PathBuf, Option<String>)>> {
+    let located = match &invocation.action {
+        Action::Run => match explicit_root {
+            Some(root) => (root, None),
+            None => {
+                let session = registry.create().map_err(io::Error::other)?;
+                (session.root, Some(session.id))
+            }
+        },
+        Action::Resume(target) => {
+            if explicit_root.is_some() {
+                return Err(io::Error::other(
+                    "BUS_DATA_DIR cannot be combined with bus resume",
+                ));
+            }
+            let session = registry.resume(target.clone()).map_err(io::Error::other)?;
+            (session.root, Some(session.id))
+        }
+        // With no session ever recorded there is no server to stop.
+        Action::Stop
+            if explicit_root.is_none()
+                && matches!(
+                    std::fs::symlink_metadata(base.join("last-session")),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                ) =>
+        {
+            help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
+            return Ok(None);
+        }
+        // Stop targets the same session as control commands.
+        Action::Control(_) | Action::Stop => match explicit_root.clone() {
+            Some(root) => (root, None),
+            None => {
+                let session = last_session(registry, &invocation.action)?;
+                (session.root, Some(session.id))
+            }
+        },
+        // An inherited BUS_DATA_DIR is not an override when it is that session's
+        // own directory. Last-opened can name a session opened later.
+        Action::Restart(_) => {
+            let (root, mut session, mut explicit) =
+                restart_session(explicit_root.as_deref(), || {
+                    restart_fallback_session(registry, &invocation.action, explicit_root.as_deref())
+                })?;
+            clear_restart_session_if_data_dir_is_not_its_root(
+                registry,
+                explicit_root.as_deref(),
+                &mut session,
+                &mut explicit,
+            )?;
+            *restart_explicit_data_dir = explicit;
+            (root, session)
+        }
+        Action::Paths => (explicit_root.unwrap_or_else(|| base.to_path_buf()), None),
+        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+    };
+    Ok(Some(located))
+}
+
 fn bind_session_env(root: &std::path::Path, session_id: Option<&str>) -> io::Result<()> {
     std::env::set_var("BUS_DATA_DIR", root);
     match session_id {
@@ -169,7 +351,8 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
     }
 
     let explicit_root = bus_data_dir();
-    let explicit_data_dir = explicit_root.is_some();
+    let env_sets_data_dir = explicit_root.is_some();
+    let mut restart_explicit_data_dir = false;
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());
     if invocation.action == Action::Sessions {
@@ -180,44 +363,15 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         }
         return Ok(());
     }
-    let (root, local_session_id) = match &invocation.action {
-        Action::Run => match explicit_root {
-            Some(root) => (root, None),
-            None => {
-                let session = registry.create().map_err(io::Error::other)?;
-                (session.root, Some(session.id))
-            }
-        },
-        Action::Resume(target) => {
-            if explicit_root.is_some() {
-                return Err(io::Error::other(
-                    "BUS_DATA_DIR cannot be combined with bus resume",
-                ));
-            }
-            let session = registry.resume(target.clone()).map_err(io::Error::other)?;
-            (session.root, Some(session.id))
-        }
-        // With no session ever recorded there is no server to stop.
-        Action::Stop
-            if explicit_root.is_none()
-                && matches!(
-                    std::fs::symlink_metadata(base.join("last-session")),
-                    Err(error) if error.kind() == io::ErrorKind::NotFound
-                ) =>
-        {
-            help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
-            return Ok(());
-        }
-        // Stop targets the same session as control commands.
-        Action::Control(_) | Action::Stop | Action::Restart(_) => match explicit_root {
-            Some(root) => (root, None),
-            None => {
-                let session = last_session(&registry, &invocation.action)?;
-                (session.root, Some(session.id))
-            }
-        },
-        Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+    let Some((root, local_session_id)) = session_root(
+        &invocation,
+        explicit_root,
+        &base,
+        &registry,
+        &mut restart_explicit_data_dir,
+    )?
+    else {
+        return Ok(());
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
@@ -230,6 +384,11 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
         bus_io::private_dir(&root)?;
         require_private_root(&root)?;
     }
+    let explicit_data_dir = if matches!(invocation.action, Action::Restart(_)) {
+        restart_explicit_data_dir
+    } else {
+        env_sets_data_dir
+    };
     bind_session_env(&root, local_session_id.as_deref())?;
     match invocation.action {
         // Reads files only, so it also works while the session is hung.
@@ -340,7 +499,10 @@ fn run_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_invocation, require_private_root, Action, Invocation, ResumeTarget, USAGE};
+    use super::{
+        parse_invocation, require_private_root, restart_command_overrides_data_dir, Action,
+        Invocation, ResumeTarget, USAGE,
+    };
 
     /// A normal session used to run without a control socket, so a shared
     /// BUS_DATA_DIR still started. Now every session runs the socket, which
@@ -439,6 +601,311 @@ mod tests {
             parse_invocation(&args(&["stop", "bus"])).unwrap_err(),
             USAGE
         );
+    }
+
+    #[test]
+    fn inherited_data_dir_equal_to_the_server_keeps_the_recorded_session() {
+        let root = std::path::Path::new("/tmp/bus-session");
+        let other = std::path::Path::new("/tmp/other-bus");
+        assert!(
+            !restart_command_overrides_data_dir(Some(root), Some("abc"), root),
+            "an inherited BUS_DATA_DIR equal to the server root keeps the session"
+        );
+        assert!(
+            restart_command_overrides_data_dir(Some(root), None, root),
+            "BUS_DATA_DIR set on the command without the session is an override"
+        );
+        assert!(
+            restart_command_overrides_data_dir(Some(root), Some(""), root),
+            "an empty session id does not make BUS_DATA_DIR inherited"
+        );
+        assert!(
+            restart_command_overrides_data_dir(Some(other), Some("abc"), root),
+            "a data dir other than the running server's root is an override"
+        );
+        assert!(
+            !restart_command_overrides_data_dir(None, Some("abc"), root),
+            "a restart with no BUS_DATA_DIR uses the recorded session"
+        );
+
+        let recorded = crate::utils::restart_record::RecordedLaunch {
+            dev: Some(true),
+            yolo: Some(true),
+            explicit_data_dir: Some(false),
+            session_id: Some("abc".into()),
+            session_known: true,
+        };
+        let kept = crate::utils::restart_record::resolve_restart_launch(
+            &recorded,
+            None,
+            &crate::utils::restart_record::LaunchOverride {
+                yolo: None,
+                explicit_data_dir: restart_command_overrides_data_dir(
+                    Some(root),
+                    Some("abc"),
+                    root,
+                ),
+                cli_dev: true,
+                cli_session_id: Some("abc".into()),
+            },
+        )
+        .unwrap();
+        assert!(kept.dev && kept.yolo);
+        assert!(!kept.explicit_data_dir);
+        assert_eq!(kept.session_id.as_deref(), Some("abc"));
+    }
+
+    fn with_session_env(id: &str, body: impl FnOnce()) {
+        struct Restore(Option<String>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(value) => std::env::set_var("BUS_SESSION_ID", value),
+                    None => std::env::remove_var("BUS_SESSION_ID"),
+                }
+            }
+        }
+        let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let _restore = Restore(std::env::var("BUS_SESSION_ID").ok());
+        std::env::set_var("BUS_SESSION_ID", id);
+        body();
+    }
+
+    #[test]
+    fn restart_session_clears_the_session_when_the_data_dir_is_not_the_server_root() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-other");
+        let id = "0123456789abcdef";
+        let server = base.join("sessions").join(id);
+        let other = base.join("other-data");
+        std::fs::create_dir_all(&server).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            server.join("session.json"),
+            format!(r#"{{"version":1,"id":"{id}","created_at_ms":1}}"#),
+        )
+        .unwrap();
+        std::fs::write(base.join("last-session"), id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(other.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let (root, session) = result.expect("called").expect("restart").expect("located");
+        assert_eq!(root, other);
+        assert!(
+            explicit,
+            "a data dir other than the running server's root is an override"
+        );
+        assert_eq!(session, None);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_session_keeps_the_session_when_the_data_dir_is_the_server_root() {
+        let server = std::path::PathBuf::from("/tmp/bus-recorded-server");
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::restart_session(Some(&server), || {
+                Ok((server.clone(), "from-registry".into()))
+            }));
+        });
+        let (root, session, explicit) = result.expect("called").expect("restart session");
+        assert_eq!(root, server);
+        assert!(!explicit);
+        assert_eq!(session.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn restart_session_overrides_a_data_dir_when_no_server_is_recorded() {
+        let other = std::path::PathBuf::from("/tmp/bus-other-data");
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::restart_session(Some(&other), || {
+                Err(std::io::Error::other(
+                    "No local Bus session has been recorded yet",
+                ))
+            }));
+        });
+        let (root, session, explicit) = result.expect("called").expect("restart session");
+        assert_eq!(root, other);
+        assert!(explicit);
+        assert_eq!(session, None);
+    }
+
+    #[test]
+    fn restart_with_a_data_dir_reports_invalid_session_metadata() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-meta");
+        let id = "0123456789abcdef";
+        let server = base.join("sessions").join(id);
+        std::fs::create_dir_all(&server).unwrap();
+        std::fs::write(server.join("session.json"), b"{}").unwrap();
+        std::fs::write(base.join("last-session"), id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(server.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let error = result
+            .expect("called")
+            .expect_err("invalid session metadata is not an override");
+        assert!(error.to_string().contains("metadata is invalid"), "{error}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_with_a_data_dir_reports_missing_inherited_session() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-missing");
+        let inherited_id = "0123456789abcdef";
+        let last_opened_id = "fedcba9876543210";
+        let inherited = base.join("sessions").join(inherited_id);
+        let last_opened = base.join("sessions").join(last_opened_id);
+        std::fs::create_dir_all(&last_opened).unwrap();
+        std::fs::write(
+            last_opened.join("session.json"),
+            format!(r#"{{"version":1,"id":"{last_opened_id}","created_at_ms":1}}"#),
+        )
+        .unwrap();
+        std::fs::write(base.join("last-session"), last_opened_id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(inherited_id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(inherited.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let error = result
+            .expect("called")
+            .expect_err("a missing inherited session must fail the restart");
+        assert!(error.to_string().contains("was not found"), "{error}");
+        assert!(error.to_string().contains(inherited_id), "{error}");
+        assert!(
+            error.to_string().contains(&inherited.display().to_string()),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.join("last-session"))
+                .unwrap()
+                .trim(),
+            last_opened_id
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_with_a_missing_inherited_session_directory_is_not_an_override() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-missing");
+        let missing_id = "0123456789abcdef";
+        let other_id = "fedcba9876543210";
+        let missing = base.join("sessions").join(missing_id);
+        let other = base.join("sessions").join(other_id);
+        std::fs::create_dir_all(&other).unwrap();
+        let metadata = format!(r#"{{"version":1,"id":"{other_id}","created_at_ms":1}}"#);
+        std::fs::write(other.join("session.json"), metadata).unwrap();
+        std::fs::write(base.join("last-session"), other_id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(missing_id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(missing.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let error = result
+            .expect("called")
+            .expect_err("a missing inherited session directory is not an override");
+        assert!(error.to_string().contains("was not found"), "{error}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_session_keeps_inherited_session_when_last_session_changes() {
+        let inherited = std::path::PathBuf::from("/tmp/bus-inherited-a");
+        let last_opened = std::path::PathBuf::from("/tmp/bus-last-b");
+        let mut result = None;
+        with_session_env("abc", || {
+            result = Some(super::restart_session(Some(&inherited), || {
+                Ok((last_opened.clone(), "other-session".into()))
+            }));
+        });
+        let (root, session, explicit) = result.expect("called").expect("restart session");
+        assert_eq!(root, inherited);
+        assert!(
+            !explicit,
+            "the inherited target root must not be replaced by the global last-opened root"
+        );
+        assert_eq!(session.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn restart_session_keeps_its_directory_when_another_session_is_last_opened() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-multi");
+        let inherited_id = "0123456789abcdef";
+        let last_opened_id = "fedcba9876543210";
+        let inherited = base.join("sessions").join(inherited_id);
+        let last_opened = base.join("sessions").join(last_opened_id);
+        std::fs::create_dir_all(&inherited).unwrap();
+        std::fs::create_dir_all(&last_opened).unwrap();
+        let metadata = |id: &str| format!(r#"{{"version":1,"id":"{id}","created_at_ms":1}}"#);
+        std::fs::write(inherited.join("session.json"), metadata(inherited_id)).unwrap();
+        std::fs::write(last_opened.join("session.json"), metadata(last_opened_id)).unwrap();
+        std::fs::write(base.join("last-session"), last_opened_id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(inherited_id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(inherited.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let (root, session) = result
+            .expect("called")
+            .expect("inherited restart")
+            .expect("located");
+        assert_eq!(root, inherited);
+        assert!(
+            !explicit,
+            "the inherited target root must not be replaced by the global last-opened root"
+        );
+        assert_eq!(session.as_deref(), Some(inherited_id));
+        assert_eq!(
+            std::fs::read_to_string(base.join("last-session"))
+                .unwrap()
+                .trim(),
+            last_opened_id
+        );
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

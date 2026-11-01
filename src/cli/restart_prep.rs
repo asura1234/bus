@@ -43,6 +43,48 @@ pub(super) fn begin_handoff(
             ),
         )
     })?;
+    let recorded = restart_record::read_recorded_launch(&restart_record::build_path(root))
+        .map_err(|error| {
+            record_refused(
+                root,
+                &refused_record(
+                    request,
+                    new_binary,
+                    &old_binary,
+                    &old_sha,
+                    "unknown",
+                    &error,
+                ),
+            )
+        })?;
+    let status_yolo = if recorded.yolo.is_none() {
+        super::super::launch::running_server_yolo()
+    } else {
+        None
+    };
+    let launch = restart_record::resolve_restart_launch(
+        &recorded,
+        status_yolo,
+        &restart_record::LaunchOverride {
+            yolo: yolo.then_some(true),
+            explicit_data_dir,
+            cli_dev: dev,
+            cli_session_id: session_id.map(str::to_owned),
+        },
+    )
+    .map_err(|error| {
+        record_refused(
+            root,
+            &refused_record(
+                request,
+                new_binary,
+                &old_binary,
+                &old_sha,
+                "unknown",
+                &error,
+            ),
+        )
+    })?;
     let plan = HandoffPlan {
         root: root.to_path_buf(),
         old_binary,
@@ -53,10 +95,10 @@ pub(super) fn begin_handoff(
             request.as_who.as_deref(),
             std::env::var("USER").ok().as_deref(),
         ),
-        session_id: session_id.map(str::to_owned),
-        explicit_data_dir,
-        dev,
-        yolo,
+        session_id: launch.session_id,
+        explicit_data_dir: launch.explicit_data_dir,
+        dev: launch.dev,
+        yolo: launch.yolo,
     };
     if let Err(error) = restart_record::write_json(&restart_record::handoff_path(root), &plan) {
         return Err(record_refused(
