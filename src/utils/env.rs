@@ -50,15 +50,18 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
     }
 }
 
-/// First executable `program` on [`path_var`]. Relative entries stay relative;
-/// callers that exec after a chdir resolve them. A non-executable namesake is
-/// skipped, matching `execvp`.
-pub(crate) fn resolve_on_path(program: impl AsRef<std::ffi::OsStr>) -> Option<PathBuf> {
+/// First executable `program` on [`path_var`]. A non-executable namesake is
+/// skipped, matching `execvp`. A relative hit is made absolute against the
+/// lookup directory, so a later [`std::process::Command::current_dir`] cannot
+/// retarget it. Only [`command_on_path`] calls this, and only while a test
+/// override is active.
+fn resolve_on_path(program: impl AsRef<std::ffi::OsStr>) -> Option<PathBuf> {
     let program = program.as_ref();
     let path = path_var()?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(program))
         .find(|candidate| is_executable_file(candidate))
+        .and_then(|candidate| std::path::absolute(candidate).ok())
 }
 
 /// `Command` for a bare program name.
