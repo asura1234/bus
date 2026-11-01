@@ -84,8 +84,7 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
                 python_env.update(BUS_TEST_BINARY=str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus")))
             if instrumented:
                 python_env["LLVM_PROFILE_FILE"] = str(target / quality.profile_file_name("cli"))
-            tests.append(Gate("python", (sys.executable, "-m", "pytest", "-q",
-                             "-o", "python_files=*_test.py", *files), env=python_env))
+            tests.append(Gate("python", quality.python_test_command(files), env=python_env))
     if selection.dev_tools:
         tests.append(Gate("dev-tools", nextest("--features", "dev-tools", "--bin", "bus",
                           "--test", "cli", "--test", "tui-driver",
@@ -167,7 +166,9 @@ def execute(selection: Selection, *, nested: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog=
+        "Python uses four file workers; set PYTEST_WORKERS=0 for serial diagnosis, "
+        "or a positive integer to set the worker count.")
     parser.add_argument("--full", action="store_true", help="all tests, lint and fresh coverage floor")
     parser.add_argument("--base", default="origin/master", help="affected merge-base (default: origin/master)")
     parser.add_argument("--plan", action="store_true", help="print selection without building or running tests")
