@@ -39,7 +39,7 @@ pub(crate) fn grok_login_required(screen: &str) -> bool {
         osc_progress: "",
     };
     load_manifest(AgentKind::Grok).is_some_and(|loaded| {
-        matched_manifest_rule(input, &loaded, false).is_some_and(|rule| {
+        matched_manifest_rule(input, &loaded, false, None).is_some_and(|rule| {
             rule.id == "login_unavailable" && rule.state == Some(schema::ManifestState::Blocked)
         })
     })
