@@ -373,10 +373,15 @@ fn stop(name: &str) -> Value {
 /// Kills a scratch Bus that outlived its host. A clean host teardown leaves
 /// nothing to signal, so the extra `bus stop` runs only when something remains.
 fn sweep_stopped_session(paths: &SessionPaths, info: Option<&session::SessionInfo>) {
-    let token = paths
+    // No driver claim: this directory is not a scratch session we started.
+    // Sweeping it used to signal every process that held the directory.
+    let Some(token) = paths
         .read_claim()
         .map(|claim| claim.token)
-        .unwrap_or_default();
+        .filter(|token| !token.is_empty())
+    else {
+        return;
+    };
     let host_pid = info.map(|info| info.host_pid);
     let bus_pid = info.and_then(|info| info.bus_pid);
     let host_alive = host_pid.is_some_and(session::process_alive);
@@ -386,10 +391,8 @@ fn sweep_stopped_session(paths: &SessionPaths, info: Option<&session::SessionInf
         return;
     }
     session::reap_session_tree(&paths.dir, &token, host_pid, bus_pid);
-    if !token.is_empty() {
-        if let Ok(binary) = std::env::current_exe() {
-            stop_leftovers(paths, &binary, &token);
-        }
+    if let Ok(binary) = std::env::current_exe() {
+        stop_leftovers(paths, &binary, &token);
     }
     session::reap_session_tree(&paths.dir, &token, host_pid, bus_pid);
 }

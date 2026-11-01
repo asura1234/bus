@@ -52,12 +52,14 @@ fn reap_pids(pids: &[u32], grace: Duration) {
 }
 
 /// Token holders plus anything else with a file open under `dir`.
+///
+/// An empty token means the driver never claimed this directory. Directory
+/// holders are then left alone: they are not this scratch session.
 pub(in crate::devtools::tui) fn session_pids(dir: &Path, token: &str) -> Vec<u32> {
-    let mut pids = if token.is_empty() {
-        Vec::new()
-    } else {
-        pids_owned(dir, token)
-    };
+    if token.is_empty() {
+        return Vec::new();
+    }
+    let mut pids = pids_owned(dir, token);
     for pid in pids_holding(dir) {
         if !pids.contains(&pid) {
             pids.push(pid);

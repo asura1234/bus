@@ -384,6 +384,31 @@ fn reap_session_tree_kills_dir_holders_and_the_recorded_pid_only() {
 }
 
 #[test]
+fn stop_sweep_preserves_processes_in_unclaimed_directories() {
+    let root = temp_root("unclaimed");
+    let paths = SessionPaths::new(&root, "s1");
+    create_private_dir(&paths.dir).unwrap();
+    let mut bystander = std::process::Command::new("/bin/sleep")
+        .arg("60")
+        .current_dir(&paths.dir)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !pids_holding(&paths.dir).contains(&bystander.id())
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(pids_holding(&paths.dir).contains(&bystander.id()));
+    super::super::sweep_stopped_session(&paths, None);
+    let survived = bystander.try_wait().unwrap().is_none();
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(survived, "unclaimed directory holder was signaled");
+}
+
+#[test]
 fn watcher_reaps_when_the_observed_process_exits() {
     let root = temp_root("watch");
     create_private_dir(&root).unwrap();
