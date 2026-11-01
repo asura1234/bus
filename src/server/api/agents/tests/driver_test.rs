@@ -49,7 +49,7 @@ async fn universal_driver_answers_shell_prompt_without_agent_metadata() {
         },
     ))
     .unwrap();
-    assert_eq!(observed["ok"], true);
+    assert!(observed.get("error").is_none(), "{observed}");
     assert!(observed["result"]["observation"]["text"]
         .as_str()
         .unwrap()
@@ -58,7 +58,7 @@ async fn universal_driver_answers_shell_prompt_without_agent_metadata() {
     params.keys = vec!["n".into()];
     let result: Value =
         serde_json::from_str(&app.handle_agent_press("answer".into(), params)).unwrap();
-    assert_eq!(result["ok"], true);
+    assert!(result.get("error").is_none(), "{result}");
     assert_eq!(writes.recv().await.unwrap().as_ref(), b"n");
     assert!(writes.try_recv().is_err());
 }
@@ -71,7 +71,7 @@ async fn universal_driver_select_never_enters_the_initial_update_row() {
     params.select = Some("Continue with current version".into());
     let result: Value =
         serde_json::from_str(&app.handle_agent_press("select".into(), params)).unwrap();
-    assert_eq!(result["ok"], true);
+    assert!(result.get("error").is_none(), "{result}");
     assert_eq!(result["result"]["press"]["selection_pending"], true);
     assert_eq!(writes.recv().await.unwrap().as_ref(), b"\x1b[B");
     assert!(writes.try_recv().is_err());
@@ -85,18 +85,41 @@ async fn universal_driver_validates_keys_and_terminal_before_typing_text() {
     params.keys = vec!["not-a-key".into()];
     let result: Value =
         serde_json::from_str(&app.handle_agent_press("bad-key".into(), params.clone())).unwrap();
-    assert_eq!(result["ok"], false);
+    assert!(result.get("error").is_some(), "{result}");
     params.keys.clear();
     params.expected_terminal_id = Some("old-terminal".into());
     let result: Value =
         serde_json::from_str(&app.handle_agent_press("old-terminal".into(), params.clone()))
             .unwrap();
-    assert_eq!(result["ok"], false);
+    assert!(result.get("error").is_some(), "{result}");
     assert!(writes.try_recv().is_err());
     params.expected_terminal_id = None;
     let result: Value =
         serde_json::from_str(&app.handle_agent_press("text".into(), params)).unwrap();
-    assert_eq!(result["ok"], true);
+    assert!(result.get("error").is_none(), "{result}");
     assert_eq!(writes.recv().await.unwrap().as_ref(), b"tui-driver-demo");
     assert!(writes.try_recv().is_err(), "text must not imply Enter");
+}
+
+#[tokio::test]
+async fn universal_driver_submits_bracketed_text_with_a_separate_enter() {
+    let (mut app, target, mut writes) = shell(b"\x1b[?2004hProject name: ");
+    let mut params = press(&target);
+    params.text = Some("tui-driver-demo".into());
+    params.submit = true;
+    let result: Value =
+        serde_json::from_str(&app.handle_agent_press("submit".into(), params)).unwrap();
+    assert!(result.get("error").is_none(), "{result}");
+    assert_eq!(
+        writes.recv().await.unwrap().as_ref(),
+        b"\x1b[200~tui-driver-demo\x1b[201~"
+    );
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .as_ref(),
+        b"\r"
+    );
 }
