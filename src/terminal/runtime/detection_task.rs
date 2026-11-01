@@ -557,11 +557,12 @@ impl DetectionTask {
     ) {
         let managed_launch_pending = self.managed_launch_pending.load(Ordering::Acquire);
         let has_obligation = managed_launch_pending
-            || self
-                .detection_context
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .obligation;
+            || agent.is_some()
+                && self
+                    .detection_context
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .obligation;
         let current_detection_content_seq = if agent.is_some() {
             Some(self.detection_content_seq.load(Ordering::Relaxed))
         } else {
@@ -812,6 +813,15 @@ mod blocked_tests {
             kind: AgentKind,
             previous: AgentState,
         ) -> (AgentState, bool) {
+            self.test_scan_detection_context_for_agent(Some(kind), previous)
+                .await
+        }
+
+        async fn test_scan_detection_context_for_agent(
+            &self,
+            kind: Option<AgentKind>,
+            previous: AgentState,
+        ) -> (AgentState, bool) {
             let (events, mut received) = mpsc::channel(16);
             let task = DetectionTask {
                 pane_id: self.pane_id,
@@ -825,10 +835,10 @@ mod blocked_tests {
                 render_dirty: Arc::new(RenderSignal::default()),
                 kimi_code_home: Arc::new(Mutex::new(None)),
             };
-            let mut status = DetectionState::new(Some(kind));
+            let mut status = DetectionState::new(kind);
             status.state = previous;
             status.last_visible_idle = false;
-            task.scan_screen(&mut status, Some(kind), false, false, false, Instant::now())
+            task.scan_screen(&mut status, kind, false, false, false, Instant::now())
                 .await;
             let published = received.try_recv().ok().is_some_and(|event| {
                 matches!(
@@ -890,6 +900,22 @@ mod blocked_tests {
                 .test_scan_detection_context(AgentKind::Kimi, AgentState::Working)
                 .await,
             (AgentState::Working, false)
+        );
+        assert!(writes.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_plain_shell_does_not_inherit_an_exited_agents_obligation() {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        runtime.set_detection_context(AgentKind::Kimi, true, None, |_: &str| {
+            super::super::InputObservation::Unavailable
+        });
+        runtime.test_process_pty_bytes(b"$ ");
+        assert_eq!(
+            runtime
+                .test_scan_detection_context_for_agent(None, AgentState::Unknown)
+                .await,
+            (AgentState::Unknown, false)
         );
         assert!(writes.try_recv().is_err());
     }
