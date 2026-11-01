@@ -201,3 +201,49 @@ fn driver_menu_block_preserves_number_widths_and_explanatory_gaps() {
     let grid = menu("Choose:\n❯ 1. Yes\n  additional detail\n\n  10. No");
     assert_eq!(selection_step(&grid, "No"), Ok(SelectionStep::Move("down")));
 }
+
+#[tokio::test]
+async fn driver_select_crosses_indented_option_descriptions() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 8);
+    runtime.test_process_pty_bytes(
+        "Choose:\r\n❯ 1. Yes\r\n    additional detail\r\n\r\n  2. No".as_bytes(),
+    );
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(
+        selection_step(&grid, "No"),
+        Ok(SelectionStep::Move("down")),
+        "an indented explanation between options must not hide the current menu focus"
+    );
+}
+
+#[test]
+fn driver_select_accepts_right_aligned_option_numbers() {
+    let first = menu("Choose:\n❯  1. Yes\n  10. No");
+    assert_eq!(
+        selection_step(&first, "No"),
+        Ok(SelectionStep::Move("down"))
+    );
+    let second = menu("Choose:\n   1. Yes\n❯ 10. No");
+    assert_eq!(
+        selection_step(&second, "Yes"),
+        Ok(SelectionStep::Move("up"))
+    );
+}
+
+#[tokio::test]
+async fn driver_inverse_descriptions_are_continuations_not_options() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 5);
+    runtime
+        .test_process_pty_bytes(b"  \x1b[7mYes\x1b[0m\r\n     \x1b[7mFirst choice\x1b[0m\r\n  No");
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(selection_step(&grid, "No"), Ok(SelectionStep::Move("down")));
+}
+
+#[test]
+fn driver_does_not_guess_between_conflicting_focus_signals() {
+    let mut grid = menu("> quoted context\n  Yes\n  No");
+    for cell in &mut grid.cells[1][2..5] {
+        cell.attrs.push("inverse".into());
+    }
+    assert!(selection_step(&grid, "Yes").is_err());
+}

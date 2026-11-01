@@ -42,32 +42,23 @@ pub(crate) fn selection_focus_for_label(
     label: Option<&str>,
 ) -> Result<(usize, String), String> {
     let rows = grid.rows_text();
-    let range = if let Some(label) = label {
-        let targets: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter(|(_, text)| option_label(text).0 == label)
-            .map(|(row, _)| row)
-            .collect();
-        let [target] = targets.as_slice() else {
-            return Err(
-                "Option label is missing or ambiguous; read the screen or send explicit keys"
-                    .into(),
-            );
-        };
-        menu_block(grid, &rows, *target)
-    } else {
-        0..rows.len()
-    };
-    let marked: Vec<_> = range
+    let scope = menu_scope(grid, &rows, label)?;
+    let candidates: Vec<_> = scope
+        .rows
         .clone()
+        .filter(|row| scope.accepts(grid, &rows, *row))
+        .collect();
+    let marked: Vec<_> = candidates
+        .iter()
+        .copied()
         .filter(|row| option_label(&rows[*row]).1)
         .collect();
-    let inverse: Vec<_> = range
+    let inverse: Vec<_> = candidates
+        .into_iter()
         .filter(|row| inverse_label_selected(grid, *row, &rows[*row]))
         .collect();
-    // Without a requested menu, conflicting blocks do not establish unique focus.
-    if label.is_none() && !marked.is_empty() && inverse.iter().any(|row| !marked.contains(row)) {
+    // Distinct conflicting focus cues do not establish a unique option.
+    if !marked.is_empty() && inverse.iter().any(|row| !marked.contains(row)) {
         return Err("Menu focus is not unique; read the screen or send explicit keys".into());
     }
     let focused = if marked.is_empty() { inverse } else { marked };
@@ -77,11 +68,59 @@ pub(crate) fn selection_focus_for_label(
     Ok((*focused, option_label(&rows[*focused]).0.to_owned()))
 }
 
-fn menu_block(grid: &Grid, rows: &[String], target: usize) -> std::ops::Range<usize> {
-    let column = option_column(grid, target, &rows[target]);
-    let belongs =
-        |row: usize| rows[row].trim().is_empty() || option_column(grid, row, &rows[row]) == column;
-    let mut start = target;
+#[derive(Clone, Copy)]
+struct OptionLayout {
+    body: u16,
+    label: u16,
+    numbered: bool,
+}
+
+impl OptionLayout {
+    fn same_level(self, other: Self) -> bool {
+        self.numbered == other.numbered
+            && (self.body == other.body || (self.numbered && self.label == other.label))
+    }
+}
+
+struct MenuScope {
+    rows: std::ops::Range<usize>,
+    option: Option<OptionLayout>,
+}
+
+impl MenuScope {
+    fn accepts(&self, grid: &Grid, rows: &[String], row: usize) -> bool {
+        self.option.is_none_or(|target| {
+            option_layout(grid, row, &rows[row]).is_some_and(|other| target.same_level(other))
+        })
+    }
+}
+
+fn menu_scope(grid: &Grid, rows: &[String], label: Option<&str>) -> Result<MenuScope, String> {
+    let Some(label) = label else {
+        return Ok(MenuScope {
+            rows: 0..rows.len(),
+            option: None,
+        });
+    };
+    let targets: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, text)| option_label(text).0 == label)
+        .map(|(row, _)| row)
+        .collect();
+    let [target] = targets.as_slice() else {
+        return Err(
+            "Option label is missing or ambiguous; read the screen or send explicit keys".into(),
+        );
+    };
+    let option =
+        option_layout(grid, *target, &rows[*target]).ok_or("Option layout is unavailable")?;
+    let belongs = |row: usize| {
+        rows[row].trim().is_empty()
+            || option_layout(grid, row, &rows[row])
+                .is_some_and(|other| option.same_level(other) || other.body >= option.body)
+    };
+    let mut start = *target;
     while start > 0 && belongs(start - 1) {
         start -= 1;
     }
@@ -89,16 +128,26 @@ fn menu_block(grid: &Grid, rows: &[String], target: usize) -> std::ops::Range<us
     while end < rows.len() && belongs(end) {
         end += 1;
     }
-    start..end
+    Ok(MenuScope {
+        rows: start..end,
+        option: Some(option),
+    })
 }
 
-fn option_column(grid: &Grid, row: usize, text: &str) -> Option<u16> {
+fn option_layout(grid: &Grid, row: usize, text: &str) -> Option<OptionLayout> {
     let body = option_body(text).0;
-    if body.is_empty() {
+    let label = option_label(text).0;
+    if body.is_empty() || label.is_empty() {
         return None;
     }
-    let start = body.as_ptr() as usize - text.as_ptr() as usize;
-    grid.row_with_columns(row).1.get(start).copied()
+    let (_, columns) = grid.row_with_columns(row);
+    let body_start = body.as_ptr() as usize - text.as_ptr() as usize;
+    let label_start = label.as_ptr() as usize - text.as_ptr() as usize;
+    Some(OptionLayout {
+        body: *columns.get(body_start)?,
+        label: *columns.get(label_start)?,
+        numbered: body != label,
+    })
 }
 
 fn inverse_label_selected(grid: &Grid, row: usize, text: &str) -> bool {
@@ -129,10 +178,16 @@ pub(crate) fn selection_identity(
     grid: &Grid,
     label: Option<&str>,
 ) -> Result<SelectionIdentity, String> {
+    let rows = grid.rows_text();
+    let scope = menu_scope(grid, &rows, label)?;
     let (row, label) = selection_focus_for_label(grid, label)?;
-    let occurrence = grid.rows_text()[..row]
-        .iter()
-        .filter(|text| option_label(text).0 == label)
+    let occurrence = scope
+        .rows
+        .clone()
+        .take_while(|index| *index < row)
+        .filter(|index| {
+            scope.accepts(grid, &rows, *index) && option_label(&rows[*index]).0 == label
+        })
         .count();
     Ok(SelectionIdentity { label, occurrence })
 }

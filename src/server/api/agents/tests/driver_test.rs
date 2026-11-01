@@ -346,3 +346,29 @@ async fn universal_driver_selection_redraw_retains_menu_context() {
     );
     assert_eq!(writes.try_recv().unwrap().as_ref(), b"\r");
 }
+
+#[tokio::test]
+async fn universal_driver_description_redraw_cannot_repeat_pending_navigation() {
+    let (mut app, target, mut writes) = shell(
+        "  1. Continue\r\n     note\r\n❯ 2. Continue\r\n     explanation\r\n  3. Done".as_bytes(),
+    );
+    let mut params = press(&target);
+    params.select = Some("Done".into());
+    let first: Value =
+        serde_json::from_str(&app.handle_agent_press("first".into(), params.clone())).unwrap();
+    assert_eq!(
+        first["result"]["press"]["keys"],
+        serde_json::json!(["down"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes("\x1b[2J\x1b[H  1. Continue\r\n     Continue\r\n❯ 2. Continue\r\n     explanation\r\n  3. Done".as_bytes());
+    let pending: Value =
+        serde_json::from_str(&app.handle_agent_press("repeat".into(), params)).unwrap();
+    assert_eq!(pending["result"]["press"]["keys"], serde_json::json!([]));
+    assert_eq!(pending["result"]["press"]["selection_pending"], true);
+    assert!(
+        writes.try_recv().is_err(),
+        "description text is not a new focused option"
+    );
+}
