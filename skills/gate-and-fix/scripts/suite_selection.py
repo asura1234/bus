@@ -32,6 +32,16 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
     for name in paths:
         if not name or PurePosixPath(name).is_absolute() or any(p in {"", ".", ".."} for p in name.split("/")):
             raise ValueError("paths must be normalized repository-relative paths")
+    def can_narrow(name):
+        path = PurePosixPath(name)
+        parts = path.parts
+        if path.suffix == '.py':
+            return parts[0] in PYTHON and not (parts[0] == 'skills' and len(parts) > 1 and parts[1] in SHARED_SKILLS)
+        return path.suffix == '.rs' and (parts[0] == 'tests' or (
+            len(parts) > 2 and parts[0] == 'src' and parts[1] in RUST_OWNERS and
+            ('tests' in parts[2:-1] or path.name.endswith('_test.rs'))))
+    if full or any(not can_narrow(name) for name in paths):
+        return Selection(True, None, PYTHON, True, "explicit full mode or shared/unknown input", coverage_floor, True)
     references = References(root) if paths and not full else None
     full |= bool(references and references.uncertain)
     for name in sorted(set(paths)):
@@ -46,6 +56,11 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
         elif parts[0] == "src" and path.suffix == ".rs" and (
             "tests" in parts[2:-1] or path.name.endswith("_test.rs")
         ) and len(parts) > 2 and parts[1] in RUST_OWNERS and references.incoming(name):
+            # Integration crates can include a source container and its cfg(test)
+            # children, whose behavior also depends on that separate crate context.
+            if references.integration_targets(name):
+                full = True
+                break
             owner = parts[1]
             if owner == "devtools":
                 dev_tools = True

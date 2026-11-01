@@ -24,12 +24,21 @@ fails before any test starts. The initial ownership map is deliberately narrow:
 | Python with only references inside its owner | That owner's actual `*_test.py` files |
 | Cross-owner references, embedded Markdown/data, build inputs, production Rust, unknown paths | Every suite |
 
-The index scans Rust modules, `#[path]`, `include!`, `include_str!`, `include_bytes!`,
-literal build inputs, and Python imports/path expressions. It also follows Python
-references when deciding whether selected tests require `BUS_TEST_BINARY`.
-Ambiguous literal references can widen the selection. Missing ownership and
-cross-owner references fall back to every suite; this includes embedded skill
-resources watched by `build.rs`. Rust is one crate, so production modules do not
+The index resolves Rust modules and `#[path]` using the existing Rust syntax
+helpers, and resolves literal includes relative to the containing file. Python
+imports use exact package/source directories and explicit repository `sys.path`
+entries, including each existing parent package initializer; path expressions
+require a known anchor such as `Path(__file__).parents`.
+Temporary fixture paths and matching basenames do not create repository edges.
+Rust runtime file literals resolve to exact repository/source paths, including
+`concat!(env!("CARGO_MANIFEST_DIR"), ...)` script arguments. Python helper imports
+are followed transitively so a script's Rust test consumers also force full fallback.
+Source test modules reached transitively from an integration target also fall back
+to every suite, covering each crate context that compiles and runs those tests.
+The index also follows Python imports when selected tests need `BUS_TEST_BINARY`.
+Missing ownership and cross-owner references fall back to every suite. Embedded
+skill resources include directory symlinks, with the collector's test exclusions;
+a Cargo rebuild watch alone is not a runtime consumer. Rust is one crate, so production modules do not
 receive a guessed unit-only scope. Extending narrow selection requires reference
 evidence and a failing regression test.
 An empty diff runs no tests; use `--full` when a fresh complete verdict is needed.

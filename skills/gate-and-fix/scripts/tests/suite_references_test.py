@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from suite_selection import select  # noqa: E402
 
@@ -33,7 +35,7 @@ def test_cross_root_python_import_is_a_full_fallback(tmp_path):
 
 def test_python_script_paths_are_references_even_without_imports(tmp_path):
     source(tmp_path, "skills/new/scripts/work.py", "print('work')")
-    source(tmp_path, "tools/work_test.py", 'SCRIPT = ROOT / "skills" / "new/scripts/work.py"\n')
+    source(tmp_path, "tools/work_test.py", 'from pathlib import Path\nROOT = Path(__file__).resolve().parents[1]\nSCRIPT = ROOT / "skills" / "new/scripts/work.py"\n')
     assert select(["skills/new/scripts/work.py"], root=tmp_path).full
 
 
@@ -41,3 +43,100 @@ def test_an_independent_python_test_remains_affected(tmp_path):
     source(tmp_path, "tools/isolated_test.py", "def test_case(): assert 1 == 1")
     plan = select(["tools/isolated_test.py"], root=tmp_path)
     assert not plan.full and plan.python == ("tools",)
+
+
+def test_same_rust_basename_in_another_component_is_not_a_consumer(tmp_path):
+    for component in ('agents', 'client'):
+        source(tmp_path, f'src/{component}/mod.rs', '#[path="tests/helper_test.rs"] mod helper;')
+        source(tmp_path, f'src/{component}/tests/helper_test.rs', '#[test] fn case() {}')
+    plan = select(['src/agents/tests/helper_test.rs'], root=tmp_path)
+    assert not plan.full and plan.rust_filter == '(binary(bus) & test(/^agents::/))'
+
+
+def test_tmp_fixture_directory_literal_is_not_a_repository_reference(tmp_path):
+    source(tmp_path, 'src/agents/mod.rs', '#[path="tests/local_test.rs"] mod local;')
+    source(tmp_path, 'src/agents/tests/local_test.rs', '#[test] fn case() {}')
+    source(tmp_path, 'tools/fixture_test.py', 'def test_fixture(tmp_path):\n    source = tmp_path / "src"\n')
+    assert not select(['src/agents/tests/local_test.rs'], root=tmp_path).full
+
+
+def test_bare_python_import_resolves_in_its_source_directory(tmp_path):
+    for component in ('tools', 'packaging'):
+        source(tmp_path, f'{component}/worker.py', 'def run(): return 1')
+        source(tmp_path, f'{component}/worker_test.py', 'import worker\n')
+    plan = select(['tools/worker.py'], root=tmp_path)
+    assert not plan.full and plan.python == ('tools',)
+
+
+def test_bundle_rebuild_watch_does_not_embed_skill_test_sources(tmp_path):
+    source(tmp_path, 'build.rs', 'fn main() { let skills = root.join("skills"); collect(&skills, &skills, &mut files); println!("cargo:rerun-if-changed=skills"); }')
+    source(tmp_path, 'skills/example/scripts/tests/local_test.py', 'def test_case(): pass\n')
+    source(tmp_path, 'skills/example/scripts/runtime.py', 'def run(): return 1\n')
+    assert not select(['skills/example/scripts/tests/local_test.py'], root=tmp_path).full
+    assert select(['skills/example/scripts/runtime.py'], root=tmp_path).full
+
+
+def test_unrelated_rebuild_watch_is_not_a_runtime_dependency(tmp_path):
+    source(tmp_path, 'build.rs', 'fn main() { println!("cargo:rerun-if-changed=tools"); }')
+    source(tmp_path, 'tools/runtime.py', 'def run(): return 1\n')
+    source(tmp_path, 'tools/runtime_test.py', 'from .runtime import run\n')
+    assert not select(['tools/runtime.py'], root=tmp_path).full
+
+
+def test_bundle_directory_symlink_tracks_production_but_not_test_sources(tmp_path):
+    source(tmp_path, 'build.rs', 'fn main() { let skills = root.join("skills"); collect(&skills, &skills, &mut files); }')
+    source(tmp_path, 'scripts/runtime.py', 'def run(): return 1\n')
+    source(tmp_path, 'scripts/runtime_test.py', 'import runtime\n')
+    alias = tmp_path / 'skills/shared/scripts'
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(tmp_path / 'scripts', target_is_directory=True)
+    assert select(['scripts/runtime.py'], root=tmp_path).full
+    assert not select(['scripts/runtime_test.py'], root=tmp_path).full
+
+
+def test_python_helper_import_carries_the_cli_prerequisite(tmp_path):
+    source(tmp_path, 'tools/helper.py', 'import os\nbinary = os.environ["BUS_TEST_BINARY"]\n')
+    source(tmp_path, 'tools/case_test.py', 'from .helper import binary\n')
+    plan = select(['tools/case_test.py'], root=tmp_path)
+    assert not plan.full and plan.binary
+
+
+def test_explicit_repo_sys_path_resolves_a_cross_root_import(tmp_path):
+    source(tmp_path, 'tools/helper.py', 'def run(): return 1\n')
+    source(tmp_path, 'packaging/case_test.py', 'import sys\nfrom pathlib import Path\nROOT=Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(ROOT / "tools"))\nfrom helper import run\n')
+    assert select(['tools/helper.py'], root=tmp_path).full
+
+
+def test_rust_manifest_relative_script_tracks_transitive_python_helpers(tmp_path):
+    source(tmp_path, 'Cargo.toml', '[[test]]\nname="tui-driver"\npath="tests/driver_test.rs"\n')
+    source(tmp_path, 'tests/driver_test.rs', 'fn case() { Command::new("python3").arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tools/scenario_test.py")); }')
+    source(tmp_path, 'tools/scenario_test.py', 'from .helper import run\n')
+    source(tmp_path, 'tools/helper.py', 'from .leaf import run\n')
+    source(tmp_path, 'tools/leaf.py', 'def run(): pass\n')
+    assert select(['tools/scenario_test.py'], root=tmp_path).full
+    assert select(['tools/leaf.py'], root=tmp_path).full
+
+
+def test_manifest_path_inside_rust_fixture_string_is_not_a_reference(tmp_path):
+    source(tmp_path, 'tests/fixture_test.rs', 'const SAMPLE: &str = r#"concat!(env!("CARGO_MANIFEST_DIR"), "/tools/local_test.py")"#;')
+    source(tmp_path, 'tools/local_test.py', 'def test_case(): pass\n')
+    assert not select(['tools/local_test.py'], root=tmp_path).full
+
+
+def test_src_tests_reachable_through_integration_containers_fall_back(tmp_path):
+    source(tmp_path, 'Cargo.toml', '[[test]]\nname="api"\npath="tests/api/root_test.rs"\n')
+    source(tmp_path, 'src/utils/container.rs', '#[path="tests/local_test.rs"] mod local;')
+    source(tmp_path, 'src/utils/tests/local_test.rs', '#[test] fn case() {}')
+    source(tmp_path, 'tests/api/root_test.rs', '#[path="../support/shared_test.rs"] mod shared;')
+    source(tmp_path, 'tests/support/shared_test.rs', '#[path="../../src/utils/container.rs"] mod container;')
+    assert select(['src/utils/tests/local_test.rs'], root=tmp_path).full
+
+
+@pytest.mark.parametrize('statement', ['import tools.pkg.worker', 'from tools.pkg.worker import run'])
+def test_python_imports_track_each_existing_package_initializer(tmp_path, statement):
+    source(tmp_path, 'tools/__init__.py', '')
+    source(tmp_path, 'tools/pkg/__init__.py', '')
+    source(tmp_path, 'tools/pkg/worker.py', 'def run(): pass\n')
+    source(tmp_path, 'packaging/case_test.py', statement + '\n')
+    for name in ('tools/__init__.py', 'tools/pkg/__init__.py'):
+        assert select([name], root=tmp_path).full
