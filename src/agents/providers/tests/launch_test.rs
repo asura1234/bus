@@ -70,11 +70,21 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
 
 #[test]
 fn unreadable_pwd_error_names_the_field_and_path() {
-    let path = format!("/definitely/missing-bus-pwd-{}", std::process::id());
-    let error = canonical_directory(&path).unwrap_err();
+    let path = std::env::temp_dir().join(format!(
+        "missing-bus-pwd-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    assert!(path.is_absolute());
+    let input = path.to_string_lossy();
+    let cause = std::fs::canonicalize(input.as_ref()).unwrap_err();
+    let error = canonical_directory(&input).unwrap_err();
     assert!(error.contains("Agent PWD"), "{error}");
-    assert!(error.contains(&path), "{error}");
-    assert!(error.contains("No such file or directory"), "{error}");
+    assert!(error.contains(&format!("{input:?}")), "{error}");
+    assert!(error.ends_with(&cause.to_string()), "{error}");
 }
 
 #[test]
