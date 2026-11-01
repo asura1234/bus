@@ -31,7 +31,7 @@ fn send(
         runtime,
         kind,
         text.into(),
-        true,
+        Some(false),
         Duration::ZERO,
         deadline,
         None,

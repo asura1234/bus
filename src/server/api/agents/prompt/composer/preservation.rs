@@ -10,6 +10,8 @@ pub(super) struct PreservingComposer {
     expected: String,
     directory: PathBuf,
     keys: Vec<Bytes>,
+    /// Kimi only. A running turn is steered with Ctrl+S, not Enter.
+    steer: bool,
     native_draft: Mutex<Option<NativeDraft>>,
 }
 
@@ -24,6 +26,7 @@ impl PreservingComposer {
         expected: String,
         directory: PathBuf,
         keys: Vec<Bytes>,
+        steer: bool,
     ) -> Self {
         Self {
             kind,
@@ -31,6 +34,7 @@ impl PreservingComposer {
             expected,
             directory,
             keys,
+            steer,
             native_draft: Mutex::new(None),
         }
     }
@@ -129,6 +133,8 @@ impl SubmissionInspector for PreservingComposer {
             directory: self.directory.clone(),
             key: self.keys[1].clone(),
             backspace: self.keys[2].clone(),
+            // keys[0] is Ctrl+S. Kimi 2.4 emits prompt.steered only for that shortcut.
+            submit: self.steer.then(|| self.keys[0].clone()),
             verification_error: Some(
                 "Kimi submission may have run; inspect the transcript before resending",
             ),

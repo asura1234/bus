@@ -230,7 +230,7 @@ impl App {
         let api_request_id = request.id.clone();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false, hard_deadline)
+                self.queue_agent_prompt(request.id, params, false, false, hard_deadline)
             }
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
@@ -308,6 +308,7 @@ impl App {
                 wait: None,
             },
             true,
+            false,
             hard_deadline,
         )
     }
@@ -340,6 +341,7 @@ impl App {
                 wait: None,
             },
             true,
+            params.steer,
             hard_deadline,
         )
     }
@@ -349,6 +351,7 @@ impl App {
         id: String,
         params: AgentPromptParams,
         observe: bool,
+        steer: bool,
         hard_deadline: std::time::Instant,
     ) -> Result<
         (
@@ -445,7 +448,7 @@ impl App {
             runtime,
             expected_agent,
             params.text,
-            observe,
+            observe.then_some(steer && expected_agent == crate::agents::AgentKind::Kimi),
             submit_delay,
             submit_deadline,
             Some(crate::platform::draft_editor::directory(&agent.pane_id)),
@@ -459,7 +462,8 @@ fn queue_prompt_input(
     runtime: &crate::terminal::TerminalRuntime,
     kind: crate::agents::AgentKind,
     text: String,
-    observe: bool,
+    // Some(true) is a Kimi in-turn steer. Some(false) observes an ordinary prompt.
+    kimi_steer: Option<bool>,
     delay: Duration,
     deadline: Option<std::time::Instant>,
     draft_directory: Option<std::path::PathBuf>,
@@ -484,6 +488,7 @@ fn queue_prompt_input(
             }
         }
     }
+    let observe = kimi_steer.is_some();
     if !observe
         || !matches!(
             kind,
@@ -518,6 +523,7 @@ fn queue_prompt_input(
                 text,
                 directory,
                 keys.into_iter().map(Bytes::from).collect(),
+                kimi_steer.unwrap_or(false),
             ))
         } else {
             Box::new(composer::observer(kind, text))

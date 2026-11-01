@@ -94,7 +94,7 @@ async fn codex_image_fallback_drafts_receive_exactly_one_enter() {
             &runtime,
             AgentKind::Codex,
             format!("{text}\n{images}"),
-            true,
+            Some(false),
             std::time::Duration::ZERO,
             None,
             None,

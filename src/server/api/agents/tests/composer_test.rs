@@ -125,6 +125,7 @@ fn kimi_editor_allows_command_menu_repaint_without_trusting_a_changed_composer()
         "/new".into(),
         std::path::PathBuf::new(),
         vec![],
+        false,
     );
     let before = "╭─────────────────────────────────────────────────╮\n│ > /new                                          │\n╰─────────────────────────────────────────────────╯\nAsk When Needed";
     let menu = "╭─────────────────────────────────────────────────╮\n│ > /new                                          │\n╰─────────────────────────────────────────────────╯\n│   → new         Start a fresh session in        │\n│                 the current workspace           │\nAsk When Needed";
@@ -141,6 +142,7 @@ fn kimi_editor_allows_command_menu_repaint_without_trusting_a_changed_composer()
         "ordinary task".into(),
         std::path::PathBuf::new(),
         vec![],
+        false,
     );
     assert!(!ordinary.editor_frame_unchanged(before, menu));
     let spinning = format!("⠋ Working…\n{before}");
@@ -180,6 +182,7 @@ async fn kimi_editor_never_touches_a_clipped_foreign_draft() {
                     Bytes::from_static(b"\x07"),
                     Bytes::from_static(b"\x7f"),
                 ],
+                false,
             )),
         )
         .unwrap();
@@ -194,20 +197,25 @@ async fn kimi_editor_never_touches_a_clipped_foreign_draft() {
 // Exercise the native editor exchange and the submission transaction together.
 #[tokio::test]
 async fn kimi_editor_submits_only_after_complete_draft_readback() {
-    kimi_editor_case(0).await;
+    kimi_editor_case(0, false).await;
+}
+
+#[tokio::test]
+async fn kimi_editor_steer_submits_with_ctrl_s() {
+    kimi_editor_case(0, true).await;
 }
 
 #[tokio::test]
 async fn kimi_editor_rejects_a_changed_hidden_prefix() {
-    kimi_editor_case(1).await;
+    kimi_editor_case(1, false).await;
 }
 
 #[tokio::test]
 async fn kimi_editor_does_not_submit_when_the_developer_types_during_transfer() {
-    kimi_editor_case(2).await;
+    kimi_editor_case(2, false).await;
 }
 
-async fn kimi_editor_case(tamper: u8) {
+async fn kimi_editor_case(tamper: u8, steer: bool) {
     use bytes::Bytes;
     use std::time::Duration;
     let directory = crate::utils::test_temp::unique_temp_path("kimi-editor-submit");
@@ -267,6 +275,7 @@ async fn kimi_editor_case(tamper: u8) {
                     Bytes::from_static(b"\x07"),
                     Bytes::from_static(b"\x7f"),
                 ],
+                steer,
             )),
         )
         .unwrap();
@@ -325,7 +334,8 @@ async fn kimi_editor_case(tamper: u8) {
         draw(&draft);
     }
     assert_eq!(draft, prompt);
-    assert_eq!(next(&mut writes).await.as_ref(), b"\r");
+    let submit: &[u8] = if steer { b"\x13" } else { b"\r" };
+    assert_eq!(next(&mut writes).await.as_ref(), submit);
     draw("");
     completion
         .recv_timeout(Duration::from_secs(8))
@@ -1358,7 +1368,7 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         &runtime,
         AgentKind::Cursor,
         text.into(),
-        true,
+        Some(false),
         std::time::Duration::ZERO,
         Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
         None,

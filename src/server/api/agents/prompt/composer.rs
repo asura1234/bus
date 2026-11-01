@@ -12,13 +12,14 @@ pub(super) fn preserving_observer(
     expected: String,
     directory: std::path::PathBuf,
     keys: Vec<bytes::Bytes>,
+    steer: bool,
 ) -> impl crate::terminal::runtime::SubmissionInspector {
     let keys = if kind == AgentKind::Claude && !preservation::default_claude_stash_binding() {
         Vec::new()
     } else {
         keys
     };
-    preservation::PreservingComposer::new(kind, expected, directory, keys)
+    preservation::PreservingComposer::new(kind, expected, directory, keys, steer)
 }
 
 pub(super) fn observer(

@@ -10,6 +10,7 @@ fn inspector(kind: AgentKind) -> PreservingComposer {
             Bytes::from_static(b"\x07"),
             Bytes::from_static(b"\x7f"),
         ],
+        false,
     )
 }
 
@@ -100,7 +101,7 @@ fn an_existing_native_stash_and_an_unconfigured_binding_are_left_untouched() {
     assert!(observer.draft_preservation(&occupied_slot).is_none());
     for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
         let observer =
-            PreservingComposer::new(kind, "from bus".into(), "unused".into(), Vec::new());
+            PreservingComposer::new(kind, "from bus".into(), "unused".into(), Vec::new(), false);
         assert!(observer
             .draft_preservation(&screen(kind, "developer draft"))
             .is_none());

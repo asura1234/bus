@@ -24,6 +24,8 @@ pub(crate) struct EditorSubmission {
     pub(crate) directory: PathBuf,
     pub(crate) key: Bytes,
     pub(crate) backspace: Bytes,
+    /// Replaces Enter. Absent means Enter, which starts a turn.
+    pub(crate) submit: Option<Bytes>,
     pub(crate) verification_error: Option<&'static str>,
 }
 
@@ -386,7 +388,9 @@ impl ObservedSubmission {
             };
             self.reset_confirmation(delay);
             self.check_deadline()?;
-            self.guarded_editor_key(self.enter.clone(), lease, true, |screen| {
+            // Kimi's running turn takes Ctrl+S as an in-turn steer. Enter only queues the next turn.
+            let submit = editor.submit.clone().unwrap_or_else(|| self.enter.clone());
+            self.guarded_editor_key(submit, lease, true, |screen| {
                 self.inspect.editor_frame_unchanged(&verified, screen)
             })?;
             self.wait_transfer(|| {
