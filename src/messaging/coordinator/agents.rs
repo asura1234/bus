@@ -4,7 +4,7 @@ use super::{
     LeftOpenTerminal, Method, Provider, ResponseResult, RoomId, RoomKind, Worker,
     MASTER_AGENT_NEEDS_ROOM,
 };
-use crate::agents::providers::{codex, cursor, hook_json::HookContext, launch, spool};
+use crate::agents::providers::{codex, hook_json::HookContext, launch, spool};
 use crate::messaging::identity;
 use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 
@@ -19,20 +19,7 @@ pub(crate) struct AddAgent {
     pub(crate) consent_project_hooks: bool,
 }
 
-/// The first turn for a provider that cannot take the prompt at launch.
-pub(super) fn first_message_text(
-    provider: Provider,
-    is_orchestrator: bool,
-    instructions: &str,
-) -> String {
-    match provider {
-        Provider::Grok if is_orchestrator => {
-            crate::agents::providers::grok::system_prompt::prompt_message(instructions)
-        }
-        Provider::Cursor | Provider::Grok => cursor::system_prompt::prompt_message(instructions),
-        _ => orchestrator::prompt_message(instructions),
-    }
-}
+pub(super) use super::first_message::first_message_text;
 
 type LaunchBinding = (Option<String>, Option<String>, Option<String>);
 
