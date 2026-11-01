@@ -161,7 +161,11 @@ fn write_input(
                 std::time::Duration::from_millis(150),
                 None,
             )
-            .map(|_| ())
+            .map(|completion| {
+                // This input API reports queueing. Explicitly detach the
+                // completion so dropping it does not cancel delayed Enter.
+                let _ = completion.into_receiver();
+            })
             .map_err(|error| error.to_string())
     } else {
         if submit {
