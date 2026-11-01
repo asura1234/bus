@@ -1,6 +1,87 @@
 use super::*;
 
 #[test]
+fn grok_login_keeps_work_queued_until_authenticated_idle() {
+    use crate::agents::{manifest, AgentKind, AgentState};
+
+    for screen in [
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
+        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-connecting.txt"),
+    ] {
+        let (mut worker, agent, room, dir, calls) = fixture(
+            Provider::Grok,
+            vec![Ok(ResponseResult::AgentPrompted {
+                agent: native_info("pane", "grok", "session"),
+            })],
+        );
+        let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity.clone())
+            .unwrap();
+        let detected = manifest::detect_with_osc(
+            AgentKind::Grok,
+            manifest::DetectionInput {
+                screen,
+                osc_title: "grok",
+                osc_progress: "4;0;0",
+            },
+        );
+        let status = if detected.state == AgentState::Blocked {
+            RuntimeStatus::Blocked
+        } else {
+            RuntimeStatus::Idle
+        };
+        worker
+            .state
+            .observe_status(agent, status, io::now_ms())
+            .unwrap();
+        let request = queue(&mut worker, room, agent, "deliver after login");
+        worker.submit_ready().unwrap();
+        assert!(calls.lock().unwrap().is_empty());
+        assert_eq!(
+            worker.state.agent(agent).unwrap().wait_reason(),
+            Some("agent_blocked")
+        );
+        let deadline = io::now_ms() + 2 * crate::messaging::model::QUEUED_STALL_MS;
+        worker.expire_queued_requests(deadline).unwrap();
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert!(worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .is_none());
+
+        // Model the existing SessionStart binding and idle observation after
+        // authentication. This does not log in to a real provider.
+        identity.session_id = Some("session".into());
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity)
+            .unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, deadline + 1)
+            .unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_idle"]);
+        assert!(worker.state.queued_requests(agent).is_empty());
+        assert_eq!(
+            worker.state.agent(agent).unwrap().current_request,
+            Some(request)
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn delivery_logs_explain_queued_hook_gate_once_without_prompt_contents() {
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
