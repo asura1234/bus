@@ -871,7 +871,10 @@ idle then deliver, and an approval card without `--yolo`.
   is `Ran a command` and stays Idle. `[1 task running]` on the footer is
   Working. Test: busy-then-idle, only when `agent add --help` lists `kimi`.
   Rule: those three markers are Working and outrank the empty composer.
-  Match `Running a command` on the visible screen. A send while that marker
+  Match the live status line (`Running a command` or
+  `● Running a command · …`), which is the sixth non-empty line when the
+  bullet sits above the box. A finished reply that only contains the phrase,
+  including `✻ Thinking N times`, stays Idle. A send while that marker
   is Working queues with `agent_working` and must not leave `draft-*.txt`.
   `▶ Run this command?` for the test's own `sleep 45` is a dialog. Choose
   `Approve once` through `sbus agent dialog` and `sbus agent choose`. Do not
