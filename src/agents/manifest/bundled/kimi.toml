@@ -107,9 +107,9 @@ priority = 84
 # The live tool header sits above the composer. A live run also prints
 # "Approved:" and a spinner tip, so the header is about the eighth
 # non-empty line. The same words can be a finished reply. This rule is
-# not proof of work by itself: keep it for a `· $ command` suffix, while
-# the main turn is open, or, when that wire cannot be read, while the
-# line is bold like the live header.
+# not proof of work by itself: the main wire's turn decides when available,
+# including settled replies with a command suffix or bold text. Without wire,
+# require both the `· $ command` suffix and bold styling of the live header.
 region = "bottom_non_empty_lines(12)"
 visible_working = true
 line_regex = ['(?i)^\s*(?:[●•]\s+)?running a command(?:\s*·.*)?\s*$']

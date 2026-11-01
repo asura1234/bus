@@ -9,33 +9,36 @@ use super::wire::{MainTurn, MainTurnCache};
 /// Approved line and spinner tip that sit under a live Bash header.
 const RUNNING_COMMAND_FOOTER_LINES: usize = 12;
 
-/// A `· $ command` suffix is the live Bash header. Wire completion then
-/// decides a bare phrase; without a wire, only a bold status line is live.
+/// The main turn decides when wire evidence is available. Without it, require
+/// both the command suffix and the bold styling of Kimi's live Bash header.
 pub(crate) fn running_command_text_is_live(
     turn: Option<MainTurn>,
     line_is_bold: Option<bool>,
     has_command_suffix: bool,
 ) -> bool {
-    if has_command_suffix {
-        return true;
-    }
     match turn {
         Some(MainTurn::Open) => true,
         Some(MainTurn::Settled) => false,
-        None => line_is_bold.unwrap_or(true),
+        None => has_command_suffix && line_is_bold == Some(true),
     }
 }
 
-/// True when the running-command line includes the live `·` command suffix.
+/// True when the running-command line includes an actual `· $ command` suffix.
 pub(crate) fn running_command_has_command_suffix(screen: &str) -> bool {
     let non_empty: Vec<&str> = screen
         .lines()
         .filter(|line| !line.trim().is_empty())
         .collect();
     let start = non_empty.len().saturating_sub(RUNNING_COMMAND_FOOTER_LINES);
-    non_empty[start..]
-        .iter()
-        .any(|line| is_running_command_line(line) && line.contains('·'))
+    non_empty[start..].iter().any(|line| {
+        is_running_command_line(line)
+            && line.split_once('·').is_some_and(|(_, suffix)| {
+                suffix
+                    .trim_start()
+                    .strip_prefix("$ ")
+                    .is_some_and(|command| !command.trim().is_empty())
+            })
+    })
 }
 
 pub(crate) fn refresh_running_command_turn(
@@ -245,7 +248,7 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
             Some(true),
             false
         ));
-        assert!(running_command_text_is_live(
+        assert!(!running_command_text_is_live(
             Some(MainTurn::Settled),
             Some(false),
             true
@@ -255,9 +258,12 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
             None,
             false
         ));
-        assert!(running_command_text_is_live(None, Some(true), false));
+        assert!(!running_command_text_is_live(None, Some(true), false));
         assert!(!running_command_text_is_live(None, Some(false), false));
-        assert!(running_command_text_is_live(None, None, false));
+        assert!(!running_command_text_is_live(None, None, false));
+        assert!(running_command_text_is_live(None, Some(true), true));
+        assert!(!running_command_text_is_live(None, Some(false), true));
+        assert!(!running_command_text_is_live(None, None, true));
     }
 
     #[test]
@@ -297,5 +303,89 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
 K3.1 Pro thinking: high  …/tmp/project  master\n\
                                context: 2% (17.9k/1M)";
         assert!(running_command_has_command_suffix(live_cmd));
+        for suffix in ["· explanation", "· $ ", "· $echo done"] {
+            assert!(!running_command_has_command_suffix(&frame(&format!(
+                "Running a command {suffix}"
+            ))));
+        }
+    }
+
+    fn frame(reply: &str) -> String {
+        format!(" ● {reply}\n╭────────────────────────╮\n│ >                      │\n╰────────────────────────╯\nK3.1 Pro thinking: high  /tmp/project  master\ncontext: 2% (17.9k/1M)")
+    }
+    fn settled_home() -> std::path::PathBuf {
+        let home = crate::utils::test_temp::unique_temp_path("kimi-activity-settled");
+        let dir = home.join("sessions/wd_project/session_1");
+        crate::platform::fs::private_dir(&dir.join("agents/main")).unwrap();
+        let index =
+            serde_json::json!({"sessionId":"session_1","sessionDir":dir,"workDir":"/tmp/project"});
+        std::fs::write(home.join("session_index.jsonl"), format!("{index}\n")).unwrap();
+        let rows = [
+            serde_json::json!({"type":"turn.prompt","agentId":"main","turnId":1,"promptId":"p1","input":[{"type":"text","text":"Reply exactly: Running a command · $ echo done"}]}),
+            serde_json::json!({"type":"agent.message.appended","message":{"message":{"role":"assistant","content":[{"type":"text","text":"Running a command · $ echo done"}],"toolCalls":[]},"meta":{"source":"llm"}}}),
+            serde_json::json!({"type":"agent.turn.ended","turnId":1,"outcome":"done"}),
+            serde_json::json!({"type":"turn.ended","agentId":"main","turnId":1,"reason":"completed"}),
+            serde_json::json!({"type":"prompt.completed","agentId":"main","promptId":"p1","reason":"completed"}),
+        ];
+        std::fs::write(
+            dir.join("agents/main/wire.jsonl"),
+            rows.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        home
+    }
+
+    #[test]
+    fn completed_wire_and_plain_command_shaped_final_are_not_live_work() {
+        let home = settled_home();
+        let text = std::fs::read_to_string(
+            home.join("sessions/wd_project/session_1/agents/main/wire.jsonl"),
+        )
+        .unwrap();
+        assert_eq!(
+            super::super::wire::committed_final(
+                &text,
+                1,
+                "Reply exactly: Running a command · $ echo done"
+            ),
+            Some("Running a command · $ echo done".to_owned())
+        );
+        let mut cache = super::super::wire::MainTurnCache::default();
+        let turn = refresh_running_command_turn(Some(&home), &mut cache);
+        std::fs::remove_dir_all(&home).unwrap();
+        assert_eq!(turn, Some(super::super::wire::MainTurn::Settled));
+        let screen = frame("Running a command · $ echo done");
+        let suffix = running_command_has_command_suffix(&screen);
+        let bold = running_command_line_is_bold(&screen);
+        assert_eq!(bold, Some(false));
+        assert!(!running_command_text_is_live(turn,bold,suffix),
+        "completed wire + plain final reply must be Idle, not Working; turn={turn:?} bold={bold:?} suffix={suffix}");
+    }
+
+    #[test]
+    fn absent_wire_and_bold_final_reply_are_not_live_work() {
+        let mut cache = super::super::wire::MainTurnCache::default();
+        let turn = refresh_running_command_turn(None, &mut cache);
+        let ansi = frame("\u{1b}[1mRunning a command\u{1b}[0m");
+        let suffix = running_command_has_command_suffix(&ansi);
+        let bold = running_command_line_is_bold(&ansi);
+        assert_eq!(turn, None);
+        assert_eq!(bold, Some(true));
+        assert!(
+            !running_command_text_is_live(turn, bold, suffix),
+            "finished Markdown-bold reply with no wire must not be treated as live tool work"
+        );
+    }
+
+    #[test]
+    fn absent_wire_and_non_command_middle_dot_reply_are_not_live_work() {
+        let screen = frame("Running a command · explanation");
+        let suffix = running_command_has_command_suffix(&screen);
+        let bold = running_command_line_is_bold(&screen);
+        assert_eq!(bold, Some(false));
+        assert!(
+            !running_command_text_is_live(None, bold, suffix),
+            "a middle-dot explanation is not a · $ command header; suffix={suffix}"
+        );
     }
 }

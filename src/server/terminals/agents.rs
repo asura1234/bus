@@ -278,6 +278,7 @@ impl App {
         })?;
 
         let args = params.args;
+        let kimi_code_home = params.kimi_home.as_ref().map(std::path::PathBuf::from);
         let argv = agent_start_argv(
             kind,
             params.executable,
@@ -310,6 +311,7 @@ impl App {
                 AgentStartError::InputFailed(err.to_string())
             });
         }
+        runtime.bind_kimi_code_home(kimi_code_home);
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
         }

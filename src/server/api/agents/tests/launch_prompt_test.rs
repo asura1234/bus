@@ -1058,3 +1058,7 @@ async fn startup_snapshot_does_not_capture_an_unfinished_redraw() {
 
 #[path = "verified_launch_test.rs"]
 mod verified_launch;
+
+#[cfg(unix)]
+#[path = "kimi_wire_launch_test.rs"]
+mod kimi_wire_launch;

@@ -734,7 +734,7 @@ impl TerminalRuntime {
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
         let content_write_lock = Arc::new(Mutex::new(()));
 
-        let kimi_code_home = absolute_kimi_code_home(&cmd);
+        let kimi_code_home = Arc::new(Mutex::new(absolute_kimi_code_home(&cmd)));
         let spawned = spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
 
@@ -791,7 +791,7 @@ impl TerminalRuntime {
             detection_content_seq.clone(),
             render_notify.clone(),
             render_dirty.clone(),
-            kimi_code_home,
+            kimi_code_home.clone(),
         );
 
         let (draft_input, startup_suggestion_open) =
@@ -812,6 +812,7 @@ impl TerminalRuntime {
             dialog_wait_test: Mutex::default(),
             detection_content_seq,
             managed_launch_pending,
+            kimi_code_home,
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_prompt_generation: Arc::new(AtomicU64::new(0)),

@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU32};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
@@ -158,7 +158,7 @@ pub(super) fn spawn_detection_task(
     detection_content_seq: Arc<AtomicU64>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
-    kimi_code_home: Option<PathBuf>,
+    kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
 ) -> (Arc<AtomicBool>, Option<tokio::task::AbortHandle>) {
     let managed_launch_pending = Arc::new(AtomicBool::new(false));
     if agent_detection != AgentDetection::Enabled {
@@ -192,8 +192,8 @@ struct DetectionTask {
     managed_launch_pending: Arc<AtomicBool>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
-    /// Private `KIMI_CODE_HOME` from this pane's launch, when Bus started Kimi.
-    kimi_code_home: Option<PathBuf>,
+    /// Current managed Kimi home, rebound by native launches into this pane.
+    kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
 }
 
 struct DetectionState {
@@ -618,41 +618,28 @@ impl DetectionTask {
             .await;
     }
 
-    /// Keep "Running a command" only while that turn is open, or while an
-    /// unreadable wire still shows the bold live header. `None` skips the screen.
     fn kimi_command_screen(
         &self,
         status: &mut DetectionState,
         content: &str,
         screen_detection: crate::agents::AgentDetection,
     ) -> Option<crate::agents::AgentDetection> {
-        if !crate::agents::manifest::kimi_running_command_is_winner(content) {
-            return Some(screen_detection);
-        }
-        let turn = crate::agents::providers::kimi::activity::refresh_running_command_turn(
-            self.kimi_code_home.as_deref(),
+        let home = self
+            .kimi_code_home
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let adjusted = classify_kimi_command_screen(
+            &self.terminal,
+            home.as_deref(),
             &mut status.kimi_turn_cache,
+            content,
+            screen_detection,
         );
-        let has_command_suffix =
-            crate::agents::providers::kimi::activity::running_command_has_command_suffix(content);
-        let ansi = (!has_command_suffix && turn.is_none()).then(|| self.terminal.visible_ansi());
-        let line_is_bold = ansi
-            .as_deref()
-            .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
-        if crate::agents::providers::kimi::activity::running_command_text_is_live(
-            turn,
-            line_is_bold,
-            has_command_suffix,
-        ) {
-            return Some(screen_detection);
-        }
-        let adjusted = crate::agents::manifest::kimi_screen_without_running_command(content);
-        if adjusted.skip_state_update {
+        if adjusted.is_none() {
             status.pending_idle.clear();
-            None
-        } else {
-            Some(adjusted)
         }
+        adjusted
     }
 
     async fn publish_screen_detection(
@@ -701,4 +688,34 @@ impl DetectionTask {
             }
         }
     }
+}
+
+/// Resolve the command marker against native wire evidence, or its strict
+/// styled-header fallback. `None` means the remaining screen is a viewer.
+pub(super) fn classify_kimi_command_screen(
+    terminal: &PaneTerminal,
+    home: Option<&std::path::Path>,
+    cache: &mut crate::agents::providers::kimi::wire::MainTurnCache,
+    content: &str,
+    screen_detection: crate::agents::AgentDetection,
+) -> Option<crate::agents::AgentDetection> {
+    if !crate::agents::manifest::kimi_running_command_is_winner(content) {
+        return Some(screen_detection);
+    }
+    let turn = crate::agents::providers::kimi::activity::refresh_running_command_turn(home, cache);
+    let has_command_suffix =
+        crate::agents::providers::kimi::activity::running_command_has_command_suffix(content);
+    let ansi = turn.is_none().then(|| terminal.visible_ansi());
+    let line_is_bold = ansi
+        .as_deref()
+        .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
+    if crate::agents::providers::kimi::activity::running_command_text_is_live(
+        turn,
+        line_is_bold,
+        has_command_suffix,
+    ) {
+        return Some(screen_detection);
+    }
+    let adjusted = crate::agents::manifest::kimi_screen_without_running_command(content);
+    (!adjusted.skip_state_update).then_some(adjusted)
 }

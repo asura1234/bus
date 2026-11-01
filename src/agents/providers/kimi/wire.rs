@@ -306,6 +306,7 @@ struct WireStamp {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MainTurnCache {
+    home: Option<PathBuf>,
     valid: bool,
     index_exists: bool,
     index_len: u64,
@@ -329,12 +330,14 @@ pub(crate) fn refresh_main_turn(
     let index_stamp = regular_stamp(&index, Some(MAX_INDEX_BYTES))?;
     let Some((index_len, index_modified)) = index_stamp else {
         *cache = MainTurnCache {
+            home: Some(home),
             valid: true,
             ..MainTurnCache::default()
         };
         return Ok(None);
     };
     if cache.valid
+        && cache.home.as_deref() == Some(home.as_path())
         && cache.index_exists
         && cache.index_len == index_len
         && cache.index_modified == index_modified
@@ -364,6 +367,7 @@ pub(crate) fn refresh_main_turn(
         None => None,
     };
     *cache = MainTurnCache {
+        home: Some(home),
         valid: true,
         index_exists: true,
         index_len,
@@ -788,6 +792,43 @@ mod tests {
             "{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":4,\"promptId\":\"next\",\"input\":[{\"type\":\"text\",\"text\":\"again\"}]}\n",
         );
         assert_eq!(main_turn(&reopened).unwrap(), Some(MainTurn::Open));
+    }
+
+    #[test]
+    fn kimi_refresh_does_not_reuse_another_homes_turn() {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-home-switch");
+        let homes = [root.join("open"), root.join("done")];
+        let modified = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        for (home, settled) in homes.iter().zip([false, true]) {
+            let directory = home.join("sessions/wd/session_1");
+            crate::platform::fs::private_dir(&directory.join("agents/main")).unwrap();
+            let index = serde_json::json!({"sessionId":"session_1","sessionDir":directory});
+            let index_path = home.join("session_index.jsonl");
+            std::fs::write(&index_path, format!("{index}\n")).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(index_path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            std::fs::write(
+                directory.join("agents/main/wire.jsonl"),
+                turn_chain(settled),
+            )
+            .unwrap();
+        }
+        let mut cache = MainTurnCache::default();
+        assert_eq!(
+            refresh_main_turn(&homes[0], &mut cache).unwrap(),
+            Some(MainTurn::Open)
+        );
+        let actual = refresh_main_turn(&homes[1], &mut cache).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            actual,
+            Some(MainTurn::Settled),
+            "a native relaunch must read its own home even with identical index stamps"
+        );
     }
 
     #[test]
