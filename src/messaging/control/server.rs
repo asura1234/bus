@@ -32,7 +32,7 @@ pub(crate) struct Server {
     stopped: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     _sockets: [OwnedSocket; 2],
-    _lease: std::fs::File,
+    _lease: crate::platform::fs::FileLock,
 }
 
 struct OwnedSocket {

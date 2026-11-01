@@ -97,7 +97,6 @@ impl Worker {
         let lease = io::lock(&data_dir.join("coordinator.lock")).map_err(|e| {
             format!("Another Bus coordinator owns this data directory, or it is inaccessible: {e}")
         })?;
-        let lease = CoordinatorLease(lease);
         let store = JsonStore::new(data_dir.join("state.json"));
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
