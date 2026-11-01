@@ -6,13 +6,9 @@ the [Review Format](../_bus/docs/guides/review-format.md).
 
 ## Use the feature author's worktree
 
-Review in the feature author's development worktree at the exact committed head,
-using its already-built binary when available. Do not create a reviewer clone,
-worktree or target, and never build in the main checkout. Coordinate test writes
-and builds with the author; compilation uses the owner's single target and the
-room build slot, never concurrently with its gate. The full
-[review/investigation rules](../_bus/orchestration/parallel-writes.md#reviews-and-investigations)
-also apply to subagents. Reports, logs and patches go in ignored round artifacts.
+Workspace selection and builds follow the
+[read-only workspace policy](../_bus/orchestration/parallel-writes.md#reviews-and-investigations),
+including for subagents. Reports, logs and patches go in ignored round artifacts.
 
 ## A lane is one independent viewpoint
 
@@ -94,19 +90,15 @@ Review added tests under [code-review-guide "Never pad coverage with a tautology
 
 **Probe lifecycle**:
 
-- before writing, tell the author the exact test paths and intended cases; agree exclusive access to shared files;
-- run each probe, save only your test additions as a patch under this round's ignored artifacts (including new untracked files),
-  and record the command, output and patch path; tests should be keepable as normal regression tests;
-- remove only your additions before handoff, including green probes and after interruptions; prove affected paths match their
-  pre-probe state without staging, stashing, resetting or discarding anyone else's work. The author chooses to adopt/rewrite
-  the saved patch or leave it unadopted; it must not dirty the owner's gate or enter a commit accidentally;
+- follow the [probe test lifecycle](../_bus/docs/guides/code-review-guide.md#probe-test-lifecycle)
+  for coordination, evidence and handoff;
 - file and case names follow code-review-guide "probe test naming and ownership"; first make clear which
   files you may write, never overwrite or delete someone else's probe, never delete or weaken existing assertions; lane / round are recorded only in the review
   artifact, not in test names;
 - red → write a finding in the corresponding dimension, with the first evidence item
   `已证明：<test name @ relative test file path> — <failed assertion>`;
 - green → withdraw the suspicion and open no finding; record the saved patch and result in review.md
-  "本轮探索区域 / 运行的测试", then remove your additions as above;
+  "本轮探索区域 / 运行的测试";
 - never leave only a red test without writing a finding.
 
 ### Prove user-visible behavior by driving the real TUI

@@ -165,7 +165,7 @@ The difference is only in two points: the second place is genuinely alive (once 
 badly, switch early, do not force it), and `toss_up_reason` must be written — **what evidence is still missing to separate them**.
 
 `toss_up_reason` is written for the orchestrator. **This skill does not decide what to do next**:
-opening an isolated worktree per candidate for a spike, choosing one by another constraint such as
+commissioning an authoring spike under the [authoring workspace policy](../_bus/orchestration/parallel-writes.md#when-worktrees-are-needed), choosing one by another constraint such as
 schedule/cost, or asking the developer, are all the orchestrator's job. Your output is only "where the gap is
 and what evidence is missing".
 

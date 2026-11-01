@@ -16,15 +16,11 @@ replacement text in the finding's "possible remediation", for the plan author to
 
 ## Use the feature author's worktree
 
-Use the author's feature development worktree and already-built binary; never
-create a review/investigation worktree, clone or target, or build main. If a fix
-has no worktree yet, its author first creates the feature worktree with
-`worktree-new`. Compilation uses that worktree's target through the room build
-slot, coordinated with the owner. This skill remains read-only over plans and
-repository content; reports stay under ignored `temp/review-plan/`. If a separate
-investigation needs test probes, follow the test-only write and saved-patch/restore
-lifecycle in [Parallel writes](../_bus/orchestration/parallel-writes.md#reviews-and-investigations),
-without changing production files or the plan.
+Follow the [read-only workspace policy](../_bus/orchestration/parallel-writes.md#reviews-and-investigations).
+This skill remains read-only over plans and repository content; reports stay
+under ignored `temp/review-plan/`. A separate investigation using test probes
+follows `review-pr`'s permissions and the
+[probe test lifecycle](../_bus/docs/guides/code-review-guide.md#probe-test-lifecycle).
 
 ## A lane is one independent viewpoint
 

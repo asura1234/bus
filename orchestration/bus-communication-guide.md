@@ -37,6 +37,9 @@ orchestrator. Settle these directly with the peer:
 - Build slots, device locks and other leases between their holders.
 - Clarifying a finding or a test result.
 
+For review, investigation and exploration workspace selection, follow
+[Parallel writes](parallel-writes.md#reviews-and-investigations).
+
 Send a verdict to the PR owner only. The owner tells the orchestrator once, when
 it matters (ready to merge, merged, stuck). Don't copy the orchestrator on
 peer traffic.
