@@ -359,8 +359,7 @@ fn login_shell_builder_resolves_bare_shell_names_from_path() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let original_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", &bin);
+    let _path = crate::utils::env::PathOverride::set(&bin);
 
     let cmd = pane_shell_command_builder_for_target(
         PaneShellConfig::new("fake-shell", crate::utils::config::ShellModeConfig::Login),
@@ -373,10 +372,7 @@ fn login_shell_builder_resolves_bare_shell_names_from_path() {
         cmd.get_env("SHELL").and_then(std::ffi::OsStr::to_str),
         shell.to_str()
     );
-    match original_path {
-        Some(path) => std::env::set_var("PATH", path),
-        None => std::env::remove_var("PATH"),
-    }
+    drop(_path);
     let _ = std::fs::remove_dir_all(base);
 }
 
@@ -409,8 +405,7 @@ fn login_shell_from_relative_path_runs_in_the_pane_directory() {
         }
     }
     relative_bin.push(bin.strip_prefix("/").unwrap());
-    let original_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", &relative_bin);
+    let _path = crate::utils::env::PathOverride::set(&relative_bin);
 
     let spawn_exit = |configured_shell: &str| {
         let mut cmd = pane_shell_command_builder_for_target(
@@ -427,10 +422,7 @@ fn login_shell_from_relative_path_runs_in_the_pane_directory() {
     let absolute_result = spawn_exit(shell.to_str().unwrap());
     let result = spawn_exit("fake-shell");
 
-    match original_path {
-        Some(path) => std::env::set_var("PATH", path),
-        None => std::env::remove_var("PATH"),
-    }
+    drop(_path);
     std::fs::remove_dir_all(&base).unwrap();
 
     assert_eq!(

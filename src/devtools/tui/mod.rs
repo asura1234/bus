@@ -360,16 +360,45 @@ fn stop(name: &str) -> Value {
     let info = paths.read_info();
     let response = request(name, &Command::Stop);
     // The host answered, so it is shutting down, even when it reports a
-    // problem with what it kept.
+    // problem with what it kept. A dead host never answers: `request` returns
+    // `no_session` and used to leave the scratch Bus running.
     if response["run_dir"].is_string() {
-        if let Some(info) = info {
+        if let Some(info) = info.as_ref() {
             let deadline = Instant::now() + Duration::from_secs(10);
             while session::process_alive(info.host_pid) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
+    sweep_stopped_session(&paths, info.as_ref());
     response
+}
+
+/// Kills a scratch Bus that outlived its host. A clean host teardown leaves
+/// nothing to signal, so the extra `bus stop` runs only when something remains.
+fn sweep_stopped_session(paths: &SessionPaths, info: Option<&session::SessionInfo>) {
+    // No driver claim: this directory is not a scratch session we started.
+    // Sweeping it used to signal every process that held the directory.
+    let Some(token) = paths
+        .read_claim()
+        .map(|claim| claim.token)
+        .filter(|token| !token.is_empty())
+    else {
+        return;
+    };
+    let host_pid = info.map(|info| info.host_pid);
+    let bus_pid = info.and_then(|info| info.bus_pid);
+    let host_alive = host_pid.is_some_and(session::process_alive);
+    let bus_alive = bus_pid.is_some_and(session::process_alive);
+    let holders = session::session_pids(&paths.dir, &token);
+    if !host_alive && !bus_alive && holders.is_empty() {
+        return;
+    }
+    session::reap_session_tree(&paths.dir, &token, host_pid, bus_pid);
+    if let Ok(binary) = std::env::current_exe() {
+        stop_leftovers(paths, &binary, &token);
+    }
+    session::reap_session_tree(&paths.dir, &token, host_pid, bus_pid);
 }
 
 fn list() -> Value {

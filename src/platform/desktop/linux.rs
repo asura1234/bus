@@ -75,7 +75,7 @@ pub fn write_clipboard(bytes: &[u8]) -> bool {
 }
 
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
-    Command::new("xdg-open")
+    crate::utils::env::command_on_path("xdg-open")
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -92,9 +92,10 @@ pub fn reveal_path(path: &std::path::Path) -> std::io::Result<Option<std::proces
 
 pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     if running_inside_wsl() {
-        if let Some(image) =
-            read_wsl_clipboard_image_with_command(|program| Command::new(program), max_bytes)
-        {
+        if let Some(image) = read_wsl_clipboard_image_with_command(
+            |program| crate::utils::env::command_on_path(program),
+            max_bytes,
+        ) {
             return Some(image);
         }
     }
@@ -181,7 +182,9 @@ pub(in crate::platform) fn bytes_match_image_signature(extension: &str, bytes: &
 
 /// Show a native desktop notification through libnotify's command-line helper.
 pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
-    show_desktop_notification_with_command(title, body, |program| Command::new(program))
+    show_desktop_notification_with_command(title, body, |program| {
+        crate::utils::env::command_on_path(program)
+    })
 }
 
 pub(in crate::platform) fn show_desktop_notification_with_command(
@@ -221,7 +224,7 @@ pub(in crate::platform) fn read_clipboard_image_with_command(
     args: &[&str],
     max_bytes: usize,
 ) -> Option<Vec<u8>> {
-    let mut command = Command::new(program);
+    let mut command = crate::utils::env::command_on_path(program);
     command.args(args);
     read_clipboard_image_with_spawned_command(command, max_bytes)
 }
@@ -296,7 +299,7 @@ pub(in crate::platform) fn clipboard_commands() -> Vec<ClipboardCommand> {
 }
 
 pub(in crate::platform) fn run_clipboard_command(command: &ClipboardCommand, bytes: &[u8]) -> bool {
-    let mut child = match Command::new(command.program)
+    let mut child = match crate::utils::env::command_on_path(command.program)
         .args(command.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

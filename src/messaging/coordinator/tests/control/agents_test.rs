@@ -4,17 +4,7 @@ use super::*;
 fn agent_add_requires_consent_only_when_project_hooks_would_change() {
     use crate::agents::providers::{hook_json, ProviderKind};
 
-    struct RestorePath(Option<std::ffi::OsString>);
-    impl Drop for RestorePath {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
     let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
-    let _restore = RestorePath(std::env::var_os("PATH"));
     let binary = std::env::current_exe().unwrap();
     for (provider, folder) in [
         (ProviderKind::Codex, ".codex"),
@@ -33,7 +23,7 @@ fn agent_add_requires_consent_only_when_project_hooks_would_change() {
             let bin = dir.join("bin");
             std::fs::create_dir_all(&bin).unwrap();
             std::fs::write(bin.join(provider.executable()), "fixture binary").unwrap();
-            std::env::set_var("PATH", &bin);
+            let _path = crate::utils::env::PathOverride::set(&bin);
             let path = dir.join(folder).join("hooks.json");
             let contract = hook_json::HookContract::for_provider(provider);
             let previous = if case == "missing" {

@@ -12,6 +12,7 @@ use crate::terminal::runtime::io::PaneRuntimeIo;
 use crate::terminal::runtime::read::{pty_read_callback, PtyReadContext};
 use crate::terminal::runtime::AgentDetection;
 use crate::terminal::runtime::TerminalRuntime;
+use crate::utils::env::is_executable_file;
 use crate::utils::ids::PaneId;
 use crate::utils::logging::pane_spawn_started;
 use crate::utils::render::signal::RenderSignal;
@@ -250,24 +251,6 @@ pub(super) fn shell_mode_uses_login_shell(
     }
 }
 
-pub(super) fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 pub(super) fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
     if shell.contains(std::path::MAIN_SEPARATOR) {
         let path = Path::new(shell);
@@ -281,7 +264,7 @@ pub(super) fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
             });
     }
 
-    std::env::var_os("PATH")
+    crate::utils::env::path_var()
         .and_then(|path| {
             std::env::split_paths(&path)
                 .map(|dir| dir.join(shell))

@@ -1,6 +1,15 @@
 use super::super::*;
 use super::temp_log_path;
 
+/// Written only after `File::lock` succeeds. The parent's stdout pipe is not
+/// a ready signal: libtest captures the holder, and `read_line` then waits
+/// forever, so the parent never kills it.
+fn lock_held_marker(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".held");
+    path.with_file_name(name)
+}
+
 #[test]
 fn contending_archive_writers_keep_the_active_file_within_budget() {
     let path = temp_log_path("contending-active-budget");
@@ -110,19 +119,18 @@ fn subprocess_log_lock_holder() {
     let Some(path) = std::env::var_os("BUS_TEST_LOG_LOCK_HOLDER") else {
         return;
     };
+    let path = PathBuf::from(path);
     let file = OpenOptions::new().append(true).open(&path).unwrap();
     file.lock().unwrap();
-    use std::io::Read;
-    println!("LOCKED");
-    io::stdout().flush().unwrap();
+    std::fs::write(lock_held_marker(&path), b"1").unwrap();
     let mut byte = [0];
-    let _ = io::stdin().read(&mut byte);
+    let mut input = std::io::stdin();
+    let _ = std::io::Read::read(&mut input, &mut byte);
 }
 
 #[cfg(unix)]
 #[test]
 fn log_writer_resumes_after_its_lock_holder_is_killed() {
-    use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let path = temp_log_path("killed-log-lock-holder");
     let dir = path.parent().unwrap().to_path_buf();
@@ -133,28 +141,31 @@ fn log_writer_resumes_after_its_lock_holder_is_killed() {
         dev: true,
     };
     let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
+    let marker = lock_held_marker(&path);
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "utils::logging::tests::lock_tests::subprocess_log_lock_holder",
-            "--nocapture",
+            "--test-threads",
+            "1",
         ])
         .env("BUS_TEST_LOG_LOCK_HOLDER", &path)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     let mut locked = false;
-    for _ in 0..10 {
-        let mut line = String::new();
-        if output.read_line(&mut line).unwrap() == 0 {
-            break;
-        }
-        if line.trim() == "LOCKED" {
+    while std::time::Instant::now() < deadline {
+        if marker.is_file() {
             locked = true;
             break;
         }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
     if !locked {
         let _ = child.kill();

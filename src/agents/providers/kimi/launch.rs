@@ -112,7 +112,7 @@ fn resolve_executable(source: &Path) -> Result<PathBuf, String> {
     if let Some(home) = std::env::home_dir() {
         candidates.push(home.join(".kimi-code/bin/kimi"));
     }
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = crate::utils::env::path_var() {
         candidates.extend(
             std::env::split_paths(&path)
                 .filter(|dir| dir.is_absolute())
@@ -525,7 +525,7 @@ fn environment_for(
         .parent()
         .ok_or("Kimi executable has no directory")?;
     let mut paths = vec![directory.to_path_buf()];
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = crate::utils::env::path_var() {
         paths.extend(std::env::split_paths(&path).filter(|dir| dir != directory));
     }
     let path = std::env::join_paths(paths)

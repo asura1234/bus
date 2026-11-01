@@ -27,7 +27,6 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
     use std::time::{Duration, Instant, SystemTime};
 
     struct Cleanup {
-        old_path: Option<OsString>,
         temp_dir: PathBuf,
         owner_pid: Option<i32>,
     }
@@ -40,10 +39,6 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
                 }
             }
             unsafe {
-                match self.old_path.take() {
-                    Some(path) => std::env::set_var("PATH", path),
-                    None => std::env::remove_var("PATH"),
-                }
                 std::env::remove_var("BUS_TEST_WL_COPY_MARKER");
                 std::env::remove_var("BUS_TEST_WL_COPY_PAYLOAD");
                 std::env::remove_var("BUS_TEST_WL_COPY_ARGS");
@@ -61,7 +56,6 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
         std::env::temp_dir().join(format!("bus-fake-wl-copy-{}-{unique}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let mut cleanup = Cleanup {
-        old_path: std::env::var_os("PATH"),
         temp_dir: temp_dir.clone(),
         owner_pid: None,
     };
@@ -81,16 +75,15 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
     std::fs::set_permissions(&fake_wl_copy, permissions)
         .expect("fake wl-copy should be executable");
 
-    let test_path = match cleanup.old_path.as_ref() {
+    let test_path = match crate::utils::env::path_var() {
         Some(path) => {
             let mut paths = vec![temp_dir.clone()];
-            paths.extend(std::env::split_paths(path));
+            paths.extend(std::env::split_paths(&path));
             std::env::join_paths(paths).expect("test path should be valid")
         }
         None => temp_dir.clone().into_os_string(),
     };
     unsafe {
-        std::env::set_var("PATH", test_path);
         std::env::set_var("BUS_TEST_WL_COPY_MARKER", &marker);
         std::env::set_var("BUS_TEST_WL_COPY_PAYLOAD", &payload);
         std::env::set_var("BUS_TEST_WL_COPY_ARGS", &args);
@@ -98,6 +91,8 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
 
     let (result_tx, result_rx) = mpsc::channel();
     let writer = std::thread::spawn(move || {
+        // The override is thread-local; the lookup runs on this thread.
+        let _path = crate::utils::env::PathOverride::set(&test_path);
         let command = ClipboardCommand {
             program: "wl-copy",
             args: &["--type", "text/plain;charset=utf-8"],
@@ -152,7 +147,6 @@ fn failed_wl_copy_uses_x11_fallback() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct Cleanup {
-        old_path: Option<OsString>,
         old_wayland_display: Option<OsString>,
         old_display: Option<OsString>,
         temp_dir: PathBuf,
@@ -161,10 +155,6 @@ fn failed_wl_copy_uses_x11_fallback() {
     impl Drop for Cleanup {
         fn drop(&mut self) {
             unsafe {
-                match self.old_path.take() {
-                    Some(value) => std::env::set_var("PATH", value),
-                    None => std::env::remove_var("PATH"),
-                }
                 match self.old_wayland_display.take() {
                     Some(value) => std::env::set_var("WAYLAND_DISPLAY", value),
                     None => std::env::remove_var("WAYLAND_DISPLAY"),
@@ -190,7 +180,6 @@ fn failed_wl_copy_uses_x11_fallback() {
     ));
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let cleanup = Cleanup {
-        old_path: std::env::var_os("PATH"),
         old_wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
         old_display: std::env::var_os("DISPLAY"),
         temp_dir: temp_dir.clone(),
@@ -214,8 +203,8 @@ fn failed_wl_copy_uses_x11_fallback() {
             .expect("fake clipboard command should be executable");
     }
 
+    let _path = crate::utils::env::PathOverride::set(&temp_dir);
     unsafe {
-        std::env::set_var("PATH", &temp_dir);
         std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
         std::env::set_var("DISPLAY", ":0");
         std::env::set_var("BUS_TEST_XCLIP_PAYLOAD", &payload);
@@ -300,11 +289,10 @@ fn read_clipboard_image_rejects_xclip_text_served_for_image_target() {
             .expect("fake xclip should be executable");
     }
 
-    let old_path = std::env::var_os("PATH");
-    let test_path = match old_path.as_ref() {
+    let test_path = match crate::utils::env::path_var() {
         Some(path) => {
             let mut paths = vec![temp_dir.clone()];
-            paths.extend(std::env::split_paths(path));
+            paths.extend(std::env::split_paths(&path));
             std::env::join_paths(paths).expect("test path should be valid")
         }
         None => temp_dir.clone().into_os_string(),
@@ -313,17 +301,11 @@ fn read_clipboard_image_rejects_xclip_text_served_for_image_target() {
     unsafe {
         std::env::remove_var("WAYLAND_DISPLAY");
         std::env::set_var("DISPLAY", ":0");
-        std::env::set_var("PATH", test_path);
     }
+    let _path = crate::utils::env::PathOverride::set(&test_path);
 
     let result = read_clipboard_image(16 * 1024 * 1024);
-
-    unsafe {
-        match old_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-    }
+    drop(_path);
     let _ = std::fs::remove_file(fake_xclip);
     let _ = std::fs::remove_dir(temp_dir);
 
@@ -356,11 +338,10 @@ fn read_clipboard_image_rejects_wayland_xclip_fallback_text_for_image_target() {
         }
     }
 
-    let old_path = std::env::var_os("PATH");
-    let test_path = match old_path.as_ref() {
+    let test_path = match crate::utils::env::path_var() {
         Some(path) => {
             let mut paths = vec![temp_dir.clone()];
-            paths.extend(std::env::split_paths(path));
+            paths.extend(std::env::split_paths(&path));
             std::env::join_paths(paths).expect("test path should be valid")
         }
         None => temp_dir.clone().into_os_string(),
@@ -369,17 +350,11 @@ fn read_clipboard_image_rejects_wayland_xclip_fallback_text_for_image_target() {
     unsafe {
         std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
         std::env::set_var("DISPLAY", ":0");
-        std::env::set_var("PATH", test_path);
     }
+    let _path = crate::utils::env::PathOverride::set(&test_path);
 
     let result = read_clipboard_image(16 * 1024 * 1024);
-
-    unsafe {
-        match old_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-    }
+    drop(_path);
     let _ = std::fs::remove_file(fake_wl_paste);
     let _ = std::fs::remove_file(fake_xclip);
     let _ = std::fs::remove_dir(temp_dir);

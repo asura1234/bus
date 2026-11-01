@@ -92,7 +92,7 @@ pub(crate) fn status(home: &Path) -> io::Result<Status> {
 
 pub(crate) fn install(home: &Path) -> io::Result<Status> {
     bus_io::private_dir(&data_dir(home))?;
-    let _lease = bus_io::append_lock(&data_dir(home).join("skills-install.lock"))?;
+    let _lease = bus_io::lock_wait(&data_dir(home).join("skills-install.lock"))?;
     let mut manifest = install::load_manifest(home)?;
     let mut actions = BTreeMap::new();
     for (provider, directory) in PROVIDERS {

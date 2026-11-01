@@ -321,7 +321,7 @@ fn git_bash() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("PATH").and_then(|path| {
+            crate::utils::env::path_var().and_then(|path| {
                 std::env::split_paths(&path)
                     .map(|p| p.join("bash.exe"))
                     .find(|p| p.is_file())

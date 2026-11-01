@@ -30,6 +30,11 @@ pub(super) const OWNER_ENV: &str = "BUS_TUI_OWNER";
 /// Moves the driver root, so test suites never share the cap with other
 /// drivers on the machine. Must be absolute and short (sockets live under it).
 pub(super) const ROOT_ENV: &str = "BUS_TUI_ROOT";
+/// Set by a test on the short-lived `tui start` process. The host inherits it
+/// (start does not clear the environment) and reaps the scratch Bus when that
+/// pid is gone. Unset for a developer session. Not `Claim.claimant`: that pid
+/// is the `tui start` process, which exits on purpose as soon as the host is up.
+pub(super) const REAP_WITH_ENV: &str = "BUS_TUI_REAP_WITH";
 
 /// Variables that name another Bus or its sockets. They are never passed to
 /// the spawned instance, and refused outright when they point at the target.
@@ -485,18 +490,11 @@ pub(super) fn pids_holding(dir: &Path) -> Vec<u32> {
     }
 }
 
-pub(super) fn terminate(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
-    }
-}
+#[path = "session_reap.rs"]
+mod reap;
+pub(super) use reap::{
+    kill_self, reap_session_tree, session_pids, terminate, watch_until_observer_exits,
+};
 
 /// Sockets a running Bus serves from its data directory. Bus runs its herdr
 /// server as a named session (`--session bus`), whose sockets live under
