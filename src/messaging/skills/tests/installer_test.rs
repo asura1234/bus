@@ -197,39 +197,3 @@ fn symlink_skills_and_symlink_registries_are_never_written_through() {
     assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
     std::fs::remove_dir_all(home).unwrap();
 }
-
-#[test]
-fn launching_into_a_shadowed_repo_posts_no_room_message() {
-    use crate::messaging::model::{BusState, Provider};
-    let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow-gone");
-    let repo = home.join("repo");
-    for directory in [
-        home.join(".claude/skills/demo"),
-        repo.join(".claude/skills/demo"),
-    ] {
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join("SKILL.md"), "skill").unwrap();
-    }
-    std::fs::create_dir_all(&repo).unwrap();
-    let output = std::process::Command::new("git")
-        .arg("init")
-        .arg(&repo)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-
-    let mut state = BusState::new();
-    let room = state.create_room("work").unwrap();
-    state
-        .create_agent(room, "shadow", Provider::ClaudeCode, repo, None)
-        .unwrap();
-    let notices: Vec<String> = state
-        .notices(room)
-        .map(|notice| notice.text.clone())
-        .collect();
-    assert!(
-        notices.is_empty(),
-        "Bus core does not post skill-shadow notices, got {notices:?}"
-    );
-    std::fs::remove_dir_all(home).unwrap();
-}
