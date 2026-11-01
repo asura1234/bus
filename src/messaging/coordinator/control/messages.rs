@@ -215,7 +215,9 @@ impl Worker {
             return None;
         }
         let agent = self.state.agent(author?)?;
-        if agent.room_id == master.id && agent.orchestrates.is_some() {
+        // Saved MASTER orchestrators remain orchestrators even if their work
+        // room binding no longer passes load validation.
+        if agent.room_id == master.id {
             return None;
         }
         let home_name = self

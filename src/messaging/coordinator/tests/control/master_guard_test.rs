@@ -102,19 +102,22 @@ fn master_guard_bound_orchestrator_and_developer_can_send_in_master() {
 }
 
 #[test]
-fn master_guard_master_residence_alone_does_not_make_an_orchestrator() {
+fn master_guard_legacy_unbound_orchestrator_can_send_in_master() {
     let (mut worker, _, recipient, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
-    let unbound = add(&mut worker, master, &dir, "unbound");
+    let legacy = add(&mut worker, master, &dir, "legacy-orchestrator");
+    worker.save(worker.state.clone()).unwrap();
+    worker.state = worker.store.load().unwrap().unwrap();
     let sent = call(
         &mut worker,
-        "unbound-master",
+        "legacy-orchestrator",
         "message.send",
-        json!({"room":"master","as":unbound.0.to_string(),"to":[recipient.0.to_string()],"text":"new message"}),
+        json!({"room":"master","as":legacy.0.to_string(),"to":[recipient.0.to_string()],"text":"new message"}),
     );
-    assert!(!sent.ok, "{sent:?}");
-    assert_eq!(sent.error.unwrap().code, "master_reserved");
-    assert_eq!(worker.state.requests().count(), 0);
+    assert!(sent.ok, "{sent:?}");
+    let request = worker.state.requests().last().unwrap();
+    assert_eq!(request.room_id, master);
+    assert_eq!(request.prompt.author, Author::Agent(legacy));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
