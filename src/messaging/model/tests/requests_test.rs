@@ -400,6 +400,89 @@ fn kimi_lead_final_does_not_abandon_a_follow_up_before_its_turn_starts() {
 }
 
 #[test]
+fn kimi_answered_steer_completes_a_silent_lead_after_a_synchronous_tool() {
+    use crate::agents::providers::kimi::wire::{session_capture_lines, Outcome};
+    use serde_json::json;
+
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let lead = submit_text(
+        &mut state,
+        room,
+        agent,
+        "Run pwd synchronously, then finish silently.",
+    );
+    start_request(&mut state, lead, "launch-codex", 10);
+    state.requests.get_mut(&lead).unwrap().provider_turn_id = Some("0".into());
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    let follow = submit_text(&mut state, room, agent, "Reply STEER-REPLY.");
+    state.begin_steering(follow, lead).unwrap();
+    state
+        .record_steering(
+            follow,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let lead_prompt = state.render_request_payload(lead).unwrap();
+    let follow_prompt = state.render_request_payload(follow).unwrap();
+    let events = vec![
+        json!({"type":"turn.prompt","agentId":"main","turnId":0,"promptId":"p0","input":[{"type":"text","text":lead_prompt}]}),
+        json!({"type":"agent.message.appended","message":{"message":{"role":"assistant","content":[],"toolCalls":[{"id":"sync-pwd","name":"Bash","arguments":{"command":"pwd"}}]},"meta":{"source":"llm"}}}),
+        json!({"type":"agent.message.appended","message":{"message":{"role":"tool","toolCallId":"sync-pwd","content":[{"type":"text","text":"/tmp/project\n"}]},"meta":{"source":"tool"}}}),
+        json!({"type":"turn.steer","agentId":"main","turnId":0,"input":[{"type":"text","text":follow_prompt}]}),
+        json!({"type":"agent.message.appended","message":{"message":{"role":"assistant","content":[{"type":"text","text":"STEER-REPLY"}],"toolCalls":[]},"meta":{"source":"llm"}}}),
+        json!({"type":"agent.turn.ended","turnId":0,"outcome":"done"}),
+        json!({"type":"turn.ended","agentId":"main","turnId":0,"reason":"completed"}),
+        json!({"type":"prompt.completed","agentId":"main","promptId":"p0","reason":"completed"}),
+    ];
+    let capture = session_capture_lines(
+        events.iter().map(|event| Ok(event.to_string())),
+        0,
+        &lead_prompt,
+    )
+    .unwrap()
+    .expect("successful committed turn");
+    assert!(capture.continuation.is_none());
+    assert_eq!(
+        capture.steered,
+        vec![(follow_prompt.clone(), "STEER-REPLY".into())]
+    );
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 30)
+        .unwrap();
+    for (prompt, text) in &capture.steered {
+        assert!(state.complete_kimi_steered_reply(agent, prompt, text, "0", 40));
+    }
+    let recorded = match capture.lead {
+        Some(Outcome::NoReply) => Some(RecordedTurnEnd::NoReply),
+        Some(Outcome::Final(text)) => Some(RecordedTurnEnd::Final {
+            turn_id: "0".into(),
+            text,
+            prompts: vec![lead_prompt],
+        }),
+        Some(Outcome::Failed(error)) => Some(RecordedTurnEnd::Error(error)),
+        None => None,
+    };
+    state.settle_ended_request(agent, 40, |_| recorded.clone());
+    assert_eq!(
+        state.request(follow).unwrap().reply().unwrap().text,
+        "STEER-REPLY"
+    );
+    assert_eq!(
+        state.request(lead).unwrap().phase,
+        RequestPhase::Completed,
+        "a completed synchronous tool does not imply a future background continuation"
+    );
+    assert!(state.request(lead).unwrap().reply().is_none());
+    assert!(state.agent(agent).unwrap().current_request.is_none());
+}
+
+#[test]
 fn kimi_wire_steer_settles_each_request_with_its_own_reply() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;

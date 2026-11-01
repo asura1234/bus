@@ -128,8 +128,8 @@ struct OpenTurn {
     steer_prompt: Option<String>,
     steer_answer: Option<String>,
     steers: Vec<(String, String)>,
-    /// The lead called a tool and has not written its own answer since.
-    saw_lead_tool: bool,
+    /// A background tool on this turn still has a later non-Bus continuation.
+    awaits_background: bool,
     agent_outcome: Option<String>,
     agent_error: Option<String>,
     turn_reason: Option<String>,
@@ -162,6 +162,48 @@ fn assistant_text(value: &Value) -> Option<(bool, String)> {
         .collect::<Option<Vec<_>>>()?
         .concat();
     Some((false, text))
+}
+
+fn tool_args_run_in_background(args: &Value) -> bool {
+    match args {
+        Value::Object(map) => map.get("run_in_background").and_then(Value::as_bool) == Some(true),
+        Value::String(raw) => {
+            serde_json::from_str::<Value>(raw)
+                .ok()
+                .and_then(|parsed| parsed.get("run_in_background").and_then(Value::as_bool))
+                == Some(true)
+        }
+        _ => false,
+    }
+}
+
+fn result_awaits_later_turn(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("status: running")
+        || text.contains("automatic_notification")
+        || text.contains("[still_running]")
+}
+
+fn assistant_tools_await_background(value: &Value) -> bool {
+    value
+        .pointer("/message/message/toolCalls")
+        .and_then(Value::as_array)
+        .is_some_and(|calls| {
+            calls.iter().any(|call| {
+                call.get("arguments")
+                    .is_some_and(tool_args_run_in_background)
+            })
+        })
+}
+
+fn content_text(value: &Value) -> String {
+    value
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect()
 }
 
 fn steer_text(value: &Value) -> Option<String> {
@@ -238,7 +280,7 @@ fn open_turn(value: &Value) -> Option<OpenTurn> {
         steer_prompt: None,
         steer_answer: None,
         steers: Vec::new(),
-        saw_lead_tool: false,
+        awaits_background: false,
         agent_outcome: None,
         agent_error: None,
         turn_reason: None,
@@ -251,10 +293,9 @@ fn note_assistant(turn: &mut OpenTurn, value: &Value) {
         return;
     };
     if tool_call {
-        // Kimi 2.4 appends the lead's tool message after prompt.steered.
-        // That call still belongs to the bound turn, so a later non-Bus
-        // continuation can be the lead's own answer.
-        turn.saw_lead_tool = true;
+        if assistant_tools_await_background(value) {
+            turn.awaits_background = true;
+        }
         if turn.after_steer {
             turn.steer_answer = None;
         } else {
@@ -266,6 +307,39 @@ fn note_assistant(turn: &mut OpenTurn, value: &Value) {
         } else {
             turn.lead_answer = Some(text);
         }
+    }
+}
+
+fn note_tool_result(turn: &mut OpenTurn, value: &Value) {
+    let Some(message) = value.get("message").and_then(|inner| inner.get("message")) else {
+        return;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("tool") {
+        return;
+    }
+    if result_awaits_later_turn(&content_text(message)) {
+        turn.awaits_background = true;
+    }
+}
+
+fn note_loop_event(turn: &mut OpenTurn, value: &Value) {
+    let Some(event) = value.get("event") else {
+        return;
+    };
+    match event.get("type").and_then(Value::as_str) {
+        Some("tool.call") if event.get("args").is_some_and(tool_args_run_in_background) => {
+            turn.awaits_background = true;
+        }
+        Some("tool.result") => {
+            let output = event
+                .pointer("/result/output")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if result_awaits_later_turn(output) {
+                turn.awaits_background = true;
+            }
+        }
+        _ => {}
     }
 }
 
@@ -283,7 +357,11 @@ fn apply_wire_event(turn: &mut OpenTurn, kind: &str, value: &Value) {
                 note_steer(turn, text);
             }
         }
-        "agent.message.appended" if turn.agent_outcome.is_none() => note_assistant(turn, value),
+        "agent.message.appended" if turn.agent_outcome.is_none() => {
+            note_assistant(turn, value);
+            note_tool_result(turn, value);
+        }
+        "context.append_loop_event" if turn.agent_outcome.is_none() => note_loop_event(turn, value),
         "agent.turn.ended" if value.get("turnId").and_then(Value::as_u64) == Some(turn.id) => {
             if let Some(outcome) = value.get("outcome").and_then(Value::as_str) {
                 turn.agent_outcome = Some(outcome.to_owned());
@@ -409,9 +487,9 @@ fn lead_after_steers(
     if let Some(continuation) = continuation {
         return (None, Some(continuation));
     }
-    // A tool with no lead text can still finish on a later non-Bus turn.
-    // A steer reply alone is that steer's answer, not proof the lead is open.
-    if bound.saw_lead_tool && bound.lead_answer.is_none() {
+    // The bound turn already committed. Hold only when that turn started a
+    // background tool whose own answer arrives as a later non-Bus turn.
+    if bound.awaits_background && bound.lead_answer.is_none() {
         (None, None)
     } else {
         (Some(Outcome::NoReply), None)
@@ -953,6 +1031,36 @@ mod tests {
     }
 
     #[test]
+    fn synchronous_tool_does_not_hold_an_answered_silent_lead() {
+        let original = "[Bus message 5 from you]\nRun pwd synchronously, then finish silently.";
+        let steered = "[Bus message 7 from you]\nReply STEER-REPLY.";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[],\"toolCalls\":[{{\"id\":\"sync-pwd\",\"name\":\"Bash\",\"arguments\":{{\"command\":\"pwd\"}}}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"tool\",\"toolCallId\":\"sync-pwd\",\"content\":[{{\"type\":\"text\",\"text\":\"/tmp/project\\n\"}}]}},\"meta\":{{\"source\":\"tool\"}}}}}}\n",
+                "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"STEER-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            steered = serde_json::to_string(steered).unwrap(),
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 0, original)
+                .unwrap()
+                .expect("successful committed turn");
+        assert_eq!(capture.lead, Some(Outcome::NoReply));
+        assert_eq!(capture.continuation, None);
+        assert_eq!(
+            capture.steered,
+            vec![(steered.to_owned(), "STEER-REPLY".into())]
+        );
+    }
+
+    #[test]
     fn delayed_lead_tool_after_steer_holds_for_a_non_bus_continuation() {
         let original = "[Bus message 5 from you]\nstart sleep 45 then reply LEAD-DONE";
         let steered = "[Bus message 7 from you]\nreply STEER-REPLY";
@@ -962,7 +1070,8 @@ mod tests {
                 "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
                 "{{\"type\":\"prompt.steered\",\"agentId\":\"main\",\"content\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
                 "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
-                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"think\",\"think\":\"tool\"}}],\"toolCalls\":[{{\"name\":\"Bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"think\",\"think\":\"tool\"}}],\"toolCalls\":[{{\"name\":\"Bash\",\"arguments\":{{\"command\":\"sleep 45\",\"run_in_background\":true}}}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"tool\",\"content\":[{{\"type\":\"text\",\"text\":\"task_id: bash-1\\nstatus: running\\nautomatic_notification: true\"}}]}},\"meta\":{{\"source\":\"tool\"}}}}}}\n",
                 "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"STEER-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
                 "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
                 "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
