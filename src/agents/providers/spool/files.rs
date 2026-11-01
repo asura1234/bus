@@ -1,6 +1,6 @@
 //! Spool path policy over platform-owned creation, locking and replacement.
 use crate::platform::fs;
-use std::{fs::File, io, path::Path};
+use std::{io, path::Path};
 
 pub(super) fn private_dir(path: &Path) -> io::Result<()> {
     if !path.exists() {
@@ -20,7 +20,7 @@ pub(super) fn private_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn try_append_lock(path: &Path) -> io::Result<File> {
+pub(crate) fn try_append_lock(path: &Path) -> io::Result<fs::FileLock> {
     if !path.exists() {
         match fs::create_private_state_file(path) {
             Ok(file) => file.sync_all()?,
@@ -34,7 +34,7 @@ pub(crate) fn try_append_lock(path: &Path) -> io::Result<File> {
     fs::lock_file(path)
 }
 
-pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
+pub(crate) fn append_lock(path: &Path) -> io::Result<fs::FileLock> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         match try_append_lock(path) {

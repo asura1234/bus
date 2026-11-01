@@ -93,6 +93,7 @@ fn agent_add_requires_consent_only_when_project_hooks_would_change() {
 
 #[test]
 fn codex_is_refused_as_an_orchestrator_but_not_as_a_worker() {
+    let _providers = provider_binaries();
     let (mut worker, _room, _agent, dir) = fixture();
     worker.state.create_room("second").unwrap();
     // Allowed adds get as far as opening a tab, which tests refuse.
@@ -245,6 +246,7 @@ fn dev_agent_add_rejects_an_orchestrator_outside_master_before_launching() {
 
 #[test]
 fn dev_master_agent_add_launches_with_its_prompt_and_leaves_the_pwd_alone() {
+    let _providers = provider_binaries();
     let (mut worker, room, _agent, dir) = fixture();
     worker.transport = Box::new(NoTabs);
     let pwd = dir.join("repo");
@@ -311,6 +313,7 @@ fn dev_work_agent_add_rejects_an_orchestrator_prompt() {
 
 #[test]
 fn dev_agent_add_adopts_an_existing_session_once_and_prompts_it_the_reviewed_way() {
+    let _providers = provider_binaries();
     let (mut worker, room, agent, dir) = fixture();
     worker.transport = Box::new(NoTabs);
     let session = "160d1f8b-9023-44b8-9bc7-24333effb185";
@@ -366,6 +369,7 @@ fn dev_agent_add_adopts_an_existing_session_once_and_prompts_it_the_reviewed_way
 
 #[test]
 fn an_adopted_cursor_session_is_bound_at_launch() {
+    let _providers = provider_binaries();
     // cursor-agent --resume reports no sessionStart: its first hook is the
     // first prompt's, which Bus would never type without a bound session.
     struct Launches {
@@ -462,6 +466,7 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
 
 #[test]
 fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
+    let _providers = provider_binaries();
     struct SuccessfulLaunches {
         tabs: usize,
     }
@@ -934,6 +939,7 @@ fn agent_clear_keeps_reset_intent_only_while_the_reset_may_have_been_typed() {
 
 #[test]
 fn workers_launch_with_messaging_and_no_signature_instructions_for_every_provider() {
+    let _providers = provider_binaries();
     let (mut worker, room, _, dir) = fixture();
     worker.transport = Box::new(NoTabs);
     for provider in ["claude", "codex", "cursor"] {
@@ -994,6 +1000,7 @@ fn notify_you_reserves_developer_names_for_create_and_rename() {
 
 #[test]
 fn rejected_launch_creation_releases_waiters_without_a_pane_or_session() {
+    let _providers = provider_binaries();
     let (mut worker, room, _, dir) = fixture();
     struct Rejected;
     impl Transport for Rejected {

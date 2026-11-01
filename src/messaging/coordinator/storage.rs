@@ -4,22 +4,7 @@ use crate::messaging::storage::state_store::StoreError;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Unlock while the owning handle is still open. A duplicated handle may
-/// outlive the coordinator, so closing only this handle is not sufficient.
-pub(super) struct CoordinatorLease(pub(super) std::fs::File);
-
-impl Drop for CoordinatorLease {
-    fn drop(&mut self) {
-        if let Err(error) = self.0.unlock() {
-            tracing::warn!(
-                event = "bus.coordinator.unlock_failed",
-                raw_os_error = ?error.raw_os_error(),
-                %error,
-                "Coordinator lock could not be explicitly released"
-            );
-        }
-    }
-}
+pub(super) type CoordinatorLease = crate::platform::fs::FileLock;
 
 const STORAGE_RETRY_MIN: Duration = Duration::from_secs(1);
 const STORAGE_RETRY_MAX: Duration = Duration::from_secs(30);

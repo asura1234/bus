@@ -298,7 +298,7 @@ fn skipped_observation_is_saved_before_submission_and_survives_restart() {
 
     // A duplicated descriptor keeps a flock alive after the original handle
     // closes. Coordinator teardown must explicitly unlock before reopening.
-    let held_clone = worker._lease.0.try_clone().unwrap();
+    let held_clone = worker._lease.try_clone().unwrap();
     assert!(io::lock(&dir.join("coordinator.lock")).is_err());
     drop(worker);
     let recovered = Worker::open(

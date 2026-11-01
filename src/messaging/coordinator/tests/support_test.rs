@@ -1,5 +1,36 @@
 use super::*;
 
+/// Availability fixtures for tests whose native transport never runs a model.
+/// Own the thread-local PATH for the whole test, including coordinator reopens.
+pub(in crate::messaging::coordinator) struct ProviderBinaries {
+    root: PathBuf,
+    _path: crate::utils::env::PathOverride,
+}
+
+pub(in crate::messaging::coordinator) fn provider_binaries() -> ProviderBinaries {
+    let root = crate::utils::test_temp::unique_temp_path("bus-synthetic-providers");
+    crate::platform::fs::private_dir(&root).unwrap();
+    for name in ["claude", "codex", "cursor-agent"] {
+        let path = root.join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 91\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    ProviderBinaries {
+        _path: crate::utils::env::PathOverride::set(&root),
+        root,
+    }
+}
+
+impl Drop for ProviderBinaries {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 pub(super) static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct FakeTransport {

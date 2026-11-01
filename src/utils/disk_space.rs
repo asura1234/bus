@@ -1,14 +1,18 @@
 //! Free space on the volume that holds a data directory.
 //!
 //! The restart preflight and the messaging coordinator both use this so a
-//! scratch dev-tools fixture cannot disagree with the live measurement.
+//! guarded test or dev-tools scratch fixture cannot disagree with the live measurement.
 use std::path::Path;
 
 pub(crate) fn available_bytes(data_dir: &Path) -> std::io::Result<u64> {
-    // The TUI driver owns this marker and an isolated data dir. Its dev build
-    // measures only this fixture, so scratch acceptance never reads real capacity.
+    // The launch guard validates the protected HOME before a test Bus boots.
+    // Normal scratch launches and dev-tools sessions use only their own fixture.
+    let synthetic = std::env::var_os("TEST_BUS_PROTECTED_HOME").is_some();
     #[cfg(feature = "dev-tools")]
-    if std::env::var_os("BUS_TUI_OWNER").is_some() {
+    let synthetic = synthetic
+        || std::env::var_os("BUS_TUI_OWNER").is_some()
+        || std::env::var("BUS_TUI_FAKE_AGENT").as_deref() == Ok("1");
+    if synthetic {
         return match std::fs::read_to_string(data_dir.join("disk-free-bytes")) {
             Ok(value) => value
                 .trim()
@@ -60,3 +64,7 @@ fn volume_available_bytes(data_dir: &Path) -> std::io::Result<u64> {
 fn volume_available_bytes(_data_dir: &Path) -> std::io::Result<u64> {
     Ok(u64::MAX)
 }
+
+#[cfg(all(test, unix))]
+#[path = "tests/disk_space_test.rs"]
+pub(crate) mod tests;

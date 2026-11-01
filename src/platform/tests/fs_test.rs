@@ -74,6 +74,30 @@ fn exclusive_file_lock_is_released_on_drop() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn exclusive_file_lock_releases_while_a_duplicate_descriptor_stays_open() {
+    let dir = temp_dir("lock-inherited-descriptor");
+    let path = dir.join("lock");
+    create_private_state_file(&path).unwrap();
+    let lease = lock_file(&path).unwrap();
+    // Fork duplicates this open file description until the child execs.
+    let inherited = lease.try_clone().unwrap();
+    assert_eq!(
+        lock_file(&path).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    drop(lease);
+    let next = lock_file(&path).expect("the completed critical section must release its lock");
+    drop(inherited);
+    assert_eq!(
+        lock_file(&path).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    drop(next);
+    assert!(lock_file(&path).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn private_files_and_directories_are_owner_only() {

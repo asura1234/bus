@@ -249,11 +249,14 @@ class EndToEndArgumentTests(unittest.TestCase):
 
 class EndToEndEnvironmentTests(unittest.TestCase):
     def test_inherited_bus_herdr_and_claude_code_variables_are_scrubbed(self):
-        env = e2e.scrubbed_env({"PATH": "/bin", "HOME": "/home/me", "BUS_DATA_DIR": "/developer", "BUS_DEV": "1",
-                                "HERDR_SOCKET_PATH": "/sock", "HERDR_ENV": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
-                                "CLAUDECODE": "1", "CODEX_HOME": "/codex"}, "/run/data")
+        with mock.patch("tools.acceptance.harness_test.uuid.uuid4") as owner:
+            owner.return_value.hex = "scratch-owner"
+            env = e2e.scrubbed_env({"PATH": "/bin", "HOME": "/home/me", "BUS_DATA_DIR": "/developer", "BUS_DEV": "1",
+                                    "BUS_TUI_OWNER": "developer-owner", "HERDR_SOCKET_PATH": "/sock", "HERDR_ENV": "1",
+                                    "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDECODE": "1", "CODEX_HOME": "/codex"}, "/run/data")
         self.assertEqual(env, {"PATH": "/bin", "HOME": "/run/data-home", "USERPROFILE": "/run/data-home",
-                               "TEST_BUS_PROTECTED_HOME": "/home/me", "BUS_DATA_DIR": "/run/data", "TERM": "xterm-256color"})
+                               "TEST_BUS_PROTECTED_HOME": "/home/me", "BUS_DATA_DIR": "/run/data", "TERM": "xterm-256color",
+                               "BUS_TUI_OWNER": "scratch-owner"})
 
     def test_binary_is_the_debug_bus_build_or_an_explicit_path(self):
         with tempfile.TemporaryDirectory() as root:

@@ -100,8 +100,37 @@ fn executable(_path: &Path) -> bool {
     false
 }
 
+/// An owned critical section, independent of transient descriptor duplicates
+/// held by a concurrent fork before exec. Closing one File alone does not
+/// release a Unix flock while another copy of its open file description lives.
+#[derive(Debug)]
+pub(crate) struct FileLock(File);
+
+impl FileLock {
+    pub(crate) fn from_locked(file: File) -> Self {
+        Self(file)
+    }
+}
+
+impl std::ops::Deref for FileLock {
+    type Target = File;
+
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(event = "bus.file.unlock_failed", raw_os_error = ?error.raw_os_error(),
+                %error, "File lock could not be explicitly released");
+        }
+    }
+}
+
 /// Locks an existing file. Creation and path validation belong to the caller.
-pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
+pub(crate) fn lock_file(path: &Path) -> io::Result<FileLock> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -110,7 +139,7 @@ pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
         std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
         std::fs::TryLockError::Error(error) => error,
     })?;
-    Ok(file)
+    Ok(FileLock::from_locked(file))
 }
 
 #[derive(Debug)]

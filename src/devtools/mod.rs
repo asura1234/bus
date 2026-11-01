@@ -2,3 +2,7 @@
 //! only into the dev variant (cargo feature `dev-tools`) and are available
 //! only through `bus --dev`.
 pub(crate) mod tui;
+
+#[cfg(all(test, unix))]
+#[path = "tests/disk_space_test.rs"]
+mod disk_space_tests;

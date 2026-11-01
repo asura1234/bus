@@ -1,6 +1,6 @@
 //! Hook configuration path policy over platform file mechanics.
 use crate::platform::fs;
-use std::{fs::File, io, path::Path};
+use std::{io, path::Path};
 
 pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     if !path.exists() {
@@ -20,7 +20,7 @@ pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn lock(path: &Path) -> io::Result<File> {
+pub(crate) fn lock(path: &Path) -> io::Result<fs::FileLock> {
     if !path.exists() {
         match fs::create_private_state_file(path) {
             Ok(file) => file.sync_all()?,

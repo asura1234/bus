@@ -125,6 +125,8 @@ fn actor_writes_user_input_to_owned_fd() {
 #[test]
 fn actor_delays_enter_from_completed_prompt_write() {
     let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
+    // Model a concurrent fork retaining the peer until exec, after the reader exits.
+    let _inherited_peer = peer.try_clone().expect("duplicate peer descriptor");
     let text = Bytes::from(vec![b'x'; 4 * 1024 * 1024]);
     let text_len = text.len();
     let delay = Duration::from_millis(200);
@@ -140,6 +142,10 @@ fn actor_delays_enter_from_completed_prompt_write() {
         let mut user = [0; 4];
         peer.read_exact(&mut user)
             .expect("peer receives queued input");
+        // Closing one descriptor is insufficient while a concurrent fork has
+        // another. Shutdown closes the connection for every inherited copy.
+        peer.shutdown(std::net::Shutdown::Both)
+            .expect("close peer connection");
         (prompt_completed, enter_received, enter, user)
     });
 

@@ -1,6 +1,7 @@
 //! Durable private files and OS-released exclusive ownership, outside all UI paths.
 // Preserve existing messaging call sites until the S12 import rewrite.
 pub(crate) use crate::platform::fs::private_dir;
+use crate::platform::fs::FileLock;
 pub(crate) use crate::utils::time::{now_ms, now_ns};
 use std::{fs::File, io, path::Path};
 
@@ -23,16 +24,16 @@ fn open_lock(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-pub(crate) fn lock(path: &Path) -> io::Result<File> {
+pub(crate) fn lock(path: &Path) -> io::Result<FileLock> {
     let file = open_lock(path)?;
     file.try_lock().map_err(|error| match error {
         std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
         std::fs::TryLockError::Error(error) => error,
     })?;
-    Ok(file)
+    Ok(FileLock::from_locked(file))
 }
 
-pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
+pub(crate) fn append_lock(path: &Path) -> io::Result<FileLock> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         match lock(path) {

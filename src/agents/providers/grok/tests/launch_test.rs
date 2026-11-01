@@ -9,6 +9,7 @@ pub(crate) struct Fixture {
     pub(crate) project: PathBuf,
     pub(crate) bin: PathBuf,
     old: Vec<(&'static str, Option<OsString>)>,
+    _path: crate::utils::env::PathOverride,
     _lock: MutexGuard<'static, ()>,
 }
 impl Fixture {
@@ -21,13 +22,12 @@ impl Fixture {
         let bin = root.join("bin");
         fs::create_dir_all(&project).unwrap();
         fs::create_dir_all(&bin).unwrap();
-        let old = ["HOME", "PATH", "BUS_YOLO", "GROK_HOME"]
+        let old = ["HOME", "BUS_YOLO", "GROK_HOME"]
             .into_iter()
             .map(|k| (k, std::env::var_os(k)))
             .collect();
         std::env::set_var("HOME", root.join("home"));
-        std::env::set_var(
-            "PATH",
+        let path = crate::utils::env::PathOverride::set(
             std::env::join_paths([
                 bin.clone(),
                 PathBuf::from("/usr/bin"),
@@ -42,6 +42,7 @@ impl Fixture {
             project,
             bin,
             old,
+            _path: path,
             _lock: lock,
         }
     }
@@ -545,4 +546,19 @@ fn grok_ordinary_relocated_home_launch_and_resume_keep_global_hooks_unchanged() 
         );
         assert!(!global.join("hooks/bus.json").exists(), "{route}");
     }
+}
+
+#[test]
+fn grok_fixture_path_is_private_to_the_calling_thread() {
+    let inherited = std::env::var_os("PATH");
+    let fixture = Fixture::new();
+    fixture.install();
+    let sibling_path = std::thread::spawn(|| std::env::var_os("PATH"))
+        .join()
+        .unwrap();
+    assert_eq!(
+        sibling_path, inherited,
+        "a Grok fixture changed another thread's PATH"
+    );
+    assert_eq!(resolve_executable().unwrap(), fixture.bin.join("grok"));
 }
