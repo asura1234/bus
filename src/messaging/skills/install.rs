@@ -59,10 +59,11 @@ pub(super) fn linked_ancestor(path: &Path) -> io::Result<Option<std::path::PathB
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        if ancestor
-            .file_name()
-            .is_some_and(|name| name == ".claude" || name == ".agents")
-        {
+        if ancestor.file_name().is_some_and(|name| {
+            super::PROVIDERS
+                .iter()
+                .any(|(_, directory)| name == *directory)
+        }) {
             break;
         }
     }

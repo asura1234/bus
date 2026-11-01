@@ -24,9 +24,22 @@ Cargo target returns another checkout's binary, it rebuilds into
 `target/install-skills` and refuses to install when that binary still does not
 match.
 
-Skills are copied into `~/.claude/skills` and `~/.agents/skills` for Claude and
-Codex. Codex's current [skill discovery documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)
-identifies `$HOME/.agents/skills` as its user location. Bus records ownership,
+Skills are copied into each provider's user skill directory, as
+`<directory>/<name>/SKILL.md`:
+
+- Claude: `~/.claude/skills`
+- Codex: `~/.agents/skills`
+  ([Codex discovery](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills))
+- Cursor: `~/.cursor/skills`
+  ([Cursor skills](https://cursor.com/help/customization/skills))
+- Grok: `~/.grok/skills`
+  ([Grok skills](https://docs.x.ai/build/features/skills-plugins-marketplaces))
+- Kimi Code: `~/.kimi-code/skills`, which is `$KIMI_CODE_HOME/skills` when that
+  variable is unset
+  ([Kimi Code skills](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html))
+
+Cursor, Grok, and Kimi also read `~/.agents/skills`. Bus still writes each
+provider's own directory. Install does not post to Bus rooms. Bus records ownership,
 version and SHA-256 hashes in `~/.local/share/bus/skills-manifest.json`.
 Upgrades replace matching Bus-owned copies; existing user skills and edited Bus
 copies are preserved with a warning. Shared scripts and guides live in the

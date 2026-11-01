@@ -53,7 +53,15 @@ fn state_components_and_link_targets_cannot_enter_protected_roots() {
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&protected).unwrap();
-    for directory in [".local", ".claude", ".agents", ".codex"] {
+    for directory in [
+        ".local",
+        ".claude",
+        ".agents",
+        ".codex",
+        ".cursor",
+        ".grok",
+        ".kimi-code",
+    ] {
         std::fs::create_dir_all(protected.join(directory)).unwrap();
         symlink(protected.join(directory), home.join(directory)).unwrap();
         assert!(validate(&home, None, &protected).is_err(), "{directory}");

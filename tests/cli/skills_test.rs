@@ -44,7 +44,7 @@ fn json(output: Output) -> serde_json::Value {
 }
 
 #[test]
-fn skills_status_is_read_only_without_a_session_and_install_copies_both_providers() {
+fn skills_status_is_read_only_without_a_session_and_install_copies_every_provider() {
     let home = home();
     let status = json(bus(&home, &["skills", "status"]));
     assert!(
@@ -65,7 +65,7 @@ fn skills_status_is_read_only_without_a_session_and_install_copies_both_provider
         .unwrap()
         .iter()
         .all(|skill| skill["action"] == "installed"));
-    for provider in [".claude", ".agents"] {
+    for provider in [".claude", ".agents", ".cursor", ".grok", ".kimi-code"] {
         let skill = home.join(provider).join("skills/review-pr/SKILL.md");
         assert!(skill.is_file(), "{}", skill.display());
         assert!(!std::fs::symlink_metadata(skill)

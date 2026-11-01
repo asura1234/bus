@@ -12,7 +12,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const PROVIDERS: [(&str, &str); 2] = [("claude", ".claude"), ("codex", ".agents")];
+/// User skill roots under `$HOME/<dir>/skills/<name>/SKILL.md`.
+/// Cursor: `~/.cursor/skills` (cursor.com/help/customization/skills; cursor-agent 2026.10.14).
+/// Grok: `~/.grok/skills` (docs.x.ai skills; `grok` binary).
+/// Kimi: `~/.kimi-code/skills` (`$KIMI_CODE_HOME/skills`; kimi.com code docs and `kimi` binary).
+const PROVIDERS: [(&str, &str); 5] = [
+    ("claude", ".claude"),
+    ("codex", ".agents"),
+    ("cursor", ".cursor"),
+    ("grok", ".grok"),
+    ("kimi", ".kimi-code"),
+];
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Status {

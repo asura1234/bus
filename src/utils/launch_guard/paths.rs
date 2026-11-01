@@ -60,7 +60,15 @@ pub(crate) fn validate(home: &Path, data: Option<&Path>, protected: &Path) -> io
         ));
     }
     let mut roots = Vec::new();
-    for directory in [".local/share/bus", ".claude", ".agents", ".codex"] {
+    for directory in [
+        ".local/share/bus",
+        ".claude",
+        ".agents",
+        ".codex",
+        ".cursor",
+        ".grok",
+        ".kimi-code",
+    ] {
         let root = protected.join(directory);
         roots.push(resolved(&root, &[], 0)?);
         roots.push(root);
@@ -70,6 +78,9 @@ pub(crate) fn validate(home: &Path, data: Option<&Path>, protected: &Path) -> io
         ".claude/skills",
         ".agents/skills",
         ".codex",
+        ".cursor/skills",
+        ".grok/skills",
+        ".kimi-code/skills",
     ] {
         resolved(&home.join(directory), &roots, 0)?;
     }

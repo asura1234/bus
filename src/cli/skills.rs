@@ -2,7 +2,7 @@
 use crate::messaging::skills;
 use std::io::{self, BufRead, IsTerminal, Write};
 
-const USAGE: &str = "Usage: bus skills status\n       bus skills install [--yes]\nCopies default skills to ~/.claude/skills and ~/.agents/skills.\n--yes installs without a prompt. Existing user skills are preserved.\nEach copy's action is installed, updated, unchanged, preserved-conflict, or blocked-link.";
+const USAGE: &str = "Usage: bus skills status\n       bus skills install [--yes]\nCopies default skills to ~/.claude/skills, ~/.agents/skills, ~/.cursor/skills, ~/.grok/skills, and ~/.kimi-code/skills.\n--yes installs without a prompt. Existing user skills are preserved.\nEach copy's action is installed, updated, unchanged, preserved-conflict, or blocked-link.";
 
 pub(super) fn run(args: &[String]) -> io::Result<()> {
     if args.is_empty()
@@ -56,7 +56,7 @@ fn offer(
     }
     writeln!(
         output,
-        "Copies go to ~/.claude/skills and ~/.agents/skills; user skills are preserved."
+        "Copies go to ~/.claude/skills, ~/.agents/skills, ~/.cursor/skills, ~/.grok/skills, and ~/.kimi-code/skills; user skills are preserved."
     )?;
     loop {
         write!(output, "Install? [y/N] ")?;

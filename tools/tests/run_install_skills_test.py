@@ -231,6 +231,9 @@ def test_install_skills_installs_checkout_bundle_and_preserves_user_skill(tmp_pa
     assert actions[("claude", "pr")] == "preserved-conflict"
     assert states[("codex", "pr")] == "installed"
     assert actions[("codex", "pr")] == "installed"
+    for provider in ("cursor", "grok", "kimi"):
+        assert states[(provider, "pr")] == "installed"
+        assert actions[(provider, "pr")] == "installed"
     again = subprocess.run(
         [str(ROOT / "run"), "install-skills", "--yes"],
         env=env,
@@ -244,6 +247,15 @@ def test_install_skills_installs_checkout_bundle_and_preserves_user_skill(tmp_pa
     }
     assert second[("codex", "pr")] == "unchanged"
     assert second[("claude", "pr")] == "preserved-conflict"
+    for provider, directory in (
+        ("cursor", ".cursor"),
+        ("grok", ".grok"),
+        ("kimi", ".kimi-code"),
+    ):
+        assert second[(provider, "pr")] == "unchanged"
+        assert (home / directory / "skills/pr/SKILL.md").read_bytes() == (
+            ROOT / "skills/pr/SKILL.md"
+        ).read_bytes()
     assert custom.read_text() == "my custom skill\n"
     assert (home / ".agents/skills/pr/SKILL.md").read_bytes() == (
         ROOT / "skills/pr/SKILL.md"
