@@ -199,57 +199,37 @@ fn symlink_skills_and_symlink_registries_are_never_written_through() {
 }
 
 #[test]
-fn collisions_report_provider_precedence_without_warning_about_user_scope_itself() {
-    use crate::agents::providers::ProviderKind;
-    let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow");
+fn launching_into_a_shadowed_repo_posts_no_room_message() {
+    use crate::messaging::model::{BusState, Provider};
+    let home = crate::utils::test_temp::unique_temp_path("bus-skill-shadow-gone");
     let repo = home.join("repo");
-    let nested = repo.join("child");
     for directory in [
-        home.join(".claude/skills/pr"),
-        home.join(".agents/skills/pr"),
-        repo.join(".claude/skills/pr"),
-        nested.join(".agents/skills/pr"),
+        home.join(".claude/skills/demo"),
+        repo.join(".claude/skills/demo"),
     ] {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("SKILL.md"), "skill").unwrap();
     }
-    std::process::Command::new("git")
+    std::fs::create_dir_all(&repo).unwrap();
+    let output = std::process::Command::new("git")
         .arg("init")
         .arg(&repo)
         .output()
         .unwrap();
-    assert!(shadowed_skills(ProviderKind::ClaudeCode, &home, &home)
-        .unwrap()
-        .is_empty());
-    assert!(shadowed_skills(ProviderKind::Codex, &home, &home)
-        .unwrap()
-        .is_empty());
-    std::process::Command::new("git")
-        .arg("init")
-        .arg(&home)
-        .output()
-        .unwrap();
-    assert!(shadowed_skills(ProviderKind::ClaudeCode, &home, &home)
-        .unwrap()
-        .is_empty());
-    let claude = shadowed_skills(ProviderKind::ClaudeCode, &nested, &home).unwrap();
-    assert_eq!(claude, vec!["pr".to_owned()]);
-    let codex = shadowed_skills(ProviderKind::Codex, &nested, &home).unwrap();
-    assert_eq!(codex, vec!["pr".to_owned()]);
-    for provider in [ProviderKind::Cursor, ProviderKind::Grok, ProviderKind::Kimi] {
-        assert!(shadowed_skills(provider, &nested, &home)
-            .unwrap()
-            .is_empty());
-    }
-    std::fs::remove_dir_all(home).unwrap();
-}
+    assert!(output.status.success());
 
-#[cfg(feature = "dev-tools")]
-#[test]
-fn fake_agent_does_not_inspect_provider_skill_directories() {
-    use crate::agents::providers::ProviderKind;
-    let missing = crate::utils::test_temp::unique_temp_path("fake-no-skill-root");
-    assert!(shadowed_skills(ProviderKind::Fake, &missing, &missing)
-        .unwrap()
-        .is_empty());
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    state
+        .create_agent(room, "shadow", Provider::ClaudeCode, repo, None)
+        .unwrap();
+    let notices: Vec<String> = state
+        .notices(room)
+        .map(|notice| notice.text.clone())
+        .collect();
+    assert!(
+        notices.is_empty(),
+        "Bus core does not post skill-shadow notices, got {notices:?}"
+    );
+    std::fs::remove_dir_all(home).unwrap();
 }
