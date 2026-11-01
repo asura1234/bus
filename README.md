@@ -37,9 +37,12 @@ Skills are copied into each provider's user skill directory, as
 Cursor, Grok, and Kimi also read `~/.agents/skills`. The add-on still writes each
 provider's own directory. It prints to its own terminal and does not post to Bus
 rooms. Ownership and SHA-256 hashes live in `~/.config/bus-skills/manifest.json`.
-Upgrades replace matching owned copies; existing user skills and edited copies
-stay in place, and remove deletes a skill only when its bytes still match that
-manifest. Shared scripts and guides live in the owned `_bus` directory inside
+Upgrades replace matching owned copies. A skill directory that already exists
+is left untouched and is not recorded as owned, even when its bytes match the
+shipped skill. Remove deletes a skill only when the manifest records that
+exact directory name and its bytes still match that record. A manifest name
+that is not a single skill directory is ignored. Provider directories that
+were already present are left in place. Shared scripts and guides live in the owned `_bus` directory inside
 each skills directory. The add-on reads `skills/` from this checkout.
 
 The canonical sources remain in `skills/`. This repo has no `.claude/skills` or

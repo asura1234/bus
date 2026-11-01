@@ -145,21 +145,48 @@ def linked_ancestor(path: Path) -> Path | None:
     return None
 
 
-def private_dir(path: Path) -> None:
-    if path.is_symlink():
-        raise OSError(f"{path} is not a real directory")
-    if not path.exists():
-        if path.parent != path:
-            private_dir(path.parent)
+def components_under(path: Path, bound: Path) -> list[Path]:
+    """Return ``bound``'s descendants through ``path``, parent first.
+
+    ``bound`` itself is not included. A symlink of ``HOME`` or ``/var`` is
+    outside this check. A symlink of ``~/.config`` is inside it.
+    """
+    chain: list[Path] = []
+    current = path
+    while current != bound and current != current.parent:
+        chain.append(current)
+        current = current.parent
+    if current != bound:
+        raise OSError(f"{path} is outside {bound}")
+    chain.reverse()
+    return chain
+
+
+def reject_linked_components(path: Path, bound: Path) -> None:
+    """Reject a symlink on ``path`` even when the final directory already exists."""
+    for component in components_under(path, bound):
         try:
-            path.mkdir(mode=0o700)
-        except FileExistsError:
-            if path.is_symlink() or not path.is_dir():
-                raise OSError(f"{path} is not a real directory") from None
-        return
-    meta = path.lstat()
-    if not stat.S_ISDIR(meta.st_mode) or stat.S_ISLNK(meta.st_mode):
-        raise OSError(f"{path} is not a real directory")
+            meta = component.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(meta.st_mode) or not stat.S_ISDIR(meta.st_mode):
+            raise OSError(f"{component} is not a real directory")
+
+
+def private_dir(path: Path, *, bound: Path) -> None:
+    for component in components_under(path, bound):
+        try:
+            meta = component.lstat()
+        except FileNotFoundError:
+            try:
+                component.mkdir(mode=0o700)
+            except FileExistsError:
+                meta = component.lstat()
+                if stat.S_ISLNK(meta.st_mode) or not stat.S_ISDIR(meta.st_mode):
+                    raise OSError(f"{component} is not a real directory") from None
+            continue
+        if stat.S_ISLNK(meta.st_mode) or not stat.S_ISDIR(meta.st_mode):
+            raise OSError(f"{component} is not a real directory")
 
 
 def tree_files(root: Path, directory: Path, files: dict[str, bytes]) -> None:
@@ -187,6 +214,7 @@ def tree_hash(root: Path) -> str:
 
 def load_manifest(home: Path) -> dict:
     path = manifest_path(home)
+    reject_linked_components(path.parent, home)
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -200,12 +228,18 @@ def load_manifest(home: Path) -> dict:
     installed = manifest.get("installed")
     if not isinstance(installed, dict):
         raise OSError(f"Invalid skills manifest at {path}")
+    for key, owned in installed.items():
+        if not isinstance(key, str) or not isinstance(owned, dict) or not isinstance(owned.get("hash"), str):
+            raise OSError(f"Invalid skills manifest at {path}")
+    created = manifest.get("created_dirs", [])
+    if not isinstance(created, list) or any(not isinstance(item, str) for item in created):
+        raise OSError(f"Invalid skills manifest at {path}")
     return manifest
 
 
 def save_manifest(home: Path, manifest: dict) -> None:
     path = manifest_path(home)
-    private_dir(path.parent)
+    private_dir(path.parent, bound=home)
     if path.is_symlink():
         raise OSError(f"refuses to replace a symlink at {path}")
     payload = json.dumps(manifest, indent=2, sort_keys=True).encode()
@@ -224,13 +258,14 @@ def save_manifest(home: Path, manifest: dict) -> None:
 
 class Lock:
     def __init__(self, home: Path) -> None:
+        self.home = home
         self.path = config_dir(home) / "install.lock"
         self.handle = None
 
     def __enter__(self) -> "Lock":
         import fcntl
 
-        private_dir(self.path.parent)
+        private_dir(self.path.parent, bound=self.home)
         if self.path.is_symlink():
             raise OSError(f"refuses to lock through a symlink at {self.path}")
         self.handle = self.path.open("a+")
@@ -260,7 +295,10 @@ def skill_state(path: Path, owned: dict | None, desired: str) -> str:
         raise
     except OSError:
         return "conflict"
-    if current == desired:
+    if owned is not None and not isinstance(owned, dict):
+        raise OSError("Invalid skills manifest entry")
+    # Byte identity is not ownership. Only a manifest record keeps a matching tree installed.
+    if current == desired and owned is not None:
         return "installed"
     if owned is not None and current == owned.get("hash"):
         return "outdated"
@@ -289,12 +327,12 @@ def install_one(home: Path, root: Path, provider: str, skill: dict, manifest: di
     key = f"{provider}/{skill['name']}"
     owned = manifest["installed"].get(key)
     observed = skill_state(path, owned, skill["hash"])
-    if observed == "installed" and (owned is None or owned.get("hash") != skill["hash"]):
+    if observed == "installed" and isinstance(owned, dict) and owned.get("hash") != skill["hash"]:
         manifest["installed"][key] = {"hash": skill["hash"], "version": manifest["bundle_hash"]}
         save_manifest(home, manifest)
     if observed in {"conflict", "installed", "blocked-link"}:
         return leave_action(observed)
-    private_dir(root)
+    private_dir(root, bound=home)
     token = f"{os.getpid()}-{os.urandom(4).hex()}"
     stage = root / f".bus-stage-{token}"
     backup = root / f".bus-backup-{token}"
@@ -311,8 +349,21 @@ def install_one(home: Path, root: Path, provider: str, skill: dict, manifest: di
             if backup.exists():
                 os.rename(backup, path)
             raise
+        previous = manifest["installed"].get(key)
         manifest["installed"][key] = {"hash": skill["hash"], "version": manifest["bundle_hash"]}
-        save_manifest(home, manifest)
+        try:
+            save_manifest(home, manifest)
+        except OSError:
+            if previous is None:
+                manifest["installed"].pop(key, None)
+            else:
+                manifest["installed"][key] = previous
+            import shutil
+
+            shutil.rmtree(path, ignore_errors=True)
+            if backup.exists():
+                os.rename(backup, path)
+            raise
         if backup.exists():
             import shutil
 
@@ -351,12 +402,18 @@ def install_all(home: Path) -> list[dict]:
         manifest["bundle_hash"] = bundle_hash(skills)
         for provider, directory in PROVIDERS:
             root = home / directory / "skills"
+            provider_home = home / directory
+            provider_existed = provider_home.exists() or provider_home.is_symlink()
             try:
                 for skill in skills:
                     action = install_one(home, root, provider, skill, manifest)
                     entries.append(_entry(provider, skill["name"], root / skill["name"], action))
             except OSError as error:
                 entries.append(_entry(provider, "", root, "failed", str(error)))
+            if not provider_existed and provider_home.is_dir() and not provider_home.is_symlink():
+                created = manifest.setdefault("created_dirs", [])
+                if directory not in created:
+                    created.append(directory)
         manifest["bundle_hash"] = bundle_hash(skills)
         save_manifest(home, manifest)
     return entries
@@ -374,15 +431,40 @@ def prune_empty(path: Path, stop: Path) -> None:
         current = current.parent
 
 
+def plain_skill_name(name: object) -> bool:
+    if not isinstance(name, str) or name in {"", ".", ".."}:
+        return False
+    if "/" in name or "\\" in name or "\x00" in name:
+        return False
+    path = Path(name)
+    return path.name == name and not path.is_absolute()
+
+
+def prune_stop(home: Path, provider: str, manifest: dict) -> Path:
+    directory = dict(PROVIDERS)[provider]
+    created = manifest.get("created_dirs") or []
+    if isinstance(created, list) and directory in created:
+        return home
+    return home / directory
+
+
 def remove_one(home: Path, provider: str, skill: dict, manifest: dict) -> str:
     import shutil
 
-    key = f"{provider}/{skill['name']}"
+    name = skill["name"]
+    key = f"{provider}/{name}"
     owned = manifest["installed"].get(key)
     if owned is None:
         return "absent"
+    if not isinstance(owned, dict) or not isinstance(owned.get("hash"), str):
+        raise OSError("Invalid skills manifest entry")
+    if not plain_skill_name(name):
+        raise OSError(f"refuses to remove {name!r}")
     directory = dict(PROVIDERS)[provider]
-    path = home / directory / "skills" / skill["name"]
+    root = home / directory / "skills"
+    path = root / name
+    if path.parent != root:
+        raise OSError(f"refuses to remove {name!r}")
     if linked_ancestor(path) is not None:
         return "blocked-link"
     try:
@@ -399,8 +481,11 @@ def remove_one(home: Path, provider: str, skill: dict, manifest: dict) -> str:
         return "preserved-conflict"
     shutil.rmtree(path)
     del manifest["installed"][key]
+    prune_empty(path.parent, prune_stop(home, provider, manifest))
+    created = manifest.get("created_dirs")
+    if isinstance(created, list) and directory in created and not (home / directory).exists():
+        created.remove(directory)
     save_manifest(home, manifest)
-    prune_empty(path.parent, home)
     return "removed"
 
 
@@ -423,11 +508,14 @@ def remove_all(home: Path) -> list[dict]:
         manifest = load_manifest(home)
         for provider, directory in PROVIDERS:
             root = home / directory / "skills"
-            names = {
-                key.split("/", 1)[1]
-                for key in list(manifest["installed"])
-                if key.startswith(f"{provider}/") and "/" in key
-            }
+            prefix = f"{provider}/"
+            names = set()
+            for key in list(manifest["installed"]):
+                if not isinstance(key, str) or not key.startswith(prefix):
+                    continue
+                name = key[len(prefix):]
+                if plain_skill_name(name):
+                    names.add(name)
             try:
                 for name in sorted(names):
                     skill = known.get(name) or {"name": name, "hash": "", "files": []}

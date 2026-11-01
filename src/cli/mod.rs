@@ -305,7 +305,7 @@ fn session_root(
             (root, session)
         }
         Action::Paths => (explicit_root.unwrap_or_else(|| base.to_path_buf()), None),
-        Action::Sessions | Action::Help | Action::Tui(_) | Action::Skills(_) => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     };
     Ok(Some(located))
 }

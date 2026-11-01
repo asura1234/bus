@@ -25,18 +25,27 @@ def _bus(home, *args, check=True, binary=None):
     return result
 
 
-def test_reinstall_after_a_lost_manifest_adopts_byte_identical_bus_copies(tmp_path):
+def test_reinstall_after_a_lost_manifest_leaves_byte_identical_copies_unowned(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _bus(home, "install", "--yes")
-    # A missing manifest is adopted again when the bytes still match; a corrupt one blocks install.
+    # A missing manifest does not adopt byte-identical copies. A corrupt manifest still blocks install.
+    skills_root = home / ".claude/skills"
+    before = {path.relative_to(home).as_posix(): path.read_bytes() for path in skills_root.rglob("*") if path.is_file()}
     (home / ".config/bus-skills/manifest.json").unlink()
-    assert _bus(home, "install", "--yes").returncode == 0
+    reinstalled = _bus(home, "install", "--yes")
+    assert "claude: skipped: user skills preserved" in reinstalled.stdout
     report = json.loads(_bus(home, "status").stdout)
     states = {skill["state"] for skill in report["skills"]}
-    assert states == {"installed"}, report
+    assert states == {"conflict"}, report
     manifest = json.loads((home / ".config/bus-skills/manifest.json").read_text())
-    assert len(manifest["installed"]) == len(report["skills"])
+    assert manifest["installed"] == {}
+    after = {path.relative_to(home).as_posix(): path.read_bytes() for path in skills_root.rglob("*") if path.is_file()}
+    assert after == before
+    removed = _bus(home, "remove", "--yes")
+    assert "claude: skipped: nothing installed" in removed.stdout
+    still = {path.relative_to(home).as_posix(): path.read_bytes() for path in skills_root.rglob("*") if path.is_file()}
+    assert still == before
 
 
 def test_a_symlinked_provider_home_is_not_reported_as_existing_user_skills(tmp_path):
