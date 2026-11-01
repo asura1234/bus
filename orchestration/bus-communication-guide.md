@@ -133,6 +133,12 @@ that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction,
 restart) omit that header. This completes your request immediately, including
 while a watcher turn stays open.
 Bus returns the turn's final only to requests that are still outstanding.
+Replies reach the agent that made the request, including ordinary workers.
+Without a live author waiter consuming the answer, Bus queues an ordinary
+message from the responder to the requester in the original room; history shows
+that addressing too. A live waiter receives the answer without a second terminal
+notification. If it exits unread, terminal delivery resumes after its lease
+expires. Busy agents and drafts use the usual delivery guards.
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 

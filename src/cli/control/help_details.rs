@@ -358,12 +358,13 @@ key refused, or not idle within 15s); inspect state before another action.
 Follow-up send errors use common errors and can retain result.applied. Waiters
 on interrupted work return message_interrupted. Use send to steer without stopping."#;
 
-const MESSAGE_SEEN: &str = r#"Acknowledge an orchestrator-owned worker reply only AFTER reading its output.
+const MESSAGE_SEEN: &str = r#"Acknowledge a reply to your own request only AFTER reading its output.
 Uses the recipient request ID, not the message ID. Seeing a shared final covers
-its turn group. Anonymous status/waits never suppress terminal delivery.
+only this author's answered group members. Anonymous status/waits never suppress
+terminal delivery.
 Result: {request_id,seen:true}.
 Errors: command_failed for unknown request, wrong author or no completed reply;
-inspect message status, read the answer, and use its owning orchestrator ID."#;
+inspect message status, read the answer, and use its owning author ID."#;
 
 const REQUEST_RECOVER: &str = r#"Explicitly close a stuck recipient request without replaying it. Queued untyped
 requests close individually, regardless of agent status. Already abandoned is
@@ -457,9 +458,11 @@ messages wait for a new turn. Blocked/launching recipients queue; accumulated
 ordinary messages form one ordered prompt/group with batch position/time headers.
 Explicit replies complete individually; the final answers outstanding requests
 without replacing earlier answers. Raw text/files remain queryable after restart.
-An --as orchestrator async waiter renews a 3s lease deferring its reply/outcome
-wake; after stdout flush only printed reply/event_acks are acknowledged. Killed
-waiters lose the lease; anonymous waits/status never suppress delivery.
+Replies and captured finals reach the requester through ordinary agent messages.
+An --as author async waiter renews a 3s lease deferring its reply wake
+(and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
+are acknowledged. Killed waiters lose the lease; anonymous waits/status never
+suppress delivery.
 
 Errors: request_already_replied means different text was NOT sent; inspect result
 {message_id,request_ids,request_complete:true,new_text_sent:false,existing_reply:
@@ -510,7 +513,7 @@ Success requires
 complete:true; async also accepts closed reply_not_captured, bounded wait needs
 replies and fails on every abandoned request. Result is the full last status,
 including raw Markdown replies/files and per-recipient progress.
---as owning orchestrator renews a 3s waiter lease and acknowledges only printed
+--as owning author renews a 3s waiter lease and acknowledges only printed
 completed replies/event_acks after stdout flush, deferring duplicate wakes while
 alive. Anonymous waits and message status never suppress delivery. Killing the
 waiter leaves the request intact and its unseen events eligible for delivery.
