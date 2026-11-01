@@ -24,11 +24,14 @@ pub(crate) struct BusState {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(super) routing_before_ms: u64,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
-    /// Pending, one terminal notification, or seen per shared reply.
+    /// Pending, one terminal notification, or seen per answered request.
     /// Kept outside the immutable request archive so acknowledgements
     /// of older replies are durable without rewriting append-only history.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) reply_routes: BTreeMap<RequestId, super::reply_routing::ReplyRoute>,
+    /// Older snapshots keyed shared finals only for their orchestrator author.
+    #[serde(default)]
+    pub(super) reply_routes_by_request: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) worker_events: BTreeMap<String, super::worker_events::WorkerEvent>,
     /// Applied provider callbacks and published report finals by identity,
@@ -127,6 +130,7 @@ impl BusState {
             || self.requests != previous.requests
             || self.queues != previous.queues
             || self.reply_routes != previous.reply_routes
+            || self.reply_routes_by_request != previous.reply_routes_by_request
             || self.worker_events != previous.worker_events
             || self.consumed_callbacks != previous.consumed_callbacks
             || self.consumed_provider_turns != previous.consumed_provider_turns
@@ -167,6 +171,7 @@ impl BusState {
             routing_before_ms: 0,
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),
+            reply_routes_by_request: true,
             worker_events: BTreeMap::new(),
             consumed_callbacks: Arc::default(),
             consumed_callback_ids: BTreeSet::new(),

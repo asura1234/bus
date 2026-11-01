@@ -22,6 +22,15 @@ fn ready_worker_at(f: &mut Fixture, at_ms: u64) {
         .observe_status(f.agent, RuntimeStatus::Idle, at_ms)
         .unwrap();
     f.worker.save(state).unwrap();
+    crate::agents::providers::spool::initialize(
+        &f.dir.join("callbacks/worker"),
+        &crate::agents::providers::spool::Manifest {
+            routing_key: crate::agents::providers::spool::RoutingKey(f.agent.0),
+            provider: f.worker.state.agent(f.agent).unwrap().provider,
+            launch_id: "worker".into(),
+        },
+    )
+    .unwrap();
 }
 
 fn callback(f: &Fixture, turn: &str, sequence: u64, kind: CallbackEventKind) -> ProviderCallback {

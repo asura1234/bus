@@ -9,12 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
 enum Key {
-    Reply(RequestId),
+    Reply(Vec<RequestId>),
     Event(String),
 }
 struct Part {
     key: Key,
     worker: AgentId,
+    recipient: AgentId,
     room: RoomId,
     at: u64,
     text: String,
@@ -29,28 +30,28 @@ impl BusState {
     ) -> Result<bool, ModelError> {
         let mut changed = self.retain_worker_outcomes(now_ms);
         changed |= self.drop_duplicate_reply_wakes(now_ms)?;
-        let mut batches: BTreeMap<AgentId, Vec<Part>> = BTreeMap::new();
+        let mut batches: BTreeMap<(AgentId, AgentId, RoomId), Vec<Part>> = BTreeMap::new();
         for part in self
             .notification_parts(None, waited)
             .into_iter()
             .filter(|p| !p.waited)
         {
-            batches.entry(part.worker).or_default().push(part);
+            batches
+                .entry((part.worker, part.recipient, part.room))
+                .or_default()
+                .push(part);
         }
-        for (worker, parts) in batches {
+        for ((worker, recipient, room), parts) in batches {
             if parts.iter().all(|p| now_ms < p.at.saturating_add(2_000)) {
                 continue;
             }
-            let Some(orchestrator) = self.worker_orchestrator(worker) else {
-                continue;
-            };
-            let room = parts[0].room;
             let queued = self
                 .requests()
                 .find(|r| {
                     r.phase == RequestPhase::Queued
                         && r.prompt.author == Author::Agent(worker)
-                        && r.agent_id == orchestrator
+                        && r.agent_id == recipient
+                        && r.room_id == room
                         && self.is_reply_notification(r.id)
                         && now_ms <= r.prompt.submitted_at_ms.saturating_add(2_000)
                 })
@@ -64,7 +65,7 @@ impl BusState {
                     Draft {
                         text,
                         files: vec![],
-                        recipient_ids: [orchestrator].into(),
+                        recipient_ids: [recipient].into(),
                     },
                     Author::Agent(worker),
                     now_ms,
@@ -73,8 +74,10 @@ impl BusState {
             };
             for part in parts {
                 match part.key {
-                    Key::Reply(key) => {
-                        self.reply_routes.insert(key, ReplyRoute::Routed(notice));
+                    Key::Reply(keys) => {
+                        for key in keys {
+                            self.reply_routes.insert(key, ReplyRoute::Routed(notice));
+                        }
                     }
                     Key::Event(key) => {
                         if let Some(event) = self.worker_events.get_mut(&key) {
@@ -96,13 +99,24 @@ impl BusState {
     fn drop_duplicate_reply_wakes(&mut self, now_ms: u64) -> Result<bool, ModelError> {
         let mut notices = BTreeSet::new();
         let mut changed = false;
-        let stored: Vec<_> = self
+        let stored: BTreeSet<_> = self
             .requests()
             .filter(|request| self.reply_needs_ack(request))
             .filter(|request| self.captured_reply_already_sent(request))
-            .map(reply_key)
+            .map(|request| (reply_key(request), request.prompt.author.clone()))
             .collect();
-        for key in stored {
+        let keys: Vec<_> = if stored.is_empty() {
+            vec![]
+        } else {
+            self.requests()
+                .filter(|request| {
+                    request.reply().is_some()
+                        && stored.contains(&(reply_key(request), request.prompt.author.clone()))
+                })
+                .map(|request| request.id)
+                .collect()
+        };
+        for key in keys {
             if self.withdraw_reply_route(key, &mut notices) {
                 changed = true;
             }
@@ -157,9 +171,9 @@ impl BusState {
         waited: &BTreeSet<PromptId>,
     ) -> Vec<Part> {
         let mut parts = Vec::new();
-        let mut replies: BTreeMap<RequestId, Vec<&Request>> = BTreeMap::new();
+        let mut replies: BTreeMap<(RequestId, Author), Vec<&Request>> = BTreeMap::new();
         for request in self.requests().filter(|r| self.reply_needs_ack(r)) {
-            let key = reply_key(request);
+            let key = request.id;
             if selected(
                 self.reply_routes
                     .get(&key)
@@ -167,12 +181,16 @@ impl BusState {
                     .unwrap_or(ReplyRoute::Pending),
                 notice,
             ) {
-                replies.entry(key).or_default().push(request);
+                replies
+                    .entry((reply_key(request), request.prompt.author.clone()))
+                    .or_default()
+                    .push(request);
             }
         }
-        for (key, group) in replies {
+        for group in replies.into_values() {
             let source = group[0];
-            let Some(reply) = source.reply() else {
+            let (Some(reply), Some(recipient)) = (source.reply(), self.reply_recipient(source))
+            else {
                 continue;
             };
             let messages = group
@@ -184,8 +202,9 @@ impl BusState {
                 .collect::<Vec<_>>()
                 .join(", ");
             parts.push(Part {
-                key: Key::Reply(key),
+                key: Key::Reply(group.iter().map(|request| request.id).collect()),
                 worker: source.agent_id,
+                recipient,
                 room: source.room_id,
                 at: source.completed_at_ms.unwrap_or(reply.received_at_ms),
                 text: format!(
@@ -203,6 +222,14 @@ impl BusState {
             if !selected(event.route, notice) {
                 continue;
             }
+            // Refresh a routed event using its original destination, even if
+            // its worker has since been deleted.
+            let Some(recipient) = notice
+                .and_then(|id| self.request(id).map(|request| request.agent_id))
+                .or_else(|| self.worker_orchestrator(event.agent))
+            else {
+                continue;
+            };
             let author_waits = matches!(event.kind, WorkerEventKind::Outcome)
                 && self.requests().any(|r| {
                     event.group == Some(reply_key(r))
@@ -212,6 +239,7 @@ impl BusState {
             parts.push(Part {
                 key: Key::Event(key.clone()),
                 worker: event.agent,
+                recipient,
                 room: event.room,
                 at: event.at_ms,
                 text: event.text.clone(),

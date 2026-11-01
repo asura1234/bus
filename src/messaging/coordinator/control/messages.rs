@@ -24,7 +24,7 @@ impl Worker {
                 if let Some(selector) = optional_text(p, "as")? {
                     if let Some(source) = self.state.requests_for_message(message).next() {
                         let author = self.control_author(source.room_id, selector)?;
-                        if self.state.reply_orchestrator(source) == Some(author) {
+                        if source.prompt.author == Author::Agent(author) {
                             let now = self.reply_waiter_now();
                             self.reply_waiters.insert(message, now);
                         }
