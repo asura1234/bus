@@ -185,6 +185,36 @@ fn kimi_live_tracking_effort_footer_without_busy_marker_stays_idle() {
 }
 
 #[test]
+fn kimi_standalone_running_command_reply_is_idle_once_the_turn_is_not_live() {
+    // Captured shape: final reply "● Running a command" above an empty composer.
+    // Text alone still matches the live header. The turn wire, or a non-bold
+    // line when that wire cannot be read, is what makes this Idle.
+    let screen = "\
+ ● Running a command\n\
+╭──────────────────────────────────────╮\n\
+│ >                                    │\n\
+╰──────────────────────────────────────╯\n\
+K3.1 Pro thinking: high  …/tmp/project  master\n\
+                               context: 2% (17.9k/1M)";
+    let live = kimi_detection(screen);
+    assert_eq!(live.state, AgentState::Working);
+    assert_eq!(
+        live.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("footer_running_command_working")
+    );
+    assert!(super::super::kimi_running_command_is_winner(screen));
+    let settled = super::super::kimi_screen_without_running_command(screen);
+    assert_eq!(settled.state, AgentState::Idle);
+    assert!(settled.visible_idle);
+
+    let tasks = kimi_frame("Ask When Needed  K2.8 Preview thinking: max  [1 task running]");
+    assert!(!super::super::kimi_running_command_is_winner(&tasks));
+    let still_working = super::super::kimi_screen_without_running_command(&tasks);
+    assert_eq!(still_working.state, AgentState::Working);
+    assert!(still_working.visible_working);
+}
+
+#[test]
 fn kimi_idle_composer_with_command_phrase_in_finished_reply_stays_idle() {
     let detection = kimi_detection(&kimi_frame(
         "Running a command is the in-progress label.\n✻ Thinking 9 times\nK3.1 Pro thinking: high  …/tmp/project  master",

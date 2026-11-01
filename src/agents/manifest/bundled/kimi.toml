@@ -104,9 +104,11 @@ line_regex = ['(?i)\[[1-9][0-9]*\s+tasks?\s+running\]']
 id = "footer_running_command_working"
 state = "working"
 priority = 84
-# The live bullet is the line above the composer. With the box, the effort
-# footer, and context, that is the sixth non-empty line. Match that status
-# line, not a finished reply that only mentions the phrase.
+# The live tool header is the line above the composer. With the box, the
+# effort footer, and context, that is the sixth non-empty line. The same
+# words can be a finished reply. This rule is not proof of work by itself:
+# the detector keeps it only while Kimi's main turn is open, or, when that
+# wire cannot be read, while the line is bold like the live header.
 region = "bottom_non_empty_lines(6)"
 visible_working = true
 line_regex = ['(?i)^\s*(?:[●•]\s+)?running a command(?:\s*·.*)?\s*$']

@@ -46,7 +46,16 @@ fn evaluate_loaded_manifest(
     loaded: &LoadedManifest,
     managed_launch_pending: bool,
 ) -> AgentDetection {
-    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending) else {
+    evaluate_loaded_manifest_skipping(input, loaded, managed_launch_pending, None)
+}
+
+fn evaluate_loaded_manifest_skipping(
+    input: DetectionInput<'_>,
+    loaded: &LoadedManifest,
+    managed_launch_pending: bool,
+    skip_rule: Option<&str>,
+) -> AgentDetection {
+    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending, skip_rule) else {
         return fallback_detection(managed_launch_pending);
     };
     let state = rule
@@ -60,6 +69,36 @@ fn evaluate_loaded_manifest(
         visible_blocker: rule.visible_blocker && state == AgentState::Blocked,
         visible_working: rule.visible_working && state == AgentState::Working,
     }
+}
+
+fn kimi_screen_input(screen: &str) -> DetectionInput<'_> {
+    DetectionInput {
+        screen,
+        osc_title: "",
+        osc_progress: "",
+    }
+}
+
+/// True when the running-command line, not a higher-priority Kimi marker, won.
+pub(crate) fn kimi_running_command_is_winner(screen: &str) -> bool {
+    let Some(loaded) = load_manifest(AgentKind::Kimi) else {
+        return false;
+    };
+    matched_manifest_rule(kimi_screen_input(screen), &loaded, false, None)
+        .is_some_and(|rule| rule.id == "footer_running_command_working")
+}
+
+/// Screen state after refusing the running-command line as proof of work.
+pub(crate) fn kimi_screen_without_running_command(screen: &str) -> AgentDetection {
+    let Some(loaded) = load_manifest(AgentKind::Kimi) else {
+        return fallback_detection(false);
+    };
+    evaluate_loaded_manifest_skipping(
+        kimi_screen_input(screen),
+        &loaded,
+        false,
+        Some("footer_running_command_working"),
+    )
 }
 
 pub fn should_skip_state_update(agent: AgentKind, screen_content: &str) -> bool {
@@ -78,9 +117,13 @@ fn matched_manifest_rule<'a>(
     input: DetectionInput<'_>,
     loaded: &'a LoadedManifest,
     managed_launch_pending: bool,
+    skip_rule: Option<&str>,
 ) -> Option<&'a ManifestRule> {
     let mut matched: Option<&ManifestRule> = None;
     for (rule, compiled_rule) in loaded.manifest.rules.iter().zip(&loaded.compiled_rules) {
+        if skip_rule.is_some_and(|id| rule.id == id) {
+            continue;
+        }
         if (!rule.managed_launch_only || managed_launch_pending)
             && compiled_rule_matches(compiled_rule, region(input, &rule.region))
             && matched.is_none_or(|previous| previous.priority < rule.priority)

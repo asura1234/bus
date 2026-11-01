@@ -457,6 +457,11 @@ pub(crate) fn spawn_with_portable_pty(
     })
 }
 
+fn absolute_kimi_code_home(cmd: &CommandBuilder) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(cmd.get_env("KIMI_CODE_HOME")?);
+    path.is_absolute().then_some(path)
+}
+
 fn initialize_pane_terminal(
     cols: u16,
     rows: u16,
@@ -729,6 +734,7 @@ impl TerminalRuntime {
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
         let content_write_lock = Arc::new(Mutex::new(()));
 
+        let kimi_code_home = absolute_kimi_code_home(&cmd);
         let spawned = spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
 
@@ -785,6 +791,7 @@ impl TerminalRuntime {
             detection_content_seq.clone(),
             render_notify.clone(),
             render_dirty.clone(),
+            kimi_code_home,
         );
 
         let (draft_input, startup_suggestion_open) =

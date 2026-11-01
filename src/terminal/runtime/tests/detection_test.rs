@@ -555,6 +555,7 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         Arc::new(AtomicU64::new(0)),
         Arc::new(Notify::new()),
         Arc::new(RenderSignal::new()),
+        None,
     );
     let detector = detector.unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), received.recv()).await;
