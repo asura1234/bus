@@ -1543,7 +1543,6 @@ fn unrelated_send_does_not_hide_reply_not_captured() {
     let mut f = Fixture::new();
     let orch = f.orch;
     let source = running(&mut f, Author::Agent(orch));
-    report(&mut f, "Already reported the head.");
     let now = io::now_ms() + 120_000;
     let mut state = f.worker.state.clone();
     state
@@ -1553,6 +1552,18 @@ fn unrelated_send_does_not_hide_reply_not_captured() {
         state.settle_ended_request(f.agent, now, |_| None),
         Some(source)
     );
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Already reported the head.".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
     f.worker.save(state).unwrap();
     let mut state = f.worker.state.clone();
     state
@@ -1712,7 +1723,6 @@ fn progress_message_does_not_hide_reply_not_captured() {
     let mut f = Fixture::new();
     let orch = f.orch;
     let source = running(&mut f, Author::Agent(orch));
-    report(&mut f, "Still working on the request.");
     let now = io::now_ms() + 120_000;
     let mut state = f.worker.state.clone();
     state
@@ -1722,6 +1732,18 @@ fn progress_message_does_not_hide_reply_not_captured() {
         state.settle_ended_request(f.agent, now, |_| None),
         Some(source)
     );
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Still working on the request.".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
     state.retain_worker_outcomes(now);
     let outcomes = state.worker_outcomes_for(state.request(source).unwrap());
     assert_eq!(outcomes.len(), 1, "{outcomes:?}");
@@ -2146,6 +2168,106 @@ fn post_close_arbitrary_message_does_not_hide_reply_not_captured() {
             .iter()
             .any(|notice| notice.prompt.text.contains("reply_not_captured")),
         "an arbitrary post-close message is not this request's result: {notices:?}"
+    );
+}
+
+#[test]
+fn explicit_answer_without_a_late_callback_suppresses_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "The actual answer despite capture failure.".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms(),
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    // The send is minutes before settlement, outside the same-minute window.
+    let now = io::now_ms() + 120_000;
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("The actual answer")),
+        "the explicit send is the delivery: {notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
+        "a send during the turn is that request's result: {notices:?}"
+    );
+    assert_eq!(
+        notices.len(),
+        1,
+        "settlement wakes exactly once: {notices:?}"
+    );
+}
+
+#[test]
+fn post_settlement_send_of_the_answer_keeps_reply_not_captured() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "The actual answer despite capture failure.".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(f.agent),
+            now,
+        )
+        .unwrap();
+    state
+        .route_worker_replies(now + 10_000, &BTreeSet::new())
+        .unwrap();
+    f.worker.save(state).unwrap();
+
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("The actual answer")),
+        "the post-settlement send is still delivered: {notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+        "a send after the turn closes is not that request's result: {notices:?}"
     );
 }
 

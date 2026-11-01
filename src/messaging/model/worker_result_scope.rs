@@ -21,6 +21,20 @@ impl BusState {
             .is_some_and(|sent_at| (start..=end).contains(&sent_at))
     }
 
+    /// An explicit send stamped while this request was still the author's open
+    /// turn. The link is the request id: not the text, and not the clock.
+    pub(super) fn issued_send_covers(&self, request: &Request) -> bool {
+        let group = reply_key(request);
+        self.worker_events
+            .get(&format!("issued:{}", group.0))
+            .is_some_and(|event| {
+                event.kind == WorkerEventKind::Final
+                    && event.route == ReplyRoute::Seen
+                    && event.group == Some(group)
+                    && event.agent == request.agent_id
+            })
+    }
+
     /// The worker already sent this request's captured reply, at or after the
     /// request was submitted. An earlier request's identical text does not count.
     pub(super) fn captured_reply_already_sent(&self, request: &Request) -> bool {
