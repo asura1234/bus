@@ -78,7 +78,8 @@ def test_parallel_empty_failure_and_collection_error_remain_distinct(tmp_path, s
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX process-group teardown')
-def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path):
+@pytest.mark.parametrize('nested', [False, True])
+def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path, nested):
     tools = tmp_path / 'tools'
     tools.mkdir()
     (tools / 'conftest.py').write_text(
@@ -106,9 +107,19 @@ def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path):
         'try:\n'
         '    with interrupt_signals():\n'
         '        _,tests=r.commands(r.Selection(False,"none()",("tools",),False,"fixture"))\n'
-        '        r.batch(tests)\n'
+        f'        r.batch(tests,nested={nested!r})\n'
         'except Interrupted as error: sys.exit(128+error.signum)\n'
     )
+    if nested:
+        # The canonical gate owns the outer group; the Python lane inherits it.
+        script = (
+            f'import sys;sys.path.insert(0,{scripts!r});import gate_and_fix as g;'
+            'from gate_process import interrupt_signals,Interrupted\n'
+            'try:\n'
+            '    with interrupt_signals():\n'
+            f'        g.run_gates([g.Gate("test-full",(sys.executable,"-c",{script!r}))],cwd=g.Path({str(tmp_path)!r}))\n'
+            'except Interrupted as error: sys.exit(128+error.signum)\n'
+        )
     env = runner.quality.child_env(PYTEST_WORKERS='2')
     process = subprocess.Popen([sys.executable, '-c', script], cwd=tmp_path, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
