@@ -139,3 +139,37 @@ def test_common_gitdir_pointer_change_refreshes_identity(identity_worktrees, tmp
         assert build(a)
     finally:
         marker.write_text(original)
+
+
+def test_new_commondir_pointer_invalidates_an_existing_build(identity_worktrees, tmp_path):
+    repo, _, _, git, build = identity_worktrees
+    common = tmp_path / "new-common.git"
+    shutil.copytree(repo / ".git", common)
+    sha_a = git(repo, "rev-parse", "refs/heads/fixture-a")
+    git(repo, f"--git-dir={common}", "update-ref", "refs/heads/fixture", sha_a)
+    marker = repo / ".git/commondir"
+    assert not marker.exists()
+    assert not build(repo)
+    assert build(repo), "ordinary checkout must have a cached build first"
+    old_sha = git(repo, "rev-parse", "HEAD")
+    watched = [repo / ".git/HEAD", repo / ".git/refs/heads/fixture"]
+    before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in watched]
+    try:
+        marker.write_text(str(common.resolve()) + "\n")
+        assert git(repo, "rev-parse", "HEAD") != old_sha
+        assert Path(git(repo, "rev-parse", "--show-toplevel")) == repo
+        assert git(repo, "status", "--porcelain") == ""
+        assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in watched] == before
+        assert not build(repo), "new common directory must refresh embedded identity"
+        assert build(repo), "unchanged post-transition build should remain cached"
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def test_staging_unrelated_document_in_linked_worktree_keeps_build_cached(identity_worktrees):
+    _, a, _, git, build = identity_worktrees
+    assert not build(a)
+    assert build(a)
+    (a / "notes.md").write_text("unrelated staged document\n")
+    git(a, "add", "notes.md")
+    assert build(a), "staging an unrelated document must keep the linked worktree cached"

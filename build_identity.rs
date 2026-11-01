@@ -59,11 +59,17 @@ fn record_build_identity() {
             .map(|s| s.trim().to_string())
     };
     if let Some(gitdir) = git(&["rev-parse", "--absolute-git-dir"]) {
-        let commondir = PathBuf::from(gitdir).join("commondir");
+        let gitdir = PathBuf::from(gitdir);
+        let commondir = gitdir.join("commondir");
         if commondir.is_file() {
             // This pointer selects the shared refs directory independently of
             // both the checkout's .git entry and its worktree-specific HEAD.
             println!("cargo:rerun-if-changed={}", commondir.display());
+        } else {
+            // Detect a pointer introduced after an ordinary checkout was built.
+            // Other Git metadata writes may invalidate that checkout too; linked
+            // worktrees already have commondir and keep the narrower file watch.
+            println!("cargo:rerun-if-changed={}", gitdir.display());
         }
     }
     let sha = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
