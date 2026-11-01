@@ -35,3 +35,9 @@ def test_tools_test_narrows_on_real_repo():
 def test_python_scenario_run_by_tui_driver_selects_dev_tools(path):
     plan = selection.select([path], root=ROOT)
     assert plan.full or plan.dev_tools, plan
+
+
+def test_src_test_included_through_shared_container_selects_its_integration_binaries():
+    plan = selection.select(["src/utils/tests/launch_paths_test.rs"], root=ROOT)
+    assert plan.full or all(f"binary({b})" in (plan.rust_filter or "")
+                            for b in ("api", "client", "server")), plan

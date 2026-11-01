@@ -32,6 +32,8 @@ Temporary fixture paths and matching basenames do not create repository edges.
 Rust runtime file literals resolve to exact repository/source paths, including
 `concat!(env!("CARGO_MANIFEST_DIR"), ...)` script arguments. Python helper imports
 are followed transitively so a script's Rust test consumers also force full fallback.
+Source test modules reached transitively from an integration target also fall back
+to every suite, covering each crate context that compiles and runs those tests.
 The index also follows Python imports when selected tests need `BUS_TEST_BINARY`.
 Missing ownership and cross-owner references fall back to every suite. Embedded
 skill resources include directory symlinks, with the collector's test exclusions;

@@ -177,7 +177,7 @@ class References:
                 if owner(source) != owner(name):
                     return True
                 # Python helpers can be imported by a script launched from Rust.
-                # Rust module containers are covered by their namespace selection.
+                # Rust uses namespace selection plus integration-target reachability.
                 if name.endswith('.py'):
                     pending.append(source)
         return False

@@ -119,3 +119,12 @@ def test_manifest_path_inside_rust_fixture_string_is_not_a_reference(tmp_path):
     source(tmp_path, 'tests/fixture_test.rs', 'const SAMPLE: &str = r#"concat!(env!("CARGO_MANIFEST_DIR"), "/tools/local_test.py")"#;')
     source(tmp_path, 'tools/local_test.py', 'def test_case(): pass\n')
     assert not select(['tools/local_test.py'], root=tmp_path).full
+
+
+def test_src_tests_reachable_through_integration_containers_fall_back(tmp_path):
+    source(tmp_path, 'Cargo.toml', '[[test]]\nname="api"\npath="tests/api/root_test.rs"\n')
+    source(tmp_path, 'src/utils/container.rs', '#[path="tests/local_test.rs"] mod local;')
+    source(tmp_path, 'src/utils/tests/local_test.rs', '#[test] fn case() {}')
+    source(tmp_path, 'tests/api/root_test.rs', '#[path="../support/shared_test.rs"] mod shared;')
+    source(tmp_path, 'tests/support/shared_test.rs', '#[path="../../src/utils/container.rs"] mod container;')
+    assert select(['src/utils/tests/local_test.rs'], root=tmp_path).full

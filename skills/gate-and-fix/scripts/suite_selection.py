@@ -56,6 +56,11 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
         elif parts[0] == "src" and path.suffix == ".rs" and (
             "tests" in parts[2:-1] or path.name.endswith("_test.rs")
         ) and len(parts) > 2 and parts[1] in RUST_OWNERS and references.incoming(name):
+            # Integration crates can include a source container and its cfg(test)
+            # children, whose behavior also depends on that separate crate context.
+            if references.integration_targets(name):
+                full = True
+                break
             owner = parts[1]
             if owner == "devtools":
                 dev_tools = True
