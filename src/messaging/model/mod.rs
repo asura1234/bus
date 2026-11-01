@@ -25,6 +25,7 @@ mod status;
 mod types;
 mod worker_events;
 mod worker_notifications;
+mod worker_result_scope;
 #[cfg(test)]
 use requests::rejection_reason;
 
