@@ -14,7 +14,8 @@ current Bus agent context. If the room cannot be established, ask for it.
 repo = git rev-parse --show-toplevel
 main = first worktree in `git worktree list --porcelain` for repo
 room_id = numeric room ID from bus state (resolve a name uniquely)
-marker = <main>/temp/.bus/sitrep-<room_id>.json
+session_id = BUS_SESSION_ID from the current Bus agent environment
+marker = <main>/temp/.bus/sitrep-<session_id>-<room_id>.json
 
 Read marker FIRST, before gathering task or PR facts. Run:
   python3 "$SKILL_DIR/scripts/marker.py" read --main "<main>" --room "<room_id>"

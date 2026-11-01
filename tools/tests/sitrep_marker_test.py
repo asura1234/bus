@@ -1,5 +1,6 @@
 """A room marker advances only after a valid report window is accepted."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -7,8 +8,9 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[2] / "skills/sitrep/scripts/marker.py"
 
 
-def call(tmp_path, command, payload=None, room="568"):
-    return subprocess.run([sys.executable, str(SCRIPT), command, "--main", str(tmp_path), "--room", room, "--now", "2026-10-30T13:39:35Z"], input=json.dumps(payload) if payload is not None else None, text=True, capture_output=True, check=False)
+def call(tmp_path, command, payload=None, room="568", session="session-a"):
+    env = dict(os.environ, BUS_SESSION_ID=session)
+    return subprocess.run([sys.executable, str(SCRIPT), command, "--main", str(tmp_path), "--room", room, "--now", "2026-10-30T13:39:35Z"], input=json.dumps(payload) if payload is not None else None, text=True, capture_output=True, check=False, env=env)
 
 
 def test_first_window_and_advance(tmp_path):
@@ -19,14 +21,28 @@ def test_first_window_and_advance(tmp_path):
     assert not (tmp_path / "temp").exists()
     saved = call(tmp_path, "write", {"timestamp": window["cutoff"], "items": ["pr:214"], "revision": window["revision"]})
     assert saved.returncode == 0, saved.stderr
-    assert json.loads((tmp_path / "temp/.bus/sitrep-568.json").read_text()) == {"timestamp": window["cutoff"], "items": ["pr:214"]}
+    assert json.loads((tmp_path / "temp/.bus/sitrep-session-a-568.json").read_text()) == {"timestamp": window["cutoff"], "items": ["pr:214"]}
     next_window = json.loads(call(tmp_path, "read").stdout)
     assert next_window["since"] == window["cutoff"] and next_window["items"] == ["pr:214"]
     assert next_window["initial"] is False and next_window["revision"]
 
 
+def test_same_numeric_room_in_different_sessions_has_independent_markers(tmp_path):
+    first = json.loads(call(tmp_path, "read").stdout)
+    saved = call(tmp_path, "write", {"timestamp": first["cutoff"], "items": ["pr:214"], "revision": first["revision"]})
+    assert saved.returncode == 0, saved.stderr
+
+    other = call(tmp_path, "read", session="session-b")
+    assert other.returncode == 0, other.stderr
+    other_window = json.loads(other.stdout)
+    assert other_window["initial"] is True
+    assert other_window["items"] == []
+    assert other_window["since"] == "2026-10-29T13:39:35Z"
+    assert json.loads(call(tmp_path, "read").stdout)["initial"] is False
+
+
 def test_malformed_marker_never_resets_and_unsafe_room_is_rejected(tmp_path):
-    marker = tmp_path / "temp/.bus/sitrep-568.json"
+    marker = tmp_path / "temp/.bus/sitrep-session-a-568.json"
     marker.parent.mkdir(parents=True)
     marker.write_text('{"timestamp":"bad","items":[]}')
     result = call(tmp_path, "read")
@@ -42,11 +58,11 @@ def test_stale_marker_update_is_not_overwritten(tmp_path):
     payload["items"] = ["stale"]
     result = call(tmp_path, "write", payload)
     assert result.returncode != 0
-    assert json.loads((tmp_path / "temp/.bus/sitrep-568.json").read_text())["items"] == ["first"]
+    assert json.loads((tmp_path / "temp/.bus/sitrep-session-a-568.json").read_text())["items"] == ["first"]
 
 
 def test_future_marker_and_escaping_directory_are_rejected(tmp_path):
-    marker = tmp_path / "temp/.bus/sitrep-568.json"
+    marker = tmp_path / "temp/.bus/sitrep-session-a-568.json"
     marker.parent.mkdir(parents=True)
     marker.write_text('{"timestamp":"2026-10-31T13:39:35Z","items":[]}')
     result = call(tmp_path, "read")

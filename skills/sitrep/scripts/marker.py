@@ -49,10 +49,13 @@ def main():
     parser.add_argument("--now", help="fixed UTC time for tests")
     args = parser.parse_args()
     try:
+        session = os.environ.get("BUS_SESSION_ID", "")
         if not args.main.is_absolute() or not args.main.is_dir() or not re.fullmatch(r"0|[1-9]\d*", args.room):
             raise ValueError("main must be an existing absolute directory and room a numeric ID")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", session):
+            raise ValueError("BUS_SESSION_ID must be a nonempty alphanumeric ID")
         main_dir = args.main.resolve()
-        path = main_dir / "temp" / ".bus" / f"sitrep-{args.room}.json"
+        path = main_dir / "temp" / ".bus" / f"sitrep-{session}-{args.room}.json"
         if not path.parent.resolve().is_relative_to(main_dir):
             raise ValueError("marker directory escapes main worktree")
         now = utc(args.now) if args.now else dt.datetime.now(dt.timezone.utc).replace(microsecond=0)

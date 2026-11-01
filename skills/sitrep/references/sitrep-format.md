@@ -64,7 +64,9 @@ unknown status values, and bare PR URLs.
 
 ## Room marker
 
-The marker JSON has exactly `timestamp` (UTC RFC 3339 with whole seconds and
+Markers are keyed by repository, `BUS_SESSION_ID`, and numeric room ID so
+same-numbered rooms in different Bus sessions have independent windows. The
+marker JSON has exactly `timestamp` (UTC RFC 3339 with whole seconds and
 `Z`) and `items` (an array of nonempty stable task or PR identifiers). The
 marker helper read result contains `since`, `cutoff`, `initial`, `items`, and
 `revision`; the first run uses a 24-hour window and a null revision. Its write
