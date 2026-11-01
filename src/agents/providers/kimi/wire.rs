@@ -128,6 +128,8 @@ struct OpenTurn {
     steer_prompt: Option<String>,
     steer_answer: Option<String>,
     steers: Vec<(String, String)>,
+    /// The lead called a tool and has not written its own answer since.
+    saw_lead_tool: bool,
     agent_outcome: Option<String>,
     agent_error: Option<String>,
     turn_reason: Option<String>,
@@ -236,6 +238,7 @@ fn open_turn(value: &Value) -> Option<OpenTurn> {
         steer_prompt: None,
         steer_answer: None,
         steers: Vec::new(),
+        saw_lead_tool: false,
         agent_outcome: None,
         agent_error: None,
         turn_reason: None,
@@ -252,6 +255,7 @@ fn note_assistant(turn: &mut OpenTurn, value: &Value) {
             turn.steer_answer = None;
         } else {
             turn.lead_answer = None;
+            turn.saw_lead_tool = true;
         }
     } else if !text.is_empty() {
         if turn.after_steer {
@@ -355,10 +359,60 @@ fn later_bus_answer(turn: &OpenTurn, lead_prompt: &str) -> Option<(String, Strin
     own_turn_final(turn).map(|text| (turn.prompt_text.clone(), text))
 }
 
-fn later_bus_open(turn: &OpenTurn, lead_prompt: &str) -> bool {
-    !prompt_matches(turn, lead_prompt)
+/// Only a Bus turn that started after the bound turn can withhold it. An
+/// earlier turn that never got `prompt.completed` is a different request.
+fn later_bus_open(turn: &OpenTurn, bound: &OpenTurn) -> bool {
+    turn.id > bound.id
+        && !prompt_matches(turn, &bound.prompt_text)
         && turn.prompt_text.contains("[Bus message")
         && turn.prompt_reason.is_none()
+}
+
+fn push_steered(steered: &mut Vec<(String, String)>, pair: (String, String)) {
+    if !steered.iter().any(|(existing, _)| existing == &pair.0) {
+        steered.push(pair);
+    }
+}
+
+/// The follow-up turn's own final, plus any steer recorded inside that turn.
+fn later_turn_replies(turn: &OpenTurn, lead_prompt: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if let Some(pair) = later_bus_answer(turn, lead_prompt) {
+        pairs.push(pair);
+    }
+    if prompt_matches(turn, lead_prompt) || !turn.prompt_text.contains("[Bus message") {
+        return pairs;
+    }
+    pairs.extend(turn.steers.iter().cloned());
+    pairs
+}
+
+fn lead_after_steers(
+    bound: &OpenTurn,
+    done: &[OpenTurn],
+    lead_outcome: Outcome,
+    steered: &[(String, String)],
+) -> (Option<Outcome>, Option<(u64, String)>) {
+    let Outcome::NoReply = lead_outcome else {
+        return (Some(lead_outcome), None);
+    };
+    if steered.is_empty() {
+        return (Some(Outcome::NoReply), None);
+    }
+    let continuation = done
+        .iter()
+        .filter(|turn| turn.id > bound.id)
+        .find_map(|turn| continuation_text(turn).map(|text| (turn.id, text)));
+    if let Some(continuation) = continuation {
+        return (None, Some(continuation));
+    }
+    // A tool with no lead text can still finish on a later non-Bus turn.
+    // A steer reply alone is that steer's answer, not proof the lead is open.
+    if bound.saw_lead_tool && bound.lead_answer.is_none() {
+        (None, None)
+    } else {
+        (Some(Outcome::NoReply), None)
+    }
 }
 
 fn capture_bound(done: &[OpenTurn], turn_id: u64, prompt: &str) -> Option<SessionCapture> {
@@ -380,32 +434,19 @@ fn capture_bound(done: &[OpenTurn], turn_id: u64, prompt: &str) -> Option<Sessio
     let mut steered = bound.steers.clone();
     // The follow-up started a turn of its own. Hold the original prompt until
     // that turn commits, then give the follow-up its own text.
-    if done.iter().any(|turn| later_bus_open(turn, prompt)) {
+    if done.iter().any(|turn| later_bus_open(turn, bound)) {
         return Some(SessionCapture {
             lead: None,
             steered,
             continuation: None,
         });
     }
-    for turn in done {
-        if let Some(pair) = later_bus_answer(turn, prompt) {
-            if !steered.iter().any(|(existing, _)| existing == &pair.0) {
-                steered.push(pair);
-            }
+    for turn in done.iter().filter(|turn| turn.id > bound.id) {
+        for pair in later_turn_replies(turn, prompt) {
+            push_steered(&mut steered, pair);
         }
     }
-    // NoReply here means the bound turn's own text was only a steer. Leave the
-    // lead open for a later non-Bus turn instead of completing the group silent.
-    let (lead, continuation) = match lead_outcome {
-        Outcome::NoReply if !steered.is_empty() => {
-            let continuation = done
-                .iter()
-                .filter(|turn| turn.id > bound.id)
-                .find_map(|turn| continuation_text(turn).map(|text| (turn.id, text)));
-            (None, continuation)
-        }
-        other => (Some(other), None),
-    };
+    let (lead, continuation) = lead_after_steers(bound, done, lead_outcome, &steered);
     Some(SessionCapture {
         lead,
         steered,
@@ -830,6 +871,120 @@ mod tests {
                 .expect("lead turn completed");
         assert_eq!(capture.lead, None);
         assert!(capture.steered.is_empty());
+    }
+
+    #[test]
+    fn stale_open_bus_turn_does_not_hold_a_later_committed_reply() {
+        let old = "[Bus message 5 from you]\nold request";
+        let current = "[Bus message 8 from you]\ncurrent request";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{old}}}]}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":{current}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"CURRENT-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p1\",\"reason\":\"completed\"}}\n",
+            ),
+            old = serde_json::to_string(old).unwrap(),
+            current = serde_json::to_string(current).unwrap(),
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 1, current)
+                .unwrap()
+                .expect("current turn committed");
+        assert_eq!(capture.lead, Some(Outcome::Final("CURRENT-REPLY".into())));
+    }
+
+    #[test]
+    fn earlier_open_bus_turn_does_not_hide_a_later_completed_reply() {
+        let earlier = "[Bus message 5 from you]\nFirst task.";
+        let later = "[Bus message 8 from you]\nReply with exactly LATER-DONE.";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{earlier}}}]}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":{later}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"LATER-DONE\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p1\",\"reason\":\"completed\"}}\n",
+            ),
+            earlier = serde_json::to_string(earlier).unwrap(),
+            later = serde_json::to_string(later).unwrap(),
+        );
+        let capture = session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 1, later)
+            .unwrap()
+            .expect("later turn completed");
+        assert_eq!(
+            capture.lead,
+            Some(Outcome::Final("LATER-DONE".into())),
+            "an earlier Bus turn that never completed must not hide this turn's reply"
+        );
+    }
+
+    #[test]
+    fn answered_steer_does_not_hold_a_successful_silent_lead() {
+        let original = "[Bus message 5 from you]\ncomplete silently";
+        let steered = "[Bus message 8 from you]\nreply STEER-REPLY";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{steered}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"STEER-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            steered = serde_json::to_string(steered).unwrap(),
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 0, original)
+                .unwrap()
+                .expect("lead turn committed");
+        assert_eq!(capture.lead, Some(Outcome::NoReply));
+        assert_eq!(
+            capture.steered,
+            vec![(steered.to_owned(), "STEER-REPLY".into())]
+        );
+    }
+
+    #[test]
+    fn nested_steer_in_a_follow_up_turn_gets_its_own_reply() {
+        let original = "[Bus message 5 from you]\nlead";
+        let first = "[Bus message 8 from you]\nfirst follow-up";
+        let second = "[Bus message 9 from you]\nsecond follow-up";
+        let wire = format!(
+            concat!(
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{original}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"LEAD-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":{first}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"FIRST-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":1,\"input\":[{{\"type\":\"text\",\"text\":{second}}}]}}\n",
+                "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"SECOND-REPLY\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+                "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+                "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+                "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p1\",\"reason\":\"completed\"}}\n",
+            ),
+            original = serde_json::to_string(original).unwrap(),
+            first = serde_json::to_string(first).unwrap(),
+            second = serde_json::to_string(second).unwrap(),
+        );
+        let capture =
+            session_capture_lines(wire.lines().map(|line| Ok(line.to_owned())), 0, original)
+                .unwrap()
+                .expect("both turns committed");
+        assert_eq!(capture.lead, Some(Outcome::Final("LEAD-REPLY".into())));
+        assert_eq!(
+            capture.steered,
+            vec![
+                (first.to_owned(), "FIRST-REPLY".into()),
+                (second.to_owned(), "SECOND-REPLY".into()),
+            ]
+        );
     }
 
     #[test]

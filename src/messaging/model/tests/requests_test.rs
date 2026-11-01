@@ -351,6 +351,141 @@ fn kimi_steered_reply_stays_with_its_request_when_the_lead_continues() {
 }
 
 #[test]
+fn kimi_lead_final_does_not_abandon_a_follow_up_before_its_turn_starts() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let lead = submit_text(&mut state, room, agent, "lead request");
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    let follow = submit_text(&mut state, room, agent, "follow-up request");
+    state.begin_steering(follow, lead).unwrap();
+    state
+        .record_steering(
+            follow,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 30)
+        .unwrap();
+    let lead_prompt = state.render_request_payload(lead).unwrap();
+    let record = RecordedTurnEnd::Final {
+        turn_id: "0".into(),
+        text: "LEAD-REPLY".into(),
+        prompts: vec![lead_prompt],
+    };
+
+    assert_eq!(
+        state.settle_ended_request(agent, 40, |_| Some(record.clone())),
+        Some(lead)
+    );
+    assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Completed);
+    assert_eq!(
+        state.request(follow).unwrap().phase,
+        RequestPhase::Active,
+        "the follow-up's own turn and reply have not appeared yet"
+    );
+    assert_eq!(state.request(follow).unwrap().failure_reason, None);
+    assert!(
+        !state.settle_unclaimed_steering(agent, 50, |_| Some(record.clone())),
+        "idle must not close a confirmed steer before its own turn"
+    );
+    assert_eq!(state.request(follow).unwrap().phase, RequestPhase::Active);
+    assert_eq!(state.request(follow).unwrap().failure_reason, None);
+}
+
+#[test]
+fn kimi_wire_steer_settles_each_request_with_its_own_reply() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    let lead = submit_text(&mut state, room, agent, "Run sleep 45 and reply LEAD-DONE.");
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 20)
+        .unwrap();
+    let follow = submit_text(&mut state, room, agent, "Reply with exactly STEER-DONE.");
+    let lead_prompt = state.render_request_payload(lead).unwrap();
+    let follow_prompt = state.render_request_payload(follow).unwrap();
+    state.begin_steering(follow, lead).unwrap();
+    state
+        .record_steering(
+            follow,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 30)
+        .unwrap();
+    let wire = format!(
+        concat!(
+            "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":0,\"promptId\":\"p0\",\"input\":[{{\"type\":\"text\",\"text\":{lead}}}]}}\n",
+            "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"working\"}}],\"toolCalls\":[{{\"name\":\"bash\"}}]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+            "{{\"type\":\"prompt.steered\",\"agentId\":\"main\",\"content\":[{{\"type\":\"text\",\"text\":{follow}}}]}}\n",
+            "{{\"type\":\"turn.steer\",\"agentId\":\"main\",\"turnId\":0,\"input\":[{{\"type\":\"text\",\"text\":{follow}}}]}}\n",
+            "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"STEER-DONE\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+            "{{\"type\":\"agent.turn.ended\",\"turnId\":0,\"outcome\":\"done\"}}\n",
+            "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":0,\"reason\":\"completed\"}}\n",
+            "{{\"type\":\"prompt.completed\",\"agentId\":\"main\",\"promptId\":\"p0\",\"reason\":\"completed\"}}\n",
+            "{{\"type\":\"turn.prompt\",\"agentId\":\"main\",\"turnId\":1,\"promptId\":\"p1\",\"input\":[{{\"type\":\"text\",\"text\":\"<notification id=\\\"task:done\\\" />\"}}]}}\n",
+            "{{\"type\":\"agent.message.appended\",\"message\":{{\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"LEAD-DONE\"}}],\"toolCalls\":[]}},\"meta\":{{\"source\":\"llm\"}}}}}}\n",
+            "{{\"type\":\"agent.turn.ended\",\"turnId\":1,\"outcome\":\"done\"}}\n",
+            "{{\"type\":\"turn.ended\",\"agentId\":\"main\",\"turnId\":1,\"reason\":\"completed\"}}\n",
+        ),
+        lead = serde_json::to_string(&lead_prompt).unwrap(),
+        follow = serde_json::to_string(&follow_prompt).unwrap(),
+    );
+    assert!(wire.matches("\"type\":\"prompt.steered\"").count() >= 1);
+    let capture = crate::agents::providers::kimi::wire::session_capture_lines(
+        wire.lines().map(|line| Ok(line.to_owned())),
+        0,
+        &lead_prompt,
+    )
+    .unwrap()
+    .expect("steered wire committed");
+    assert_eq!(
+        capture.steered,
+        vec![(follow_prompt.clone(), "STEER-DONE".into())]
+    );
+    let (continuation_turn, continuation_text) = capture.continuation.expect("lead continuation");
+    assert_eq!(continuation_text, "LEAD-DONE");
+    assert!(state.complete_kimi_steered_reply(agent, &follow_prompt, "STEER-DONE", "0", 40,));
+    let record = RecordedTurnEnd::Final {
+        turn_id: continuation_turn.to_string(),
+        text: continuation_text,
+        prompts: vec![lead_prompt],
+    };
+    assert_eq!(
+        state.settle_ended_request(agent, 40, |_| Some(record.clone())),
+        Some(lead)
+    );
+    let steered = state.request(follow).unwrap();
+    assert_eq!(steered.phase, RequestPhase::Completed);
+    assert_eq!(
+        steered.reply().map(|reply| reply.text.as_str()),
+        Some("STEER-DONE")
+    );
+    assert!(steered.failure_reason.is_none());
+    assert!(steered.group.is_none());
+    let lead_state = state.request(lead).unwrap();
+    assert_eq!(lead_state.phase, RequestPhase::Completed);
+    assert_eq!(
+        lead_state.reply().map(|reply| reply.text.as_str()),
+        Some("LEAD-DONE")
+    );
+    assert!(state
+        .settle_ended_request(agent, 50, |_| Some(record))
+        .is_none());
+}
+
+#[test]
 fn kimi_process_exit_settles_confirmed_submission_before_start_hook() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;

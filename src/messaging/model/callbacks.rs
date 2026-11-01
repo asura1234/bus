@@ -1,7 +1,7 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase,
+    PendingFinal, Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase,
 };
 
 impl BusState {
@@ -533,6 +533,38 @@ impl BusState {
         ));
     }
 
+    /// Confirmed Kimi steering has no turn of its own yet. Its reply is a later
+    /// wire turn, so the lead's final must not close it.
+    pub(super) fn kimi_confirmed_steer_awaits_own_turn(&self, member: &Request) -> bool {
+        self.agents.get(&member.agent_id).is_some_and(|agent| {
+            agent.provider == Provider::Kimi
+                && member.steered
+                && !member.trusted_start_bound
+                && !member.uncertain_outcome
+                && !member.settled()
+                && member.phase == RequestPhase::Active
+        })
+    }
+
+    pub(super) fn hold_or_demote_unclaimed_steer(&mut self, id: RequestId) {
+        if self
+            .requests
+            .get(&id)
+            .is_some_and(|member| self.kimi_confirmed_steer_awaits_own_turn(member))
+        {
+            return;
+        }
+        let Some(member) = self.requests.get_mut(&id) else {
+            return;
+        };
+        member.phase = RequestPhase::Submitting;
+        member.uncertain_outcome = true;
+        member.submission_error = Some(
+            "Provider turn ended without claiming this input; awaiting turn ownership proof."
+                .into(),
+        );
+    }
+
     /// Settles the agent's current request, and every request in its group,
     /// with its captured final reply. Confirmed members publish immediately.
     /// Unconfirmed steering needs turn proof, with the completed lead retained
@@ -582,14 +614,7 @@ impl BusState {
             pending.provider_turn_id.as_deref(),
         );
         for member in &unresolved {
-            if let Some(member) = self.requests.get_mut(member) {
-                member.phase = RequestPhase::Submitting;
-                member.uncertain_outcome = true;
-                member.submission_error = Some(
-                    "Provider turn ended without claiming this input; awaiting turn ownership proof."
-                        .into(),
-                );
-            }
+            self.hold_or_demote_unclaimed_steer(*member);
         }
         self.publish_group_reply(request_id, &members, &pending)?;
         for member in members {

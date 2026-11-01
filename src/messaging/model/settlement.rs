@@ -41,6 +41,7 @@ impl BusState {
         }) else {
             return false;
         };
+        let idle = owner.status == RuntimeStatus::Idle;
         let Some(lead) = owner
             .current_request
             .and_then(|id| self.requests.get(&id))
@@ -77,8 +78,19 @@ impl BusState {
         }
         // A later member's transcript lookup can prove earlier inputs too.
         // Resolve all available evidence before declaring any member uncertain.
+        // A confirmed Kimi steer can still become its own turn after the lead
+        // final. Idle is not that failure; keep the lead anchored until the
+        // follow-up's wire arrives or the process exits.
+        let mut awaiting_own_turn = false;
         for id in &members {
-            if let Some(member) = self.requests.get_mut(id).filter(|m| !m.settled()) {
+            let Some(member) = self.requests.get(id).filter(|m| !m.settled()).cloned() else {
+                continue;
+            };
+            if idle && self.kimi_confirmed_steer_awaits_own_turn(&member) {
+                awaiting_own_turn = true;
+                continue;
+            }
+            if let Some(member) = self.requests.get_mut(id) {
                 member.group = None;
                 member.phase = RequestPhase::Abandoned;
                 member.completed_at_ms = Some(now_ms);
@@ -86,6 +98,9 @@ impl BusState {
                 member.uncertain_outcome = true;
                 uncertain.get_or_insert(member.prompt.id);
             }
+        }
+        if awaiting_own_turn {
+            return uncertain.is_some();
         }
         if let Some(request) = self.requests.get_mut(&lead.id) {
             request.pending_final = None;
@@ -569,6 +584,7 @@ impl BusState {
                     && !member.trusted_start_bound
                     && !member.settled()
                     && !self.recorded_for(member, id, &members, prompts)
+                    && !self.kimi_confirmed_steer_awaits_own_turn(member)
             })
             .map(|member| member.id)
             .collect();
@@ -584,7 +600,11 @@ impl BusState {
         let session = self.requests.get(&id)?.provider_session_id.clone();
         if let Some(turn) = answer.provider_turn_id.as_deref() {
             for member in members {
-                if self.requests.get(&member).is_some_and(|m| !m.settled()) {
+                if self
+                    .requests
+                    .get(&member)
+                    .is_some_and(|m| !m.settled() && !self.kimi_confirmed_steer_awaits_own_turn(m))
+                {
                     self.bind_recorded_member(member, session.clone(), turn);
                 }
             }
