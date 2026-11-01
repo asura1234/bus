@@ -68,3 +68,67 @@ async fn production_driver_observes_shell_without_an_agent_or_dialog_parser() {
     runtime.test_process_pty_bytes(b"\x1b[?2026hpartial redraw");
     assert!(observe(&runtime).is_err());
 }
+
+#[tokio::test]
+async fn observing_terminal_preserves_unpublished_dirty_rows() {
+    use crate::terminal::emulator::TerminalDirtyPatchOutcome;
+    fn changed_runtime() -> crate::terminal::TerminalRuntime {
+        let (runtime, _writes) = crate::terminal::TerminalRuntime::test_with_channel(20, 3);
+        runtime.test_process_pty_bytes(b"OLD");
+        assert!(matches!(
+            runtime.collect_dirty_patch(20, 3),
+            TerminalDirtyPatchOutcome::Patch(_)
+        ));
+        runtime.test_process_pty_bytes(b"\rNEW");
+        runtime
+    }
+    let baseline = changed_runtime();
+    let control = baseline.collect_dirty_patch(20, 3);
+    assert!(matches!(&control, TerminalDirtyPatchOutcome::Patch(patch) if !patch.rows.is_empty()));
+    let runtime = changed_runtime();
+    let (grid, _) = observe(&runtime).unwrap();
+    assert!(grid.text().contains("NEW"));
+    let after_observation = runtime.collect_dirty_patch(20, 3);
+    let TerminalDirtyPatchOutcome::Patch(patch) = after_observation else {
+        panic!("read-only observation must retain the unpublished patch");
+    };
+    assert!(patch.rows.iter().any(|(_, cells)| cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>()
+        .contains("NEW")));
+}
+
+#[tokio::test]
+async fn inverse_only_menu_focus_survives_terminal_observation() {
+    let (runtime, _writes) = crate::terminal::TerminalRuntime::test_with_channel(20, 3);
+    runtime.test_process_pty_bytes(b"\x1b[7mYes\x1b[0m\r\nNo");
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(
+        selection_step(&grid, "Yes"),
+        Ok(SelectionStep::Confirm),
+        "a visibly inverse-selected row must remain selectable after production observation"
+    );
+}
+
+#[tokio::test]
+async fn production_driver_preserves_cells_links_wide_text_and_cursor() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(20, 3);
+    runtime.test_process_pty_bytes(
+        "\x1b[1;3;4;38;2;1;2;3m界\x1b[0m\x1b]8;;https://example.test\x1b\\link\x1b]8;;\x1b\\"
+            .as_bytes(),
+    );
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(grid.row_text(0), "界link");
+    assert_eq!(grid.cells[0][1].symbol, "");
+    assert_eq!(grid.cells[0][0].fg, "#010203");
+    assert_eq!(grid.cells[0][0].attrs, ["bold", "italic", "underline"]);
+    assert_eq!(
+        grid.cells[0][2].link.as_deref(),
+        Some("https://example.test")
+    );
+    let cursor = grid.cursor.unwrap();
+    assert_eq!((cursor.row, cursor.col, cursor.visible), (0, 6, true));
+    runtime.test_process_pty_bytes(b"\x1b[?25l");
+    assert!(!observe(&runtime).unwrap().0.cursor.unwrap().visible);
+}

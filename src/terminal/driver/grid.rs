@@ -1,6 +1,4 @@
 //! Styled terminal cells shared by pane observation and the scratch UI driver.
-use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier};
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) use crate::protocol::api::schema::driver::{Cell, Cursor, Grid};
@@ -23,30 +21,80 @@ impl Grid {
         }
     }
 
-    pub fn from_buffer(buffer: &Buffer) -> Self {
-        let area = buffer.area;
-        let cells = (0..area.height)
-            .map(|y| {
-                (0..area.width)
-                    .map(|x| {
-                        let cell = &buffer[(x, y)];
-                        Cell {
-                            symbol: cell.symbol().to_owned(),
-                            fg: color_name(cell.fg),
-                            bg: color_name(cell.bg),
-                            attrs: attrs(cell.modifier),
-                            link: None,
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-        Self {
-            cols: area.width,
-            rows: area.height,
-            cells,
-            cursor: None,
+    /// Read original VT cells; presentation color transforms and dirty acknowledgement
+    /// belong to the renderer, not to observation.
+    pub(super) fn from_terminal(
+        terminal: &crate::terminal::vt::Terminal,
+    ) -> Result<Self, crate::terminal::vt::Error> {
+        use crate::terminal::vt::{CellColor, CellWide, KITTY_UNICODE_PLACEHOLDER};
+        fn color(color: Option<CellColor>) -> String {
+            match color {
+                None => "default".into(),
+                Some(CellColor::Palette(index)) => format!("idx:{index}"),
+                Some(CellColor::Rgb(rgb)) => format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b),
+            }
         }
+        let cols = terminal.cols()?;
+        let rows = terminal.rows()?;
+        let mut cells = Vec::with_capacity(usize::from(rows));
+        for y in 0..rows {
+            let mut row = Vec::with_capacity(usize::from(cols));
+            for x in 0..cols {
+                let (wide, graphemes, style) = terminal.viewport_styled_cell(x, u32::from(y))?;
+                let symbol = if wide == CellWide::SpacerTail {
+                    String::new()
+                } else if graphemes.is_empty()
+                    || graphemes.first() == Some(&KITTY_UNICODE_PLACEHOLDER)
+                {
+                    " ".into()
+                } else {
+                    graphemes.into_iter().filter_map(char::from_u32).collect()
+                };
+                let attrs = [
+                    (style.bold, "bold"),
+                    (style.faint, "dim"),
+                    (style.italic, "italic"),
+                    (style.underlined, "underline"),
+                    (style.inverse, "inverse"),
+                    (style.strikethrough, "strike"),
+                    (style.blink, "blink"),
+                    (style.invisible, "hidden"),
+                    (style.overline, "overline"),
+                ]
+                .into_iter()
+                .filter(|(set, _)| *set)
+                .map(|(_, name)| name.to_owned())
+                .collect();
+                row.push(Cell {
+                    symbol,
+                    fg: color(style.fg_color),
+                    bg: color(style.bg_color),
+                    attrs,
+                    link: terminal.viewport_hyperlink_uri(x, u32::from(y))?,
+                });
+            }
+            cells.push(row);
+        }
+        let scrollbar = terminal.scrollbar()?;
+        let from_bottom = scrollbar
+            .total
+            .saturating_sub(scrollbar.offset + scrollbar.len);
+        let y = usize::from(terminal.cursor_y()?).saturating_add(from_bottom);
+        let cursor = if y < usize::from(rows) {
+            Some(Cursor {
+                row: y as u16,
+                col: terminal.cursor_x()?,
+                visible: terminal.mode_get(25)?,
+            })
+        } else {
+            None
+        };
+        Ok(Self {
+            cols,
+            rows,
+            cells,
+            cursor,
+        })
     }
 
     /// Row text with trailing blanks trimmed. Wide tails contribute nothing.
@@ -88,30 +136,4 @@ impl Grid {
     pub fn text(&self) -> String {
         self.rows_text().join("\n")
     }
-}
-
-fn color_name(color: Color) -> String {
-    match color {
-        Color::Reset => "default".into(),
-        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        Color::Indexed(index) => format!("idx:{index}"),
-        other => format!("{other:?}").to_lowercase(),
-    }
-}
-
-fn attrs(modifier: Modifier) -> Vec<String> {
-    [
-        (Modifier::BOLD, "bold"),
-        (Modifier::DIM, "dim"),
-        (Modifier::ITALIC, "italic"),
-        (Modifier::UNDERLINED, "underline"),
-        (Modifier::REVERSED, "inverse"),
-        (Modifier::CROSSED_OUT, "strike"),
-        (Modifier::SLOW_BLINK, "blink"),
-        (Modifier::HIDDEN, "hidden"),
-    ]
-    .into_iter()
-    .filter(|(flag, _)| modifier.contains(*flag))
-    .map(|(_, name)| name.to_owned())
-    .collect()
 }

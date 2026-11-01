@@ -178,6 +178,20 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
 }
 
 impl TerminalRuntime {
+    /// Immutable emulator access; does not update or acknowledge render state.
+    pub(in crate::terminal) fn with_terminal<T>(
+        &self,
+        read: impl FnOnce(&crate::terminal::vt::Terminal) -> Result<T, crate::terminal::vt::Error>,
+    ) -> Result<T, String> {
+        let core = self
+            .terminal
+            .ghostty
+            .core
+            .lock()
+            .map_err(|e| e.to_string())?;
+        read(&core.terminal).map_err(|e| e.to_string())
+    }
+
     /// Scroll up by N lines (into scrollback history).
     pub fn scroll_up(&self, lines: usize) {
         self.terminal.scroll_up(lines);
