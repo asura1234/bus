@@ -84,6 +84,12 @@ pub enum ResponseResult {
     AgentDialog {
         observation: super::agents::AgentDialogObservation,
     },
+    TerminalObserved {
+        observation: super::agents::TerminalObservation,
+    },
+    TerminalPressed {
+        press: super::agents::TerminalPressResult,
+    },
     AgentDialogChosen {
         choice: super::agents::AgentDialogChooseResult,
     },

@@ -1,5 +1,6 @@
 mod basic;
 mod dialog;
+mod driver;
 mod prompt;
 mod read;
 mod startup_snapshot;

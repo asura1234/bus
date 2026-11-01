@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod common;
 pub mod copy;
+pub mod driver;
 pub mod events;
 pub mod layout;
 pub mod methods;

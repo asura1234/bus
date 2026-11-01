@@ -1,3 +1,4 @@
+pub(crate) mod driver;
 pub(crate) mod emulator;
 pub(crate) mod events;
 mod history;

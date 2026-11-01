@@ -22,6 +22,48 @@ pub struct AgentSendKeysParams {
     pub keys: Vec<String>,
 }
 
+/// Provider-independent observation, including terminals with no agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentObserveParams {
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPressParams {
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_terminal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub submit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TerminalObservation {
+    pub terminal_id: String,
+    pub pane_id: String,
+    pub content_revision: u64,
+    pub text: String,
+    pub grid: super::driver::Grid,
+    pub focus: Option<(usize, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TerminalPressResult {
+    pub keys: Vec<String>,
+    pub text_written: bool,
+    /// One navigation step was written; observe its redraw before continuing.
+    pub selection_pending: bool,
+    pub observation: TerminalObservation,
+}
+
 /// Observing is read-only unless the caller explicitly opens a queued question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentDialogObserveParams {

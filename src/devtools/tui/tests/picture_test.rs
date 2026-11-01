@@ -54,8 +54,8 @@ fn italic_cells_look_different_from_plain_ones() {
     let normal = screen.grid();
     screen.feed(b"\x1b[H\x1b[3mplain\x1b[0m");
     let italic = screen.grid();
-    assert!(italic.cells[0][0].attrs.contains(&"italic"));
-    assert!(!normal.cells[0][0].attrs.contains(&"italic"));
+    assert!(italic.cells[0][0].attrs.contains(&"italic".to_owned()));
+    assert!(!normal.cells[0][0].attrs.contains(&"italic".to_owned()));
 
     let normal_path =
         crate::utils::test_temp::unique_temp_path("normal-cell-style").with_extension("png");

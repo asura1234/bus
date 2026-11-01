@@ -1,6 +1,9 @@
 use super::*;
 use serde_json::json;
 
+#[path = "tests/driver_test.rs"]
+mod driver_tests;
+
 fn command(args: &[&str]) -> Result<ParsedCommand, String> {
     parse(
         &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
@@ -181,6 +184,8 @@ const SAMPLES: &[&[&str]] = &[
         "/w",
     ],
     &["agent", "read", "a", "--source", "visible"],
+    &["agent", "observe", "a"],
+    &["agent", "press", "a", "--key", "y"],
     &["agent", "dialog", "a"],
     &[
         "agent",
