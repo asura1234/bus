@@ -51,7 +51,7 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         build.append(Gate("lint", (sys.executable, SCRIPT, "lint"), env=env))
     if rust:
         # Explicit empty preflight compiles every default artifact once, including the
-        # CLI used by Python, before concurrent nextest invocations read the cache.
+        # CLI used by Python, before the test lanes run.
         argv = nextest("--all-targets", coverage=instrumented, expression="none()")
         build.append(Gate("instrumented-build" if instrumented else "test-build",
                           tuple("--no-tests=pass" if arg == "--no-tests=fail" else arg for arg in argv),
@@ -93,6 +93,13 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         tests.insert(0, Gate("cli-smoke", (str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus")), "--help"),
                           env=quality.child_env(LLVM_PROFILE_FILE=str(target / quality.profile_file_name("cli")))))
     normal = quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
+    if rust or selection.binary:
+        # Preflight does not prevent a later Cargo command from relinking.
+        # Writers and consumers of the default target must not overlap;
+        # dev-tools uses the separate normal target when both variants run.
+        shared = frozenset({"default-cargo-output"})
+        tests = [replace(gate, resources=gate.resources | shared)
+                 if gate.name != "dev-tools" else gate for gate in tests]
     if instrumented and target.resolve() == normal.resolve():
         # A user may explicitly co-locate outputs. Both Cargo writes and all
         # binary consumers then need serialization across the feature variants.
@@ -105,7 +112,7 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
 def batch(gates: list[Gate], *, nested: bool = False) -> list[GateResult]:
     if not gates:
         return []
-    print("Running concurrently: " + ", ".join(gate.name for gate in gates), flush=True)
+    print("Scheduling: " + ", ".join(gate.name for gate in gates), flush=True)
     results = run_gates(gates, cwd=quality.ROOT, private_groups=not nested)
     results = [replace(result, exit_code=0, stdout=result.stdout +
                        "\npytest exit 5: empty selection, nothing to run\n")
