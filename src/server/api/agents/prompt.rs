@@ -16,8 +16,23 @@ pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SU
 
 pub(super) fn detection_composer(
     kind: crate::agents::AgentKind,
-) -> impl crate::terminal::runtime::SubmissionInspector {
-    composer::observer(kind, String::new())
+) -> Option<Box<dyn crate::terminal::runtime::SubmissionInspector>> {
+    observes_composer(kind).then(|| {
+        Box::new(composer::observer(kind, String::new()))
+            as Box<dyn crate::terminal::runtime::SubmissionInspector>
+    })
+}
+
+fn observes_composer(kind: crate::agents::AgentKind) -> bool {
+    use crate::agents::AgentKind;
+    matches!(
+        kind,
+        AgentKind::Codex
+            | AgentKind::Claude
+            | AgentKind::Cursor
+            | AgentKind::Grok
+            | AgentKind::Kimi
+    )
 }
 
 struct StyledChar {
@@ -495,16 +510,7 @@ fn queue_prompt_input(
             }
         }
     }
-    if !observe
-        || !matches!(
-            kind,
-            AgentKind::Codex
-                | AgentKind::Claude
-                | AgentKind::Cursor
-                | AgentKind::Grok
-                | AgentKind::Kimi
-        )
-    {
+    if !observe || !observes_composer(kind) {
         return runtime.queue_user_input_submission(
             Bytes::from(encoded),
             Bytes::from(enter),

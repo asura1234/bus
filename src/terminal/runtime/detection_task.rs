@@ -794,9 +794,14 @@ mod blocked_tests {
     ) -> (AgentState, bool) {
         let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
         runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
-        runtime.set_detection_context(AgentKind::Kimi, obligation, None, |_: &str| {
-            super::super::InputObservation::Unavailable
-        });
+        runtime.set_detection_context(
+            AgentKind::Kimi,
+            obligation,
+            None,
+            Some(Box::new(|_: &str| {
+                super::super::InputObservation::Unavailable
+            })),
+        );
         runtime
             .managed_launch_pending
             .store(startup, Ordering::Release);
@@ -891,9 +896,14 @@ mod blocked_tests {
     #[tokio::test]
     async fn pty_activity_keeps_an_existing_working_turn_working() {
         let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
-        runtime.set_detection_context(AgentKind::Kimi, true, None, |_: &str| {
-            super::super::InputObservation::Unavailable
-        });
+        runtime.set_detection_context(
+            AgentKind::Kimi,
+            true,
+            None,
+            Some(Box::new(|_: &str| {
+                super::super::InputObservation::Unavailable
+            })),
+        );
         runtime.test_process_pty_bytes(b"Tool output is still arriving\r\n");
         assert_eq!(
             runtime
@@ -907,9 +917,14 @@ mod blocked_tests {
     #[tokio::test]
     async fn a_plain_shell_does_not_inherit_an_exited_agents_obligation() {
         let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
-        runtime.set_detection_context(AgentKind::Kimi, true, None, |_: &str| {
-            super::super::InputObservation::Unavailable
-        });
+        runtime.set_detection_context(
+            AgentKind::Kimi,
+            true,
+            None,
+            Some(Box::new(|_: &str| {
+                super::super::InputObservation::Unavailable
+            })),
+        );
         runtime.test_process_pty_bytes(b"$ ");
         assert_eq!(
             runtime

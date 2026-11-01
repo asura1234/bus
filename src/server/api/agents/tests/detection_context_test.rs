@@ -122,3 +122,16 @@ async fn grok_welcome_without_composer_blocks_but_empty_native_composer_is_ready
         AgentState::Idle
     );
 }
+
+#[tokio::test]
+#[cfg(feature = "dev-tools")]
+async fn a_provider_without_observed_submission_keeps_its_visible_idle_signal() {
+    assert_eq!(
+        detect(AgentKind::Fake, "fake> ", true, None, false).await,
+        AgentState::Idle
+    );
+    assert_eq!(
+        detect(AgentKind::Fake, "Choose the next action", true, None, false).await,
+        AgentState::Blocked
+    );
+}

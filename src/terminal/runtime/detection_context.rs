@@ -41,7 +41,7 @@ impl TerminalRuntime {
         kind: AgentKind,
         obligation: bool,
         activity_age_ms: Option<u64>,
-        inspector: impl SubmissionInspector + 'static,
+        inspector: Option<Box<dyn SubmissionInspector>>,
     ) {
         let mut context = self
             .detection_context
@@ -52,7 +52,7 @@ impl TerminalRuntime {
             kind: Some(kind),
             activity_at: activity_age_ms
                 .and_then(|age| Instant::now().checked_sub(Duration::from_millis(age))),
-            inspector: Some(Box::new(inspector)),
+            inspector,
             pristine: self.startup_suggestion_open.clone(),
         };
     }
