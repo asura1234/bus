@@ -890,16 +890,21 @@ idle then deliver, and an approval card without `--yolo`.
   live Bash header uses those same words. Screen text cannot tell them
   apart. The live header is `● Running a command · $ sleep 45` plus
   `Approved:` and a spinner tip, so it is about the eighth non-empty line
-  above the composer. A finished reply has no `· $ command` suffix and is
-  not bold. Test: scratch HOME (share `credentials` and `oauth`, copy
-  `config.toml`; never the live Bus or real `~/.kimi-code` tree), private
-  `BUS_DATA_DIR` 0700, `sleep 45` then a reply that is exactly
-  `Running a command`. Rule: keep Working for a `· $ command` suffix.
-  After the turn's `agent.turn.ended` / `turn.ended` / `prompt.completed`
-  chain, or when that wire cannot be read and the line is not bold, a
-  bare `● Running a command` above an empty composer is Idle. Bus launches
-  Kimi with `/usr/bin/env KIMI_CODE_HOME=…` in an existing pane, so the
-  detector often has no home from the PTY CommandBuilder; do not treat a
-  missing wire as proof the header is a reply. Scratch `sbus` must pass
+  above the composer. The reproduced bare final had no suffix or bold,
+  but a finished reply can also reproduce those styles. Test: use the
+  [scratch setup](#scratch-setup-and-build-identity) with real `HOME` and
+  private `BUS_DATA_DIR` 0700, `sleep 45` then a reply that is exactly
+  `Running a command`. Rule: when the private wire is readable, its main
+  turn decides this command marker: an open turn is Working; the complete
+  `agent.turn.ended` / `turn.ended` / `prompt.completed` chain is Idle even
+  if the final reply has a `· $ command` suffix or bold styling. Without
+  readable wire evidence, require both a bold header and an actual
+  `· $ command` suffix; a bold bare phrase or `· explanation` is Idle.
+  Managed add and cold resume pass private `KIMI_CODE_HOME` before PTY
+  creation. Native `agent.start` in an existing shell also binds its
+  validated home to the running detector, rather than leaving it only in
+  `/usr/bin/env` argv. A manual launch outside these paths can still lack
+  that binding; missing wire evidence is not proof of completion. Scratch
+  `sbus` must pass
   `SHELL`. `agent add` reads the source `config.toml`; a scratch
   `.kimi-code` without that file fails with `No such file or directory`.
