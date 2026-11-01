@@ -11,6 +11,9 @@ use std::{
     time::SystemTime,
 };
 
+#[path = "trust.rs"]
+mod trust;
+
 const HOME_FILE: &str = "kimi-home.json";
 const EXECUTABLE_FILE: &str = "kimi-executable.json";
 // Kimi 2.4's startup chooser is independent of [upgrade].auto_install.
@@ -210,7 +213,7 @@ fn verify_shared_auth(home: &Path, source: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBuf, String> {
+fn private_home(source: &Path, hooks: &HookContext) -> Result<PathBuf, String> {
     let home = hooks.spool.join("kimi-home");
     crate::platform::fs::private_dir(&home).map_err(|e| e.to_string())?;
     for name in ["device_id", "region"] {
@@ -220,27 +223,7 @@ fn private_home(source: &Path, cwd: &Path, hooks: &HookContext) -> Result<PathBu
         }
     }
     share_auth(source, &home)?;
-    // Carry only a trust decision the user already made for this exact cwd.
-    // A fresh project still shows Kimi's native trust prompt.
-    let trust_source = source.join("workspace-trust");
-    if trust_source.is_dir() {
-        for entry in std::fs::read_dir(&trust_source).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let meta = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
-            if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 4096 {
-                continue;
-            }
-            let bytes = std::fs::read(entry.path()).map_err(|e| e.to_string())?;
-            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-                continue;
-            };
-            if value.get("root").and_then(serde_json::Value::as_str) == cwd.to_str() {
-                let trust_home = home.join("workspace-trust");
-                crate::platform::fs::private_dir(&trust_home).map_err(|e| e.to_string())?;
-                copy_private_file(&entry.path(), &trust_home.join(entry.file_name()))?;
-            }
-        }
-    }
+    trust::share(source, &home)?;
     let source_config =
         std::fs::read_to_string(source.join("config.toml")).map_err(|e| e.to_string())?;
     let mut config: toml::Value =
@@ -310,7 +293,8 @@ fn hook_command(hooks: &HookContext) -> String {
 }
 
 pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
-    let home = saved_home(hooks)?;
+    let saved = checked_home_record(hooks)?;
+    let home = saved.path;
     let path = home.join("config.toml");
     let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 2 * 1024 * 1024 {
@@ -362,6 +346,7 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
         hook_json::atomic_write(&path, bytes.as_bytes()).map_err(|e| e.to_string())?;
     }
     changed |= write_tui_settings(&home)?;
+    changed |= trust::share(&saved.source, &home)?;
     Ok(changed)
 }
 
@@ -490,7 +475,7 @@ pub(crate) fn bind_home(mut argv: Vec<String>, home: &Path) -> Result<Vec<String
     Ok(argv)
 }
 
-pub(crate) fn saved_home(hooks: &HookContext) -> Result<PathBuf, String> {
+fn checked_home_record(hooks: &HookContext) -> Result<HomeRecord, String> {
     let saved: HomeRecord =
         serde_json::from_value(hook_json::read_resume_json(&hooks.spool.join(HOME_FILE))?)
             .map_err(|_| "Saved Kimi home is invalid")?;
@@ -501,7 +486,11 @@ pub(crate) fn saved_home(hooks: &HookContext) -> Result<PathBuf, String> {
         return Err("Saved Kimi home changed; relaunch required".into());
     }
     verify_shared_auth(&saved.path, &saved.source)?;
-    Ok(saved.path)
+    Ok(saved)
+}
+
+pub(crate) fn saved_home(hooks: &HookContext) -> Result<PathBuf, String> {
+    Ok(checked_home_record(hooks)?.path)
 }
 
 pub(crate) fn saved_executable(hooks: &HookContext) -> Result<PathBuf, String> {
@@ -578,7 +567,7 @@ pub(crate) fn prepare(
     }
     let source = source_home()?;
     let executable = resolve_executable(&source)?;
-    let home = private_home(&source, &cwd, &spec.hooks)?;
+    let home = private_home(&source, &spec.hooks)?;
     initialize(&spec.hooks)?;
     for (name, bytes) in [
         (
@@ -611,6 +600,10 @@ pub(crate) fn prepare(
 mod update_test;
 
 #[cfg(all(test, unix))]
+#[path = "trust_test.rs"]
+mod trust_test;
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
@@ -630,7 +623,7 @@ mod tests {
             spool,
             launch_id: "launch".into(),
         };
-        let home = private_home(&source, &root, &hooks).unwrap();
+        let home = private_home(&source, &hooks).unwrap();
         let tui = std::fs::read_to_string(home.join("tui.toml")).unwrap();
         assert!(tui.contains("cache_expiry_hint = false"));
         assert!(tui.contains("auto_install = false"));
@@ -691,7 +684,7 @@ mod tests {
             spool,
             launch_id: "launch".into(),
         };
-        let home = private_home(&source, &root, &hooks).unwrap();
+        let home = private_home(&source, &hooks).unwrap();
         hook_json::atomic_write(
             &hooks.spool.join(HOME_FILE),
             &serde_json::to_vec(&home_record(&home, &source).unwrap()).unwrap(),
@@ -746,7 +739,7 @@ mod tests {
             spool,
             launch_id: "launch".into(),
         };
-        assert!(private_home(&source, &root, &hooks).is_err());
+        assert!(private_home(&source, &hooks).is_err());
         assert_eq!(
             std::fs::read(credentials.join("kimi-code.json")).unwrap(),
             b"synthetic"
