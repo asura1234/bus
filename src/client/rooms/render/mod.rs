@@ -46,6 +46,7 @@ pub(super) enum Action {
     ScrollFiles(bool),
     Notes,
     Composer,
+    Search(super::chat_search::SearchFocus),
     Recipients,
     Recipient(Option<crate::messaging::model::AgentId>),
     Files,
