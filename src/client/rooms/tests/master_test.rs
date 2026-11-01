@@ -259,7 +259,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
 
     assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 2, 2]);
     assert_eq!(hit_rows(&ui, render::Action::NewRoom), [4]);
-    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [6, 6, 7, 7, 11]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [6, 6, 7, 7]);
     assert_eq!(hit_rows(&ui, render::Action::Room(other)), [8, 8, 9, 9]);
     assert_eq!(hit_rows(&ui, render::Action::NewAgent), [11]);
     assert_eq!(hit_rows(&ui, render::Action::Agent(worker))[0], 13);
