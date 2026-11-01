@@ -1,7 +1,7 @@
 """Opt-in real Kimi trust acceptance adapted from inv-8259's failing probe.
 
 BUS_KIMI_TRUST_BINARY=/absolute/bus BUS_KIMI_TRUST_SHA=<full-sha> \
-    python3 tests/kimi_trust_acceptance.py -v
+    python3 tests/kimi_trust_acceptance_test.py -v
 Uses real HOME, a fresh private Bus and project. Only Kimi's native trust answer
 may add one throwaway project entry to the real store; credentials are never copied.
 """
