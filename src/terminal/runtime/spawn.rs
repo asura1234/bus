@@ -12,6 +12,7 @@ use crate::terminal::runtime::io::PaneRuntimeIo;
 use crate::terminal::runtime::read::{pty_read_callback, PtyReadContext};
 use crate::terminal::runtime::AgentDetection;
 use crate::terminal::runtime::TerminalRuntime;
+use crate::utils::env::is_executable_file;
 use crate::utils::ids::PaneId;
 use crate::utils::logging::pane_spawn_started;
 use crate::utils::render::signal::RenderSignal;
@@ -247,24 +248,6 @@ pub(super) fn shell_mode_uses_login_shell(
         crate::utils::config::ShellModeConfig::Auto => target == ShellLaunchTarget::Macos,
         crate::utils::config::ShellModeConfig::Login => true,
         crate::utils::config::ShellModeConfig::NonLogin => false,
-    }
-}
-
-pub(crate) fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
     }
 }
 

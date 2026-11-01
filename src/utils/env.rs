@@ -1,4 +1,5 @@
 //! Inherited process facts shared by the component callers.
+use std::path::Path;
 use std::path::PathBuf;
 
 pub(crate) const BUS_ENV_VAR: &str = "HERDR_ENV";
@@ -29,6 +30,26 @@ pub(crate) fn path_var() -> Option<std::ffi::OsString> {
     std::env::var_os("PATH")
 }
 
+/// A regular file with an execute bit. Non-Unix treats every regular file as
+/// executable, matching the host `execvp`.
+pub(crate) fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 /// First executable `program` on [`path_var`]. Relative entries stay relative;
 /// callers that exec after a chdir resolve them. A non-executable namesake is
 /// skipped, matching `execvp`.
@@ -37,7 +58,7 @@ pub(crate) fn resolve_on_path(program: impl AsRef<std::ffi::OsStr>) -> Option<Pa
     let path = path_var()?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(program))
-        .find(|candidate| crate::terminal::runtime::spawn::is_executable_file(candidate))
+        .find(|candidate| is_executable_file(candidate))
 }
 
 /// `Command` for a bare program name.
