@@ -231,12 +231,9 @@ the wrapper remains held.
   writer at a time, or give them one owner. Use separate worktrees and branches
   for parallel authors with heavy overlap or conflicting gates/builds; control
   their integration. Follow [Parallel writes](parallel-writes.md).
-- **Keep reviews and investigations in the author's feature worktree.** Only
-  test additions may change repository content in these roles; reuse the owner's
-  binary/target and build slot, save probe patches and remove your additions
-  before handoff. Never create review/diagnostic clones or build main; before a
-  fix exists, create its feature worktree with `worktree-new`. Follow the full
-  [review and investigation rules](parallel-writes.md#reviews-and-investigations).
+- **Apply the read-only workspace policy.** Follow
+  [Reviews and investigations](parallel-writes.md#reviews-and-investigations)
+  when briefing reviews, investigations or exploration.
 - **Give every parallel worker the installed write guide.** Each brief tells
   the worker to read the absolute session `docs/parallel-writes.md` path and
   includes its ownership map; resolve the path before sending the brief.

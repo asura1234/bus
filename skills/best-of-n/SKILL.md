@@ -19,7 +19,8 @@ this skill share the same priors and cannot produce the same disagreement.
 Use the installed Bus executable (or the absolute executable supplied by the active Bus session).
 Resolve it once as BUS_CLI. If unavailable, report the missing tool or consume caller-provided proposals;
 never build or start Bus from the target repository as an implicit prerequisite. Read the active session's
-communication/CLI guide before creating agents. Reuse existing agents, isolate their target worktree,
+communication/CLI guide before creating agents. Reuse existing agents, follow the
+[workspace policy](../_bus/orchestration/parallel-writes.md#reviews-and-investigations),
 and preserve the selected BUS_DATA_DIR for control calls.
 
 Send the locked question through `"$BUS_CLI" send`, retain its message id, then use

@@ -75,8 +75,7 @@ overlaps so heavily that one branch would need constant hand-offs, or whose
 gates/builds conflict through shared outputs, profiles or a required clean tree.
 Have the author use `worktree-new`; record each checkout, branch, immutable base
 and owner in the map. Authors still obey their ownership maps inside their own
-worktrees. Reviews and investigations use the feature author's worktree as
-specified below; they do not get another checkout.
+worktrees. For read-only work, follow [Reviews and investigations](#reviews-and-investigations).
 
 Reuse exactly one Cargo target per worktree: export
 `CARGO_TARGET_DIR=<worktree>/target` for every Cargo, gate, coverage and E2E run,
@@ -98,33 +97,21 @@ target or checkout.
 
 ## Reviews and investigations
 
-Reviews and investigations are mostly read-only. Their only repository-content
-writes are new test files or added cases in existing test files; never edit
-production code, configuration, build scripts, docs or plans in that role.
-Reports, logs and saved probe patches belong in ignored workflow artifact paths.
-An author who needs to investigate before a fix exists first uses `worktree-new`
-to create the feature worktree where the fix will be made, then investigates
-there. Never build in the main checkout or touch the live Bus or its target.
+Review, investigation and exploration are read-only and get no new worktree,
+clone or scratch repository copy. Only authoring work gets a worktree. Use the
+author's existing worktree, or read with `git show` / `git diff` from the main
+checkout. If investigation leads to a fix, assign authoring work before using
+`worktree-new`; investigation alone does not justify a checkout.
 
-The orchestrator must not create reviewer/investigator worktrees, diagnostic
-clones or scratch repository copies (including `bus-review-*` and `bus-diag-*`).
-Reviewers and investigators use the feature author's development worktree and
-its single target. Prefer the author's already-built binary for the exact head.
+Never build in the main checkout or touch the live Bus or its target. Reuse the
+author's single target and prefer its already-built binary for the exact head.
 If a probe needs compilation, coordinate with the author and use that target
 through the room's build slot; never create a second target. Serialize probe
 writes/builds with the owner's gates so a gate sees only its committed head.
 
-Before adding a probe, tell the author its exact test paths and intended cases,
-and agree exclusive access to any shared test file. Run the focused probe,
-then save a patch containing only your additions, including new untracked test
-files, plus the command and red/green output in ignored review artifacts.
-Remove only your additions before handing back the worktree, even for green
-probes or interrupted reviews; preserve the author's and other reviewers'
-changes. Do not stage, commit, stash or reset the shared tree to do this.
-Report patch paths and prove the affected test paths have returned to their
-pre-probe state. The author independently verifies the evidence and chooses
-whether to adopt/rewrite the probe or leave the saved patch unadopted. A red
-probe must neither dirty the owner's gate nor enter its commit accidentally.
+Probe permissions belong to `review-pr`; handoff follows the
+[probe test lifecycle](https://github.com/asura1234/bus/blob/master/docs/guides/code-review-guide.md#probe-test-lifecycle).
+Reports, logs and saved probe patches belong in ignored workflow artifact paths.
 
 ## Integrate deliberately
 

@@ -254,8 +254,8 @@ Decide how agents share the repository before sending parallel work:
   per acceptance item or group for both investigation and fixes.
 - Follow [Parallel writes](parallel-writes.md), the shared guide for
   orchestrators and workers, for ownership maps, shared-file locks, worktrees,
-  integration and cleanup. Default to one shared branch; switch to separate
-  worktrees for heavy overlap or conflicting gates/builds.
+  integration and cleanup. Use its [workspace policy](parallel-writes.md#reviews-and-investigations)
+  when assigning read-only work.
 - In **every parallel worker's brief**, include its ownership map and tell it
   to read the installed guide by its **absolute path**. Resolve the session
   docs directory from your prompt's References, then append `parallel-writes.md`.

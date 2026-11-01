@@ -58,9 +58,9 @@ MUST NOT:
   - run repository-wide quality gates or builds,
     **including** filtered forms. Those belong to CI and gate-and-fix
   - run unfiltered full suites or live end-to-end checks
-  - create a review worktree/clone/target or build main; use the owner's tree/target and room slot;
-    coordinate probe access, save test patches and remove your additions per guide.md
 ========== 2. DETERMINISTIC PROLOGUE ==========
+
+Read $SKILL_DIR/../_bus/orchestration/parallel-writes.md; in the author's PR-branch worktree, confirm HEAD matches the requested head.
 
 Run:
   python3 "$SKILL_DIR/../review-pr/scripts/review_round.py" \
