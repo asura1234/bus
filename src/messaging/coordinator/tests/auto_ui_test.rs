@@ -70,7 +70,7 @@ impl Transport for AutoServer {
             dialog: native.dialog.clone(),
         };
         match method {
-            Method::AgentList(_) => {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 let mut info = native.info.clone();
                 info.dialog_id = native.dialog.as_ref().map(|d| d.id.clone());
                 info.agent_status = if native.dialog.is_some() {

@@ -7,9 +7,11 @@ struct NativeFailure {
 impl Transport for NativeFailure {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                agents: vec![self.info.clone()],
-            }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList {
+                    agents: vec![self.info.clone()],
+                })
+            }
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
                     "pane_id":"pane", "terminal_id":self.info.terminal_id, "workspace_id":"w1",
@@ -138,7 +140,10 @@ fn deferred_terminal_rebind_does_not_hide_the_next_native_failure() {
     }
     impl Transport for Frames {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            if matches!(method, Method::AgentList(_)) {
+            if matches!(
+                method,
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+            ) {
                 self.current.info = self.pending.pop_front().unwrap();
                 return self.current.request(method);
             }
@@ -246,9 +251,11 @@ fn confirmed_new_native_attempt_clears_the_previous_startup_error() {
     impl Transport for Frames {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                    agents: vec![self.0.pop_front().unwrap()],
-                }),
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList {
+                        agents: vec![self.0.pop_front().unwrap()],
+                    })
+                }
                 other => panic!("unexpected native recovery operation: {other:?}"),
             }
         }
@@ -298,7 +305,9 @@ struct ExitedWhileDetached;
 impl Transport for ExitedWhileDetached {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList { agents: vec![] })
+            }
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
                     "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1",
@@ -350,9 +359,11 @@ fn native_resume_correlation_rejects_foreign_and_ambiguous_ownership() {
     impl Transport for ListOnly {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                    agents: self.0.clone(),
-                }),
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList {
+                        agents: self.0.clone(),
+                    })
+                }
                 _ => Ok(ResponseResult::Ok {}),
             }
         }
@@ -423,7 +434,7 @@ struct RejectedResumeInNewTerminal;
 impl Transport for RejectedResumeInNewTerminal {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
                 agents: vec![serde_json::from_value(json!({
                     "terminal_id":"restored-terminal", "pane_id":"pane", "name":"bus-r1-a2",
                     "native_resume":{"name":"bus-r1-a2","agent":"claude","session_id":"session","command":"claude --resume session","error":"provider exited before startup confirmation"},

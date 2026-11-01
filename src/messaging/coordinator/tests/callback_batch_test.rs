@@ -12,7 +12,7 @@ struct BareServer {
 impl Transport for BareServer {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 let mut info = native_info("pane", "claude", "session");
                 info.name = Some(self.managed_name.clone());
                 info.interactive_ready = true;

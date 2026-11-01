@@ -921,6 +921,54 @@
     },
     "request": {
       "$defs": {
+        "AgentDetectionContext": {
+          "description": "Request obligations for the exact native pane observed by the coordinator.",
+          "properties": {
+            "activity_age_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "obligation": {
+              "type": "boolean"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "pane_id",
+            "obligation"
+          ],
+          "type": "object"
+        },
+        "AgentDetectionContexts": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/request/$defs/AgentDetectionContext"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "agents"
+          ],
+          "type": "object"
+        },
         "AgentDialogAnswerParams": {
           "additionalProperties": false,
           "properties": {
@@ -3413,6 +3461,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.list_with_detection_context",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentDetectionContexts"
             }
           },
           "required": [

@@ -214,6 +214,9 @@ mod prompt;
 #[path = "dialog_test.rs"]
 mod dialog;
 
+#[path = "detection_context_test.rs"]
+mod detection_context;
+
 #[tokio::test]
 async fn agent_send_keys_validates_every_key_before_writing() {
     let mut app = app_with_agent();

@@ -33,7 +33,7 @@ struct FloodNative {
 impl Transport for FloodNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 let poll = self.polls.fetch_add(1, Ordering::SeqCst);
                 self.info.launch_pending = poll == 0;
                 self.info.interactive_ready = poll > 0;

@@ -4,7 +4,7 @@ struct MissingNative;
 impl Transport for MissingNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
             Method::PaneGet(p) => Ok(ResponseResult::PaneInfo { pane: serde_json::from_value(json!({
                 "pane_id":p.pane_id, "terminal_id":"terminal", "workspace_id":"w1", "tab_id":"t1",
                 "focused":false, "agent_status":"unknown", "revision":1
@@ -597,7 +597,9 @@ struct RecoveredProviderExit {
 impl Transport for RecoveredProviderExit {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList { agents: vec![] })
+            }
             Method::PaneGet(p) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
                     "pane_id": p.pane_id, "terminal_id": "new-terminal",

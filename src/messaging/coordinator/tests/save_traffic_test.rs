@@ -14,7 +14,7 @@ impl Transport for IdleAgent {
             .unwrap()
             .push(crate::protocol::api::api_method_name(&method));
         match method {
-            Method::AgentList(_) => {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 let mut info = native_info("pane", "claude", "session");
                 info.name = Some(self.managed_name.clone());
                 info.interactive_ready = true;

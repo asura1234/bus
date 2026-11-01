@@ -211,7 +211,10 @@ fn a_delete_reply_publishes_removal_before_the_following_tick() {
     }
     impl Transport for BlockPoll {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            assert!(matches!(method, Method::AgentList(_)));
+            assert!(matches!(
+                method,
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+            ));
             self.entered.send(()).unwrap();
             self.resume.recv_timeout(Duration::from_secs(10)).unwrap();
             Ok(ResponseResult::AgentList { agents: vec![] })

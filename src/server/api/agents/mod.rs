@@ -1,4 +1,5 @@
 mod basic;
+mod detection_context;
 mod dialog;
 mod prompt;
 mod read;

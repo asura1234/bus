@@ -1,7 +1,7 @@
 //! Coordinator poll ownership.
 use super::dialogs;
 use super::{
-    io, launch, resume, schema, AgentId, BTreeMap, BusState, Duration, Method, Path, PathBuf,
+    io, launch, resume, schema, AgentId, BTreeMap, BusState, Duration, Path, PathBuf,
     ResponseResult, RoomAgent, RuntimeStatus, Worker,
 };
 
@@ -9,7 +9,9 @@ impl Worker {
     pub(super) fn poll(&mut self) -> Result<Option<Vec<schema::AgentInfo>>, String> {
         let result = self
             .transport
-            .request(Method::AgentList(schema::EmptyParams {}));
+            .request(super::Method::AgentListWithDetectionContext(
+                detection_contexts(&self.state, io::now_ms()),
+            ));
         let infos = match result {
             Ok(ResponseResult::AgentList { agents }) => agents,
             other => {
@@ -338,4 +340,182 @@ fn update_polled_metadata(
         .update_agent_runtime_metadata(agent.id, cwd, branch)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Keep request ownership independent of screen-derived state: blocked work
+/// remains an obligation, while finished turns and idle drafts do not.
+fn detection_contexts(state: &BusState, now: u64) -> schema::AgentDetectionContexts {
+    let obligations: std::collections::BTreeSet<_> = state
+        .requests()
+        .filter(|request| {
+            matches!(
+                request.phase,
+                super::RequestPhase::Queued
+                    | super::RequestPhase::Submitting
+                    | super::RequestPhase::Active
+            )
+        })
+        .map(|request| request.agent_id)
+        .collect();
+    let agents = state
+        .agents()
+        .filter_map(|agent| {
+            let identity = &agent.runtime_identity;
+            let obligation = obligations.contains(&agent.id);
+            let activity_age_ms = agent
+                .current_request
+                .and_then(|id| state.request(id))
+                .filter(|request| {
+                    request.trusted_start_bound
+                        && request.turn_ended_at_ms.is_none()
+                        && request.pending_final.is_none()
+                })
+                .and_then(|request| request.progress_at_ms)
+                .map(|at| now.saturating_sub(at));
+            Some(schema::AgentDetectionContext {
+                terminal_id: identity.terminal_id.clone()?,
+                pane_id: identity.pane_id.clone()?,
+                session_id: identity.session_id.clone(),
+                obligation,
+                activity_age_ms,
+            })
+        })
+        .collect();
+    schema::AgentDetectionContexts { agents }
+}
+
+#[cfg(test)]
+mod detection_context_tests {
+    use super::*;
+    use crate::messaging::model::{
+        AgentRuntimeIdentity, Author, Draft, Provider, SubmissionOutcome,
+    };
+
+    #[test]
+    fn poll_sends_queued_obligations_through_the_transport_request_contract() {
+        use crate::messaging::native::{Transport, TransportError};
+        use crate::protocol::api::schema::Method;
+        use std::sync::{Arc, Mutex};
+
+        struct Capture(Arc<Mutex<Vec<Method>>>);
+        impl Transport for Capture {
+            fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+                self.0.lock().unwrap().push(method.clone());
+                Ok(match method {
+                    Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                        ResponseResult::AgentList { agents: Vec::new() }
+                    }
+                    _ => ResponseResult::Ok {},
+                })
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bus-poll-context-{}-{}",
+            std::process::id(),
+            io::now_ns()
+        ));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let mut worker = Worker::open(root.clone(), Box::new(Capture(captured.clone()))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Kimi, root.clone(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "work".into(),
+                    recipient_ids: [agent].into(),
+                    files: Vec::new(),
+                },
+                Author::Developer,
+                io::now_ms(),
+            )
+            .unwrap();
+        worker.save(state).unwrap();
+        worker.poll().unwrap();
+        let methods = captured.lock().unwrap();
+        let Some(Method::AgentListWithDetectionContext(context)) = methods.first() else {
+            panic!(
+                "coordinator discarded detection context at the request boundary: {:?}",
+                methods.first()
+            );
+        };
+        assert_eq!(
+            context.agents,
+            [schema::AgentDetectionContext {
+                terminal_id: "terminal".into(),
+                pane_id: "pane".into(),
+                session_id: None,
+                obligation: true,
+                activity_age_ms: None,
+            }]
+        );
+        drop(methods);
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn queued_submitting_and_current_requests_remain_detection_obligations() {
+        let mut state = BusState::new();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Kimi, "/tmp".into(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        assert!(!detection_contexts(&state, 100).agents[0].obligation);
+        let request = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "work".into(),
+                    recipient_ids: [agent].into(),
+                    files: Vec::new(),
+                },
+                Author::Developer,
+                100,
+            )
+            .unwrap()[0];
+        assert!(detection_contexts(&state, 100).agents[0].obligation);
+        state.begin_submission(request, "launch", 1).unwrap();
+        assert!(detection_contexts(&state, 100).agents[0].obligation);
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: None,
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        assert!(detection_contexts(&state, 100).agents[0].obligation);
+        assert_eq!(
+            detection_contexts(&state, 100).agents[0].activity_age_ms,
+            None,
+            "a submitted request is not proof that its provider turn started"
+        );
+    }
 }

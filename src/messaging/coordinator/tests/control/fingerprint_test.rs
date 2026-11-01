@@ -122,15 +122,17 @@ fn unavailable_dialog_snapshots_do_not_resolve_an_existing_help_notice() {
     impl crate::messaging::native::Transport for RedrawServer {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                    agents: vec![serde_json::from_value(serde_json::json!({
-                        "terminal_id": "terminal", "pane_id": "pane", "name": "builder",
-                        "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
-                        "interactive_ready": true, "revision": 1,
-                        "agent_status": "idle", "dialog_id": null,
-                    }))
-                    .unwrap()],
-                }),
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList {
+                        agents: vec![serde_json::from_value(serde_json::json!({
+                            "terminal_id": "terminal", "pane_id": "pane", "name": "builder",
+                            "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
+                            "interactive_ready": true, "revision": 1,
+                            "agent_status": "idle", "dialog_id": null,
+                        }))
+                        .unwrap()],
+                    })
+                }
                 Method::AgentDialogObserve(_) => Err(TransportError {
                     code: Some("dialog_observation_unavailable".into()),
                     message: "Synchronized redraw has no coherent snapshot".into(),

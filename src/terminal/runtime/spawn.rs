@@ -783,7 +783,7 @@ impl TerminalRuntime {
             })?)
         };
 
-        let (managed_launch_pending, detect_handle) = spawn_detection_task(
+        let (managed_launch_pending, detection_context, detect_handle) = spawn_detection_task(
             pane_id,
             agent_detection,
             initial_state.detected_agent,
@@ -814,6 +814,7 @@ impl TerminalRuntime {
             dialog_wait_test: Mutex::default(),
             detection_content_seq,
             managed_launch_pending,
+            detection_context,
             kimi_code_home,
             preserve_processes_on_drop: false,
             shell_integration: None,

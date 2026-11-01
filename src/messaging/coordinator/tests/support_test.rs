@@ -304,7 +304,10 @@ pub(super) struct NativeBoundClose {
 
 impl Transport for NativeBoundClose {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        if matches!(method, Method::AgentList(_)) {
+        if matches!(
+            method,
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+        ) {
             // The native server bound a session, but the terminal is still Bus-owned.
             let saved = JsonStore::new(self.state_path.clone())
                 .load()

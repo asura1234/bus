@@ -80,7 +80,7 @@ impl Transport for FailedLaunchNative {
                 })
             }
             // Simulate an exited or absent native launch.
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
                     "pane_id":"pane", "terminal_id":self.screen_terminal.as_deref().unwrap_or("terminal"),
@@ -1040,9 +1040,11 @@ struct ShellRetryNative {
 impl Transport for ShellRetryNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                agents: self.ready.lock().unwrap().iter().cloned().collect(),
-            }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList {
+                    agents: self.ready.lock().unwrap().iter().cloned().collect(),
+                })
+            }
             Method::AgentStartIfIdentity(params) => {
                 let state = JsonStore::new(self.fallback.state_path.clone())
                     .load()

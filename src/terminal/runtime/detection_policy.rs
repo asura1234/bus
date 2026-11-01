@@ -45,7 +45,7 @@ impl PendingIdleConfirmation {
         now: std::time::Instant,
     ) -> bool {
         let is_working_to_plain_idle = previous.state == AgentState::Working
-            && next.state == AgentState::Idle
+            && matches!(next.state, AgentState::Idle | AgentState::Blocked)
             && !next.visible_idle
             && !next.visible_blocker
             && !agent_changed
@@ -316,6 +316,35 @@ pub(super) fn detection_update_for_publish_with_osc(
         crate::agents::detect_agent_with_osc(agent, content, osc_title, osc_progress)
     };
     (!detection.skip_state_update).then_some(detection)
+}
+
+/// A live obligation needs either a ready composer or positive work evidence.
+/// Working rules stay authoritative; even a matched blocker waits for activity
+/// to go quiet, without adding another dialog parser.
+pub(super) fn apply_obligation_detection(
+    mut detection: AgentDetection,
+    obligation: bool,
+    composer_ready: bool,
+    activity_working: bool,
+) -> AgentDetection {
+    if !obligation
+        || detection.skip_state_update
+        || detection.state == AgentState::Working
+        || (detection.state == AgentState::Blocked && !activity_working)
+    {
+        return detection;
+    }
+    detection.state = if composer_ready {
+        AgentState::Idle
+    } else if activity_working {
+        AgentState::Working
+    } else {
+        AgentState::Blocked
+    };
+    detection.visible_idle = composer_ready;
+    detection.visible_blocker = false;
+    detection.visible_working = false;
+    detection
 }
 
 pub(super) fn observe_detection_content_change(bytes: &[u8], detection_content_seq: &AtomicU64) {
