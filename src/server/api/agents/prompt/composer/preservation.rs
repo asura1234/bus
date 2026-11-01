@@ -144,6 +144,9 @@ impl SubmissionInspector for PreservingComposer {
             || (self.kind == AgentKind::Kimi
                 && self.expected == "/new"
                 && super::super::kimi::same_new_editor_frame(previous, current))
+            || (self.kind == AgentKind::Kimi
+                && self.expected != "/new"
+                && super::super::kimi::same_composer_frame(previous, current))
     }
 
     fn editor_working(&self, screen: &str) -> bool {

@@ -80,6 +80,47 @@ pub(super) fn same_new_editor_frame(previous: &str, current: &str) -> bool {
     }
 }
 
+/// The framed draft is unchanged. A working spinner or transcript above the
+/// frame may move; a dialog or a completion menu may not.
+pub(super) fn same_composer_frame(previous: &str, current: &str) -> bool {
+    match (rows(previous), rows(current)) {
+        (Some((left, left_clipped)), Some((right, right_clipped)))
+            if left_clipped == right_clipped && left == right =>
+        {
+            menu_lines(previous) == menu_lines(current)
+        }
+        _ => false,
+    }
+}
+
+fn menu_lines(screen: &str) -> Vec<String> {
+    let lines: Vec<String> = screen
+        .lines()
+        .map(|line| styled_chars(line).iter().map(|c| c.character).collect())
+        .collect();
+    let Some(bottom) = lines
+        .iter()
+        .rposition(|line| line.trim().starts_with('╰') && line.contains('╯'))
+    else {
+        return Vec::new();
+    };
+    lines[bottom + 1..]
+        .iter()
+        .filter(|line| {
+            let text = line.trim();
+            text.starts_with('│') && text.contains('→')
+        })
+        .cloned()
+        .collect()
+}
+
+fn dialog_text(lowercase: &str) -> bool {
+    lowercase.contains("trust this folder?")
+        || lowercase.contains("run this command?")
+        || lowercase.contains("write this file?")
+        || lowercase.contains("askuserquestion")
+}
+
 fn matches_rows(rows: &[String], expected: &str) -> bool {
     let Some(first) = rows.first() else {
         return false;
@@ -125,31 +166,13 @@ fn rows(screen: &str) -> Option<(Vec<String>, bool)> {
     if bottom <= top + 1 || bottom - top > 64 {
         return None;
     }
+    // Kimi 2.4 leaves this framed composer up while the turn is working, so a
+    // steer can read it. A dialog in front of the frame still hides it.
     let preceding = &lines[top.saturating_sub(16)..top];
-    if preceding.iter().any(|line| {
-        let line = line.trim();
-        let lowercase = line.to_lowercase();
-        let mut chars = line.chars();
-        let first = chars.next().unwrap_or_default();
-        let rest = chars.as_str().trim_start().to_lowercase();
-        let active_spinner = (('\u{2800}'..='\u{28ff}').contains(&first)
-            && [
-                "thinking…",
-                "thinking...",
-                "working…",
-                "working...",
-                "using ",
-            ]
-            .iter()
-            .any(|prefix| rest.starts_with(prefix)))
-            || (matches!(first, '🌕' | '🌖' | '🌗' | '🌘' | '🌑' | '🌒' | '🌓' | '🌔')
-                && rest.is_empty());
-        active_spinner
-            || lowercase.contains("trust this folder?")
-            || lowercase.contains("run this command?")
-            || lowercase.contains("write this file?")
-            || lowercase.contains("askuserquestion")
-    }) {
+    if preceding
+        .iter()
+        .any(|line| dialog_text(&line.to_lowercase()))
+    {
         return None;
     }
     let first = lines[top + 1].trim_start().strip_prefix("│ > ")?;

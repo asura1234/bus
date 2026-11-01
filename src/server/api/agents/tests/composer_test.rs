@@ -19,6 +19,15 @@ fn kimi_only_accepts_the_current_idle_framed_composer() {
     let busy = format!("⠋ Working…\n{frame}");
     assert_eq!(
         observe(AgentKind::Kimi, &busy, "Bus task"),
+        crate::terminal::runtime::InputObservation::Empty
+    );
+    let busy_draft = format!("⠋ Working…\n{draft}");
+    assert_eq!(
+        observe(AgentKind::Kimi, &busy_draft, "Bus task"),
+        crate::terminal::runtime::InputObservation::Pending
+    );
+    assert_eq!(
+        observe(AgentKind::Kimi, &busy_draft, "Other task"),
         crate::terminal::runtime::InputObservation::Unavailable
     );
     let historical = format!("The earlier turn said Working… in its answer\n{frame}");
@@ -29,7 +38,39 @@ fn kimi_only_accepts_the_current_idle_framed_composer() {
     let moon = format!("🌕\n{frame}");
     assert_eq!(
         observe(AgentKind::Kimi, &moon, "Bus task"),
+        crate::terminal::runtime::InputObservation::Empty
+    );
+    let dialog = format!("▶ Run this command?\n{frame}");
+    assert_eq!(
+        observe(AgentKind::Kimi, &dialog, "Bus task"),
         crate::terminal::runtime::InputObservation::Unavailable
+    );
+}
+
+#[test]
+fn kimi_working_screen_composer_can_take_a_steer() {
+    let screen = "\
+  ⠏ thinking…
+  ⠏ Working… · Tip: /goal for multi-step work with a clear finish line
+ ╭──────────────────────────────────────╮
+ │ >                                    │
+ ╰──────────────────────────────────────╯
+ K3.1 Pro thinking: high";
+    assert_eq!(
+        observe(AgentKind::Kimi, screen, "KIMI-STEER-32299"),
+        InputObservation::Empty
+    );
+    let pasted = screen.replace(
+        "│ >                                    │",
+        "│ > KIMI-STEER-32299                   │",
+    );
+    assert_eq!(
+        observe(AgentKind::Kimi, &pasted, "KIMI-STEER-32299"),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        observe(AgentKind::Kimi, &pasted, "KIMI-LEAD-32299"),
+        InputObservation::Unavailable
     );
 }
 
@@ -102,6 +143,15 @@ fn kimi_editor_allows_command_menu_repaint_without_trusting_a_changed_composer()
         vec![],
     );
     assert!(!ordinary.editor_frame_unchanged(before, menu));
+    let spinning = format!("⠋ Working…\n{before}");
+    let next_spin = format!("⠙ Working…\n{before}");
+    assert!(ordinary.editor_frame_unchanged(&spinning, &next_spin));
+    assert!(!ordinary.editor_frame_unchanged(&spinning, &spinning.replace("/new", "/exit")));
+    assert!(!ordinary.editor_frame_unchanged(
+        &spinning,
+        &format!("{spinning}\n│   → new         Start a fresh session in        │")
+    ));
+    assert!(!ordinary.editor_frame_unchanged(&spinning, &format!("Run this command?\n{spinning}")));
 }
 
 #[tokio::test]
