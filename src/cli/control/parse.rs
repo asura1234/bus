@@ -343,26 +343,7 @@ fn agent_cli() -> Command {
                 .arg(flag("pane"))
                 .arg(flag("cells")),
         )
-        .subcommand(
-            subcommand("press")
-                .arg(value_arg("agent").required(true))
-                .arg(flag("pane"))
-                .arg(value_arg("terminal-id").long("terminal-id"))
-                .arg(
-                    value_arg("select")
-                        .long("select")
-                        .conflicts_with_all(["key", "text", "submit"]),
-                )
-                .arg(value_arg("key").long("key").action(ArgAction::Append))
-                .arg(Arg::new("text").long("text").allow_hyphen_values(true))
-                .arg(flag("submit"))
-                .group(
-                    ArgGroup::new("input")
-                        .args(["select", "key", "text", "submit"])
-                        .multiple(true)
-                        .required(true),
-                ),
-        )
+        .subcommand(agent_press_cli())
         .subcommand(
             subcommand("choose")
                 .arg(value_arg("agent").required(true))
@@ -416,6 +397,27 @@ fn agent_cli() -> Command {
                 .arg(value_arg("as").long("as"))
         }
     })
+}
+
+fn agent_press_cli() -> Command {
+    subcommand("press")
+        .arg(value_arg("agent").required(true))
+        .arg(flag("pane"))
+        .arg(value_arg("terminal-id").long("terminal-id"))
+        .arg(
+            value_arg("select")
+                .long("select")
+                .conflicts_with_all(["key", "text", "submit"]),
+        )
+        .arg(value_arg("key").long("key").action(ArgAction::Append))
+        .arg(Arg::new("text").long("text").allow_hyphen_values(true))
+        .arg(flag("submit"))
+        .group(
+            ArgGroup::new("input")
+                .args(["select", "key", "text", "submit"])
+                .multiple(true)
+                .required(true),
+        )
 }
 
 fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {

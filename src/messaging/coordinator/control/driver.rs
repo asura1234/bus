@@ -109,13 +109,7 @@ fn press_terminal_with_elapsed(
     let mut previous = None;
     loop {
         if let Some(press) = previous.take_if(|_| elapsed() >= SELECTION_BUDGET) {
-            return press_result(
-                press,
-                keys,
-                text_written,
-                "selection_pending",
-                Some("Selection is still pending; continue from the returned screen".into()),
-            );
+            return selection_pending_result(press, keys, text_written);
         }
         let response = call(Method::AgentPress(params.clone()));
         let mut press = match response {
@@ -158,13 +152,7 @@ fn press_terminal_with_elapsed(
         let mut moved = false;
         for _ in 0..REDRAW_POLLS {
             if elapsed() >= SELECTION_BUDGET {
-                return press_result(
-                    press,
-                    keys,
-                    text_written,
-                    "selection_pending",
-                    Some("Selection is still pending; continue from the returned screen".into()),
-                );
+                return selection_pending_result(press, keys, text_written);
             }
             pause();
             match native_observe(&params.target, params.expected_terminal_id.as_deref(), call) {
@@ -209,6 +197,20 @@ fn press_terminal_with_elapsed(
         }
         previous = Some(press);
     }
+}
+
+fn selection_pending_result(
+    press: schema::TerminalPressResult,
+    keys: Vec<String>,
+    text_written: bool,
+) -> Result<Value, String> {
+    press_result(
+        press,
+        keys,
+        text_written,
+        "selection_pending",
+        Some("Selection is still pending; continue from the returned screen".into()),
+    )
 }
 
 fn press_result(
