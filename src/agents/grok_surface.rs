@@ -70,3 +70,17 @@ pub(crate) fn composer_border(line: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '(' | ')' | ' ' | '-' | '·'))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn multi_recipient_grok_restored_header_clears_the_entire_prompt() {
+        let screen = "╭────────────────────╮\n│ ❯ [Bus message 42 from you to app master 2, builder [deleted]] │\n│   shared task │\n╰────────────────────╯";
+        assert_eq!(super::restored_prompt_clear_keys(screen).unwrap().len(), 6);
+        assert!(super::restored_prompt_clear_keys(&format!("[stop]\n{screen}")).is_none());
+        assert!(super::restored_prompt_clear_keys(
+            &screen.replace("[Bus message", "developer note")
+        )
+        .is_none());
+    }
+}

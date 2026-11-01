@@ -27,6 +27,10 @@ in MASTER, not even to their own orchestrator: send from your own work room
 reached from your own room too; names resolve across rooms.
 Bus refuses new worker sends in MASTER; replies to requests received there remain allowed.
 
+A message sent to several recipients lists them all in its header. Anyone
+listed already has it: never relay, summarise or "correct" it to them. Message
+only agents who weren't addressed, and only with what changes their next action.
+
 ## Peer to peer first
 
 Most coordination happens between the workers who share a task, not through the

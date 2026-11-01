@@ -712,3 +712,67 @@ fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
         assert!(!payload.contains("[Bus message "), "{payload}");
     }
 }
+
+#[test]
+fn multi_recipient_header_resolves_current_names_and_freezes_for_retries() {
+    let (mut state, room, builder, reviewer) = state_with_room_and_agents();
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "shared task".into(),
+                files: Vec::new(),
+                recipient_ids: [reviewer, builder].into(),
+            },
+            Author::Agent(builder),
+            10,
+        )
+        .unwrap();
+    state.rename_agent(reviewer, "renamed reviewer").unwrap();
+    state.rename_agent(builder, "renamed builder").unwrap();
+    state.delete_agent(builder, 11).unwrap();
+    let id = requests[0];
+    let message = state.request(id).unwrap().prompt.id.0;
+    let expected = format!(
+        "builder (agent {}):\n[Bus message {message} from builder (agent {}) to renamed reviewer, renamed builder [deleted]]\nshared task",
+        builder.0, builder.0
+    );
+    assert_eq!(state.render_request_payload(id).unwrap(), expected);
+    state.rename_agent(reviewer, "renamed again").unwrap();
+    let mut restored: BusState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    assert_eq!(restored.render_request_payload(id).unwrap(), expected);
+}
+
+#[test]
+fn multi_recipient_batched_headers_keep_each_messages_own_recipients() {
+    let (mut state, room, builder, reviewer) = state_with_room_and_agents();
+    let first = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "shared task".into(),
+                files: Vec::new(),
+                recipient_ids: [reviewer, builder].into(),
+            },
+            Author::Developer,
+            10,
+        )
+        .unwrap()[0];
+    let second = submit_text(&mut state, room, reviewer, "private followup");
+    let first_message = state.request(first).unwrap().prompt.id.0;
+    let second_message = state.request(second).unwrap().prompt.id.0;
+    let payload = state.coalesce_queue(first).unwrap();
+    assert!(
+        payload.contains(&format!(
+            "[Bus message {first_message} from you to reviewer, builder]\nshared task"
+        )),
+        "{payload}"
+    );
+    assert!(
+        payload.contains(&format!(
+            "[Bus message {second_message} from you]\nprivate followup"
+        )),
+        "{payload}"
+    );
+}

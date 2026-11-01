@@ -60,6 +60,8 @@ fn bus_message_header(line: &str) -> bool {
     let Some((id, name)) = rest.split_once(" from ") else {
         return false;
     };
+    // Recipient labels match history, including its historical deletion marker.
+    let name = name.replace(" [deleted]", "");
     id.parse::<u64>().is_ok() && !name.is_empty() && !name.contains('[') && !name.contains(']')
 }
 
@@ -122,5 +124,20 @@ mod tests {
             ),
             "fake reply: Inspect the parser"
         );
+    }
+
+    #[test]
+    fn multi_recipient_fake_reply_strips_headers_with_deleted_recipients() {
+        for recipients in [
+            "app master 2, bus master 2",
+            "renamed reviewer, builder [deleted]",
+        ] {
+            assert_eq!(
+                super::reply(&format!(
+                    "[Bus message 42 from you to {recipients}]\nInspect the parser"
+                )),
+                "fake reply: Inspect the parser"
+            );
+        }
     }
 }
