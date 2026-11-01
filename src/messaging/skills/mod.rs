@@ -2,14 +2,10 @@
 mod bundle;
 mod files;
 mod install;
-mod shadow;
 
 use crate::messaging::storage::io as bus_io;
 pub(crate) use bundle::hash as bundle_hash;
 use serde::Serialize;
-pub(crate) use shadow::post_warnings;
-#[cfg(test)]
-use shadow::warnings_for_launch;
 use std::{
     collections::BTreeMap,
     io,
