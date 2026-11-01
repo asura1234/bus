@@ -884,3 +884,22 @@ idle then deliver, and an approval card without `--yolo`.
   screen is the wire-settlement gap, not this detection check. A history
   line `1 background task still running` without the footer
   `[N tasks running]` can still be Idle.
+- **2026-11-01 — Kimi standalone Running a command reply:** Symptom: after
+  the native turn completed, a final reply whose only text is
+  `● Running a command` above an empty composer stayed Working. Cause: the
+  live Bash header uses those same words. Screen text cannot tell them
+  apart. The live header is `● Running a command · $ sleep 45` plus
+  `Approved:` and a spinner tip, so it is about the eighth non-empty line
+  above the composer. A finished reply has no `· $ command` suffix and is
+  not bold. Test: scratch HOME (share `credentials` and `oauth`, copy
+  `config.toml`; never the live Bus or real `~/.kimi-code` tree), private
+  `BUS_DATA_DIR` 0700, `sleep 45` then a reply that is exactly
+  `Running a command`. Rule: keep Working for a `· $ command` suffix.
+  After the turn's `agent.turn.ended` / `turn.ended` / `prompt.completed`
+  chain, or when that wire cannot be read and the line is not bold, a
+  bare `● Running a command` above an empty composer is Idle. Bus launches
+  Kimi with `/usr/bin/env KIMI_CODE_HOME=…` in an existing pane, so the
+  detector often has no home from the PTY CommandBuilder; do not treat a
+  missing wire as proof the header is a reply. Scratch `sbus` must pass
+  `SHELL`. `agent add` reads the source `config.toml`; a scratch
+  `.kimi-code` without that file fails with `No such file or directory`.
