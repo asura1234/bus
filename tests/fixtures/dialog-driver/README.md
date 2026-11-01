@@ -32,7 +32,9 @@ not read or answer.** Give it the fake pane identity and this answer table.
 
 The Codex update wording and options derive from the captured native
 [`chooser-0.162.txt`](../codex-update/chooser-0.162.txt); the surrounding README
-records its capture provenance. All other screens are **modeled fixtures** using
+records its capture provenance. The Kimi folder-trust screen derives from a real
+Kimi 2.4.1 startup captured at Bus head `50e53ea1` on 2026-11-01; only the path and
+option rendering are normalized. The remaining screens are **modeled fixtures** using
 ordinary documented prompt shapes and existing Bus dialog fixtures/parsers. They
 are not claimed to be fresh native provider captures. In particular, the existing
 Claude `update-installed-2.1.295.ansi` capture is a passive footer, so the
