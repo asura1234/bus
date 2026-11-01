@@ -117,6 +117,7 @@ impl Transport for RecoveryNative {
 
 #[test]
 fn room_resume_preserves_the_session_queue_and_capture_and_refuses_an_unsafe_close() {
+    let _providers = provider_binaries();
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     for refuse_close in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
@@ -309,6 +310,7 @@ fn room_resume_clears_the_provider_blocker_after_its_blocked_agents_were_deleted
 
 #[test]
 fn room_blocker_from_a_failed_add_clears_once_room_resume_runs_with_no_held_agent() {
+    let _providers = provider_binaries();
     // Recover persisted blockers from a formerly refused add with no saved
     // agent holding the outage. The documented resume must clear them.
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
@@ -346,6 +348,7 @@ fn room_blocker_from_a_failed_add_clears_once_room_resume_runs_with_no_held_agen
 
 #[test]
 fn binary_outage_recovery_abandons_queued_work_when_startup_fails() {
+    let _providers = provider_binaries();
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "retained failed-resume task");
@@ -515,6 +518,7 @@ impl Transport for GenericStartupRecovery {
 
 #[test]
 fn confirmed_room_resume_clears_the_previous_startup_error() {
+    let _providers = provider_binaries();
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     for refuse_close in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
@@ -718,6 +722,7 @@ fn recovered_provider_records_and_closes_its_next_exit() {
 
 #[test]
 fn startup_launch_rejection_resume_tab_abandons_never_submitted_work() {
+    let _providers = provider_binaries();
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     struct RejectResumeTab;
     impl Transport for RejectResumeTab {
@@ -774,6 +779,7 @@ fn startup_launch_rejection_resume_tab_abandons_never_submitted_work() {
 
 #[test]
 fn startup_launch_rejection_uncertain_resume_tab_retains_queued_work() {
+    let _providers = provider_binaries();
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     struct UncertainResumeTab;
     impl Transport for UncertainResumeTab {
@@ -803,6 +809,13 @@ fn startup_launch_rejection_uncertain_resume_tab_retains_queued_work() {
     worker.transport = Box::new(UncertainResumeTab);
     let result = worker.resume_room(room).unwrap();
     assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert!(
+        result["agents"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("transport lost"),
+        "{result}"
+    );
     assert_eq!(
         worker.state.request(request).unwrap().phase,
         RequestPhase::Queued

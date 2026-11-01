@@ -84,6 +84,7 @@ impl Transport for FreshLaunchNative {
 
 #[test]
 fn freshly_added_codex_gets_its_first_prompt_without_a_session_or_prior_hooks() {
+    let _providers = provider_binaries();
     let (mut worker, _, room, dir, _) = fixture(Provider::Codex, vec![]);
     worker.dev_enabled = true;
     let (commands, receiver) = mpsc::channel();

@@ -132,6 +132,7 @@ impl Transport for FailedLaunchNative {
 
 #[test]
 fn failed_startup_reports_evidence_and_retains_identity() {
+    let _providers = provider_binaries();
     let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
     state.delete_agent(previous, 0).unwrap();
@@ -905,6 +906,7 @@ const SHELL_PROMPT_WAIT_ERROR: &str = "Shell waiting for input or prompt confirm
 
 #[test]
 fn shell_prompt_wait_error_survives_watchdog_and_restart_with_queued_work() {
+    let _providers = provider_binaries();
     for code in ["agent_shell_waiting", "agent_shell_starting"] {
         let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
         let mut state = worker.state.clone();
@@ -1129,6 +1131,7 @@ fn shell_blocked_first_launch(
 
 #[test]
 fn shell_wait_failure_guidance_to_resume_this_agent_actually_resumes_it() {
+    let _providers = provider_binaries();
     for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
         let (mut worker, agent, room, dir, original_args) = shell_blocked_first_launch(provider);
         let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
@@ -1227,6 +1230,7 @@ fn shell_wait_failure_guidance_to_resume_this_agent_actually_resumes_it() {
 
 #[test]
 fn shell_recovery_never_replays_an_uncertain_start_after_reopen() {
+    let _providers = provider_binaries();
     let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::Codex);
     let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
     let request = queue(&mut worker, room, agent, "retain uncertain launch work");
@@ -1274,6 +1278,7 @@ fn shell_recovery_never_replays_an_uncertain_start_after_reopen() {
 
 #[test]
 fn shell_recovery_keeps_the_session_invalidation_guard() {
+    let _providers = provider_binaries();
     let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::Codex);
     let mut state = worker.state.clone();
     state.invalidate_agent_session(agent).unwrap();
@@ -1301,6 +1306,7 @@ fn shell_recovery_keeps_the_session_invalidation_guard() {
 
 #[test]
 fn shell_recovery_does_not_invent_retry_authority_from_legacy_command_text() {
+    let _providers = provider_binaries();
     let (mut worker, agent, room, dir, _) = shell_blocked_first_launch(Provider::ClaudeCode);
     let saved = worker.state.agent(agent).unwrap().startup.as_ref().unwrap();
     let legacy: crate::messaging::model::AgentStartup = serde_json::from_value(json!({
@@ -1351,6 +1357,7 @@ impl Transport for ResumedSessionShellWaitNative {
 
 #[test]
 fn resumed_session_shell_wait_preserves_queued_work() {
+    let _providers = provider_binaries();
     use crate::agents::providers::hook_json::{merge_hooks, HookContract};
     for code in ["agent_shell_waiting", "agent_shell_starting"] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
@@ -1485,6 +1492,7 @@ fn startup_failure_notification_is_deduplicated_after_restart() {
 
 #[test]
 fn startup_failure_preserves_generated_system_prompt_across_restart() {
+    let _providers = provider_binaries();
     for (provider, args) in [
         (Provider::Cursor, ""),
         (
@@ -1580,6 +1588,7 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
 
 #[test]
 fn startup_launch_rejection_unsupported_shell_closes_new_sender_work() {
+    let _providers = provider_binaries();
     let (mut worker, previous, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
     state.delete_agent(previous, 0).unwrap();
@@ -1679,6 +1688,7 @@ fn startup_launch_rejection_editor_failure_closes_saved_session_work_promptly() 
 
 #[test]
 fn definite_launch_rejection_vanished_pane_abandons_new_sender_work() {
+    let _providers = provider_binaries();
     use crate::messaging::native::BusTransport;
     use crate::protocol::api::client::ConnectionTarget;
     struct VanishedPane {
@@ -1744,6 +1754,7 @@ fn definite_launch_rejection_vanished_pane_abandons_new_sender_work() {
 
 #[test]
 fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
+    let _providers = provider_binaries();
     struct RejectRetry {
         fallback: FailedLaunchNative,
     }
