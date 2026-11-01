@@ -1,5 +1,5 @@
 use crate::agents::providers::{
-    hook_json::{install_hooks, validate_resume_hooks, HookContract},
+    hook_json::{codex_callback_binary, install_hooks, validate_resume_hooks, HookContract},
     spool::{self, Manifest, RoutingKey},
 };
 use crate::agents::resume::catalog::AgentResumePlan;
@@ -862,10 +862,15 @@ fn bus_resume_takes_back_hooks_another_bus_executable_rewrote() {
         assert_eq!(extras.env, fixture.expected_env());
         let after = std::fs::read_to_string(fixture.hook_path()).unwrap();
         assert!(!after.contains("throwaway"), "{after}");
+        let expected = if provider == Provider::Codex {
+            codex_callback_binary(&fixture.root, &fixture.binary).unwrap()
+        } else {
+            fixture.binary.clone()
+        };
         assert!(validate_resume_hooks(
             &fixture.hook_path(),
             HookContract::for_provider(crate::messaging::identity::provider_kind(provider)),
-            &fixture.binary
+            &expected
         )
         .is_ok());
     }

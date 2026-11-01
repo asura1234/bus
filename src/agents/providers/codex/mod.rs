@@ -5,6 +5,9 @@ pub(crate) mod resume;
 pub(crate) mod system_prompt;
 pub(crate) mod usage;
 
+#[cfg(all(test, unix))]
+#[path = "tests/hook_trust_test.rs"]
+mod hook_trust_tests;
 #[cfg(test)]
 #[path = "tests/hooks_test.rs"]
 mod hooks_tests;

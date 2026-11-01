@@ -6,6 +6,7 @@ mod delivery;
 mod disk_space;
 mod exit_snapshot;
 mod expiry;
+mod first_message;
 #[cfg(test)]
 #[path = "tests/operational_notice_retirement_test.rs"]
 mod operational_notice_retirement_tests;

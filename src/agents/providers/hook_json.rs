@@ -126,6 +126,49 @@ pub(crate) use files::atomic_write;
 #[cfg(test)]
 pub(crate) use files::private_dir;
 
+/// Codex hashes the callback command string. This path stays inside the Bus
+/// data directory and execs `executable`, so a rebuilt or relocated Bus binary
+/// does not make a trusted hook look new.
+pub(crate) fn codex_callback_binary(data_dir: &Path, executable: &Path) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        let _ = data_dir;
+        return Ok(executable.to_path_buf());
+    }
+    #[cfg(not(windows))]
+    {
+        if !executable.is_absolute() {
+            return Err("Codex callback executable must be absolute".into());
+        }
+        let callbacks = data_dir.join("callbacks");
+        files::private_dir(&callbacks).map_err(|error| error.to_string())?;
+        let path = callbacks.join("codex-hook-bridge");
+        let quoted = crate::platform::remote_reattach_program(&executable.to_string_lossy());
+        let body = format!("#!/bin/sh\nexec {quoted} \"$@\"\n");
+        files::executable_bridge(&path, body.as_bytes()).map_err(|error| error.to_string())?;
+        Ok(path)
+    }
+}
+
+/// A live resume whose spool lives under this server's `callbacks/` directory
+/// records the stable bridge. Tests and any other binary keep the path they
+/// already hashed.
+pub(crate) fn codex_resume_hook_binary(hooks: &HookContext) -> Result<PathBuf, String> {
+    let Some(callbacks) = hooks.spool.parent() else {
+        return Ok(hooks.binary.clone());
+    };
+    if callbacks.file_name().and_then(|name| name.to_str()) != Some("callbacks") {
+        return Ok(hooks.binary.clone());
+    }
+    let Some(data_dir) = callbacks.parent() else {
+        return Ok(hooks.binary.clone());
+    };
+    match std::env::current_exe() {
+        Ok(current) if current == hooks.binary => codex_callback_binary(data_dir, &current),
+        _ => Ok(hooks.binary.clone()),
+    }
+}
+
 fn hook_entries(contract: HookContract, binary: &Path) -> Vec<(&'static str, Value)> {
     let command = contract.command(binary);
     contract

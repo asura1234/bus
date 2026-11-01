@@ -163,8 +163,8 @@ pub(crate) fn atomic_write_detailed_with_checkpoint(
     atomic_write_with_checkpoint(path, |file| file.write_all(bytes), checkpoint)
 }
 
-#[cfg(test)]
-fn atomic_write_with(
+#[cfg(any(test, unix))]
+pub(crate) fn atomic_write_with(
     path: &Path,
     write: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> Result<(), AtomicWriteError> {
