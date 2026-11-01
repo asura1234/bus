@@ -45,6 +45,11 @@ fn fail(f: &mut Fixture) -> String {
             Provider::Grok | Provider::Kimi => {
                 panic!("this fixture covers providers with committed final evidence")
             }
+            #[cfg(feature = "dev-tools")]
+            Provider::Fake => {
+                f.record(json!({"event":"failure","session":"session","turn":"turn-1"}));
+                "Fake turn failed."
+            }
         };
     f.consume();
     reason.into()

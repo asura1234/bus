@@ -1393,3 +1393,312 @@ fn the_dev_performance_overlay_turns_on_updates_and_turns_off() {
     session.ok(&["wait", "--text", "[ ] Performance overlay"]);
     session.ok(&["wait", "--text", "MB FPS", "--gone", "--timeout", "5s"]);
 }
+
+#[test]
+fn scriptable_fake_replies_to_a_room_message_without_provider_configuration() {
+    let session = Session::start("scripted");
+    let work = session_dir(&session.0).join("work");
+    let script = work.join("fake-script.json");
+    std::fs::write(
+        &script,
+        r#"{"version":1,"turns":[{"contains":"CASE_REPLY_7","actions":[{"type":"reply","text":"REPLY_7"}]}]}"#,
+    )
+    .unwrap();
+    let args = format!("--script {}", script.display());
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "scripted-worker",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--args",
+            &args,
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let (code, sent) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "scripted-worker",
+            "--text",
+            "CASE_REPLY_7",
+        ],
+    ));
+    assert_eq!(code, 0, "{sent}");
+    let id = sent["result"]["message_id"].to_string();
+    let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+    let request = &result["message"]["result"]["requests"][0];
+    assert_eq!(request["stage"], "replied", "{result}");
+    assert_eq!(request["reply"]["text"], "REPLY_7", "{result}");
+    assert!(!work.join(".claude").exists());
+    assert!(!work.join(".codex").exists());
+    assert!(!work.join(".cursor").exists());
+}
+
+#[test]
+fn scriptable_fake_waits_for_dialog_choice_before_replying() {
+    let session = Session::start("f-dialog");
+    let work = session_dir(&session.0).join("work");
+    let script = work.join("dialog.json");
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_DIALOG_7","actions":[{"type":"dialog","title":"Choose a path","options":["A","B"]},{"type":"reply","text":"selected {{choice}}"}]}]}"#).unwrap();
+    let args = format!("--script {}", script.display());
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "dialog-worker",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--args",
+            &args,
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let (code, sent) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "dialog-worker",
+            "--text",
+            "CASE_DIALOG_7",
+        ],
+    ));
+    assert_eq!(code, 0, "{sent}");
+    let id = sent["result"]["message_id"].to_string();
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == blocked",
+        "--timeout",
+        "20s",
+    ]);
+    let (code, status) = parse(scratch_bus(&session, &["message", "status", &id]));
+    assert_eq!(code, 0, "{status}");
+    let request = &status["result"]["requests"][0];
+    assert_eq!(request["start_bound"], true, "{status}");
+    assert!(
+        request["turn_id"]
+            .as_str()
+            .is_some_and(|turn| !turn.is_empty()),
+        "{status}"
+    );
+    let (code, observed) = parse(scratch_bus(&session, &["agent", "dialog", "dialog-worker"]));
+    assert_eq!(code, 0, "{observed}");
+    let dialog = &observed["result"];
+    assert!(
+        dialog["dialog"].to_string().contains("Choose a path"),
+        "{dialog}"
+    );
+    let fingerprint = dialog["fingerprint"].as_str().unwrap();
+    let (code, selected) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "choose",
+            "dialog-worker",
+            "--option",
+            "2",
+            "--fingerprint",
+            fingerprint,
+        ],
+    ));
+    assert_eq!(code, 0, "{selected}");
+    let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+    let request = &result["message"]["result"]["requests"][0];
+    assert_eq!(request["stage"], "replied", "{result}");
+    assert_eq!(request["reply"]["text"], "selected B", "{result}");
+}
+
+#[test]
+fn scriptable_fake_sends_before_its_final_reply() {
+    let session = Session::start("f-send");
+    let work = session_dir(&session.0).join("work");
+    let script = work.join("send.json");
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_SEND_7","actions":[{"type":"send","room":"bus","to":"you","text":"SCRIPTED_NOTICE_7"},{"type":"reply","text":"SENT_7"}]}]}"#).unwrap();
+    let args = format!("--script {}", script.display());
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "sender-worker",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--args",
+            &args,
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let (code, sent) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "sender-worker",
+            "--text",
+            "CASE_SEND_7",
+        ],
+    ));
+    assert_eq!(code, 0, "{sent}");
+    let id = sent["result"]["message_id"].to_string();
+    let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+    assert!(result.to_string().contains("SENT_7"), "{result}");
+    let (code, history) = parse(scratch_bus(
+        &session,
+        &["history", "--room", "bus", "--limit", "100"],
+    ));
+    assert_eq!(code, 0, "{history}");
+    assert!(
+        history.to_string().contains("SCRIPTED_NOTICE_7"),
+        "{history}"
+    );
+}
+
+#[test]
+fn scriptable_fake_crash_leaves_no_final_reply_and_records_exit() {
+    let session = Session::start("f-crash");
+    let work = session_dir(&session.0).join("work");
+    let script = work.join("crash.json");
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_CRASH_7","actions":[{"type":"crash","code":42}]}]}"#).unwrap();
+    let args = format!("--script {}", script.display());
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "crash-worker",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--args",
+            &args,
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let (code, sent) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "crash-worker",
+            "--text",
+            "CASE_CRASH_7",
+        ],
+    ));
+    assert_eq!(code, 0, "{sent}");
+    let id = sent["result"]["message_id"].to_string();
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.exit_snapshot.terminal_closed == true",
+        "--timeout",
+        "30s",
+    ]);
+    let (code, status) = parse(scratch_bus(&session, &["message", "status", &id]));
+    assert_eq!(code, 0, "{status}");
+    assert!(
+        status["result"]["requests"][0]["reply"].is_null(),
+        "{status}"
+    );
+    assert!(
+        status["result"]["requests"][0]["exit_snapshot"].is_object(),
+        "{status}"
+    );
+}
+
+#[test]
+fn scriptable_fake_resumes_without_reusing_prior_turns() {
+    let session = Session::start("f-resume");
+    let work = session_dir(&session.0).join("work");
+    let script = work.join("resume.json");
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_RESUME_7","actions":[{"type":"reply","text":"ONCE_7"}]}]}"#).unwrap();
+    let args = format!("--script {}", script.display());
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "resume-worker",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--args",
+            &args,
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    let send = |text: &str| {
+        let (code, sent) = parse(scratch_bus(
+            &session,
+            &[
+                "send",
+                "--room",
+                "bus",
+                "--to",
+                "resume-worker",
+                "--text",
+                text,
+            ],
+        ));
+        assert_eq!(code, 0, "{sent}");
+        let id = sent["result"]["message_id"].to_string();
+        session.ok(&["wait", "--message", &id, "--timeout", "30s"])
+    };
+    assert!(send("CASE_RESUME_7").to_string().contains("ONCE_7"));
+    let before = bus_state(&session)["agents"][0]["runtime_identity"]["session_id"].clone();
+    session.ok(&["restart"]);
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.0.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    assert_eq!(
+        bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
+        before
+    );
+    assert!(send("after restart\nfake agent working")
+        .to_string()
+        .contains("fake reply:"));
+    let repeated = send("CASE_RESUME_7");
+    assert!(repeated.to_string().contains("fake reply:"), "{repeated}");
+    assert!(!repeated.to_string().contains("ONCE_7"), "{repeated}");
+}

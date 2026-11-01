@@ -11,6 +11,8 @@ pub(crate) const fn provider_kind(provider: Provider) -> ProviderKind {
         Provider::Cursor => ProviderKind::Cursor,
         Provider::Grok => ProviderKind::Grok,
         Provider::Kimi => ProviderKind::Kimi,
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => ProviderKind::Fake,
     }
 }
 

@@ -91,6 +91,8 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
     }
 
     let argv = match (source, agent, session_ref.kind) {
+        #[cfg(feature = "dev-tools")]
+        ("herdr:fake", "fake", AgentSessionRefKind::Id) => fake_resume_args(&session_ref.value),
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
             vec![
                 "claude".into(),
@@ -187,6 +189,11 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
     })
 }
 
+#[cfg(feature = "dev-tools")]
+fn fake_resume_args(session: &str) -> Vec<String> {
+    vec!["bus-fake-agent".into(), "--resume".into(), session.into()]
+}
+
 pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> String {
     format!(
         "{source}\u{0}{agent}\u{0}{:?}\u{0}{}",
@@ -195,26 +202,27 @@ pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> S
 }
 
 pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
-    matches!(
-        (source, agent),
-        ("herdr:claude", "claude")
-            | ("herdr:codex", "codex")
-            | ("herdr:copilot", "copilot")
-            | ("herdr:devin", "devin")
-            | ("herdr:droid", "droid")
-            | ("herdr:kimi", "kimi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:pi", "pi")
-            | ("herdr:hermes", "hermes")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:qodercli", "qodercli")
-            | ("herdr:qwen", "qwen")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:cursor", "cursor")
-            | ("herdr:antigravity_cli", "agy")
-            | ("herdr:grok", "grok")
-    )
+    (cfg!(feature = "dev-tools") && (source, agent) == ("herdr:fake", "fake"))
+        || matches!(
+            (source, agent),
+            ("herdr:claude", "claude")
+                | ("herdr:codex", "codex")
+                | ("herdr:copilot", "copilot")
+                | ("herdr:devin", "devin")
+                | ("herdr:droid", "droid")
+                | ("herdr:kimi", "kimi")
+                | ("herdr:omp", "omp")
+                | ("herdr:mastracode", "mastracode")
+                | ("herdr:pi", "pi")
+                | ("herdr:hermes", "hermes")
+                | ("herdr:opencode", "opencode")
+                | ("herdr:qodercli", "qodercli")
+                | ("herdr:qwen", "qwen")
+                | ("herdr:kilo", "kilo")
+                | ("herdr:cursor", "cursor")
+                | ("herdr:antigravity_cli", "agy")
+                | ("herdr:grok", "grok")
+        )
 }
 
 #[cfg(test)]

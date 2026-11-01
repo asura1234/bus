@@ -61,6 +61,8 @@ fn skill_shadow_scopes(provider: ProviderKind) -> Option<(&'static str, &'static
         ProviderKind::ClaudeCode => Some((".claude/skills", ".claude/skills")),
         ProviderKind::Codex => Some((".agents/skills", ".agents/skills")),
         ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => None,
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => None,
     }
 }
 
@@ -70,6 +72,8 @@ fn shadow_behavior(provider: ProviderKind) -> &'static str {
         ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => {
             "Codex lists both copies"
         }
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => "the fake agent does not scan skills",
     }
 }
 

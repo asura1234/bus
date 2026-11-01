@@ -233,5 +233,7 @@ fn capture_args(
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
         ProviderKind::Grok => grok::resume::capture_args(hooks, project),
         ProviderKind::Kimi => kimi::resume::capture_args(hooks, project),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Ok((hooks.spool.clone(), Vec::new(), false)),
     }
 }

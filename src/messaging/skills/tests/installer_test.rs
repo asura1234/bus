@@ -174,3 +174,13 @@ fn collisions_report_provider_precedence_without_warning_about_user_scope_itself
     }
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[cfg(feature = "dev-tools")]
+#[test]
+fn fake_agent_does_not_inspect_provider_skill_directories() {
+    use crate::agents::providers::ProviderKind;
+    let missing = crate::utils::test_temp::unique_temp_path("fake-no-skill-root");
+    assert!(warnings_for_launch(ProviderKind::Fake, &missing, &missing)
+        .unwrap()
+        .is_empty());
+}

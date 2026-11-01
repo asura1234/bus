@@ -100,6 +100,8 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
         ProviderKind::Cursor => cursor::launch::runtime_args(),
         ProviderKind::Grok => grok::launch::runtime_args(),
         ProviderKind::Kimi => Vec::new(),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Vec::new(),
     }
 }
 
@@ -109,6 +111,13 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
         "claude" => Some(ProviderKind::ClaudeCode),
         "cursor" => Some(ProviderKind::Cursor),
         "kimi" => Some(ProviderKind::Kimi),
+        #[cfg(feature = "dev-tools")]
+        "fake"
+            if std::env::var_os("BUS_TUI_FAKE_AGENT").is_some()
+                && std::env::var_os("BUS_TUI_OWNER").is_some() =>
+        {
+            Some(ProviderKind::Fake)
+        }
         _ => None,
     }
 }
@@ -124,6 +133,8 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
         ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => {
             Vec::new()
         }
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Vec::new(),
     }
 }
 
@@ -131,6 +142,10 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
 /// Inspect option positions so a literal prompt or option value is not
 /// mistaken for an explicit bypass. Provider aliases suppress our copy too.
 pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<String>) {
+    #[cfg(feature = "dev-tools")]
+    if provider == ProviderKind::Fake {
+        return;
+    }
     if !crate::utils::env::yolo_enabled() {
         return;
     }
@@ -149,6 +164,8 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
         ProviderKind::Cursor => ("--force", &["--force", "--yolo", "-f"]),
         ProviderKind::Grok => ("--always-approve", &["--always-approve", "--yolo"]),
         ProviderKind::Kimi => ("--yolo", &["--yolo", "-y"]),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => return,
     };
     if !arguments::contains_flag(provider, args, aliases) {
         // Prefix rather than append: the provider must see it before any
@@ -167,6 +184,8 @@ pub(crate) fn take_adopted_session(
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
         ProviderKind::Grok => grok::launch::take_adopted_session(args),
         ProviderKind::Kimi => kimi::launch::take_adopted_session(args),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Ok(take_resume_option(provider, args)),
     }
 }
 
@@ -177,6 +196,8 @@ fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
         ProviderKind::Cursor => cursor::launch::resume_args(session),
         ProviderKind::Grok => grok::launch::resume_args(session),
         ProviderKind::Kimi => kimi::launch::resume_args(session),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => vec!["--resume".into(), session.into()],
     }
 }
 
@@ -254,6 +275,8 @@ pub(crate) fn extend_generated_args(
         ProviderKind::ClaudeCode => None,
         ProviderKind::Grok => None,
         ProviderKind::Kimi => None,
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => None,
     };
     let supplied = flag.filter(|flag| arguments::contains_flag(provider, args, &[*flag]));
     let capture = capture
@@ -300,6 +323,8 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
             ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
             ProviderKind::Grok => unreachable!("Grok validates its own arguments"),
             ProviderKind::Kimi => unreachable!("Kimi validates its own arguments"),
+            #[cfg(feature = "dev-tools")]
+            ProviderKind::Fake => false,
         };
         if incompatible {
             return Err(format!("{} launch argument {arg} disables the interactive terminal or observation hooks Bus needs; see docs/launch-args.md", provider_kind(provider)));
@@ -399,6 +424,8 @@ pub(crate) fn setup_notice(
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
         ProviderKind::Grok => Some(grok::launch::setup_notice(&root)),
         ProviderKind::Kimi => None,
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => None,
     }?;
     (!hook_json::hooks_are_current(&notice.path, HookContract::for_provider(provider), binary))
         .then_some(notice)
@@ -467,5 +494,12 @@ pub(crate) fn prepare(
         }),
         ProviderKind::Grok => unreachable!("Grok prepares its own launch"),
         ProviderKind::Kimi => unreachable!("Kimi prepares its own launch"),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => Ok(PreparedLaunch {
+            cwd,
+            args,
+            adopted_session,
+            env: spec.hooks.env(),
+        }),
     }
 }

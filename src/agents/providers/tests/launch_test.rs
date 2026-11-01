@@ -1,6 +1,34 @@
 // Included only in messaging::provider_glue::launch::tests to retain case IDs.
 #[path = "yolo_options_test.rs"]
 mod yolo_options;
+
+#[test]
+fn fake_provider_is_available_only_to_an_isolated_dev_driver() {
+    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let previous_flag = std::env::var_os("BUS_TUI_FAKE_AGENT");
+    let previous_owner = std::env::var_os("BUS_TUI_OWNER");
+    std::env::remove_var("BUS_TUI_FAKE_AGENT");
+    std::env::remove_var("BUS_TUI_OWNER");
+    assert!(crate::agents::providers::launch::native_provider("fake").is_none());
+    std::env::set_var("BUS_TUI_FAKE_AGENT", "1");
+    std::env::set_var("BUS_TUI_OWNER", "isolated-test");
+    assert_eq!(
+        crate::agents::providers::launch::native_provider("fake").map(|p| p.label()),
+        if cfg!(feature = "dev-tools") {
+            Some("fake")
+        } else {
+            None
+        }
+    );
+    match previous_flag {
+        Some(value) => std::env::set_var("BUS_TUI_FAKE_AGENT", value),
+        None => std::env::remove_var("BUS_TUI_FAKE_AGENT"),
+    }
+    match previous_owner {
+        Some(value) => std::env::set_var("BUS_TUI_OWNER", value),
+        None => std::env::remove_var("BUS_TUI_OWNER"),
+    }
+}
 use crate::agents::providers::{
     hook_json::{self, HookContract},
     launch::{launch_args, runtime_args, validate_args},

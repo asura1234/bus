@@ -73,6 +73,13 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         "cursor-hook" => ProviderKind::Cursor,
         "grok-hook" => ProviderKind::Grok,
         "kimi-hook" => ProviderKind::Kimi,
+        #[cfg(feature = "dev-tools")]
+        "fake-hook"
+            if std::env::var_os("BUS_TUI_FAKE_AGENT").is_some()
+                && std::env::var_os("BUS_TUI_OWNER").is_some() =>
+        {
+            ProviderKind::Fake
+        }
         _ => return Err(io::Error::other("Unknown Bus callback provider")),
     };
     let mut bytes = Vec::new();

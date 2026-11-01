@@ -6,6 +6,8 @@ pub(crate) mod callback_entry;
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod cursor;
+#[cfg(feature = "dev-tools")]
+pub(crate) mod fake;
 pub(crate) mod grok;
 pub(crate) mod hook_json;
 pub(crate) mod kimi;
@@ -26,6 +28,8 @@ pub(crate) enum ProviderKind {
     Cursor,
     Grok,
     Kimi,
+    #[cfg(feature = "dev-tools")]
+    Fake,
 }
 
 impl ProviderKind {
@@ -38,6 +42,8 @@ impl ProviderKind {
             Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            #[cfg(feature = "dev-tools")]
+            Self::Fake => "fake",
         }
     }
 
@@ -49,6 +55,8 @@ impl ProviderKind {
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            #[cfg(feature = "dev-tools")]
+            Self::Fake => "bus-fake-agent",
         }
     }
 }
@@ -63,6 +71,8 @@ pub(crate) fn parse(
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
         ProviderKind::Kimi => kimi::hooks::parse(value),
+        #[cfg(feature = "dev-tools")]
+        ProviderKind::Fake => fake::parse(value),
     }
 }
 
