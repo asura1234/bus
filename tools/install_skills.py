@@ -173,13 +173,15 @@ def reject_linked_components(path: Path, bound: Path) -> None:
             raise OSError(f"{component} is not a real directory")
 
 
-def private_dir(path: Path, *, bound: Path) -> None:
+def private_dir(path: Path, *, bound: Path) -> list[Path]:
+    created = []
     for component in components_under(path, bound):
         try:
             meta = component.lstat()
         except FileNotFoundError:
             try:
                 component.mkdir(mode=0o700)
+                created.append(component)
             except FileExistsError:
                 meta = component.lstat()
                 if stat.S_ISLNK(meta.st_mode) or not stat.S_ISDIR(meta.st_mode):
@@ -187,6 +189,7 @@ def private_dir(path: Path, *, bound: Path) -> None:
             continue
         if stat.S_ISLNK(meta.st_mode) or not stat.S_ISDIR(meta.st_mode):
             raise OSError(f"{component} is not a real directory")
+    return created
 
 
 def tree_files(root: Path, directory: Path, files: dict[str, bytes]) -> None:
@@ -332,7 +335,11 @@ def install_one(home: Path, root: Path, provider: str, skill: dict, manifest: di
         save_manifest(home, manifest)
     if observed in {"conflict", "installed", "blocked-link"}:
         return leave_action(observed)
-    private_dir(root, bound=home)
+    created = manifest.setdefault("created_dirs", [])
+    for directory in private_dir(root, bound=home):
+        relative = directory.relative_to(home).as_posix()
+        if relative not in created:
+            created.append(relative)
     token = f"{os.getpid()}-{os.urandom(4).hex()}"
     stage = root / f".bus-stage-{token}"
     backup = root / f".bus-backup-{token}"
@@ -402,33 +409,34 @@ def install_all(home: Path) -> list[dict]:
         manifest["bundle_hash"] = bundle_hash(skills)
         for provider, directory in PROVIDERS:
             root = home / directory / "skills"
-            provider_home = home / directory
-            provider_existed = provider_home.exists() or provider_home.is_symlink()
             try:
                 for skill in skills:
                     action = install_one(home, root, provider, skill, manifest)
                     entries.append(_entry(provider, skill["name"], root / skill["name"], action))
             except OSError as error:
                 entries.append(_entry(provider, "", root, "failed", str(error)))
-            if not provider_existed and provider_home.is_dir() and not provider_home.is_symlink():
-                created = manifest.setdefault("created_dirs", [])
-                if directory not in created:
-                    created.append(directory)
         manifest["bundle_hash"] = bundle_hash(skills)
         save_manifest(home, manifest)
     return entries
 
 
-def prune_empty(path: Path, stop: Path) -> None:
-    current = path
-    while current != stop and current != current.parent:
-        if not current.exists():
-            current = current.parent
+def prune_created_dirs(home: Path, provider: str, manifest: dict) -> None:
+    """Only prune known provider paths with explicit directory ownership."""
+    directory = dict(PROVIDERS)[provider]
+    created = manifest.get("created_dirs", [])
+    for relative in (f"{directory}/skills", directory):
+        if relative not in created:
             continue
-        if any(current.iterdir()):
-            break
-        current.rmdir()
-        current = current.parent
+        path = home / relative
+        if linked_ancestor(path) is not None:
+            continue
+        try:
+            if any(path.iterdir()):
+                continue
+            path.rmdir()
+        except FileNotFoundError:
+            pass
+        created.remove(relative)
 
 
 def plain_skill_name(name: object) -> bool:
@@ -438,14 +446,6 @@ def plain_skill_name(name: object) -> bool:
         return False
     path = Path(name)
     return path.name == name and not path.is_absolute()
-
-
-def prune_stop(home: Path, provider: str, manifest: dict) -> Path:
-    directory = dict(PROVIDERS)[provider]
-    created = manifest.get("created_dirs") or []
-    if isinstance(created, list) and directory in created:
-        return home
-    return home / directory
 
 
 def remove_one(home: Path, provider: str, skill: dict, manifest: dict) -> str:
@@ -481,10 +481,7 @@ def remove_one(home: Path, provider: str, skill: dict, manifest: dict) -> str:
         return "preserved-conflict"
     shutil.rmtree(path)
     del manifest["installed"][key]
-    prune_empty(path.parent, prune_stop(home, provider, manifest))
-    created = manifest.get("created_dirs")
-    if isinstance(created, list) and directory in created and not (home / directory).exists():
-        created.remove(directory)
+    prune_created_dirs(home, provider, manifest)
     save_manifest(home, manifest)
     return "removed"
 
