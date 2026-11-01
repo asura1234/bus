@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import test_selection as selection  # noqa: E402
+import suite_selection as selection  # noqa: E402
 
 
 @pytest.mark.parametrize("path", [
@@ -56,6 +56,11 @@ def test_python_owner_runs_its_suite_without_building_rust():
 def test_full_flag_cannot_be_narrowed_by_document_only_changes():
     plan = selection.select(["README.md"], full=True)
     assert plan.full and plan.rust_filter is None and plan.dev_tools
+    assert plan.coverage_floor
+
+
+def test_affected_full_fallback_does_not_enable_a_coverage_verdict():
+    assert not selection.select(["src/main.rs"]).coverage_floor
 
 
 @pytest.mark.parametrize("path", ["/outside", "../outside", "src/../file", "./README.md"])

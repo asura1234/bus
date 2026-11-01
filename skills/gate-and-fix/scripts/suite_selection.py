@@ -1,4 +1,4 @@
-"""Conservative affected-test selection for the Bus crate and tooling."""
+"""Conservative affected-suite selection for the Bus crate and tooling."""
 from __future__ import annotations
 
 import subprocess
@@ -22,9 +22,11 @@ class Selection:
     python: tuple[str, ...]
     dev_tools: bool
     reason: str
+    coverage_floor: bool = False
 
 
 def select(paths: list[str], *, full: bool = False) -> Selection:
+    coverage_floor = full
     rust, python = set(), set()
     dev_tools = False
     for name in sorted(set(paths)):
@@ -56,7 +58,7 @@ def select(paths: list[str], *, full: bool = False) -> Selection:
         else:
             full = True
     if full:
-        return Selection(True, None, PYTHON, True, "explicit full mode or shared/unknown input")
+        return Selection(True, None, PYTHON, True, "explicit full mode or shared/unknown input", coverage_floor)
     return Selection(False, " | ".join(sorted(rust)) or "none()", tuple(sorted(python)),
                      dev_tools, "explicit test/tooling owners; coverage floor skipped")
 
