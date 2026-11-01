@@ -142,3 +142,158 @@ async fn universal_driver_submits_bracketed_text_with_a_separate_enter() {
         b"\r"
     );
 }
+
+#[tokio::test]
+async fn universal_driver_select_after_explicit_navigation_uses_current_focus() {
+    let initial = "❯ 1. Install update now\r\n  2. Continue with current version";
+    let focused = "\x1b[2J\x1b[H  1. Install update now\r\n❯ 2. Continue with current version";
+    let (mut app, target, mut writes) = shell(initial.as_bytes());
+    let mut select = press(&target);
+    select.select = Some("Continue with current version".into());
+    let first: Value =
+        serde_json::from_str(&app.handle_agent_press("select".into(), select.clone())).unwrap();
+    assert!(first.get("error").is_none(), "{first}");
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(focused.as_bytes());
+    let mut up = press(&target);
+    up.keys = vec!["up".into()];
+    let moved: Value = serde_json::from_str(&app.handle_agent_press("up".into(), up)).unwrap();
+    assert!(moved.get("error").is_none(), "{moved}");
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[A");
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{initial}").as_bytes());
+    let repeated: Value =
+        serde_json::from_str(&app.handle_agent_press("select-again".into(), select)).unwrap();
+    assert_eq!(repeated["result"]["press"]["keys"], serde_json::json!(["down"]),
+        "the previous move applied before explicit Up; a fresh selection must not remain blocked by its old focus");
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+}
+
+#[tokio::test]
+async fn universal_driver_traverses_equal_intermediate_labels() {
+    let (mut app, target, mut writes) = shell("❯Continue\r\n Continue\r\n Done".as_bytes());
+    let mut params = press(&target);
+    params.select = Some("Done".into());
+    let first: Value =
+        serde_json::from_str(&app.handle_agent_press("first".into(), params.clone())).unwrap();
+    assert_eq!(
+        first["result"]["press"]["keys"],
+        serde_json::json!(["down"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes("\x1b[2J\x1b[H Continue\r\n❯Continue\r\n Done".as_bytes());
+    let second: Value =
+        serde_json::from_str(&app.handle_agent_press("second".into(), params)).unwrap();
+    assert_eq!(
+        second["result"]["press"]["keys"],
+        serde_json::json!(["down"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+}
+
+#[tokio::test]
+async fn universal_driver_failed_explicit_input_preserves_outstanding_selection() {
+    let (mut app, target, mut writes) = shell("❯Yes\r\n No".as_bytes());
+    let mut select = press(&target);
+    select.select = Some("No".into());
+    let first: Value =
+        serde_json::from_str(&app.handle_agent_press("first".into(), select.clone())).unwrap();
+    assert_eq!(
+        first["result"]["press"]["keys"],
+        serde_json::json!(["down"])
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    for _ in 0..15 {
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .try_send_developer_bytes(Bytes::from_static(b"x"))
+            .unwrap();
+    }
+    let mut up = press(&target);
+    up.keys.push("up".into());
+    let failed: Value = serde_json::from_str(&app.handle_agent_press("full".into(), up)).unwrap();
+    assert_eq!(failed["error"]["code"], "terminal_write_failed");
+    while writes.try_recv().is_ok() {}
+    let repeated: Value =
+        serde_json::from_str(&app.handle_agent_press("repeat".into(), select)).unwrap();
+    assert_eq!(repeated["result"]["press"]["keys"], serde_json::json!([]));
+    assert_eq!(repeated["result"]["press"]["selection_pending"], true);
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn universal_driver_enqueue_failures_log_destination_and_cause_without_answers() {
+    for full in [false, true] {
+        let (mut app, target, mut writes) = shell(b"Answer: ");
+        if full {
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            for _ in 0..16 {
+                app.lookup_runtime_sender(0, pane)
+                    .unwrap()
+                    .try_send_developer_bytes(Bytes::from_static(b"x"))
+                    .unwrap();
+            }
+        } else {
+            writes.close();
+        }
+        let mut params = press(&target);
+        params.text = Some("PRIVATE-ANSWER-NEVER-LOG".into());
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run_filtered(crate::utils::logging::DEV_FILTER, || {
+            tracing::callsite::rebuild_interest_cache();
+            let result: Value =
+                serde_json::from_str(&app.handle_agent_press("enqueue-proof".into(), params))
+                    .unwrap();
+            assert_eq!(result["error"]["code"], "terminal_write_failed");
+        });
+        let log = capture.text();
+        for expected in [
+            "bus.terminal.driver.enqueue_failed",
+            "enqueue-proof",
+            "terminal_id=",
+            "pane_id=",
+            "input_mode=\"text\"",
+            if full {
+                "no available capacity"
+            } else {
+                "closed"
+            },
+        ] {
+            assert!(log.contains(expected), "missing {expected}: {log}");
+        }
+        assert!(!log.contains("PRIVATE-ANSWER-NEVER-LOG"), "{log}");
+    }
+}
+
+#[tokio::test]
+async fn universal_driver_empty_text_keeps_outstanding_navigation() {
+    let (mut app, target, mut writes) = shell("❯Yes\r\n No".as_bytes());
+    let mut select = press(&target);
+    select.select = Some("No".into());
+    let first: Value =
+        serde_json::from_str(&app.handle_agent_press("first".into(), select.clone())).unwrap();
+    assert_eq!(
+        first["result"]["press"]["keys"],
+        serde_json::json!(["down"])
+    );
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b[B");
+    let mut empty = press(&target);
+    empty.text = Some(String::new());
+    let noop: Value = serde_json::from_str(&app.handle_agent_press("noop".into(), empty)).unwrap();
+    assert!(noop.get("error").is_none(), "{noop}");
+    assert!(writes.try_recv().is_err());
+    let resumed: Value =
+        serde_json::from_str(&app.handle_agent_press("resume".into(), select)).unwrap();
+    assert_eq!(resumed["result"]["press"]["keys"], serde_json::json!([]));
+    assert!(
+        writes.try_recv().is_err(),
+        "empty text must not release an unapplied arrow"
+    );
+}

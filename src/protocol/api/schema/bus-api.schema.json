@@ -7269,6 +7269,13 @@
                 "null"
               ]
             },
+            "focus_occurrence": {
+              "default": 0,
+              "description": "Zero-based occurrence among options with the focused label. Physical row\nshifts do not change this identity; repeated intermediate labels do.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
             "grid": {
               "$ref": "#/schemas/success_response/$defs/Grid"
             },
@@ -7303,7 +7310,7 @@
               "$ref": "#/schemas/success_response/$defs/TerminalObservation"
             },
             "selection_pending": {
-              "description": "One navigation step was written; observe its redraw before continuing.",
+              "description": "Navigation is awaiting a focus change; keys can be empty while a prior step is still pending.",
               "type": "boolean"
             },
             "text_written": {

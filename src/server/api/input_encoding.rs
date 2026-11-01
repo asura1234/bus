@@ -22,16 +22,7 @@ pub(in crate::server) fn encode_api_keys(
     runtime: &crate::terminal::TerminalRuntime,
     keys: &[String],
 ) -> Result<Vec<Vec<u8>>, String> {
-    let mut encoded_keys = Vec::with_capacity(keys.len());
-    for key in keys {
-        encoded_keys.push(
-            crate::terminal::driver::input::encode_key_with(key, |key| {
-                runtime.encode_terminal_key(key)
-            })
-            .map_err(|_| key.clone())?,
-        );
-    }
-    Ok(encoded_keys)
+    crate::terminal::driver::input::encode_keys_with(keys, |key| runtime.encode_terminal_key(key))
 }
 
 pub(in crate::server) fn encode_api_submission_parts(

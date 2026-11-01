@@ -236,7 +236,7 @@ impl TerminalRuntime {
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
                 draft_input,
-                pending_driver_selection: Mutex::default(),
+                driver_state: Default::default(),
                 dialog_wait_test: Mutex::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),

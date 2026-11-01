@@ -41,19 +41,30 @@ fn select_does_not_depend_on_option_numbers_or_physical_row_distance() {
 
 #[test]
 fn driver_encodes_shell_answers_control_keys_and_arbitrary_text() {
-    for key in [
-        "y", "n", "2", "ctrl+c", "ctrl+d", "ctrl+z", "pageup", "alt+down", "+",
+    let encode = |name: &str| {
+        input::encode_key_with(name, |key| {
+            crate::protocol::keys::encode_terminal_key(key, KeyboardProtocol::Legacy)
+        })
+    };
+    for (key, expected) in [
+        ("y", &b"y"[..]),
+        ("n", &b"n"[..]),
+        ("2", &b"2"[..]),
+        ("ctrl+c", &b"\x03"[..]),
+        ("ctrl+d", &b"\x04"[..]),
+        ("ctrl+z", &b"\x1a"[..]),
+        ("pageup", &b"\x1b[5~"[..]),
+        ("alt+down", &b"\x1b[1;3B"[..]),
+        ("+", &b"+"[..]),
     ] {
-        assert!(!input::encode_key(key, KeyboardProtocol::Legacy)
-            .unwrap()
-            .is_empty());
+        assert_eq!(encode(key).unwrap(), expected, "{key}");
     }
     assert_eq!(
         input::paste("answer\n第二行", false),
         "answer\n第二行".as_bytes()
     );
     assert_eq!(input::paste("answer", true), b"\x1b[200~answer\x1b[201~");
-    assert!(input::encode_key("unknown-key", KeyboardProtocol::Legacy).is_err());
+    assert!(encode("unknown-key").is_err());
 }
 
 #[tokio::test]

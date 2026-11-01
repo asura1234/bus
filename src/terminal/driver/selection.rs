@@ -51,6 +51,23 @@ pub(crate) fn selection_focus(grid: &Grid) -> Result<(usize, String), String> {
     Ok((*focused, option_label(&rows[*focused]).0.to_owned()))
 }
 
+/// Physical row relocation does not change an option's logical identity.
+/// The occurrence distinguishes equal intermediate labels without using screen coordinates.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SelectionIdentity {
+    label: String,
+    pub(crate) occurrence: usize,
+}
+
+pub(crate) fn selection_identity(grid: &Grid) -> Result<SelectionIdentity, String> {
+    let (row, label) = selection_focus(grid)?;
+    let occurrence = grid.rows_text()[..row]
+        .iter()
+        .filter(|text| option_label(text).0 == label)
+        .count();
+    Ok(SelectionIdentity { label, occurrence })
+}
+
 fn option_label(row: &str) -> (&str, bool) {
     let row = row.trim().trim_matches(['│', '┃']).trim();
     let selected = row.starts_with(['❯', '›', '>', '●', '◉', '▶', '→']);

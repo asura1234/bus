@@ -810,7 +810,7 @@ impl TerminalRuntime {
             content_seq,
             content_write_lock,
             draft_input,
-            pending_driver_selection: Mutex::default(),
+            driver_state: Default::default(),
             #[cfg(test)]
             dialog_wait_test: Mutex::default(),
             detection_content_seq,

@@ -53,13 +53,17 @@ pub struct TerminalObservation {
     pub text: String,
     pub grid: super::driver::Grid,
     pub focus: Option<(usize, String)>,
+    /// Zero-based occurrence among options with the focused label. Physical row
+    /// shifts do not change this identity; repeated intermediate labels do.
+    #[serde(default)]
+    pub focus_occurrence: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TerminalPressResult {
     pub keys: Vec<String>,
     pub text_written: bool,
-    /// One navigation step was written; observe its redraw before continuing.
+    /// Navigation is awaiting a focus change; keys can be empty while a prior step is still pending.
     pub selection_pending: bool,
     pub observation: TerminalObservation,
 }

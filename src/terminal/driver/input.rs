@@ -1,37 +1,5 @@
 //! One key and text encoder for terminal panes and the Bus UI.
 use crate::protocol::keys::TerminalKey;
-#[cfg(test)]
-use crate::protocol::keys::{encode_terminal_key, KeyboardProtocol};
-
-/// Encodes one chord such as `ctrl+shift+r`, `enter`, `esc` or `f6` for the
-/// keyboard protocol the client negotiated. With the kitty flags Bus pushes,
-/// Esc becomes `CSI 27 u`, so it never waits out the lone-Esc timeout.
-#[cfg(test)]
-pub(crate) fn encode_key(name: &str, protocol: KeyboardProtocol) -> Result<Vec<u8>, String> {
-    let normalized = match name.trim() {
-        "+" => "plus",
-        "C-c" | "c-c" => "ctrl+c",
-        other => other,
-    };
-    let (code, modifiers) = parse_chord(normalized)
-        .ok_or_else(|| format!("unknown key {name:?}; examples: enter, esc, ctrl+n, alt+up, f6"))?;
-    // A lone ESC byte waits out Bus's escape timeout (up to 150 ms while mouse
-    // capture is on); `CSI 27 u` is unambiguous once kitty keys are on.
-    if code == crossterm::event::KeyCode::Esc
-        && modifiers.is_empty()
-        && matches!(protocol, KeyboardProtocol::Kitty { .. })
-    {
-        return Ok(b"\x1b[27u".to_vec());
-    }
-    let bytes = encode_terminal_key(TerminalKey::new(code, modifiers), protocol);
-    if bytes.is_empty() {
-        return Err(format!(
-            "key {name:?} encodes to nothing in this keyboard mode"
-        ));
-    }
-    Ok(bytes)
-}
-
 /// Pane callers preserve terminal modes (application cursor keys and Kitty)
 /// by using the live emulator's encoder after the same chord parsing.
 pub(crate) fn encode_key_with(
@@ -52,6 +20,16 @@ pub(crate) fn encode_key_with(
         ));
     }
     Ok(bytes)
+}
+
+/// Encode and validate a complete key batch before callers enqueue any bytes.
+pub(crate) fn encode_keys_with(
+    keys: &[String],
+    mut encode: impl FnMut(TerminalKey) -> Vec<u8>,
+) -> Result<Vec<Vec<u8>>, String> {
+    keys.iter()
+        .map(|key| encode_key_with(key, &mut encode).map_err(|_| key.clone()))
+        .collect()
 }
 
 /// Bus's key-combo syntax, plus the navigation keys Bus binds but its

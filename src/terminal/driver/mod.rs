@@ -2,10 +2,15 @@
 //! a dialog parser or an agent state to read and answer a terminal prompt.
 mod grid;
 pub(crate) mod input;
+mod press;
 mod selection;
 
 pub(crate) use grid::Grid;
-pub(crate) use selection::{selection_focus, selection_step, SelectionStep};
+pub(super) use press::DriverState;
+pub(crate) use press::{press, validate_press};
+pub(crate) use selection::{
+    selection_focus, selection_identity, selection_step, SelectionIdentity, SelectionStep,
+};
 
 use crate::terminal::TerminalRuntime;
 
