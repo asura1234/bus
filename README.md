@@ -11,18 +11,14 @@ normal permissions. For this run, bypass overrides Codex's conflicting approval
 options; the original `--args` remain saved for later normal runs.
 See [agent launch arguments](docs/launch-args.md) for provider flags and details.
 
-Installing skills is a separate command. `./run dev`, `./run prod`, `bus`, and
-`bus resume` never ask about or install skills. Use `./run install-skills` to
-install this checkout's default skills, or add `--yes` to install without a
-prompt. `bus skills install --yes` installs the bundle embedded in that binary;
-`bus skills status` inspects copies without a running session. The install
-report's action for each skill is installed, updated, unchanged,
-preserved-conflict, or blocked-link, with a warning when a user skill is
-preserved.
-`./run install-skills` runs only a binary built from this checkout: if a shared
-Cargo target returns another checkout's binary, it rebuilds into
-`target/install-skills` and refuses to install when that binary still does not
-match.
+Installing skills is a separate add-on, not part of the `bus` binary.
+`./run dev`, `./run prod`, `bus`, and `bus resume` never ask about or install
+skills. `./run install-skills` copies this checkout's `skills/` tree, and
+`./run remove-skills` deletes only the copies that add-on recorded. Add `--yes`
+to skip the prompt. Neither command starts Bus or reads the Bus data directory.
+Each prints one line per provider and exits non-zero if any provider failed:
+`installed N skills to <path>`, `removed N skills from <path>`, `failed: <reason>`,
+or `skipped: <reason>`.
 
 Skills are copied into each provider's user skill directory, as
 `<directory>/<name>/SKILL.md`:
@@ -38,13 +34,13 @@ Skills are copied into each provider's user skill directory, as
   variable is unset
   ([Kimi Code skills](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html))
 
-Cursor, Grok, and Kimi also read `~/.agents/skills`. Bus still writes each
-provider's own directory. Install does not post to Bus rooms. Bus records ownership,
-version and SHA-256 hashes in `~/.local/share/bus/skills-manifest.json`.
-Upgrades replace matching Bus-owned copies; existing user skills and edited Bus
-copies are preserved with a warning. Shared scripts and guides live in the
-Bus-owned `_bus` directory inside each skills directory. The binary embeds the
-bundle, so it does not need the source checkout at runtime.
+Cursor, Grok, and Kimi also read `~/.agents/skills`. The add-on still writes each
+provider's own directory. It prints to its own terminal and does not post to Bus
+rooms. Ownership and SHA-256 hashes live in `~/.config/bus-skills/manifest.json`.
+Upgrades replace matching owned copies; existing user skills and edited copies
+stay in place, and remove deletes a skill only when its bytes still match that
+manifest. Shared scripts and guides live in the owned `_bus` directory inside
+each skills directory. The add-on reads `skills/` from this checkout.
 
 The canonical sources remain in `skills/`. This repo has no `.claude/skills` or
 `.agents/skills` registry. Bus does not scan or post about same-name repo and

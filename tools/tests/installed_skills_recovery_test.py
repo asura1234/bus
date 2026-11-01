@@ -3,30 +3,39 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 
+ROOT = Path(__file__).resolve().parents[2]
+TOOL = ROOT / "tools" / "install_skills.py"
+
+
 def _bus(home, *args, check=True, binary=None):
-    binary = binary or os.environ.get("BUS_TEST_BINARY")
-    if not binary:
-        pytest.skip("requires the gate's exact built Bus binary")
+    del binary
     env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
     env.update(HOME=str(home), USERPROFILE=str(home))
-    return subprocess.run([binary, "skills", *args], env=env, cwd=home, capture_output=True, text=True, check=check)
+    result = subprocess.run(
+        [sys.executable, str(TOOL), *args], env=env, cwd=home, capture_output=True, text=True, check=False
+    )
+    if check and result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return result
 
 
 def test_reinstall_after_a_lost_manifest_adopts_byte_identical_bus_copies(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _bus(home, "install", "--yes")
-    # A corrupt manifest blocks both status and install; removing it is the only way back.
-    (home / ".local/share/bus/skills-manifest.json").unlink()
-    report = json.loads(_bus(home, "install", "--yes").stdout)
+    # A missing manifest is adopted again when the bytes still match; a corrupt one blocks install.
+    (home / ".config/bus-skills/manifest.json").unlink()
+    assert _bus(home, "install", "--yes").returncode == 0
+    report = json.loads(_bus(home, "status").stdout)
     states = {skill["state"] for skill in report["skills"]}
-    assert states == {"installed"}, report["warnings"][:2]
-    manifest = json.loads((home / ".local/share/bus/skills-manifest.json").read_text())
+    assert states == {"installed"}, report
+    manifest = json.loads((home / ".config/bus-skills/manifest.json").read_text())
     assert len(manifest["installed"]) == len(report["skills"])
 
 
@@ -35,7 +44,8 @@ def test_a_symlinked_provider_home_is_not_reported_as_existing_user_skills(tmp_p
     (home / "dotfiles/claude").mkdir(parents=True)
     (home / ".claude").symlink_to(home / "dotfiles/claude")
     result = _bus(home, "install", "--yes")
-    claude = [skill for skill in json.loads(result.stdout)["skills"] if skill["provider"] == "claude"]
+    assert result.returncode == 0, result.stderr
+    claude = [skill for skill in json.loads(_bus(home, "status").stdout)["skills"] if skill["provider"] == "claude"]
     reported_as_user_skill = [skill["name"] for skill in claude
                               if skill["state"] == "conflict" and not Path(skill["path"]).exists()]
     assert reported_as_user_skill == [], result.stderr.splitlines()[:1]
@@ -83,14 +93,14 @@ def test_install_leaves_existing_settings_unchanged(tmp_path):
 def test_upgrades_preserve_user_authored_files(tmp_path, name):
     home = tmp_path / "home"
     home.mkdir()
-    # A preserved binary exercises authentic cross-bundle upgrades when supplied.
-    _bus(home, "install", "--yes", binary=os.environ.get("BUS_PREVIOUS_BINARY"))
+    _bus(home, "install", "--yes")
     path = home / ".agents/skills/review-pr" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     content = b"USER_REVIEW_ENDPOINT=http://localhost:43210\n"
     path.write_bytes(content)
     before = json.loads(_bus(home, "status").stdout)
-    after = json.loads(_bus(home, "install", "--yes").stdout)
+    assert _bus(home, "install", "--yes").returncode == 0
+    after = json.loads(_bus(home, "status").stdout)
     assert path.is_file(), f"upgrade deleted user file {name}"
     assert path.read_bytes() == content
     for report in (before, after):

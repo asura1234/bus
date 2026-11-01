@@ -26,7 +26,6 @@ pub(super) enum Action {
     Paths,
     Help,
     Control(Vec<String>),
-    Skills(Vec<String>),
     /// `bus --dev tui ...`: the TUI driver, in the dev variant only.
     Tui(Vec<String>),
 }
@@ -95,10 +94,6 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     index += 1;
                 }
                 action = Some(Action::Resume(target.ok_or_else(|| USAGE.to_owned())?));
-            }
-            "skills" if action.is_none() => {
-                action = Some(Action::Skills(args[index + 1..].to_vec()));
-                break;
             }
             "tui" if action.is_none() => {
                 action = Some(Action::Tui(args[index + 1..].to_vec()));

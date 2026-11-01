@@ -1,5 +1,3 @@
-#[path = "src/messaging/skills/files.rs"]
-mod skill_files;
 include!("build_identity.rs");
 use std::fs;
 
@@ -65,7 +63,6 @@ fn env_bool(name: &str) -> Option<bool> {
 
 fn main() {
     record_build_identity();
-    embed_skills();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build_identity.rs");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -144,87 +141,4 @@ fn build_vendored_lib(mut command: Command, zig: &str) {
         status.success(),
         "zig build for vendored libghostty-vt failed: {status}"
     );
-}
-
-/// Embed all runtime resources so a copied executable needs no source checkout.
-fn embed_skills() {
-    fn collect(root: &std::path::Path, path: &std::path::Path, files: &mut Vec<PathBuf>) {
-        let mut entries: Vec<_> = fs::read_dir(path)
-            .expect("read skill resources")
-            .map(|entry| entry.expect("skill entry").path())
-            .collect();
-        entries.sort();
-        for entry in entries {
-            let name = entry.file_name().expect("skill filename").to_string_lossy();
-            if name.starts_with('.')
-                || name.ends_with(".pyc")
-                || skill_files::ignored(&name)
-                || name == "tests"
-                || name.ends_with("_test.py")
-            {
-                continue;
-            }
-            if entry.is_dir() {
-                collect(root, &entry, files);
-            } else if entry.is_file() {
-                files.push(
-                    entry
-                        .strip_prefix(root)
-                        .expect("skill resource path")
-                        .to_path_buf(),
-                );
-            }
-        }
-    }
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest"));
-    let skills = root.join("skills");
-    println!("cargo:rerun-if-changed=skills");
-    println!("cargo:rerun-if-changed=cli_extensions");
-    println!("cargo:rerun-if-changed=scripts");
-    println!("cargo:rerun-if-changed=workflows");
-    println!("cargo:rerun-if-changed=docs/guides");
-    println!("cargo:rerun-if-changed=docs/templates");
-    let mut files = Vec::new();
-    collect(&skills, &skills, &mut files);
-    let mut data = Vec::new();
-    let mut index = String::new();
-    for relative in files {
-        // The architecture document is authoring guidance, not an installable skill.
-        if relative.components().count() < 2 {
-            continue;
-        }
-        let path = skills.join(&relative);
-        let start = data.len();
-        data.extend(fs::read(&path).expect("skill bytes"));
-        #[cfg(unix)]
-        let executable = {
-            use std::os::unix::fs::PermissionsExt;
-            fs::metadata(&path)
-                .expect("skill metadata")
-                .permissions()
-                .mode()
-                & 0o111
-                != 0
-        };
-        #[cfg(not(unix))]
-        let executable = false;
-        index.push_str(&format!(
-            "{}\t{}\t{}\t{}\n",
-            relative.to_string_lossy().replace('\\', "/"),
-            if executable { "x" } else { "-" },
-            start,
-            data.len()
-        ));
-    }
-    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    use std::io::Write;
-    let mut compressed =
-        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    compressed.write_all(&data).expect("compress skill bytes");
-    fs::write(
-        out.join("skills.bin"),
-        compressed.finish().expect("finish skill compression"),
-    )
-    .expect("write embedded skill bytes");
-    fs::write(out.join("skills.index"), index).expect("write embedded skill index");
 }

@@ -1,6 +1,5 @@
 """Installed workflow resources must resolve independently of Bus's checkout."""
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,13 +14,11 @@ def test_review_scripts_find_bundled_support_and_target_the_callers_repo(tmp_pat
     home.mkdir(parents=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
     env.update(HOME=str(home), USERPROFILE=str(home))
-    binary = os.environ.get("BUS_TEST_BINARY")
-    if binary:
-        subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, check=True)
-    else:
-        for name in ("review-pr", "pr", "rebase-origin-main", "gate-and-fix"):
-            shutil.copytree(ROOT / "skills" / name, skills / name)
-        shutil.copytree(ROOT / "skills" / "_bus", skills / "_bus")
+    installed = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "install_skills.py"), "install", "--yes"],
+        env=env, cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     repo = tmp_path / "other-repo"
     repo.mkdir()
     for args in (["init", "--initial-branch=feature"], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "base"]):
@@ -119,20 +116,19 @@ def test_bus_refuses_a_test_launch_with_protected_home_before_any_state_write(tm
 
 
 def test_corrupt_manifest_stops_install_without_copying_or_writing_settings(tmp_path):
-    import pytest
-    binary = os.environ.get("BUS_TEST_BINARY")
-    if not binary:
-        pytest.skip("requires the gate's exact binary")
     home = tmp_path / "home"
-    state = home / ".local/share/bus"
+    state = home / ".config/bus-skills"
     state.mkdir(parents=True)
-    (state / "skills-manifest.json").write_text("corrupt")
+    (state / "manifest.json").write_text("corrupt")
     env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_", "XDG_"))}
     env.update(HOME=str(home), USERPROFILE=str(home))
-    result = subprocess.run([binary, "skills", "install", "--yes"], env=env, cwd=tmp_path, capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "install_skills.py"), "install", "--yes"],
+        env=env, cwd=tmp_path, capture_output=True, text=True,
+    )
     assert result.returncode != 0
-    assert str(state / "skills-manifest.json") in result.stderr
-    assert not (state / "settings.json").exists()
+    assert "manifest.json" in result.stdout + result.stderr
+    assert not (home / ".local/share/bus/settings.json").exists()
     assert not (home / ".agents").exists()
 
 
