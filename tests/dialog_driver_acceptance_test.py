@@ -35,7 +35,7 @@ terminal_module = importlib.util.module_from_spec(helper)
 helper.loader.exec_module(terminal_module)
 
 
-SUPPORT_PATH = Path(__file__).with_name("dialog_driver_acceptance_support.py")
+SUPPORT_PATH = Path(__file__).with_name("dialog_driver_acceptance_support_test.py")
 support_spec = importlib.util.spec_from_file_location("dialog_driver_acceptance_support", SUPPORT_PATH)
 support = importlib.util.module_from_spec(support_spec)
 support_spec.loader.exec_module(support)
