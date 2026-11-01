@@ -24,6 +24,7 @@ enum Operation {
     Capture,
     Restore,
     Verify,
+    Recover,
     Cancelled,
 }
 
@@ -119,6 +120,14 @@ fn wrapper(value: &str) -> bool {
 
 impl Exchange {
     pub(crate) fn begin(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        Self::begin_inner(dir, timeout, false)
+    }
+
+    pub(crate) fn begin_recovery(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        Self::begin_inner(dir, timeout, true)
+    }
+
+    fn begin_inner(dir: PathBuf, timeout: Duration, recovering: bool) -> io::Result<Self> {
         private_dir(&dir)?;
         #[cfg(unix)]
         {
@@ -133,8 +142,10 @@ impl Exchange {
                 name.starts_with("draft-") && name.ends_with(".txt")
             })
         });
+        let reclaim_cancelled = recovering && !recovery_candidates(&dir)?.is_empty();
         if read_request(&dir)?.is_some_and(|request| {
-            (request.operation != Operation::Cancelled || !orphaned)
+            !(reclaim_cancelled && request.operation == Operation::Cancelled)
+                && (request.operation != Operation::Cancelled || !orphaned)
                 && (request.expires_ms > crate::utils::time::now_ms()
                     || request.operation != Operation::Idle && !has_ack(&dir, &request))
         }) {
@@ -200,6 +211,14 @@ impl Exchange {
     pub(crate) fn request_restore(&self) -> io::Result<()> {
         self.request(Operation::Restore)
     }
+    pub(crate) fn request_recover(&self) -> io::Result<()> {
+        self.request(Operation::Recover)
+    }
+
+    pub(crate) fn has_recoverable_draft(dir: &Path) -> bool {
+        recovery_candidates(dir).is_ok_and(|files| !files.is_empty())
+    }
+
     pub(crate) fn request_verify(&self) -> io::Result<()> {
         self.request(Operation::Verify)
     }
@@ -436,13 +455,46 @@ pub(crate) fn test_run_at(directory: &Path, file: &Path) -> io::Result<()> {
     run_at(Some(directory), file, "false")
 }
 
+// Only full, regular recovery files in this pane's private directory can
+// authorize withdrawal. A screen suffix, header or notification cannot.
+fn recovery_candidates(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    fs::read_dir(dir)?
+        .map(|entry| {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let metadata = entry.path().symlink_metadata()?;
+            Ok((name.starts_with("draft-")
+                && (name.ends_with(".txt") || name.ends_with(".recovered"))
+                && metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() > 0
+                && metadata.len() <= MAX_BYTES)
+                .then(|| entry.path()))
+        })
+        .filter_map(|entry| entry.transpose())
+        .collect()
+}
+
 fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
     if fs::metadata(file)?.len() > MAX_BYTES {
         return Err(io::Error::other("Draft exceeds 2 MiB"));
     }
     let bytes = fs::read(file)?;
     let saved = recovery(dir, &request.token);
+    let mut recovered = None;
     let replacement = match request.operation {
+        Operation::Recover => {
+            recovered = recovery_candidates(dir)?
+                .into_iter()
+                .find(|path| fs::read(path).is_ok_and(|saved| !saved.is_empty() && saved == bytes));
+            if recovered.is_none() {
+                return Err(io::Error::other(
+                    "Composer differs from the saved Bus draft; preserved",
+                ));
+            }
+            marker(&request.token).into_bytes()
+        }
         Operation::Capture => {
             let text = std::str::from_utf8(&bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -462,7 +514,7 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
             Vec::new()
         }
         Operation::Restore | Operation::Verify => {
-            let mut original = fs::read(saved)?;
+            let mut original = fs::read(&saved)?;
             let expected = if request.operation == Operation::Restore {
                 &[][..]
             } else {
@@ -483,10 +535,27 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
     // Cancellation shares our lock. Recheck expiry and the actual file before
     // each mutation, including after the recovery copy has reached disk.
     check_expiry(request)?;
+    if request.operation == Operation::Recover {
+        // If the caller loses its readback, this exact marker can itself be
+        // recovered later. Keep proof before changing the native editor file.
+        if saved.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Recovery proof already exists",
+            ));
+        }
+        crate::platform::atomic_write(&saved, &replacement)?;
+    }
     if fs::read(file)? != bytes {
         return Err(io::Error::other("Editor file changed; draft was preserved"));
     }
-    crate::platform::atomic_write(file, &replacement)
+    crate::platform::atomic_write(file, &replacement)?;
+    if let Some(path) = recovered {
+        // Retain the original bytes, but never spend this proof a second time.
+        fs::rename(&path, path.with_extension("withdrawn"))?;
+        crate::platform::sync_parent_directory(dir)?;
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]

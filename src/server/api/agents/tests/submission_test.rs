@@ -5,6 +5,9 @@ use crate::protocol::api::schema::{
 
 pub(super) const WAIT: Duration = crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
 
+#[path = "kimi_delivery_test.rs"]
+mod kimi_delivery_tests;
+
 fn clock(app: &App) -> crate::terminal::runtime::SubmissionClock {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     app.lookup_runtime_sender(0, pane)

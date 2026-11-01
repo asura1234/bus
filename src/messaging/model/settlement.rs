@@ -49,23 +49,22 @@ impl BusState {
         else {
             return false;
         };
+        // Kimi can start an already submitted next turn after an Idle poll.
+        // Reuse the submission stall bound; polling cannot renew this window.
+        let retain_until = (owner.provider == super::Provider::Kimi
+            && owner.status == RuntimeStatus::Idle)
+            .then(|| {
+                lead.completed_at_ms
+                    .unwrap_or(now_ms)
+                    .max(owner.status_since_ms)
+                    .saturating_add(super::DELIVERED_STALL_MS)
+            });
         let members = self.group_members(lead.id);
         if let Some(RecordedTurnEnd::Final {
             turn_id, prompts, ..
         }) = recorded_end(&lead)
         {
-            if lead.provider_turn_id.as_deref() == Some(&turn_id) {
-                for id in &members {
-                    if self.requests.get(id).is_some_and(|member| {
-                        member.steered
-                            && !member.trusted_start_bound
-                            && !member.settled()
-                            && self.recorded_for(member, lead.id, &members, &prompts)
-                    }) {
-                        self.bind_recorded_member(*id, lead.provider_session_id.clone(), &turn_id);
-                    }
-                }
-            }
+            self.bind_recorded_turn_inputs(agent, &turn_id, &prompts);
         }
         let _ = self.complete_pending_final(agent, now_ms);
         let mut uncertain = None;
@@ -74,6 +73,13 @@ impl BusState {
                 continue;
             };
             self.recover_steered_answer(&lead, &member, &members, recorded_end(&member), now_ms);
+        }
+        if retain_until.is_some_and(|deadline| now_ms < deadline)
+            && members
+                .iter()
+                .any(|id| self.requests.get(id).is_some_and(|m| !m.settled()))
+        {
+            return true;
         }
         // A later member's transcript lookup can prove earlier inputs too.
         // Resolve all available evidence before declaring any member uncertain.
@@ -95,6 +101,42 @@ impl BusState {
             owner.actionable_error = uncertain.map(Self::unconfirmed_submission_message);
         }
         true
+    }
+
+    /// Bind only inputs the committed turn actually contains, before a later
+    /// Started callback can move unclaimed steering to another turn.
+    pub(crate) fn bind_recorded_turn_inputs(
+        &mut self,
+        agent: AgentId,
+        turn: &str,
+        prompts: &[String],
+    ) {
+        let Some(lead) = self
+            .agents
+            .get(&agent)
+            .and_then(|owner| owner.current_request)
+            .and_then(|request| self.requests.get(&request))
+            .filter(|request| request.provider_turn_id.as_deref() == Some(turn))
+            .cloned()
+        else {
+            return;
+        };
+        let members = self.group_members(lead.id);
+        let proved: Vec<_> = members
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.requests.get(id).is_some_and(|member| {
+                    member.steered
+                        && !member.trusted_start_bound
+                        && !member.settled()
+                        && self.recorded_for(member, lead.id, &members, prompts)
+                })
+            })
+            .collect();
+        for id in proved {
+            self.bind_recorded_member(id, lead.provider_session_id.clone(), turn);
+        }
     }
 
     fn bind_recorded_member(&mut self, id: RequestId, session: Option<String>, turn: &str) {
@@ -493,6 +535,14 @@ impl BusState {
         );
         if key.is_some_and(|key| self.consumed_provider_turns.contains(&key)) {
             return None;
+        }
+        if self.agents.get(&agent)?.provider == super::Provider::Kimi {
+            if let Some(turn) = answer.provider_turn_id.as_deref() {
+                self.bind_recorded_turn_inputs(agent, turn, prompts);
+            }
+            self.requests.get_mut(&id)?.pending_final = Some(answer);
+            self.complete_pending_final(agent, now_ms).ok()?;
+            return Some(id);
         }
         let members = self.group_members(id);
         let unproven: Vec<RequestId> = members

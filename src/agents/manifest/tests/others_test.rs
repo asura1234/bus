@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn kimi_captured_moon_with_a_tip_is_working() {
+    let loaded =
+        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
+    for (screen, expected_rule) in [
+        (
+            include_str!("../../../../tests/fixtures/kimi-steer/thinking-tip.txt"),
+            "moon_tip_spinner_working",
+        ),
+        (
+            include_str!("../../../../tests/fixtures/kimi-steer/command-tip.txt"),
+            "footer_running_command_working",
+        ),
+    ] {
+        let detection = detect_loaded(
+            DetectionInput {
+                screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+            &loaded,
+        );
+        assert_eq!(detection.state, AgentState::Working);
+        assert!(detection.visible_working);
+        assert_eq!(
+            detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some(expected_rule)
+        );
+    }
+}
+
+#[test]
+fn kimi_bare_moon_keeps_its_existing_precedence_over_command_text() {
+    let screen = format!(
+        "● Running a command · $ sleep 45\n🌒\n{}",
+        kimi_frame("K3.1 Pro thinking: high")
+    );
+    let detection = kimi_detection(&screen);
+    assert_eq!(detection.state, AgentState::Working);
+    assert!(detection.visible_working);
+    assert_eq!(
+        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("moon_spinner_working")
+    );
+    assert!(!super::super::kimi_running_command_is_winner(&screen));
+}
+
+#[test]
 fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());

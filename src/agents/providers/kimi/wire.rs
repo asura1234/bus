@@ -1,4 +1,4 @@
-//! Kimi 2.4.0's private wire is the completion witness. Stop is only a wake.
+//! Kimi 2.4.x's private wire is the completion witness. Stop is only a wake.
 use serde_json::Value;
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -7,11 +7,20 @@ use std::time::SystemTime;
 const MAX_WIRE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: u64 = 4 * 1024 * 1024;
 
+#[cfg(test)]
+#[path = "../tests/kimi_steering_wire_test.rs"]
+mod steering_tests;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Outcome {
     Final(String),
     NoReply,
     Failed(String),
+}
+
+pub(crate) struct CommittedTurn {
+    pub(crate) outcome: Outcome,
+    pub(crate) prompts: Vec<String>,
 }
 
 #[cfg(test)]
@@ -31,6 +40,7 @@ pub(crate) fn committed_outcome(wire: &str, turn_id: u64, prompt: &str) -> Optio
     )
     .ok()
     .flatten()
+    .map(|turn| turn.outcome)
 }
 
 fn normalized_prompt(value: &str) -> String {
@@ -41,28 +51,17 @@ fn normalized_prompt(value: &str) -> String {
         .to_owned()
 }
 
-fn owned_prompt_id(value: &Value, prompt: &str) -> Option<String> {
-    let input = value.get("input")?.as_array()?;
-    if input.len() != 1
-        || input[0].get("type").and_then(Value::as_str) != Some("text")
-        || input[0]
-            .get("text")
-            .and_then(Value::as_str)
-            .map(normalized_prompt)
-            .as_deref()
-            != Some(normalized_prompt(prompt).as_str())
-    {
-        return None;
-    }
+fn owned_prompt(value: &Value) -> Option<(String, String)> {
+    let input = plain_text(value, "input")?;
     let id = value.get("promptId")?.as_str()?;
-    (!id.is_empty()).then(|| id.to_owned())
+    (!id.is_empty()).then(|| (id.to_owned(), input))
 }
 
 fn committed_outcome_lines(
     lines: impl IntoIterator<Item = Result<String, String>>,
     turn_id: u64,
     prompt: &str,
-) -> Result<Option<Outcome>, String> {
+) -> Result<Option<CommittedTurn>, String> {
     let mut lines = lines.into_iter();
     let mut invalid = None;
     let checked = std::iter::from_fn(|| {
@@ -93,13 +92,15 @@ fn scan_committed_outcome(
     lines: impl IntoIterator<Item = Result<String, String>>,
     turn_id: u64,
     prompt: &str,
-) -> Option<Outcome> {
+) -> Option<CommittedTurn> {
     let mut owned = false;
     let mut prompt_id = String::new();
     let mut answer = None;
     let mut agent_outcome = None;
     let mut agent_error = None;
     let mut turn_reason = None;
+    let mut prompts = Vec::new();
+    let mut guidance_ids = std::collections::HashSet::new();
     for line in lines {
         let line = line.ok()?;
         // One oversized historical line must not hide a later committed turn.
@@ -117,41 +118,33 @@ fn scan_committed_outcome(
                 {
                     continue;
                 }
-                prompt_id = owned_prompt_id(&value, prompt)?;
+                let (id, text) = owned_prompt(&value)?;
+                prompt_id = id;
+                prompts.push(text);
                 owned = true;
             }
-            "agent.message.appended" if owned && agent_outcome.is_none() => {
-                let message = value.get("message")?.get("message")?;
-                if message.get("role").and_then(Value::as_str) != Some("assistant")
-                    || value
-                        .pointer("/message/meta/source")
-                        .and_then(Value::as_str)
-                        != Some("llm")
-                {
-                    continue;
-                }
-                if message
-                    .get("toolCalls")
-                    .and_then(Value::as_array)
-                    .is_some_and(|calls| !calls.is_empty())
-                {
-                    answer = None;
-                    continue;
-                }
-                let text = message
-                    .get("content")?
-                    .as_array()?
-                    .iter()
-                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-                    .map(|part| part.get("text").and_then(Value::as_str))
-                    .collect::<Option<Vec<_>>>()?
-                    .concat();
-                if !text.is_empty() {
-                    answer = Some(text);
+            "prompt.steered" if owned && turn_reason.is_none() => {
+                if let Some((id, text)) = guidance(&value, &prompt_id) {
+                    if guidance_ids.insert(id) {
+                        prompts.extend(text);
+                    }
                 }
             }
-            "agent.turn.ended" if owned => {
-                if value.get("turnId").and_then(Value::as_u64) == Some(turn_id) {
+            "agent.message.appended" if owned && turn_reason.is_none() => {
+                if update_answer(&value, &mut answer, agent_outcome.is_some())? {
+                    agent_outcome = None;
+                    agent_error = None;
+                }
+            }
+            "agent.turn.ended" if owned && turn_reason.is_none() => {
+                // This counts internal agent runs, not outer turn.prompt IDs.
+                // The main wire and owned outer prompt supply its scope.
+                if value.get("turnId").and_then(Value::as_u64).is_some()
+                    && value
+                        .get("agentId")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| id == "main")
+                {
                     agent_outcome = Some(value.get("outcome")?.as_str()?.to_owned());
                     agent_error = value
                         .get("errorMessage")
@@ -172,18 +165,108 @@ fn scan_committed_outcome(
                     && value.get("agentId").and_then(Value::as_str) == Some("main")
                     && value.get("promptId").and_then(Value::as_str) == Some(&prompt_id) =>
             {
-                return terminal_outcome(
-                    agent_outcome.as_deref(),
-                    turn_reason.as_deref(),
-                    value.get("reason")?.as_str()?,
-                    answer,
-                    agent_error,
-                );
+                if !prompts
+                    .iter()
+                    .any(|text| normalized_prompt(text) == normalized_prompt(prompt))
+                {
+                    return None;
+                }
+                return Some(CommittedTurn {
+                    outcome: terminal_outcome(
+                        agent_outcome.as_deref(),
+                        turn_reason.as_deref(),
+                        value.get("reason")?.as_str()?,
+                        answer,
+                        agent_error,
+                    )?,
+                    prompts,
+                });
             }
             _ => {}
         }
     }
     None
+}
+
+fn update_answer(value: &Value, answer: &mut Option<String>, new_iteration: bool) -> Option<bool> {
+    if value
+        .get("agentId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != "main")
+    {
+        return Some(false);
+    }
+    let message = value.get("message")?.get("message")?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant")
+        || value
+            .pointer("/message/meta/source")
+            .and_then(Value::as_str)
+            != Some("llm")
+    {
+        return Some(false);
+    }
+    if new_iteration {
+        *answer = None;
+    }
+    if message
+        .get("toolCalls")
+        .and_then(Value::as_array)
+        .is_some_and(|calls| !calls.is_empty())
+    {
+        *answer = None;
+        return Some(true);
+    }
+    let text = message
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+        .map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Option<Vec<_>>>()?
+        .concat();
+    if !text.is_empty() {
+        *answer = Some(text);
+    }
+    Some(true)
+}
+
+fn plain_text(value: &Value, field: &str) -> Option<String> {
+    let parts = value.get(field)?.as_array()?;
+    let [part] = parts.as_slice() else {
+        return None;
+    };
+    text_part(part)
+}
+
+fn text_part(part: &Value) -> Option<String> {
+    if part.get("type")?.as_str()? != "text" {
+        return None;
+    }
+    part.get("text")?.as_str().map(str::to_owned)
+}
+
+fn guidance(value: &Value, active: &str) -> Option<(String, Vec<String>)> {
+    if value.get("agentId")?.as_str()? != "main" || value.get("activePromptId")?.as_str()? != active
+    {
+        return None;
+    }
+    let id = value.get("messageId")?.as_str()?;
+    let ids = value.get("promptIds")?.as_array()?;
+    let unique: std::collections::HashSet<_> = ids.iter().filter_map(Value::as_str).collect();
+    if id.is_empty() || ids.is_empty() || unique.len() != ids.len() || unique.contains("") {
+        return None;
+    }
+    let parts = value.get("content")?.as_array()?;
+    if parts.len() != ids.len() {
+        return None;
+    }
+    // Kimi batches queued prompts by retaining each original text part.
+    // Never infer message ownership from substrings of a joined part.
+    let texts = parts.iter().map(text_part).collect::<Option<Vec<_>>>()?;
+    if texts.iter().any(String::is_empty) {
+        return None;
+    }
+    Some((id.to_owned(), texts))
 }
 
 fn terminal_outcome(
@@ -221,6 +304,7 @@ pub(crate) fn resolve(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_outcome(
     home: &Path,
     cwd: &Path,
@@ -228,6 +312,16 @@ pub(crate) fn resolve_outcome(
     turn: &str,
     prompt: &str,
 ) -> Result<Option<Outcome>, String> {
+    Ok(resolve_turn(home, cwd, session, turn, prompt)?.map(|turn| turn.outcome))
+}
+
+pub(crate) fn resolve_turn(
+    home: &Path,
+    cwd: &Path,
+    session: &str,
+    turn: &str,
+    prompt: &str,
+) -> Result<Option<CommittedTurn>, String> {
     let turn_id = turn.parse::<u64>().map_err(|_| "Invalid Kimi turn id")?;
     let root = home.canonicalize().map_err(|e| e.to_string())?;
     let index = home.join("session_index.jsonl");

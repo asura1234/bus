@@ -230,7 +230,7 @@ impl App {
         let api_request_id = request.id.clone();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false, hard_deadline)
+                self.queue_agent_prompt(request.id, params, false, hard_deadline, false)
             }
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
@@ -309,6 +309,7 @@ impl App {
             },
             true,
             hard_deadline,
+            false,
         )
     }
 
@@ -341,6 +342,7 @@ impl App {
             },
             true,
             hard_deadline,
+            params.steer,
         )
     }
 
@@ -350,6 +352,7 @@ impl App {
         params: AgentPromptParams,
         observe: bool,
         hard_deadline: std::time::Instant,
+        steer: bool,
     ) -> Result<
         (
             String,
@@ -449,6 +452,7 @@ impl App {
             submit_delay,
             submit_deadline,
             Some(crate::platform::draft_editor::directory(&agent.pane_id)),
+            steer,
         )
         .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         Ok((id, agent, completion))
@@ -463,6 +467,7 @@ fn queue_prompt_input(
     delay: Duration,
     deadline: Option<std::time::Instant>,
     draft_directory: Option<std::path::PathBuf>,
+    steer: bool,
 ) -> std::io::Result<InputCompletion> {
     use crate::agents::AgentKind;
     let (mut encoded, enter) =
@@ -513,11 +518,12 @@ fn queue_prompt_input(
                 &["ctrl+s".into(), "ctrl+g".into(), "backspace".into()],
             )
             .map_err(|key| std::io::Error::other(format!("Invalid draft key: {key}")))?;
-            Box::new(composer::preserving_observer(
+            Box::new(composer::preserving_observer_for_submission(
                 kind,
                 text,
                 directory,
                 keys.into_iter().map(Bytes::from).collect(),
+                steer,
             ))
         } else {
             Box::new(composer::observer(kind, text))
@@ -572,7 +578,7 @@ pub(super) fn complete_agent_prompt(
     tracing::info!(target: "bus::server::api::agents", event = "bus.terminal.result", api_request_id = %id,
         pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
         elapsed_ms = started.elapsed().as_millis() as u64,
-        "Native prompt and Enter submission completed; this is not model acceptance");
+        "Native prompt submission completed; this is not model acceptance");
     match completed {
         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
         Ok(Err(err)) if crate::terminal::runtime::PromptNotShown::composer_busy(&err) => {

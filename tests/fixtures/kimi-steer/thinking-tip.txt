@@ -1,0 +1,28 @@
+
+ ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                                               │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                                                                                               │
+ │  ▐█████▌  Send /help for help information.                                                                                    │
+ │                                                                                                                               │
+ │  Directory: /private/tmp/bus-kimi-steer-8xvlrlga/project                                                                      │
+ │  Session:   session_aed9a55f-7414-4c34-9b48-313cf1f39600                                                                      │
+ │  Model:     K3.1 Pro                                                                                                          │
+ │  Version:   2.4.0                                                                                                             │
+ │                                                                                                                               │
+ ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ✦ Kimi K3.1 Pro is ready - use the model in a fresh session for the best results
+   Standard: Plus/Moderato and above; Highspeed: Pro/Allegretto and above
+
+   No session yet — one will be created on your first message.
+
+ ❯ [Bus message 6 from you]
+   Run the shell command sleep 45 in the foreground. Do not background it. When it finishes reply exactly BASE_COMMAND_DONE. Do
+   not send Bus messages or contact anything outside this scratch project.
+
+  🌘 · Tip: ctrl-s to add guidance without waiting for the turn to finish
+ ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                                                             │
+ ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ K3.1 Pro thinking: high  …/tmp/bus-kimi-steer-8xvlrlga/project                                               /model: switch model
+                                                                                                                context: 0% (0/1M)

@@ -68,9 +68,10 @@ fn evaluate_loaded_manifest_skipping(
     input: DetectionInput<'_>,
     loaded: &LoadedManifest,
     managed_launch_pending: bool,
-    skip_rule: Option<&str>,
+    skip_rules: Option<&[&str]>,
 ) -> AgentDetection {
-    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending, skip_rule) else {
+    let Some(rule) = matched_manifest_rule(input, loaded, managed_launch_pending, skip_rules)
+    else {
         return fallback_detection(managed_launch_pending);
     };
     let state = rule
@@ -103,7 +104,7 @@ pub(crate) fn kimi_running_command_is_winner(screen: &str) -> bool {
         .is_some_and(|rule| rule.id == "footer_running_command_working")
 }
 
-/// Screen state after refusing the running-command line as proof of work.
+/// Screen state after refusing a command label and its accompanying tip as proof of work.
 pub(crate) fn kimi_screen_without_running_command(screen: &str) -> AgentDetection {
     let Some(loaded) = load_manifest(AgentKind::Kimi) else {
         return fallback_detection(false);
@@ -112,7 +113,7 @@ pub(crate) fn kimi_screen_without_running_command(screen: &str) -> AgentDetectio
         kimi_screen_input(screen),
         &loaded,
         false,
-        Some("footer_running_command_working"),
+        Some(&["footer_running_command_working", "moon_tip_spinner_working"]),
     )
 }
 
@@ -132,11 +133,11 @@ fn matched_manifest_rule<'a>(
     input: DetectionInput<'_>,
     loaded: &'a LoadedManifest,
     managed_launch_pending: bool,
-    skip_rule: Option<&str>,
+    skip_rules: Option<&[&str]>,
 ) -> Option<&'a ManifestRule> {
     let mut matched: Option<&ManifestRule> = None;
     for (rule, compiled_rule) in loaded.manifest.rules.iter().zip(&loaded.compiled_rules) {
-        if skip_rule.is_some_and(|id| rule.id == id) {
+        if skip_rules.is_some_and(|ids| ids.contains(&rule.id.as_str())) {
             continue;
         }
         if (!rule.managed_launch_only || managed_launch_pending)

@@ -918,3 +918,37 @@ idle then deliver, and an approval card without `--yolo`.
   ownership across a private-root relaunch, while terminal replacement still
   fails the identity guard. Keep startup screen fixtures separate from live
   model acceptance.
+
+
+- **2026-11-01 — Kimi steering:** A real 56-column working screen was rejected
+  before any input because its moon spinner disabled composer inspection. At
+  131 columns the same spinner carried a tip and was incorrectly detected as
+  Idle. Test thinking and foreground shell work at both widths. Use Kimi's
+  Ctrl+S guidance action after full editor readback, permit working chrome to
+  repaint while preserving the composer and input lease, and never confirm a
+  still-visible draft from a spinner alone. Require `prompt.steered` ownership
+  and the complete terminal wire chain for grouped replies. Before a later
+  Started hook can rebind a request, reconcile the old committed final, even
+  if Stop was lost. Repeat after scratch relaunch and verify ordered messages
+  and a lost submit acknowledgment without an automatic duplicate.
+  Cover long idle-draft reflow and Working-to-Idle during editor verification;
+  select Enter or guidance under the final content guard. Native guidance can
+  batch multiple inputs: preserve its distinct text parts and require matching
+  unique prompt IDs instead of attributing substrings of concatenated text.
+  For a legacy unsent Kimi composer, recover only through full native-editor
+  comparison against a regular pane-local Bus recovery file. Keep the withdrawn
+  bytes, spend that recovery proof once, and submit only the fresh request.
+  Edited, foreign or unmatched drafts remain untouched. Prove recovery both
+  directly and after one native Esc; require stopped/settled interrupt state
+  and a fresh captured reply. Retain a queued native follow-up across an old
+  final's Idle poll (including a silent final or missing Stop), until its own
+  Started/commit evidence or the existing submission-stall bound.
+  Save exact recovery-marker proof before the editor returns it, and remove that
+  proof only after the native composer is empty. A cancelled exchange can yield
+  to owned recovery; an unacknowledged active exchange keeps its file ownership.
+  Kimi 2.4.1 can emit several internal `agent.turn.ended` counters inside one
+  outer `turn.prompt`; they are separate ID domains. Read through the matching
+  outer commit and compare its last native final byte-for-byte with Bus. A first
+  internal end cannot freeze the answer or exclude later attested guidance. Keep
+  the last nonempty text within an iteration, including a trailing think-only
+  fragment, while a new silent iteration must not reuse an earlier answer.

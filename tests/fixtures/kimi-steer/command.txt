@@ -1,0 +1,40 @@
+ │                                                    │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                    │
+ │  ▐█████▌  Send /help for help information.         │
+ │                                                    │
+ │  Directory: /private/tmp/bus-kimi-steer-8xvlrlga/p…│
+ │  Session:   session_aed9a55f-7414-4c34-9b48-313cf1…│
+ │  Model:     K3.1 Pro                               │
+ │  Version:   2.4.0                                  │
+ │                                                    │
+ ╰────────────────────────────────────────────────────╯
+
+ ✦ Kimi K3.1 Pro is ready - use the model in a fresh
+                          session for the best results
+   Standard: Plus/Moderato and above; Highspeed:
+   Pro/Allegretto and above
+
+   No session yet — one will be created on your first
+ message.
+
+ ❯ [Bus message 6 from you]
+   Run the shell command sleep 45 in the foreground. Do
+   not background it. When it finishes reply exactly
+   BASE_COMMAND_DONE. Do not send Bus messages or
+   contact anything outside this scratch project.
+
+ ● I need execute shell sleep45 foreground then exact
+   response. Must no bus etc. Tool Bash foreground
+   timeout default 60 enough. Do.
+
+ ● Running a command · $ sleep 45
+   Press Ctrl+B to run in background
+
+   Approved: Running: sleep 45
+
+  🌒
+ ╭────────────────────────────────────────────────────╮
+ │ >                                                  │
+ ╰────────────────────────────────────────────────────╯
+ K3.1 Pro thinking: high  …/tmp/bus-kimi-steer-8xvlrlg…
+                                 context: 3% (22.7k/1M)

@@ -1,0 +1,40 @@
+
+   Approved: Running: sleep 45
+
+ ● BASE_COMMAND_DONE
+
+ ❯ [Bus message 9 from you]
+   Also include BASE_STEER_THINKING in your final
+   response after the shell command.
+
+ ● I need understand latest user says also include
+   BASE_STEER_THINKING in final response after shell
+   … (7 more lines, ctrl+o to expand)
+
+ ● BASE_COMMAND_DONE
+   BASE_STEER_THINKING
+
+ ❯ [Bus message 11 from you]
+   Also include BASE_STEER_COMMAND in your final
+   response after the shell command.
+
+ ● Now latest adds BASE_STEER_COMMAND. Should output
+   all tokens? User asks also include in final response
+   … (4 more lines, ctrl+o to expand)
+
+ ● BASE_COMMAND_DONE
+   BASE_STEER_THINKING
+   BASE_STEER_COMMAND
+
+ ❯ [Bus message 13 from you]
+   Run sleep 30 in your foreground shell, then reply
+   NATIVE_GUIDANCE_BASE plus any guidance you receive.
+   Do not use Bus CLI or contact anything outside this
+   scratch project.
+
+  🌑
+ ╭────────────────────────────────────────────────────╮
+ │ >                                                  │
+ ╰────────────────────────────────────────────────────╯
+ K3.1 Pro thinking: high  …/tmp/bus-kimi-steer-8xvlrlg…
+                                 context: 3% (23.1k/1M)

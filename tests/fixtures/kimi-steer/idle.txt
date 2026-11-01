@@ -1,0 +1,39 @@
+   Standard: Plus/Moderato and above; Highspeed:
+   Pro/Allegretto and above
+
+   No session yet — one will be created on your first
+ message.
+
+ ❯ [Bus message 6 from you]
+   Run the shell command sleep 45 in the foreground. Do
+   not background it. When it finishes reply exactly
+   BASE_COMMAND_DONE. Do not send Bus messages or
+   contact anything outside this scratch project.
+
+ ● I need execute shell sleep45 foreground then exact
+   response. Must no bus etc. Tool Bash foreground
+   timeout default 60 enough. Do.
+
+ ● Ran a command · $ sleep 45
+   Command executed successfully.
+
+   Approved: Running: sleep 45
+
+ ● BASE_COMMAND_DONE
+
+ ❯ [Bus message 9 from you]
+   Also include BASE_STEER_THINKING in your final
+   response after the shell command.
+
+ ● I need understand latest user says also include
+   BASE_STEER_THINKING in final response after shell
+   … (7 more lines, ctrl+o to expand)
+
+ ● BASE_COMMAND_DONE
+   BASE_STEER_THINKING
+
+ ╭────────────────────────────────────────────────────╮
+ │ >                                                  │
+ ╰────────────────────────────────────────────────────╯
+ K3.1 Pro thinking: high  …/tmp/bus-kimi-steer-8xvlrlg…
+                                 context: 3% (22.9k/1M)

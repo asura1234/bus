@@ -557,6 +557,11 @@ impl BusState {
         let Some(pending) = request.pending_final.clone() else {
             return Ok(false);
         };
+        let silent = self
+            .agents
+            .get(&agent_id)
+            .is_some_and(|owner| owner.provider == super::Provider::Kimi)
+            && pending.text.trim().is_empty();
         let members = self.group_members(request_id);
         let (members, unresolved): (Vec<_>, Vec<_>) = members.into_iter().partition(|member| {
             self.requests
@@ -596,10 +601,12 @@ impl BusState {
             if let Some(member) = self.requests.get_mut(&member) {
                 if !member.settled() {
                     member.completed_at_ms = Some(completed_at_ms);
-                    member.completed_reply = Some(super::types::CompletedReply {
-                        content: pending.clone(),
-                        group: Some(reply_group),
-                    });
+                    if !silent {
+                        member.completed_reply = Some(super::types::CompletedReply {
+                            content: pending.clone(),
+                            group: Some(reply_group),
+                        });
+                    }
                 }
                 if member.phase != RequestPhase::Abandoned {
                     member.phase = RequestPhase::Completed;
@@ -613,10 +620,12 @@ impl BusState {
             .ok_or(ModelError::UnknownRequest(request_id))?;
         if !request.settled() {
             request.completed_at_ms = Some(completed_at_ms);
-            request.completed_reply = Some(super::types::CompletedReply {
-                content: pending,
-                group: Some(reply_group),
-            });
+            if !silent {
+                request.completed_reply = Some(super::types::CompletedReply {
+                    content: pending,
+                    group: Some(reply_group),
+                });
+            }
         }
         request.phase = RequestPhase::Completed;
         request.completed_at_ms.get_or_insert(completed_at_ms);

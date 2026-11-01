@@ -14,17 +14,28 @@ pub(super) fn recorded_kimi_end(
     state: &mut BusState,
     agent: AgentId,
 ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
+    if !state.agent(agent).is_some_and(|owner| {
+        matches!(
+            owner.status,
+            RuntimeStatus::Idle | RuntimeStatus::Unavailable
+        )
+    }) {
+        return Ok(None);
+    }
+    committed_kimi_end(data_dir, state, agent)
+}
+
+fn committed_kimi_end(
+    data_dir: &Path,
+    state: &mut BusState,
+    agent: AgentId,
+) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
     use crate::agents::providers::kimi::{launch, wire};
     use crate::messaging::model::RecordedTurnEnd;
     let Some(owner) = state.agent(agent).cloned() else {
         return Ok(None);
     };
-    if owner.provider != crate::agents::providers::ProviderKind::Kimi
-        || !matches!(
-            owner.status,
-            RuntimeStatus::Idle | RuntimeStatus::Unavailable
-        )
-    {
+    if owner.provider != crate::agents::providers::ProviderKind::Kimi {
         return Ok(None);
     }
     let Some(current) = owner.current_request else {
@@ -61,15 +72,52 @@ pub(super) fn recorded_kimi_end(
     };
     let home = launch::saved_home(&hooks)?;
     Ok(
-        match wire::resolve_outcome(&home, &owner.cwd, session, turn, &prompt)? {
-            Some(wire::Outcome::Final(text)) => Some(RecordedTurnEnd::Final {
+        match wire::resolve_turn(&home, &owner.cwd, session, turn, &prompt)? {
+            Some(wire::CommittedTurn {
+                outcome: wire::Outcome::Final(text),
+                prompts,
+            }) => Some(RecordedTurnEnd::Final {
                 turn_id: turn.into(),
                 text,
-                prompts: vec![prompt],
+                prompts,
             }),
-            Some(wire::Outcome::NoReply) => Some(RecordedTurnEnd::NoReply),
-            Some(wire::Outcome::Failed(message)) => Some(RecordedTurnEnd::Error(message)),
+            Some(wire::CommittedTurn {
+                outcome: wire::Outcome::NoReply,
+                prompts,
+            }) => {
+                // A silent lead can still precede an unclaimed queued turn.
+                // Keep its ownership anchor only when steering needs proof.
+                let steering = state.group_members(current).iter().any(|id| {
+                    state
+                        .request(*id)
+                        .is_some_and(|member| member.steered && !member.settled())
+                });
+                Some(if steering {
+                    RecordedTurnEnd::Final {
+                        turn_id: turn.into(),
+                        text: String::new(),
+                        prompts,
+                    }
+                } else {
+                    RecordedTurnEnd::NoReply
+                })
+            }
+            Some(wire::CommittedTurn {
+                outcome: wire::Outcome::Failed(message),
+                ..
+            }) => Some(RecordedTurnEnd::Error(message)),
             None => None,
         },
     )
+}
+
+impl super::Worker {
+    pub(in crate::messaging::coordinator) fn recorded_kimi_end(
+        &self,
+        state: &mut BusState,
+        agent: AgentId,
+    ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
+        // Stop and a later Started can arrive while the new turn is Working.
+        committed_kimi_end(&self.data_dir, state, agent)
+    }
 }

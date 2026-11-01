@@ -37,6 +37,10 @@ mod dispatch_shell_hold_tests;
 #[path = "reply_to_test.rs"]
 mod reply_to_tests;
 
+#[cfg(unix)]
+#[path = "kimi_steering_test.rs"]
+mod kimi_steering_tests;
+
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Records every native method; prompt writes succeed.
@@ -225,8 +229,10 @@ impl Fixture {
 
     fn started(&self, turn: &str, prompt: &str) {
         let value = match self.provider {
-            crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => {
+            Provider::Kimi => {
+                json!({"hook_event_name":"TurnStarted","session_id":"session","turn_id":turn.parse::<u64>().unwrap(),"origin_kind":"user","prompt":prompt})
+            }
+            crate::agents::providers::ProviderKind::Grok => {
                 panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
