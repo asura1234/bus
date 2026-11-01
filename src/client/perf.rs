@@ -1,6 +1,6 @@
 //! The client's perf metrics; the recorder writes them to `perf/client.jsonl`.
 use super::events::ClientLoopEvent;
-use crate::messaging::model::{BusState, RuntimeStatus};
+use crate::messaging::model::BusState;
 use crate::protocol::wire::FrameData;
 use crate::utils::perf::{ContextSample, Field, Gauge, LoopWatch, Timer};
 use ratatui::layout::Rect;
@@ -184,7 +184,7 @@ impl OverlayMeter {
 pub(super) fn overlay_label(
     context: Option<ContextSample>,
     fps: Option<f64>,
-    state: Option<&BusState>,
+    _state: Option<&BusState>,
 ) -> String {
     let cpu = context
         .map(|context| context.cpu_pct)
@@ -192,22 +192,8 @@ pub(super) fn overlay_label(
     let mem = context
         .map(|context| context.rss_mb)
         .filter(|mem| mem.is_finite());
-    // Use the same shown status as `bus state`, including dialog overrides.
-    let agents = state
-        .map(|state| {
-            let (running, live) =
-                state.agents().fold((0, 0), |(running, live), agent| {
-                    match agent.shown_status() {
-                        RuntimeStatus::Working => (running + 1, live + 1),
-                        RuntimeStatus::Unavailable => (running, live),
-                        _ => (running, live + 1),
-                    }
-                });
-            format!("{running} running / {live} live")
-        })
-        .unwrap_or_else(|| "n/a".into());
     format!(
-        " CPU {} MEM {} FPS {} \n AGENTS {agents} ",
+        " CPU {} MEM {} FPS {} ",
         cpu.map_or("n/a".into(), |cpu| format!("{}%", Field(Some(cpu)))),
         mem.map_or("n/a".into(), |mem| format!("{mem:.0}MB")),
         fps.map_or("n/a".into(), |fps| format!("{fps:.0}")),
