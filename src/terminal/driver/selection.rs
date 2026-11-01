@@ -34,21 +34,41 @@ pub(crate) fn selection_step(grid: &Grid, label: &str) -> Result<SelectionStep, 
 
 pub(crate) fn selection_focus(grid: &Grid) -> Result<(usize, String), String> {
     let rows = grid.rows_text();
-    let focused: Vec<_> = rows
+    let mut focused: Vec<_> = rows
         .iter()
         .enumerate()
-        .filter(|(index, row)| {
-            option_label(row).1
-                || grid.cells[*index]
-                    .iter()
-                    .any(|cell| cell.attrs.iter().any(|attr| attr == "inverse"))
-        })
+        .filter(|(_, row)| option_label(row).1)
         .map(|(index, _)| index)
         .collect();
+    // Explicit menu markers outrank decorative inverse cells elsewhere on screen.
+    if focused.is_empty() {
+        focused = rows
+            .iter()
+            .enumerate()
+            .filter(|(index, row)| inverse_label_selected(grid, *index, row))
+            .map(|(index, _)| index)
+            .collect();
+    }
     let [focused] = focused.as_slice() else {
         return Err("Menu focus is not unique; read the screen or send explicit keys".into());
     };
     Ok((*focused, option_label(&rows[*focused]).0.to_owned()))
+}
+
+fn inverse_label_selected(grid: &Grid, row: usize, text: &str) -> bool {
+    let label = option_label(text).0;
+    if label.is_empty() {
+        return false;
+    }
+    // option_label returns a slice of this row; convert its byte span to cells.
+    let start = label.as_ptr() as usize - text.as_ptr() as usize;
+    let (_, columns) = grid.row_with_columns(row);
+    label.char_indices().all(|(offset, _)| {
+        columns
+            .get(start + offset)
+            .and_then(|col| grid.cells[row].get(usize::from(*col)))
+            .is_some_and(|cell| cell.attrs.iter().any(|attr| attr == "inverse"))
+    })
 }
 
 /// Physical row relocation does not change an option's logical identity.

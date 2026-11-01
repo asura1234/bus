@@ -143,3 +143,34 @@ async fn production_driver_preserves_cells_links_wide_text_and_cursor() {
     runtime.test_process_pty_bytes(b"\x1b[?25l");
     assert!(!observe(&runtime).unwrap().0.cursor.unwrap().visible);
 }
+
+#[tokio::test]
+async fn driver_select_ignores_unrelated_inverse_cells() {
+    // zsh marks a partial last line with an inverse `%` (PROMPT_EOL_MARK); an
+    // inquirer-style menu then runs in the same pane under a `❯` marker.
+    let (runtime, _writes) = crate::terminal::TerminalRuntime::test_with_channel(30, 5);
+    runtime
+        .test_process_pty_bytes("done\x1b[7m%\x1b[27m\r\n? Pick one\r\n❯ Yes\r\n  No".as_bytes());
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(
+        selection_step(&grid, "No"),
+        Ok(SelectionStep::Move("down")),
+        "an inverse cell outside the menu must not make the marked focus ambiguous"
+    );
+}
+
+#[tokio::test]
+async fn inverse_style_must_cover_the_option_label() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(40, 5);
+    runtime.test_process_pty_bytes(b"status: \x1b[7mX\x1b[27m ready\r\n\x1b[7mYes\x1b[27m\r\nNo");
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(selection_focus(&grid), Ok((1, "Yes".into())));
+    assert_eq!(selection_step(&grid, "No"), Ok(SelectionStep::Move("down")));
+}
+
+#[test]
+fn inverse_style_does_not_resolve_ambiguous_explicit_markers() {
+    let mut grid = menu("❯ Yes\n❯ No");
+    grid.cells[1][2].attrs.push("inverse".into());
+    assert!(selection_focus(&grid).is_err());
+}
