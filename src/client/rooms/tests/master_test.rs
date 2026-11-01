@@ -257,10 +257,10 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
     );
     assert!(!rows.iter().any(|row| row.starts_with("claude-orch")));
 
-    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 2]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 2, 2]);
     assert_eq!(hit_rows(&ui, render::Action::NewRoom), [4]);
     assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [6, 6, 7, 7, 11]);
-    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [7, 7, 8, 8]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [8, 8, 9, 9]);
     assert_eq!(hit_rows(&ui, render::Action::NewAgent), [11]);
     assert_eq!(hit_rows(&ui, render::Action::Agent(worker))[0], 13);
     assert!(hit_rows(&ui, render::Action::Agent(orchestrator)).is_empty());
@@ -301,7 +301,7 @@ fn master_sidebar_lists_master_then_rooms_then_its_agents() {
         "{rows:?}"
     );
     assert!(deletable_rooms(&ui).is_empty());
-    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 2]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 2, 2]);
     assert_eq!(hit_rows(&ui, render::Action::NewRoom), [4]);
     assert_eq!(hit_rows(&ui, render::Action::NewAgent), [11]);
     assert_eq!(
@@ -309,7 +309,7 @@ fn master_sidebar_lists_master_then_rooms_then_its_agents() {
         [13, 13, 14]
     );
     assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [6, 6, 7, 7, 15]);
-    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [7, 7, 8, 8]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [8, 8, 9, 9]);
     assert_eq!(
         render::sidebar_room_row(&ui.snapshot.state, other, Some(master)),
         Some(8)
@@ -404,10 +404,11 @@ fn room_rows_show_status_and_truncate_long_names() {
     assert_eq!(rows[8], "# pr-456        Blocked ×", "{rows:?}");
 
     let status_hit = |room: RoomId| {
+        let row = render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() as u16;
         ui.view
             .hits
             .iter()
-            .filter(|hit| hit.action == render::Action::Room(room))
+            .filter(|hit| hit.action == render::Action::Room(room) && hit.rect.y == row)
             .max_by_key(|hit| hit.rect.x)
             .unwrap()
             .rect
@@ -1135,9 +1136,9 @@ fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
     ui.sidebar_scroll = usize::MAX;
     ui.compute_view(100, rows);
     let rows_of = |action| hit_rows(&ui, action);
-    assert_eq!(rows_of(render::Action::Agent(orchestrator)), [6, 6, 7]);
-    assert_eq!(rows_of(render::Action::Room(pr)), [1, 1, 2, 2, 8]);
-    assert_eq!(rows_of(render::Action::NewAgent), [4]);
+    assert_eq!(rows_of(render::Action::Agent(orchestrator)), [5, 5, 6]);
+    assert_eq!(rows_of(render::Action::Room(pr)), [7]);
+    assert_eq!(rows_of(render::Action::NewAgent), [3]);
 }
 
 #[test]
