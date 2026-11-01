@@ -429,6 +429,7 @@ fn generated_bus_header(line: &str) -> bool {
     let Some((id, name)) = rest.split_once(" from ") else {
         return false;
     };
+    let name = name.replace(" [deleted]", "");
     id.parse::<u64>().is_ok() && !name.is_empty() && !name.contains('[') && !name.contains(']')
 }
 

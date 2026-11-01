@@ -164,7 +164,7 @@ async fn kimi_editor_case(tamper: u8) {
     std::fs::create_dir_all(&directory).unwrap();
     let exchange = directory.join("exchange");
     let file = directory.join("native-editor.txt");
-    let prompt = format!("long Bus message {}\nlast line\n", "0123456789".repeat(140));
+    let prompt = format!("[Bus message 42 from you to app master 2, builder [deleted]]\nlong Bus message {}\nlast line\n", "0123456789".repeat(140));
     let (runtime, mut writes) =
         crate::terminal::TerminalRuntime::test_with_channel_capacity(53, 24, 32);
     let draw = |draft: &str| {

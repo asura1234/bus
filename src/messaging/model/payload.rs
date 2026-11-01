@@ -70,6 +70,18 @@ impl BusState {
         let outcome_only = self.outcome_only_notice(id);
         if author != Author::Bus && !outcome_only {
             let request = self.requests.get(&id)?;
+            let recipients = if request.prompt.recipient_ids.len() > 1 {
+                let names = request
+                    .prompt
+                    .recipient_ids
+                    .iter()
+                    .map(|id| self.agent_label(*id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(" to {names}")
+            } else {
+                String::new()
+            };
             if let Author::Agent(sender) = request.prompt.author {
                 let identity = request
                     .sender_identity
@@ -111,14 +123,14 @@ impl BusState {
                         .split_once('\n')
                         .map_or(String::new(), |(_, body)| body.to_owned());
                 }
-                let marker = format!("[Bus message {message_id} from {from}]");
+                let marker = format!("[Bus message {message_id} from {from}{recipients}]");
                 text = if text.is_empty() {
                     format!("{header}\n{marker}")
                 } else {
                     format!("{header}\n{marker}\n{text}")
                 };
             } else {
-                let marker = format!("[Bus message {message_id} from you]");
+                let marker = format!("[Bus message {message_id} from you{recipients}]");
                 text = if text.is_empty() {
                     marker
                 } else {

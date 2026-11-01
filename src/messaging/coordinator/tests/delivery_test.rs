@@ -30,6 +30,90 @@ impl Transport for LaunchPromptTransport {
     }
 }
 
+fn multi_recipient_delivery(provider: Provider) {
+    let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(LaunchPromptTransport(Arc::clone(&prompts)));
+    let mut state = worker.state.clone();
+    let peer = state
+        .create_agent(room, "app master 2", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    state.rename_agent(agent, "bus master 2").unwrap();
+    let mut single = state.clone();
+    let single_id = single
+        .submit_message_from(
+            room,
+            Draft {
+                text: "single task".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            io::now_ms(),
+        )
+        .unwrap()[0];
+    let single_message = single.request(single_id).unwrap().prompt.id.0;
+    assert_eq!(
+        single.render_request_payload(single_id).unwrap(),
+        format!("[Bus message {single_message} from you]\nsingle task"),
+        "{provider:?} single-recipient header must stay unchanged"
+    );
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "coordinate once".into(),
+                files: Vec::new(),
+                recipient_ids: [peer, agent].into(),
+            },
+            Author::Developer,
+            io::now_ms(),
+        )
+        .unwrap();
+    let message = state.request(requests[0]).unwrap().prompt.id.0;
+    worker.save(state).unwrap();
+    worker.submit_ready().unwrap();
+    let expected =
+        format!("[Bus message {message} from you to app master 2, bus master 2]\ncoordinate once");
+    assert_eq!(
+        prompts.lock().unwrap().as_slice(),
+        std::slice::from_ref(&expected),
+        "{provider:?}"
+    );
+    // The other recipient uses the identical builder, even before its pane exists.
+    assert_eq!(
+        worker.state.render_request_payload(requests[0]).unwrap(),
+        expected
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn multi_recipient_claude_delivery() {
+    multi_recipient_delivery(Provider::ClaudeCode);
+}
+
+#[test]
+fn multi_recipient_codex_delivery() {
+    multi_recipient_delivery(Provider::Codex);
+}
+
+#[test]
+fn multi_recipient_cursor_delivery() {
+    multi_recipient_delivery(Provider::Cursor);
+}
+
+#[test]
+fn multi_recipient_grok_delivery() {
+    multi_recipient_delivery(Provider::Grok);
+}
+
+#[test]
+fn multi_recipient_kimi_delivery() {
+    multi_recipient_delivery(Provider::Kimi);
+}
+
 #[test]
 fn cursor_and_grok_launch_prompts_type_once_without_room_history_or_resume_replay() {
     for provider in [Provider::Cursor, Provider::Grok] {
