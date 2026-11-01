@@ -218,10 +218,10 @@ fn collisions_report_provider_precedence_without_warning_about_user_scope_itself
         .arg(&repo)
         .output()
         .unwrap();
-    assert!(warnings_for_launch(ProviderKind::ClaudeCode, &home, &home)
+    assert!(shadowed_skills(ProviderKind::ClaudeCode, &home, &home)
         .unwrap()
         .is_empty());
-    assert!(warnings_for_launch(ProviderKind::Codex, &home, &home)
+    assert!(shadowed_skills(ProviderKind::Codex, &home, &home)
         .unwrap()
         .is_empty());
     std::process::Command::new("git")
@@ -229,19 +229,15 @@ fn collisions_report_provider_precedence_without_warning_about_user_scope_itself
         .arg(&home)
         .output()
         .unwrap();
-    assert!(warnings_for_launch(ProviderKind::ClaudeCode, &home, &home)
+    assert!(shadowed_skills(ProviderKind::ClaudeCode, &home, &home)
         .unwrap()
         .is_empty());
-    let claude = warnings_for_launch(ProviderKind::ClaudeCode, &nested, &home).unwrap();
-    assert_eq!(claude.len(), 1);
-    assert!(claude[0].contains("user copy precedence"));
-    assert!(claude[0].contains("repo/.claude/skills/pr"));
-    let codex = warnings_for_launch(ProviderKind::Codex, &nested, &home).unwrap();
-    assert_eq!(codex.len(), 1);
-    assert!(codex[0].contains("lists both copies"));
-    assert!(codex[0].contains("child/.agents/skills/pr"));
+    let claude = shadowed_skills(ProviderKind::ClaudeCode, &nested, &home).unwrap();
+    assert_eq!(claude, vec!["pr".to_owned()]);
+    let codex = shadowed_skills(ProviderKind::Codex, &nested, &home).unwrap();
+    assert_eq!(codex, vec!["pr".to_owned()]);
     for provider in [ProviderKind::Cursor, ProviderKind::Grok, ProviderKind::Kimi] {
-        assert!(warnings_for_launch(provider, &nested, &home)
+        assert!(shadowed_skills(provider, &nested, &home)
             .unwrap()
             .is_empty());
     }
@@ -253,7 +249,7 @@ fn collisions_report_provider_precedence_without_warning_about_user_scope_itself
 fn fake_agent_does_not_inspect_provider_skill_directories() {
     use crate::agents::providers::ProviderKind;
     let missing = crate::utils::test_temp::unique_temp_path("fake-no-skill-root");
-    assert!(warnings_for_launch(ProviderKind::Fake, &missing, &missing)
+    assert!(shadowed_skills(ProviderKind::Fake, &missing, &missing)
         .unwrap()
         .is_empty());
 }

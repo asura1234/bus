@@ -34,8 +34,9 @@ Bus-owned `_bus` directory inside each skills directory. The binary embeds the
 bundle, so it does not need the source checkout at runtime.
 
 The canonical sources remain in `skills/`. This repo has no `.claude/skills` or
-`.agents/skills` registry. Bus warns in room history when a repo skill with the
-same name duplicates a user skill as an agent launches or reconnects.
+`.agents/skills` registry. When a repo skill shares a name with a user skill,
+Bus writes one server-log line at launch or reconnect (repo, provider, count,
+and names). It does not post that to a room.
 [Claude Code gives personal skills precedence](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name);
 [Codex lists both same-name copies](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 

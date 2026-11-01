@@ -132,7 +132,7 @@ fn rebind_agent(
     state
         .set_agent_runtime_identity(agent.id, identity)
         .map_err(|error| error.to_string())?;
-    crate::messaging::skills::post_warnings(state, agent)?;
+    crate::messaging::skills::log_warnings(agent);
     Ok((
         agent.id,
         agent.runtime_identity.terminal_id.clone(),

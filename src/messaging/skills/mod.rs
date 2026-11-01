@@ -7,9 +7,9 @@ mod shadow;
 use crate::messaging::storage::io as bus_io;
 pub(crate) use bundle::hash as bundle_hash;
 use serde::Serialize;
-pub(crate) use shadow::post_warnings;
+pub(crate) use shadow::log_warnings;
 #[cfg(test)]
-use shadow::warnings_for_launch;
+use shadow::shadowed_skills;
 use std::{
     collections::BTreeMap,
     io,

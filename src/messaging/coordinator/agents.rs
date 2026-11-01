@@ -43,7 +43,7 @@ fn launch_binding(
     prepared: &launch::PreparedLaunch,
 ) -> Result<LaunchBinding, String> {
     let skill_agent = state.agent(id).ok_or("Unknown launching agent")?.clone();
-    crate::messaging::skills::post_warnings(state, &skill_agent)?;
+    crate::messaging::skills::log_warnings(&skill_agent);
     let provider = input.provider;
     let env = &prepared.env;
     let executable = launch::selected_executable(provider, env)?;
