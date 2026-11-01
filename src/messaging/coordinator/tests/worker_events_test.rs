@@ -2364,5 +2364,48 @@ fn in_turn_progress_does_not_hide_reply_not_captured() {
     );
 }
 
+#[test]
+fn during_turn_progress_send_still_posts_a_later_different_final() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let source = running(&mut f, Author::Agent(orch));
+    let mut state = f.worker.state.clone();
+    state
+        .submit_message_from(
+            f.room,
+            Draft {
+                text: "Brief read.".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms(),
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, now - 8_000)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(f.agent, now, |_| None),
+        Some(source)
+    );
+    f.worker.save(state).unwrap();
+    autonomous(&mut f, "owned", "The real late result.");
+    collect(&mut f);
+    // One submit delivers only the queue head, which is the in-turn progress
+    // send. The later final is the next notice, so the proof is that notice,
+    // not the call.
+    let notices = f.notices();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("The real late result.")),
+        "a later different final must still wake: {notices:?}"
+    );
+}
+
 #[path = "worker_event_waiter_overlap_test.rs"]
 mod waiter_overlap;
