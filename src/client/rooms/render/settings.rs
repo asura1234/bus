@@ -210,8 +210,7 @@ impl BusUi {
             false,
         );
         let footer = main.bottom().saturating_sub(2);
-        let error = self.visible_error().map(str::to_owned);
-        let list_bottom = footer.saturating_sub(if error.is_some() { 4 } else { 1 });
+        let list_bottom = footer.saturating_sub(1);
         view.settings_list = Rect::new(x, 10, width, list_bottom.saturating_sub(10));
         let lines = self.sound_settings_lines();
         view.settings_max_scroll = lines
@@ -226,14 +225,6 @@ impl BusUi {
         {
             let rect = Rect::new(x, 10 + index as u16, width, 1);
             self.sound_settings_row(view, rect, line);
-        }
-        if let Some(error) = error {
-            view.lines(
-                Rect::new(x, footer.saturating_sub(4), width, 3),
-                &error,
-                None,
-                false,
-            );
         }
         view.row(
             Rect::new(x, footer, width, 1),

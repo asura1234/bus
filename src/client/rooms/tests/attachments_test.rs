@@ -358,14 +358,13 @@ fn paste(ui: &mut BusUi, text: &str) {
     );
 }
 
-/// Refused: the decode error is logged without interrupting the room.
-fn assert_refused_log_only(ui: &mut BusUi, name: &str) {
+/// Refused: the decode error and input path are logged without interrupting the room.
+fn assert_refused_log_only(ui: &mut BusUi, name: &str, path: &std::path::Path, logs: &str) {
     assert_eq!(
         attached_paths(ui),
         Vec::<String>::new(),
         "a corrupt image is not attached"
     );
-    assert!(ui.visible_error().is_none());
     let screen = room_screen(ui, 100, 30);
     assert!(!screen.contains("Could not attach"), "no dialog: {screen}");
     assert!(
@@ -376,10 +375,11 @@ fn assert_refused_log_only(ui: &mut BusUi, name: &str) {
         !screen.contains(name),
         "the failed path is log-only: {screen}"
     );
-    assert_eq!(
-        attached_paths(ui),
-        Vec::<String>::new(),
-        "nothing is attached"
+    assert!(logs.contains("bus.attach.image_refused"), "{logs}");
+    assert!(logs.contains(&path.display().to_string()), "{logs}");
+    assert!(
+        logs.contains(&image::open(path).unwrap_err().to_string()),
+        "{logs}"
     );
 }
 
@@ -388,12 +388,15 @@ fn corrupt_image_dropped_into_the_composer_is_logged_without_a_dialog() {
     let dir = thumbnail_dir("drop-corrupt");
     let path = corrupt_png(&dir, "damaged drop.png");
     let (mut ui, _, _) = fixture();
+    let capture = crate::utils::logging::test_capture::Capture::default();
     // Terminals deliver a drop as a paste of the shell-escaped path.
-    paste(
-        &mut ui,
-        &format!("{} ", path.display().to_string().replace(' ', "\\ ")),
-    );
-    assert_refused_log_only(&mut ui, "damaged drop.png");
+    capture.run(|| {
+        paste(
+            &mut ui,
+            &format!("{} ", path.display().to_string().replace(' ', "\\ ")),
+        )
+    });
+    assert_refused_log_only(&mut ui, "damaged drop.png", &path, &capture.text());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -402,8 +405,9 @@ fn corrupt_image_path_pasted_into_the_composer_is_logged_without_a_dialog() {
     let dir = thumbnail_dir("paste-corrupt");
     let path = corrupt_png(&dir, "damaged.png");
     let (mut ui, _, _) = fixture();
-    paste(&mut ui, &path.display().to_string());
-    assert_refused_log_only(&mut ui, "damaged.png");
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| paste(&mut ui, &path.display().to_string()));
+    assert_refused_log_only(&mut ui, "damaged.png", &path, &capture.text());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -416,7 +420,6 @@ fn corrupt_pasted_image_data_is_logged_without_a_dialog_and_never_saved() {
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| ui.attach_image_data(Some(root.clone()), &bytes, "png"));
     assert_eq!(attached_paths(&ui), Vec::<String>::new());
-    assert!(ui.visible_error().is_none());
     assert!(
         capture.text().contains("bus.attach.image_refused"),
         "{}",

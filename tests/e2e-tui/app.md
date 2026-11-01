@@ -97,11 +97,11 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Preconditions/setup:** R(`qa-agents`); scratch provider launchers ready.
 
-1. Press Ctrl+N, click Add without completing fields → validation names missing Name/Model; form remains editable and no agent is created. Press Esc → closes.
+1. Press Ctrl+N, click Add without completing fields → the form remains editable, no agent is created, no validation text is drawn, and the client log records one validation failure covering the missing Name/Model fields. Press Esc → closes.
 2. Use A to create `qa-codex` (Codex), `qa-claude` (Claude Code), `qa-cursor` (Cursor), returning with F6 after each → every fake terminal is identifiable; sidebar lists the matching name/provider, state records the supplied PWD.
 3. Open Ctrl+N, type `cancel-agent`, press Esc → no extra agent or terminal.
 
-**Evidence:** validation text, provider-choice text, ready terminal captures, state.
+**Evidence:** absence of validation text, client-log entries with field context, provider-choice text, ready terminal captures, state.
 
 **Pass criteria:** required fields enforced; three provider choices create only their agents.
 
@@ -112,9 +112,9 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 1. Click `# MASTER`, press Ctrl+N → form includes `Orchestrates room` and a populated system prompt. Tab to Agent field → menu offers Claude Code and Cursor.
 2. Fill name `qa-master`, select Claude Code, set scratch PWD using A's completion recipe at 120×40. Before pressing Enter, capture and inspect the visible directory suggestion list and its highlighted path; Tab/Shift+Tab must move the visible highlight while leaving PWD unchanged. Enter completes exactly that visible highlighted directory without adding, closes the list and keeps PWD focused; then Tab focuses optional args. An invisible list or a completion inferred only from the changed PWD is a FAIL. Leave args empty; one more Tab focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then click Add → fake terminal opens.
 3. Press F6 → MASTER chat; click `# qa-master-target` beneath that agent → target room opens. Click MASTER, then agent name → its terminal opens, not target chat.
-4. Press F6, press F2 on MASTER → a fixed-room error; name stays MASTER and no delete × is offered for it.
+4. Press F6, press F2 on MASTER → no rename field or error text opens; the client log records the fixed-room refusal, the name stays MASTER, and no delete × is offered for it.
 
-**Evidence:** form/options, suggestion-list screenshot opened and judged before Enter, highlight cells and exact PWD before/after completion, no agent before Add, navigation screenshots/text, state relationship and IDs.
+**Evidence:** form/options, suggestion-list screenshot opened and judged before Enter, highlight cells and exact PWD before/after completion, no agent before Add, navigation screenshots/text, state relationship and IDs, absence of MASTER error text and the client-log refusal.
 
 **Pass criteria:** orchestrator belongs to MASTER, targets the chosen room, and routes correctly.
 
@@ -343,17 +343,17 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 **Pass criteria:** edits stay in their room; notes/stash/recall do not silently send messages; the first Up after archival restores the newer archived draft.
 
-### APP-13 — Actionable notification in the composer
+### APP-13 — Empty recipients open the picker
 
 **Preconditions/setup:** R(`qa-notice`), no selected recipients; graphics fixture optional. Note original message count.
 
-1. Type `notice draft`, press Enter → visible notice `Choose agents with @ before sending.` titles composer; draft stays editable and no message is submitted.
-2. Observe for at least 16 seconds without repeating the error → transient notice expires; draft persists; no repeated persistent footer is added below composer.
-3. Press Ctrl+P, then Esc → UI responds; type/edit draft → normal input still works.
+1. Type `notice draft`, press Enter → the recipient picker opens, the draft stays editable, no error text is drawn, and no message is submitted.
+2. Observe for at least 16 seconds → the picker and draft remain; no toast, footer error, or other transient error notice appears.
+3. Press Esc → the picker closes; type/edit the draft → normal input still works.
 
-**Evidence:** steps 1–2: terminal-visible notification text with timestamps, or screenshot judged by the runner; step 3: input/draft text and state message count. SKIP with reason if the runner cannot capture the required evidence for a step.
+**Evidence:** picker and draft snapshots with timestamps, absence of error text, input/draft text and state message count.
 
-**Pass criteria:** notice is visible, transient, preserves input and does not count as a send.
+**Pass criteria:** empty-recipient sends open the picker without sending or drawing an error.
 
 ### APP-14 — Settings and real colour-blind palette change
 
@@ -497,7 +497,7 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 - **Quit / product finding:** Ctrl+Q saves, restores the terminal, then stops server and agents; CLI help's claim that quit leaves them running is stale product documentation. A failed save or a save taking over 5 seconds shows an unsaved warning. Ctrl+Q again within 5 seconds of that warning force quits and may lose edits; after that window, Ctrl+Q retries saving. Repeating Ctrl+Q before the warning keeps waiting. Never count force quit as clean-save acceptance. Stopping has a 15-second wait (`client/{effects,run}.rs`, `rooms/ui.rs`, `cli/stop.rs`).
 - **Size:** source enforces no terminal minimum or small-window warning; layout shrinks/clips to available cells. APP-21's 80×24 is this suite's lower usability test size, not a claimed product minimum; below it, hidden/clipped controls alone are not failures (`rooms/render/{layout,view,paint}.rs`).
 - **Clipboard / screenshots:** require actual clipboard/saved pixels where tested and screenshots judged by the runner for visual claims; affected assertions are SKIP with reason if the runner cannot capture evidence, not product failures.
-- **Notifications / sound / unread:** terminal-visible notices and recorded effects are in scope; record sound with its chosen sound target and message/room context. Desktop banners are excluded; today's room sidebar renders no unread badge (`client/notifications.rs`, `rooms/{toast,ring}.rs`, `rooms/render/sidebar.rs`). Unavailable evidence is SKIP with reason.
+- **Notifications / sound / unread:** non-error terminal-visible notices and recorded effects are in scope; record sound with its chosen sound target and message/room context. Room errors are client-log-only. Desktop banners are excluded; today's room sidebar renders no unread badge (`client/notifications.rs`, `rooms/{notices,ring}.rs`, `rooms/render/sidebar.rs`). Unavailable evidence is SKIP with reason.
 - **Wording:** use developer for the person operating Bus; retain actual UI strings such as `You` unchanged.
 - **Thumbnail style:** #22 renders the picture without filename/caption or link decoration; only its picture cells open the saved image; blank cells beside it do not. Only filename fallback gets blue RGB(90,150,255) + underline (`history/exchange.rs`, `links.rs`); no 📎 in either presentation.
 - **Relative paths:** agent-authored paths join author PWD without canonicalizing; relative paths authored by a developer or Bus remain unlinked. Absolute and ~/ paths work for either author; ~/ uses the scratch Bus process's effective home (`history/exchange.rs::link_scope`, `links.rs::candidate`).

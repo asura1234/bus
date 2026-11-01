@@ -19,10 +19,15 @@ const BLOCKED_BRIGHT: Color = Color::Rgb(255, 92, 102);
 const BLOCKED_MID: Color = Color::Rgb(205, 64, 72);
 const BLOCKED_DIM: Color = Color::Rgb(128, 44, 52);
 
-fn agent_status(agent: &RoomAgent) -> &'static str {
-    if !agent.hook_setup_confirmed && !agent.session_binding_invalidated && !agent.deletion_pending
+fn agent_status(state: &BusState, agent: &RoomAgent) -> &'static str {
+    if agent
+        .orchestrates
+        .is_some_and(|room| state.room(room).is_none())
+        || !agent.hook_setup_confirmed
+            && !agent.session_binding_invalidated
+            && !agent.deletion_pending
     {
-        "Not ready"
+        "Unavailable"
     } else {
         status(agent.shown_status())
     }
@@ -193,17 +198,16 @@ fn sidebar_room_label(room: &Room, width: u16) -> String {
     }
 }
 
-/// The MASTER line under an agent's provider: the room it orchestrates, or
-/// `# unassigned` for a saved orchestrator whose room failed the load checks.
-/// Written like the ROOMS list, `# name`.
+/// The MASTER line under an agent's provider names the room it orchestrates.
+/// An unavailable target stays blank; its cause is client-log-only.
 pub(in crate::client::rooms) fn orchestrated_room_label(
     state: &BusState,
     agent: &RoomAgent,
 ) -> String {
-    match agent.orchestrates.and_then(|room| state.room(room)) {
-        Some(room) => format!("# {}", room.name),
-        None => "# unassigned".into(),
-    }
+    agent
+        .orchestrates
+        .and_then(|room| state.room(room))
+        .map_or_else(String::new, |room| format!("# {}", room.name))
 }
 
 /// Measured agent rows, shared by height calculation and visible-row drawing.
@@ -211,7 +215,6 @@ struct SidebarAgent<'a> {
     agent: &'a RoomAgent,
     in_master: bool,
     paths: Vec<String>,
-    error_lines: Vec<String>,
     height: usize,
 }
 
@@ -300,13 +303,8 @@ impl BusUi {
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
         let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
-        let rename_error_rows = self
-            .rename
-            .as_ref()
-            .and_then(|rename| rename.error.as_deref())
-            .map_or(0, |error| wrap(error, sw).len().saturating_sub(1));
         let master_header_rows = if self.snapshot.state.master_room().is_some() {
-            MASTER_SECTION_ROWS - 1 + rename_error_rows
+            MASTER_SECTION_ROWS - 1
         } else {
             0
         };
@@ -339,8 +337,7 @@ impl BusUi {
             offset,
             visible_end,
         };
-        let rooms_header =
-            sidebar_rooms_header(&self.snapshot.state, self.room) + rename_error_rows;
+        let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
         let work_rooms = rooms
             .iter()
             .filter(|room| room.kind == RoomKind::Work)
@@ -350,11 +347,6 @@ impl BusUi {
         self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
         view.sidebar_divider = viewport.at(1, divider_row, sw);
         self.sidebar_agent_rows(view, viewport, agents, agents_header);
-        if self.storage_is_paused() {
-            let marker = Rect::new(1, 0, sw, 1);
-            view.row(marker, "Storage paused", None, false, false);
-            view.color_last_row(marker, BLOCKED_BRIGHT);
-        }
         self.sidebar_footer(view, rows);
     }
 
@@ -372,26 +364,12 @@ impl BusUi {
                 let in_master = state
                     .master_room()
                     .is_some_and(|master| master.id == agent.room_id);
-                let error_lines = if in_master || agent.details_disclosed {
-                    agent
-                        .actionable_error
-                        .as_deref()
-                        .or(agent.working_directory_error.as_deref())
-                        .map(|error| wrap(error, sw))
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                // Healthy MASTER rows stay compact; persistent errors remain
-                // visible without an expansion control.
                 if in_master {
-                    let height = MASTER_AGENT_ROWS + error_lines.len();
                     return SidebarAgent {
                         agent,
                         in_master,
                         paths: Vec::new(),
-                        error_lines,
-                        height,
+                        height: MASTER_AGENT_ROWS,
                     };
                 }
                 let paths = if agent.details_disclosed {
@@ -401,13 +379,11 @@ impl BusUi {
                 };
                 let height = 3
                     + usize::from(agent.details_disclosed && agent.branch.is_some())
-                    + paths.len()
-                    + error_lines.len();
+                    + paths.len();
                 SidebarAgent {
                     agent,
                     in_master: false,
                     paths,
-                    error_lines,
                     height,
                 }
             })
@@ -458,18 +434,6 @@ impl BusUi {
                 .filter(|r| r.target == RenameTarget::Room(room.id))
             {
                 view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
-                if let Some(error) = &rename.error {
-                    let height = wrap(error, sw).len() as u16;
-                    view.lines(
-                        Rect {
-                            height,
-                            ..viewport.at(1, row + 1, sw)
-                        },
-                        error,
-                        None,
-                        false,
-                    );
-                }
             } else {
                 view.row(
                     rect,
@@ -546,7 +510,6 @@ impl BusUi {
             agent,
             in_master,
             paths,
-            error_lines,
             height,
         } in agents
         {
@@ -573,18 +536,14 @@ impl BusUi {
                 view.row(
                     viewport.at(1, y, sw),
                     orchestrated_room_label(&self.snapshot.state, agent),
-                    agent.orchestrates.map(Action::Room),
+                    agent
+                        .orchestrates
+                        .filter(|room| self.snapshot.state.room(*room).is_some())
+                        .map(Action::Room),
                     false,
                     true,
                 );
-                y += 1;
-                for line in error_lines {
-                    let rect = viewport.at(1, y, sw);
-                    view.row(rect, line, None, false, false);
-                    view.color_last_row(rect, BLOCKED_BRIGHT);
-                    y += 1;
-                }
-                y += 1;
+                y += 2;
                 continue;
             }
             view.row(
@@ -604,12 +563,6 @@ impl BusUi {
                     view.row(viewport.at(1, y, sw), line, None, false, true);
                     y += 1;
                 }
-                for line in error_lines {
-                    let rect = viewport.at(1, y, sw);
-                    view.row(rect, line, None, false, false);
-                    view.color_last_row(rect, BLOCKED_BRIGHT);
-                    y += 1;
-                }
             }
             y += 1;
         }
@@ -623,7 +576,7 @@ impl BusUi {
         y: usize,
     ) {
         let sw = viewport.sidebar.width.saturating_sub(3);
-        let right = agent_status(agent);
+        let right = agent_status(&self.snapshot.state, agent);
         let name_width = sw.saturating_sub(right.len() as u16 + 3);
         let rect = viewport.at(1, y, name_width);
         if let Some(rename) = self

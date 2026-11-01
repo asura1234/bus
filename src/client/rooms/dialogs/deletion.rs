@@ -18,7 +18,6 @@ pub(super) enum DeleteTarget {
 pub(super) struct DeleteDialog {
     pub target: DeleteTarget,
     pub command_id: Option<u64>,
-    pub error: Option<String>,
 }
 
 impl BusUi {
@@ -27,20 +26,26 @@ impl BusUi {
             DeleteTarget::Room(id) => self.snapshot.state.room(id).is_some(),
             DeleteTarget::Agent(id) => self.snapshot.state.agent(id).is_some(),
         };
-        if exists && self.deletion.is_none() {
-            let error = match target {
-                DeleteTarget::Room(id) if self.is_master_room(id) => {
-                    Some(ModelError::MasterRoomFixed.to_string())
-                }
-                _ => None,
-            };
-            self.deletion = Some(DeleteDialog {
-                target,
-                command_id: None,
-                error,
-            });
-            self.last_click = None;
+        if !exists || self.deletion.is_some() {
+            return;
         }
+        if let DeleteTarget::Room(id) = target {
+            if self.is_master_room(id) {
+                let error = ModelError::MasterRoomFixed.to_string();
+                tracing::warn!(
+                    event = "bus.room.delete_refused",
+                    room_id = id.0,
+                    room = "MASTER",
+                    %error,
+                );
+                return;
+            }
+        }
+        self.deletion = Some(DeleteDialog {
+            target,
+            command_id: None,
+        });
+        self.last_click = None;
     }
 
     pub(super) fn cancel_delete(&mut self) {
@@ -62,10 +67,6 @@ impl BusUi {
         else {
             return;
         };
-        if dialog.error.is_some() {
-            self.cancel_delete();
-            return;
-        }
         let target = dialog.target;
         let room = match target {
             DeleteTarget::Room(id) => Some(id),
@@ -86,7 +87,6 @@ impl BusUi {
         let id = self.queue(command, Effect::None);
         if let Some(dialog) = &mut self.deletion {
             dialog.command_id = Some(id);
-            dialog.error = None;
         }
     }
 
@@ -126,22 +126,15 @@ impl BusUi {
         true
     }
 
-    pub(super) fn settle_deletion(&mut self, id: u64, error: Option<&String>) {
+    pub(super) fn settle_deletion(&mut self, id: u64, _error: Option<&String>) {
         if self
             .deletion
             .as_ref()
             .is_some_and(|dialog| dialog.command_id == Some(id))
         {
-            if let Some(error) = error {
-                if let Some(dialog) = &mut self.deletion {
-                    dialog.command_id = None;
-                    dialog.error = Some(error.clone());
-                }
-            } else {
-                self.deletion = None;
-                self.error = None;
-                self.last_click = None;
-            }
+            self.deletion = None;
+            self.error = None;
+            self.last_click = None;
         }
     }
 

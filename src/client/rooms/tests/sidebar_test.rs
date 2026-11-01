@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
-    let (mut ui, _, agent) = fixture();
+fn unavailable_worker_shows_only_its_status_while_the_error_is_logged() {
+    let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.confirm_hook_setup(agent).unwrap();
     snapshot
@@ -34,15 +34,15 @@ fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
         .unwrap();
     let second = snapshot
         .state
-        .create_agent(
-            ui.room.unwrap(),
-            "second",
-            Provider::Cursor,
-            "/other".into(),
-            None,
-        )
+        .create_agent(room, "second", Provider::Cursor, "/other".into(), None)
         .unwrap();
-    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.receive_snapshot(Arc::new(snapshot.clone())));
+    let logs = capture.text();
+    assert!(logs.contains("bus.agent.notice"), "{logs}");
+    assert!(logs.contains(&format!("agent_id={}", agent.0)), "{logs}");
+    assert!(logs.contains(&format!("room_id={}", room.0)), "{logs}");
+    assert!(logs.contains("Startup failed"), "{logs}");
     for cols in [80, 160] {
         ui.sidebar_scroll = 0;
         ui.compute_view(cols, 24);
@@ -61,6 +61,7 @@ fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
                 seen.push_str(line.trim());
             }
         }
+        assert!(seen.contains("Unavailable"), "{cols}: {seen}");
         for text in [
             "Startup failed:",
             "No conversation found",
@@ -68,11 +69,7 @@ fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
             "system prompt",
             "rebrief retained work.",
         ] {
-            // Word wrapping removes only the row boundary, never the content.
-            assert!(
-                seen.replace(' ', "").contains(&text.replace(' ', "")),
-                "{cols}: missing {text}: {seen}"
-            );
+            assert!(!seen.contains(text), "{cols}: drew {text}: {seen}");
         }
         assert!(
             ui.view
@@ -86,10 +83,7 @@ fn expanded_worker_details_show_the_complete_startup_failure_and_recovery() {
     snapshot.state.set_agent_startup(agent, None).unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     ui.sidebar_scroll = 0;
-    assert!(
-        !room_screen(&mut ui, 160, 24).contains("Startup failed"),
-        "confirmed recovery removes the diagnosis rows"
-    );
+    assert!(!room_screen(&mut ui, 160, 24).contains("Startup failed"));
 }
 
 #[test]
@@ -748,7 +742,7 @@ fn sidebar_calls_an_unconfirmed_idle_agent_not_ready() {
         .iter()
         .find(|row| row.contains("author"))
         .expect("agent row");
-    assert!(agent_row.contains("Not ready"), "{sidebar:?}");
+    assert!(agent_row.contains("Unavailable"), "{sidebar:?}");
     assert!(!agent_row.contains("Idle"), "{sidebar:?}");
 }
 

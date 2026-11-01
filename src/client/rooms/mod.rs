@@ -112,7 +112,11 @@ impl crate::client::compositor::ClientShellState {
         if let Some(path) = &bus.settings_path {
             match crate::messaging::prefs::settings::load(path) {
                 Ok(settings) => bus.settings = settings,
-                Err(error) => bus.error = Some(error),
+                Err(error) => tracing::warn!(
+                    event = "bus.settings.load_failed",
+                    path = %path.display(),
+                    %error,
+                ),
             }
         }
         if let Some(room) = bus.room {

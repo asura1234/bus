@@ -65,10 +65,9 @@ pub(in crate::client) struct BusUi {
     /// The pending send waits for each agent's own turn instead of steering.
     pub(super) send_queued: bool,
     pub error: Option<String>,
-    pub(super) dismissed_snapshot_error: Option<String>,
-    pub(super) form_errors: BTreeMap<usize, String>,
-    /// Agent notices last written to the client log, so each is logged once.
-    pub(super) observed_agent_notices: Option<String>,
+    /// Agent errors last written to the client log, so each is logged once.
+    pub(super) observed_agent_notices:
+        BTreeMap<AgentId, (Option<String>, Option<String>, Option<RoomId>)>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
@@ -185,9 +184,7 @@ impl BusUi {
             send_queued: false,
             recovered_storage_failures: BTreeSet::new(),
             error: None,
-            dismissed_snapshot_error: None,
-            form_errors: BTreeMap::new(),
-            observed_agent_notices: None,
+            observed_agent_notices: BTreeMap::new(),
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -252,7 +249,12 @@ impl BusUi {
                 settings.color_blind_mode = on
             }) {
                 Ok(saved) => self.receive_settings(saved),
-                Err(error) => self.error = Some(error),
+                Err(error) => tracing::warn!(
+                    event = "bus.settings.save_failed",
+                    path = %path.display(),
+                    field = "color_blind_mode",
+                    %error,
+                ),
             }
         }
     }
@@ -439,8 +441,18 @@ impl BusUi {
                         self.suggestions.selected = 0;
                     }
                     Err(error) => {
-                        tracing::warn!(event = "bus.suggestions.failed", %error);
-                        self.error = Some(error);
+                        let path = self
+                            .form
+                            .as_ref()
+                            .and_then(Form::path_query)
+                            .map(|(input, _)| input);
+                        tracing::warn!(
+                            event = "bus.suggestions.failed",
+                            query_id,
+                            room_id = ?self.room.map(|room| room.0),
+                            path = path.as_deref().unwrap_or(""),
+                            %error,
+                        );
                     }
                 }
             }
@@ -461,17 +473,6 @@ impl BusUi {
         }
     }
     fn receive_storage_recovered(&mut self) {
-        if self
-            .snapshot
-            .error
-            .as_deref()
-            .is_some_and(storage_paused_error)
-        {
-            self.dismissed_snapshot_error = self.snapshot.error.clone();
-        }
-        if self.error.as_deref().is_some_and(storage_paused_error) {
-            self.error = None;
-        }
         let failed = std::mem::take(&mut self.failed);
         for pending in failed {
             if storage_paused(&pending) {
@@ -525,6 +526,7 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        self.sync_snapshot_error(previous.error.as_deref());
         if let Some(config) = &self.sound_config {
             let alerts = crate::messaging::model::new_developer_notifications(
                 &previous.state,
@@ -557,26 +559,32 @@ impl BusUi {
         recovered: bool,
         keep: bool,
     ) {
-        if !storage_paused_error(error) {
-            tracing::warn!(
-                event = "bus.command.failed",
-                command_id = pending.id,
-                command = crate::messaging::perf::command_name(&pending.command),
-                %error,
-            );
-        }
-        // Only a command that is retried hides its rejection.
-        if !(recovered && keep) {
-            self.error = Some(error.to_owned());
-            if matches!(
-                pending.command,
-                BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
-            ) && error.contains("PWD")
-            {
-                self.form_errors.insert(2, error.to_owned());
-                self.error = None;
+        let (agent, field, path) = match &pending.command {
+            BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => (
+                Some(input.name.as_str()),
+                error.contains("PWD").then_some("pwd"),
+                Some(input.cwd.clone()),
+            ),
+            BusCommand::AttachFile(_, path) => (None, Some("file"), Some(path.clone())),
+            BusCommand::RemoveFile(_, path) => {
+                (None, Some("file"), Some(path.display().to_string()))
             }
-        }
+            BusCommand::Suggestions { input, .. } => (None, Some("path"), Some(input.clone())),
+            _ => (None, None, None),
+        };
+        tracing::warn!(
+            event = "bus.command.failed",
+            command_id = pending.id,
+            command = crate::messaging::perf::command_name(&pending.command),
+            room_id = ?command_room(&pending.command).map(|room| room.0),
+            agent_id = ?command_agent(&pending.command).map(|agent| agent.0),
+            agent = agent.unwrap_or(""),
+            field = field.unwrap_or(""),
+            path = path.as_deref().unwrap_or(""),
+            recovered,
+            keep,
+            %error,
+        );
     }
 
     pub fn settle(&mut self) {
@@ -732,6 +740,10 @@ impl BusUi {
                                 tracing::warn!(
                                     event = "bus.command.enqueue_failed",
                                     command_id = pending.id,
+                                    command = crate::messaging::perf::command_name(&pending.command),
+                                    room_id = ?command_room(&pending.command).map(|room| room.0),
+                                    agent_id = ?command_agent(&pending.command).map(|agent| agent.0),
+                                    %error,
                                     "Coordinator command channel unavailable; command retained"
                                 );
                                 self.error = Some(error);
@@ -786,6 +798,37 @@ impl BusUi {
         self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 84;
         self.status_animation_last_tick = Some(now);
         true
+    }
+}
+
+fn command_room(command: &BusCommand) -> Option<RoomId> {
+    match command {
+        BusCommand::RenameRoom(room, _)
+        | BusCommand::SetRoomSound(room, _)
+        | BusCommand::SetRoomSoundName(room, _)
+        | BusCommand::DeleteRoom(room)
+        | BusCommand::SelectRoom(room)
+        | BusCommand::MarkRoomSeen(room)
+        | BusCommand::SetNotes(room, _)
+        | BusCommand::SetDraftText(room, _)
+        | BusCommand::SetRecipients(room, _)
+        | BusCommand::AttachFile(room, _)
+        | BusCommand::RemoveFile(room, _)
+        | BusCommand::Submit(room)
+        | BusCommand::SubmitQueued(room) => Some(*room),
+        BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => Some(input.room),
+        _ => None,
+    }
+}
+
+fn command_agent(command: &BusCommand) -> Option<AgentId> {
+    match command {
+        BusCommand::RenameAgent(agent, _)
+        | BusCommand::DeleteAgent(agent)
+        | BusCommand::SetDetails(agent, _)
+        | BusCommand::FocusTerminal(agent)
+        | BusCommand::CompleteHookSetup(agent) => Some(*agent),
+        _ => None,
     }
 }
 
@@ -871,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn quit_failed_save_logs_failure_branch_without_error_contents() {
+    fn quit_failed_save_logs_failure_branch_and_cause_without_draft_contents() {
         let (mut ui, room) = ui();
         ui.locals
             .get_mut(&room)
@@ -894,6 +937,7 @@ mod tests {
         });
         let logs = capture.text();
         assert_eq!(logs.matches("bus.quit.warning").count(), 1, "{logs}");
+        assert_eq!(logs.matches("bus.command.failed").count(), 1, "{logs}");
         for expected in [
             "reason=\"failed_command\"",
             "failed_count=1",
@@ -903,7 +947,8 @@ mod tests {
         ] {
             assert!(logs.contains(expected), "missing {expected}: {logs}");
         }
-        assert!(!logs.contains("PRIVATE_"), "{logs}");
+        assert!(logs.contains("PRIVATE_ERROR"), "{logs}");
+        assert!(!logs.contains("PRIVATE_DRAFT"), "{logs}");
         assert!(!ui.exit_ready);
     }
 
@@ -925,12 +970,10 @@ mod tests {
             enqueued: true,
             result: Some(Err("Storage paused; retrying".into())),
         });
-        ui.error = Some("Storage paused; retrying".into());
 
         ui.receive_event(BusEvent::StorageRecovered);
 
         assert!(ui.failed.is_empty());
-        assert!(ui.error.is_none());
         assert!(ui.pending.iter().any(|pending| {
             matches!(&pending.command, BusCommand::SetDraftText(id, _) if *id == room)
         }));
@@ -1010,7 +1053,7 @@ mod tests {
             .iter()
             .any(|p| matches!(p.command, BusCommand::Submit(_))));
         assert_eq!(ui.locals[&room].text.text, "newer than saved");
-        assert!(ui.error.as_deref().is_some_and(|e| e.contains("disk full")));
+        assert!(ui.error.is_none());
     }
     #[test]
     fn old_submit_ack_preserves_newer_text_and_another_room_draft() {

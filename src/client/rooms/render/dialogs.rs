@@ -1,4 +1,4 @@
-//! Forms, the help screen, deletion confirmation and error dialogs.
+//! Forms, the help screen and deletion confirmation.
 use super::super::{
     chat_search::{ChatSearch, SearchFocus},
     deletion::DeleteTarget,
@@ -53,29 +53,19 @@ impl BusUi {
             }
         };
         let text_width = dialog_text_width(area);
-        let mut body = wrap(dialog.error.as_ref().map_or(message.as_str(), |error| {
-            if matches!(dialog.target, DeleteTarget::Room(id) if self.is_master_room(id)) {
-                error.as_str()
-            } else if error.contains("server") {
-                "Bus server needs an update before deletion can finish. Session data was kept."
-            } else {
-                "Deletion did not finish. Session data was kept. Check the terminal before trying again."
-            }
-        }), text_width);
+        let mut body = wrap(&message, text_width);
         if dialog.command_id.is_some() {
             body.push("Stopping sessions…".into());
         }
         let (x, y) = dialog_frame(view, area, title, body);
         let ready = dialog.command_id.is_none();
-        if dialog.error.is_none() {
-            view.row(
-                Rect::new(x, y, text_width.min(12), 1),
-                "Cancel (Esc)",
-                ready.then_some(Action::CancelDelete),
-                false,
-                !ready,
-            );
-        }
+        view.row(
+            Rect::new(x, y, text_width.min(12), 1),
+            "Cancel (Esc)",
+            ready.then_some(Action::CancelDelete),
+            false,
+            !ready,
+        );
         view.row(
             Rect::new(x + 16, y, text_width.saturating_sub(16).min(10), 1),
             "OK (Enter)",
@@ -232,11 +222,6 @@ impl BusUi {
                     false,
                 );
             }
-            if let Some(error) = self.form_errors.get(&index) {
-                let height = wrap(error, width).len() as u16;
-                view.lines(Rect::new(x, y + 1, width, height), error, None, false);
-                y += height;
-            }
             if index == 1 && *field == 1 {
                 y += super::super::forms::provider_choices(orchestrates.is_some()).len() as u16;
             }
@@ -287,14 +272,6 @@ impl BusUi {
                 *field == super::super::forms::ORCHESTRATES_FIELD,
                 false,
             );
-            if let Some(error) = self
-                .form_errors
-                .get(&super::super::forms::ORCHESTRATES_FIELD)
-            {
-                let height = wrap(error, width).len() as u16;
-                view.lines(Rect::new(x, y + 1, width, height), error, None, false);
-                y += height;
-            }
             y += gap;
         }
         if let Some(prompt) = prompt {
@@ -307,9 +284,8 @@ impl BusUi {
                 true,
             );
             y += 1;
-            // Leave room for the buttons, validation error and a short PWD list.
-            let error = self.form_errors.get(&index);
-            let mut below = if error.is_some() { 7 } else { 3 };
+            // Leave room for the buttons and a short PWD list.
+            let mut below = 3;
             let suggestions = self.suggestions.entries.len().min(3) as u16;
             if suggestions > 0 {
                 below += 2 + suggestions;
@@ -322,11 +298,6 @@ impl BusUi {
                 *field == index,
             );
             y += height + 1;
-            if let Some(error) = error {
-                let height = wrap(error, width).len() as u16;
-                view.lines(Rect::new(x, y, width, height), error, None, false);
-                y += height;
-            }
         }
 
         y
@@ -354,13 +325,6 @@ impl BusUi {
             false,
         );
         y += 2;
-        if let Some(error) = self
-            .visible_error()
-            .filter(|_| !matches!(form, Form::Agent { .. }))
-        {
-            view.lines(Rect::new(x, y, width, 3), error, None, false);
-            y += 4;
-        }
         let remaining = main.bottom().saturating_sub(y + 2) as usize;
         let start = self
             .suggestions
@@ -393,17 +357,8 @@ impl BusUi {
             ..
         } = form
         {
-            // Below the Agent field's value row and any wrapped validation errors.
-            let top = 6
-                + agent_form_gap(main, form)
-                + self
-                    .form_errors
-                    .get(&0)
-                    .map_or(0, |error| wrap(error, width).len() as u16)
-                + self
-                    .form_errors
-                    .get(&1)
-                    .map_or(0, |error| wrap(error, width).len() as u16);
+            // Below the Agent field's value row.
+            let top = 6 + agent_form_gap(main, form);
             for (index, kind) in super::super::forms::provider_choices(orchestrates.is_some())
                 .iter()
                 .copied()

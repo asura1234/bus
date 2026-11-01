@@ -537,14 +537,8 @@ impl BusUi {
         }
     }
 
-    fn draft_files(&self, room: &Room) -> Vec<(PathBuf, bool)> {
-        let mut files: Vec<_> = room
-            .draft
-            .files
-            .iter()
-            .cloned()
-            .map(|path| (path, false))
-            .collect();
+    fn draft_files(&self, room: &Room) -> Vec<PathBuf> {
+        let mut files = room.draft.files.clone();
         for pending in &self.failed {
             if let crate::messaging::coordinator::BusCommand::AttachFile(id, path) =
                 &pending.command
@@ -552,7 +546,7 @@ impl BusUi {
                 if *id != room.id {
                     continue;
                 }
-                files.push((PathBuf::from(path), true));
+                files.push(PathBuf::from(path));
             }
         }
         files
@@ -661,26 +655,26 @@ fn highlight_history_row(
     }
 }
 
-fn file_rows(view: &mut View, files: &[(PathBuf, bool)], scroll: usize, layout: RoomLayout) {
+fn file_rows(view: &mut View, files: &[PathBuf], scroll: usize, layout: RoomLayout) {
     let RoomLayout { x, width, .. } = layout;
     let file_y = layout.composer_y + layout.bar_height + 1 + layout.text_height;
     if !files.is_empty() {
         view.files = Rect::new(x, file_y, width, 1);
     }
     // Reserve overflow controls before placing chips, so even one very long
-    // filename cannot consume the route to later successful/failed files.
+    // filename cannot consume the route to later files.
     let controls = files.len() > 1;
     let mut chip_x = x + if controls { 3 } else { 0 };
     let chip_right = x + width.saturating_sub(if controls { 3 } else { 0 });
     let mut shown = 0;
-    for (path, failed) in files.iter().skip(scroll) {
-        let suffix = if *failed { " ! ×]" } else { " ×]" };
+    for path in files.iter().skip(scroll) {
+        let suffix = " ×]";
         let available = chip_right.saturating_sub(chip_x);
         if available < suffix.len() as u16 + 2 {
             break;
         }
         let name = display(&path.file_name().unwrap_or_default().to_string_lossy());
-        let budget = available.saturating_sub(if *failed { 7 } else { 5 });
+        let budget = available.saturating_sub(5);
         let mut used = 0;
         let clipped: String = name
             .chars()

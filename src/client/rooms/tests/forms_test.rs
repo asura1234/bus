@@ -434,7 +434,7 @@ fn model_menu_enter_selects_without_submitting_or_showing_an_error() {
         .pending
         .iter()
         .all(|pending| !matches!(pending.command, BusCommand::AddAgent(_))));
-    assert!(ui.visible_error().is_none());
+    assert!(ui.error.is_none());
     assert!(room_screen(&mut ui, 100, 30).contains("Claude Code"));
 }
 
@@ -458,7 +458,8 @@ fn add_agent_rejects_each_missing_required_field_and_keeps_the_form_open() {
             }
         }
 
-        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| key(&mut ui, KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(
             matches!(ui.form, Some(forms::Form::Agent { .. })),
@@ -470,11 +471,20 @@ fn add_agent_rejects_each_missing_required_field_and_keeps_the_form_open() {
                 .all(|pending| !matches!(pending.command, BusCommand::AddAgent(_))),
             "{missing}"
         );
+        let error = format!("{missing} is required.");
         let screen = room_screen(&mut ui, 100, 40);
-        assert!(
-            screen.contains(&format!("{missing} is required.")),
-            "{missing}: {screen}"
+        assert!(!screen.contains(&error), "{missing}: {screen}");
+        let logs = capture.text();
+        assert_eq!(
+            logs.matches("bus.form.validation_failed").count(),
+            1,
+            "{missing}: {logs}"
         );
+        assert!(
+            logs.contains(&format!("field=\"{}\"", missing.to_lowercase())),
+            "{missing}: {logs}"
+        );
+        assert!(logs.contains(&error), "{missing}: {logs}");
     }
 }
 
@@ -492,15 +502,13 @@ fn room_creation_needs_only_name_and_does_not_inherit_agent_pwd_error() {
         &mut Default::default(),
     );
     assert!(!room_screen(&mut ui, 120, 40).contains("PWD"));
-    // A new failure with identical text is still visible, as are unrelated
-    // runtime failures; dismissing an old operation is not a blanket mute.
     ui.error = Some("Agent PWD must be an absolute path or ~/ path".into());
-    assert!(room_screen(&mut ui, 120, 40).contains("PWD"));
+    assert!(!room_screen(&mut ui, 120, 40).contains("PWD"));
     ui.error = None;
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.error = Some("Runtime connection unavailable".into());
     ui.receive_snapshot(Arc::new(snapshot));
-    assert!(room_screen(&mut ui, 120, 40).contains("Runtime connection unavailable"));
+    assert!(!room_screen(&mut ui, 120, 40).contains("Runtime connection unavailable"));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.pending.iter().any(
         |p| matches!(&p.command, BusCommand::CreateRoom(name) if name == "frontend-and-backend")
@@ -817,7 +825,7 @@ fn form_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
 }
 
 #[test]
-fn provider_menu_stays_below_validation_errors_and_before_pwd() {
+fn provider_menu_stays_below_the_model_field_and_before_pwd() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Add);
@@ -857,8 +865,8 @@ fn provider_menu_stays_below_validation_errors_and_before_pwd() {
 }
 
 #[test]
-fn async_pwd_rejection_is_inline_and_logged_once() {
-    let (mut ui, _, _) = fixture();
+fn async_pwd_rejection_is_log_only_with_its_field_and_path() {
+    let (mut ui, room, _) = fixture();
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Provider(Provider::Codex));
     if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
@@ -897,12 +905,20 @@ fn async_pwd_rejection_is_inline_and_logged_once() {
         ui.receive_snapshot(Arc::new(snapshot));
         ui.settle();
     });
-    assert_eq!(ui.form_errors.get(&2).map(String::as_str), Some(error));
     assert!(ui.error.is_none());
+    assert!(matches!(ui.form, Some(forms::Form::Agent { .. })));
+    assert!(!room_screen(&mut ui, 100, 40).contains(error));
     let logs = capture.text();
     assert_eq!(logs.matches("bus.command.failed").count(), 1, "{logs}");
     assert_eq!(logs.matches(error).count(), 1, "{logs}");
     assert!(logs.contains(&format!("command_id={id}")), "{logs}");
+    assert!(
+        logs.contains(&format!("room_id=Some({})", room.0)),
+        "{logs}"
+    );
+    assert!(logs.contains("agent=\"worker\""), "{logs}");
+    assert!(logs.contains("field=\"pwd\""), "{logs}");
+    assert!(logs.contains("path=\"/definitely/missing\""), "{logs}");
 }
 
 #[test]

@@ -162,13 +162,6 @@ impl BusUi {
         match code {
             KeyCode::Esc => self.rename = None,
             KeyCode::Enter => {
-                if self
-                    .rename
-                    .as_ref()
-                    .is_some_and(|rename| rename.error.is_some())
-                {
-                    return;
-                }
                 if let Some(rename) = self.rename.take() {
                     let cmd = match rename.target {
                         RenameTarget::Room(id) => BusCommand::RenameRoom(id, rename.editor.text),
@@ -454,12 +447,13 @@ impl BusUi {
             return;
         };
         if let Some(error) = super::super::thumbnails::image_data_error(bytes) {
-            tracing::warn!(event = "bus.attach.image_refused", %error);
+            tracing::warn!(event = "bus.attach.image_refused", room_id = room.0, extension, %error);
             return;
         }
         let Some(root) = root else {
             tracing::warn!(
                 event = "bus.paste_image.no_data_dir",
+                room_id = room.0,
                 "Clipboard image was not saved: no Bus data directory"
             );
             return;
@@ -467,7 +461,12 @@ impl BusUi {
         let path = match save_pasted_image(&root, room, bytes, extension) {
             Ok(path) => path,
             Err(error) => {
-                tracing::warn!(event = "bus.paste_image.write_failed", %error);
+                tracing::warn!(
+                    event = "bus.paste_image.write_failed",
+                    room_id = room.0,
+                    path = %root.display(),
+                    %error,
+                );
                 return;
             }
         };
@@ -484,7 +483,12 @@ impl BusUi {
         for path in paths {
             let file = crate::utils::home_path::expand_tilde_path(&path);
             if let Some(error) = super::super::thumbnails::image_file_error(&file) {
-                tracing::warn!(event = "bus.attach.image_refused", %error);
+                tracing::warn!(
+                    event = "bus.attach.image_refused",
+                    room_id = room.0,
+                    path = %file.display(),
+                    %error,
+                );
                 continue;
             }
             let path = self.keep_temporary_image(room, path);
@@ -504,7 +508,12 @@ impl BusUi {
             Ok(Some(copy)) => copy.display().to_string(),
             Ok(None) => path,
             Err(error) => {
-                tracing::warn!(event = "bus.paste_image.copy_failed", %error);
+                tracing::warn!(
+                    event = "bus.paste_image.copy_failed",
+                    room_id = room.0,
+                    path,
+                    %error,
+                );
                 path
             }
         }

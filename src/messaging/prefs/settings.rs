@@ -28,7 +28,7 @@ pub(crate) const MAX_DISK_FREE_GB: u32 = 10_000;
 /// The sidebar width before it was adjustable, so unchanged settings look
 /// the same as before.
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: u16 = 28;
-/// Narrower would leave an agent name next to `Not ready ×` no room at all.
+/// Narrower would leave an agent name next to `Unavailable ×` no room at all.
 pub(crate) const MIN_SIDEBAR_WIDTH: u16 = 20;
 /// Wider sidebars only pay off on very wide terminals; the layout also caps
 /// the sidebar at a third of the terminal, so the chat keeps two thirds.
