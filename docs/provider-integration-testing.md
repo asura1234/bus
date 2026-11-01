@@ -844,3 +844,11 @@ idle then deliver, and an approval card without `--yolo`.
   live session from this checklist. Before any live restart, commit and push,
   stop builds, and release slot locks. A turn ended by restart or sleep is not
   a pass.
+
+- **2026-11-01 — Kimi folder trust:** copying a source decision into each private
+  home loses trust answered in a Bus agent. Share `workspace-trust/` with the
+  source home, alongside `credentials/` and `oauth/`; rebind old private homes.
+  Run `tests/kimi_trust_acceptance.py` with `BUS_KIMI_TRUST_BINARY` and the full
+  `BUS_KIMI_TRUST_SHA`: the first agent in a fresh scratch folder must expose
+  the native Bus trust dialog, and the second must reach the composer without
+  it. Record the one throwaway trust key added by the native answer.

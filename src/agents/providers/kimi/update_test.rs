@@ -108,7 +108,7 @@ fn kimi_update_check_is_disabled_in_launch_and_resume_argv() {
 fn kimi_update_check_is_disabled_when_rebinding_a_preexisting_home() {
     let fixture = Fixture::new();
     // Write the pre-change capture format, with no persisted update switch.
-    let home = private_home(&fixture.source, &fixture.root, &fixture.hooks).unwrap();
+    let home = private_home(&fixture.source, &fixture.hooks).unwrap();
     for (name, value) in [
         (
             HOME_FILE,
