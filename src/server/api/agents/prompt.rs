@@ -394,7 +394,7 @@ impl App {
         let Some(expected_agent) = terminal.effective_known_agent() else {
             return Err(agent_not_ready(id, &params.target));
         };
-        if terminal.managed_agent_launch_pending() {
+        if terminal.managed_agent_awaiting_startup() {
             return Err(agent_not_ready(id, &params.target));
         }
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {

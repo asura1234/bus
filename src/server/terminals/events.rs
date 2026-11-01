@@ -302,12 +302,12 @@ impl AppState {
             managed_changed,
             agent_name_changed,
             unchanged_change,
-            managed_launch_pending,
+            startup_unconfirmed,
             suppress_acquisition_completion,
         ) = {
             let terminal = self.terminals.get_mut(&terminal_id)?;
             let previous_agent_name = terminal.agent_name.clone();
-            let managed_launch_pending = terminal.managed_agent_launch_pending();
+            let startup_unconfirmed = terminal.managed_agent_awaiting_startup();
             let mutation = update(terminal)?;
             let managed_changed = terminal.reconcile_managed_agent_at(now, false);
             let suppress_acquisition_completion = terminal.finish_agent_process_acquisition();
@@ -319,7 +319,7 @@ impl AppState {
                 managed_changed,
                 agent_name_changed,
                 unchanged_change,
-                managed_launch_pending,
+                startup_unconfirmed,
                 suppress_acquisition_completion,
             )
         };
@@ -330,7 +330,7 @@ impl AppState {
         let change = mutation.effective_state_change.or(unchanged_change)?;
         let suppress_completion = force_suppress_completion
             || (change.state == AgentState::Idle
-                && (managed_launch_pending || suppress_acquisition_completion));
+                && (startup_unconfirmed || suppress_acquisition_completion));
         if change.previous_state != change.state {
             self.next_agent_state_change_seq += 1;
             if let Some(terminal) = self.terminals.get_mut(&terminal_id) {

@@ -11,7 +11,7 @@ impl App {
             .state
             .terminals
             .values()
-            .filter(|terminal| terminal.managed_agent_launch_pending())
+            .filter(|terminal| terminal.managed_agent_awaiting_startup())
             .filter_map(|terminal| terminal.agent_name.clone())
             .collect();
         for name in pending {

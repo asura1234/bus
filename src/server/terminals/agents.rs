@@ -125,7 +125,7 @@ impl App {
             .terminals
             .get_mut(&terminal_id)
             .is_some_and(|terminal| {
-                if terminal.managed_agent_launch_pending() && returned_to_prompt {
+                if terminal.managed_agent_awaiting_startup() && returned_to_prompt {
                     terminal.clear_agent_name();
                     true
                 } else {
@@ -199,7 +199,7 @@ impl App {
                 target: target.to_string(),
             }));
         };
-        if terminal.managed_agent_launch_pending() {
+        if terminal.managed_agent_awaiting_startup() {
             return Err(AgentRenameError::PendingLaunch);
         }
         if terminal.effective_agent_label().is_none() {

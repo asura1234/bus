@@ -389,3 +389,6 @@ async fn guarded_agent_start_rejects_stale_owner_or_lost_prompt_integration_with
         assert!(saved.managed_agent_kind().is_none());
     }
 }
+
+#[path = "startup_identity_test.rs"]
+mod startup_identity;

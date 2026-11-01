@@ -15,6 +15,8 @@ pub(super) fn unstarted_owner<'a>(
     let mut owners = state.agents().filter(|agent| {
         facts.agent_name.as_deref()
             == Some(identity::managed_name(agent.room_id, agent.id).as_str())
+            && facts.managed_agent.as_deref()
+                == Some(identity::provider_kind(agent.provider).label())
             && super::super::is_unstarted(state, agent)
     });
     let agent = owners

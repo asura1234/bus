@@ -32,7 +32,7 @@ impl TerminalState {
     fn sync_managed_launch_pending(&self) {
         if let Some(signal) = &self.managed_launch_pending_signal {
             signal.store(
-                self.managed_agent_launch_pending(),
+                self.managed_agent_awaiting_startup(),
                 std::sync::atomic::Ordering::Release,
             );
         }
@@ -97,8 +97,17 @@ impl TerminalState {
         self.pending_agent_resume_plan.is_some() || self.managed_agent_identity_unestablished()
     }
 
-    /// A restored identity already belongs in snapshots, even while its process
-    /// waits for viewport/theme. Initial launches have no established identity.
+    /// Startup-only detection and input guards outlive a timed-out launch.
+    /// Public launch_pending ends at expiry; ownership still awaits readiness.
+    pub(crate) fn managed_agent_awaiting_startup(&self) -> bool {
+        self.managed_agent_launch_pending()
+            || self
+                .managed_agent
+                .is_some_and(|managed| managed.phase == ManagedAgentPhase::TimedOut)
+    }
+
+    /// Deferred restores and timed-out launches retain owned identity in
+    /// snapshots even without readiness. Only a new pending launch is omitted.
     pub fn managed_agent_identity_unestablished(&self) -> bool {
         self.managed_agent.is_some_and(|managed| {
             matches!(
@@ -116,7 +125,7 @@ impl TerminalState {
     }
 
     pub(super) fn confirm_managed_agent_session_start(&mut self, kind: AgentKind) {
-        if self.managed_agent_launch_pending() && self.managed_agent_kind() == Some(kind) {
+        if self.managed_agent_awaiting_startup() && self.managed_agent_kind() == Some(kind) {
             self.update_managed_agent(Some(ManagedAgent {
                 kind,
                 phase: ManagedAgentPhase::Active,
@@ -175,6 +184,7 @@ impl TerminalState {
                 observed_expected, ..
             } => observed_expected || known_agent == Some(managed.kind),
             ManagedAgentPhase::Blocked
+            | ManagedAgentPhase::TimedOut
             | ManagedAgentPhase::Active
             | ManagedAgentPhase::Suspended => false,
         };
@@ -187,7 +197,10 @@ impl TerminalState {
             self.clear_agent_name();
             return true;
         }
-        if managed.phase == ManagedAgentPhase::Blocked {
+        if matches!(
+            managed.phase,
+            ManagedAgentPhase::Blocked | ManagedAgentPhase::TimedOut
+        ) {
             if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
                 self.update_managed_agent(Some(ManagedAgent {
                     kind: managed.kind,
@@ -212,7 +225,16 @@ impl TerminalState {
                 return true;
             }
             if now >= deadline {
-                self.clear_agent_name();
+                // Expiry is not a terminal replacement. Keep ownership and
+                // startup detection until positive readiness or a real exit,
+                // but consume the deadline so the scheduler cannot spin.
+                if let Some(resume) = self.native_resume.as_mut() {
+                    resume.error = Some("provider startup confirmation deadline elapsed".into());
+                }
+                self.update_managed_agent(Some(ManagedAgent {
+                    kind: managed.kind,
+                    phase: ManagedAgentPhase::TimedOut,
+                }));
                 return true;
             }
             if ready_after.is_none_or(|ready_after| now >= ready_after) {

@@ -986,3 +986,21 @@ fn codex_menu_controls_are_not_an_editable_composer_footer() {
         "command accelerators are menu controls"
     );
 }
+
+#[test]
+fn cursor_startup_trust_chooser_requires_live_complete_native_chrome() {
+    let screen = "╭────────────────────╮\n│ Workspace Trust Required │\n│ Do you trust the contents of this directory? │\n│ /private/tmp/scratch-project │\n│ ▶ [a] Trust this workspace │\n│   [q] Quit │\n│ Use arrow keys to navigate, Enter to select, or press the key shown │\n╰────────────────────╯\n";
+    let dialog = parse(screen).expect("Cursor startup trust chooser");
+    assert_eq!(dialog.options.len(), 2);
+    assert_eq!(dialog.selected(), Some(1));
+    assert_eq!(dialog.keys_for(1), Some(vec!["a"]));
+    assert_eq!(dialog.keys_for(2), Some(vec!["q"]));
+    for invalid in [
+        screen.replace("Workspace Trust Required", "Old transcript"),
+        screen.replace("[q] Quit", "[x] Quit"),
+        screen.replace("▶ [a]", "  [a]"),
+        format!("{screen}→ Add a follow-up\n"),
+    ] {
+        assert!(parse(&invalid).is_none(), "{invalid}");
+    }
+}

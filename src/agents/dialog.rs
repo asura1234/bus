@@ -11,6 +11,7 @@
 use sha2::{Digest, Sha256};
 mod claude;
 mod composer;
+mod cursor;
 mod fingerprint;
 pub(crate) use fingerprint::trace as trace_fingerprint;
 mod grok;
@@ -351,7 +352,8 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     if let Some(dialog) = grok::startup_trust(&lines) {
         return Some(dialog);
     }
-    let mut dialog = kimi::parse(&lines)
+    let mut dialog = cursor::startup_trust(&lines)
+        .or_else(|| kimi::parse(&lines))
         .or_else(|| claude::parse(&lines, &styles))
         .or_else(|| numbered(&lines, &styles))
         .or_else(|| unnumbered(&lines))

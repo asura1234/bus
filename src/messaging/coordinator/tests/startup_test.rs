@@ -79,7 +79,7 @@ impl Transport for FailedLaunchNative {
                     argv: vec!["bus-provider-does-not-exist".into(), "--no-daemon".into()],
                 })
             }
-            // Native launch deadline elapsed and cleared the managed name.
+            // Simulate an exited or absent native launch.
             Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
@@ -206,7 +206,13 @@ fn pending_info(worker: &Worker, agent: AgentId) -> schema::AgentInfo {
 
 #[test]
 fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_terminal() {
-    for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+    for provider in [
+        Provider::Codex,
+        Provider::ClaudeCode,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
         let (mut worker, agent, room, dir) = pending(provider);
         let info = pending_info(&worker, agent);
         let start = worker

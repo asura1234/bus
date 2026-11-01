@@ -244,6 +244,30 @@ pub(crate) fn bind_home(argv: Vec<String>, home: &Path) -> Result<Vec<String>, S
     Ok(bound)
 }
 
+/// Validate saved native argv for a provider that never submitted a turn.
+/// The home wrapper and option grammar have the same owner as initial launch.
+pub(crate) fn validate_unstarted_argv(argv: &[String]) -> Result<(), String> {
+    let args = if argv.first().map(String::as_str) == Some("/usr/bin/env") {
+        let home = argv
+            .get(1)
+            .and_then(|arg| arg.strip_prefix("GROK_HOME="))
+            .ok_or("Unstarted Grok launch has no owned home")?;
+        validate_home(Path::new(home))?;
+        &argv[2..]
+    } else {
+        argv
+    };
+    if args
+        .first()
+        .and_then(|executable| Path::new(executable).file_name())
+        .and_then(|name| name.to_str())
+        != Some("grok")
+    {
+        return Err("Unstarted Grok launch has no matching executable".into());
+    }
+    arguments::validate_unstarted_options(&args[1..])
+}
+
 #[cfg(test)]
 pub(crate) fn resolve_executable() -> Result<PathBuf, String> {
     resolve_identity().map(|identity| identity.alias)

@@ -1102,3 +1102,63 @@ fn cold_resume_after_failed_startup_reopens_without_replaying_closed_work() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn startup_timeout_sessionless_resume_rebinds_every_provider() {
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        let mut info = resumed_info(provider);
+        info.agent_session = None;
+        let (mut worker, agent, room, dir, calls) = fixture(
+            provider,
+            vec![
+                Ok(ResponseResult::AgentList {
+                    agents: vec![info.clone()],
+                }),
+                Ok(ResponseResult::AgentInfo { agent: info }),
+                Ok(ResponseResult::Ok {}),
+            ],
+        );
+        let mut state = worker.state.clone();
+        let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(agent, identity).unwrap();
+        worker.save(state).unwrap();
+        let request = queue(&mut worker, room, agent, "first prompt after restart");
+        worker.poll().unwrap();
+        let restored = worker.state.agent(agent).unwrap();
+        assert_eq!(restored.status, RuntimeStatus::Idle);
+        assert_eq!(
+            restored.runtime_identity.terminal_id.as_deref(),
+            Some("restored-terminal")
+        );
+        assert!(restored.runtime_identity.session_id.is_none());
+        worker.submit_ready().unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            if matches!(provider, Provider::Codex | Provider::Kimi) {
+                RequestPhase::Submitting
+            } else {
+                RequestPhase::Queued
+            },
+            "{provider:?}: providers with startup hooks still need that session before delivery"
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|method| **method == "agent.prompt_if_unbound")
+                .count(),
+            usize::from(matches!(provider, Provider::Codex | Provider::Kimi))
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
