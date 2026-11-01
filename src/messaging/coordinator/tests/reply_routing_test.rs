@@ -14,18 +14,24 @@ mod exit_snapshot;
 #[path = "rejected_notice_test.rs"]
 mod rejected_notice;
 
+#[path = "requester_replies_test.rs"]
+mod requester_replies;
+
 static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct Accepting(Arc<Mutex<Vec<String>>>);
 impl Transport for Accepting {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        match method {
-            Method::AgentPromptIfIdle(p) => self.0.lock().unwrap().push(p.text),
+        let provider = match method {
+            Method::AgentPromptIfIdle(p) => {
+                self.0.lock().unwrap().push(p.text);
+                p.expected_agent
+            }
             other => panic!("unexpected native call: {other:?}"),
-        }
+        };
         Ok(ResponseResult::AgentPrompted {
             agent: serde_json::from_value(json!({
-                "terminal_id":"terminal", "pane_id":"pane", "agent":"claude", "agent_status":"idle",
+                "terminal_id":"terminal", "pane_id":"pane", "agent":provider, "agent_status":"idle",
                 "workspace_id":"workspace", "tab_id":"tab", "focused":false, "revision":1
             }))
             .unwrap(),

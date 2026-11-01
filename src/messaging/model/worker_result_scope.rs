@@ -1,7 +1,7 @@
 //! Which worker copy is this request's own result.
 use super::reply_routing::{reply_key, ReplyRoute};
 use super::worker_events::{WorkerEvent, WorkerEventKind};
-use super::{AgentId, Author, BusState, PromptId, Request, RequestId, RoomId};
+use super::{AgentId, AgentRecipients, Author, BusState, PromptId, Request, RequestId, RoomId};
 
 impl BusState {
     /// This request's own result landed within a minute of `at_ms`: a final
@@ -17,7 +17,7 @@ impl BusState {
         }) {
             return true;
         }
-        self.assigned_copy_at(request, None)
+        self.assigned_copy_at(request, None, None)
             .is_some_and(|sent_at| (start..=end).contains(&sent_at))
     }
 
@@ -27,7 +27,14 @@ impl BusState {
         request
             .reply()
             .is_some_and(|reply| !reply.text.trim().is_empty())
-            && self.assigned_copy_at(request, None).is_some()
+            && self
+                .assigned_copy_at(
+                    request,
+                    None,
+                    self.reply_recipient(request)
+                        .filter(|_| self.reply_orchestrator(request).is_none()),
+                )
+                .is_some()
     }
 
     /// A restart line covers only requests that already existed when it was posted.
@@ -63,7 +70,12 @@ impl BusState {
     /// When the worker's copy of `request`'s result was sent, if one is assigned
     /// to this request. `exclude` is a posted final's own message, which is not
     /// a second copy. Copies are claimed oldest-request first.
-    fn assigned_copy_at(&self, request: &Request, exclude: Option<PromptId>) -> Option<u64> {
+    fn assigned_copy_at(
+        &self,
+        request: &Request,
+        exclude: Option<PromptId>,
+        recipient: Option<AgentId>,
+    ) -> Option<u64> {
         let text = request
             .reply()
             .map(|reply| reply.text.trim().to_owned())
@@ -75,6 +87,7 @@ impl BusState {
             request.id,
             &text,
             exclude,
+            recipient,
         )
     }
 
@@ -97,6 +110,7 @@ impl BusState {
             request.prompt.submitted_at_ms,
             request.id,
             text.trim(),
+            None,
             None,
         )
         .is_some()
@@ -127,8 +141,16 @@ impl BusState {
             request.prompt.submitted_at_ms,
             request.id,
         );
-        self.assigned_result_at(room, worker, submit_at, id, &body, Some(event.message))
-            .is_some()
+        self.assigned_result_at(
+            room,
+            worker,
+            submit_at,
+            id,
+            &body,
+            Some(event.message),
+            None,
+        )
+        .is_some()
     }
 
     /// The posted final keeps the full body. The event summary keeps only a
@@ -156,7 +178,9 @@ impl BusState {
         text: &str,
         exclude: Option<PromptId>,
     ) -> bool {
-        !self.worker_copies(room, worker, text, exclude).is_empty()
+        !self
+            .worker_copies(room, worker, text, exclude, None)
+            .is_empty()
     }
 
     fn assigned_result_at(
@@ -167,12 +191,13 @@ impl BusState {
         request_id: RequestId,
         text: &str,
         exclude: Option<PromptId>,
+        recipient: Option<AgentId>,
     ) -> Option<u64> {
-        let copies = self.worker_copies(room, worker, text, exclude);
+        let copies = self.worker_copies(room, worker, text, exclude, recipient);
         if copies.is_empty() {
             return None;
         }
-        let mut claimants = self.reply_claimants(room, worker, text);
+        let mut claimants = self.reply_claimants(room, worker, text, recipient);
         if !claimants.iter().any(|(_, id)| *id == request_id) {
             claimants.push((submit_at, request_id));
             claimants.sort_unstable();
@@ -203,7 +228,7 @@ impl BusState {
         let Some(request) = self.request(request_id) else {
             return false;
         };
-        match self.reply_routes.get(&reply_key(request)).copied() {
+        match self.reply_routes.get(&request.id).copied() {
             Some(ReplyRoute::Seen) => true,
             Some(ReplyRoute::Routed(notice)) => {
                 self.request(notice).is_some_and(|queued| queued.settled())
@@ -218,24 +243,28 @@ impl BusState {
         worker: AgentId,
         text: &str,
         exclude: Option<PromptId>,
+        recipient: Option<AgentId>,
     ) -> Vec<(u64, PromptId)> {
         let mut found = std::collections::BTreeMap::<PromptId, u64>::new();
-        let mut keep = |id: PromptId, at: u64, author: &Author, stored: &str| {
-            if exclude == Some(id)
-                || author != &Author::Agent(worker)
-                || is_wrapper(stored)
-                || !same_result_text(stored, text)
-            {
-                return;
-            }
-            found.entry(id).or_insert(at);
-        };
+        let mut keep =
+            |id: PromptId, at: u64, author: &Author, stored: &str, recipients: &AgentRecipients| {
+                if exclude == Some(id)
+                    || author != &Author::Agent(worker)
+                    || recipient.is_some_and(|target| !recipients.contains(&target))
+                    || is_wrapper(stored)
+                    || !same_result_text(stored, text)
+                {
+                    return;
+                }
+                found.entry(id).or_insert(at);
+            };
         for prompt in self.notices(room) {
             keep(
                 prompt.id,
                 prompt.submitted_at_ms,
                 &prompt.author,
                 &prompt.text,
+                &prompt.recipient_ids,
             );
         }
         for request in self.requests().filter(|request| request.room_id == room) {
@@ -244,6 +273,7 @@ impl BusState {
                 request.prompt.submitted_at_ms,
                 &request.prompt.author,
                 &request.prompt.text,
+                &request.prompt.recipient_ids,
             );
         }
         let mut copies: Vec<_> = found.into_iter().map(|(id, at)| (at, id)).collect();
@@ -251,12 +281,19 @@ impl BusState {
         copies
     }
 
-    fn reply_claimants(&self, room: RoomId, worker: AgentId, text: &str) -> Vec<(u64, RequestId)> {
+    fn reply_claimants(
+        &self,
+        room: RoomId,
+        worker: AgentId,
+        text: &str,
+        recipient: Option<AgentId>,
+    ) -> Vec<(u64, RequestId)> {
         let mut claimants: Vec<_> = self
             .requests()
             .filter(|request| {
                 request.room_id == room
                     && request.agent_id == worker
+                    && recipient.is_none_or(|target| request.prompt.author == Author::Agent(target))
                     && request
                         .reply()
                         .is_some_and(|reply| same_result_text(&reply.text, text))
@@ -292,7 +329,7 @@ impl BusState {
         worker: AgentId,
         text: &str,
     ) -> Option<PromptId> {
-        self.worker_copies(room, worker, text.trim(), None)
+        self.worker_copies(room, worker, text.trim(), None, None)
             .into_iter()
             .next()
             .map(|(_, id)| id)

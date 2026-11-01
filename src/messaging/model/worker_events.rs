@@ -252,6 +252,8 @@ impl BusState {
         let requests: Vec<_> = self
             .requests()
             .filter(|r| !retired_automation(r))
+            // A cancelled reply wake is not an unanswered request to this worker.
+            .filter(|r| !(r.bus_generated && matches!(r.prompt.author, Author::Agent(_))))
             .filter(|r| self.event_backfill_source(r))
             .filter(|r| {
                 self.worker_orchestrator(r.agent_id).is_some()
