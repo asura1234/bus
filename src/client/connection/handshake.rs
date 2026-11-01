@@ -84,7 +84,9 @@ fn set_handshake_recv_timeout(
 }
 
 #[derive(Debug)]
-pub(in crate::client) struct HandshakeResult;
+pub(in crate::client) struct HandshakeResult {
+    pub(in crate::client) server: Option<crate::utils::restart_record::BuildStamp>,
+}
 
 /// Performs the client→server handshake.
 ///
@@ -99,6 +101,13 @@ pub(in crate::client) fn do_handshake(
     endpoint_keybindings: bool,
     mouse_capture: bool,
 ) -> Result<HandshakeResult, ClientError> {
+    // Retain the serving identity with this connection, before a later
+    // replacement can publish its own build record.
+    let server = crate::utils::env::bus_data_dir().and_then(|root| {
+        crate::utils::restart_record::read_build_stamp(&crate::utils::restart_record::build_path(
+            &root,
+        ))
+    });
     stream
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
@@ -191,5 +200,5 @@ pub(in crate::client) fn do_handshake(
         server_version = %welcome.server_version,
         "endpoint handshake succeeded"
     );
-    Ok(HandshakeResult)
+    Ok(HandshakeResult { server })
 }

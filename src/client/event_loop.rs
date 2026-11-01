@@ -169,6 +169,8 @@ struct ClientLoopDriver {
     will_query_host_cell_size: bool,
     /// Identifies the reader whose events belong to the active connection.
     connection_id: u64,
+    /// Identity retained at attachment, not re-read when a queued loss arrives.
+    attached_server: Option<crate::utils::restart_record::BuildStamp>,
 }
 
 struct AttachFailure {
@@ -226,7 +228,7 @@ fn start_client_loop(
     );
     #[cfg(windows)]
     let _ = cell_size_query; // Windows parses host geometry in its stdin reader.
-    let (stream, _handshake) = initial.expect("connected client");
+    let (stream, handshake) = initial.expect("connected client");
     let max_frame_size = if state.kitty_graphics_enabled {
         MAX_GRAPHICS_FRAME_SIZE
     } else {
@@ -251,6 +253,7 @@ fn start_client_loop(
         #[cfg(unix)]
         will_query_host_cell_size: cell_size_query,
         connection_id: 0,
+        attached_server: handshake.server,
     })
 }
 
@@ -391,11 +394,7 @@ impl ClientLoopDriver {
             return None;
         }
         crate::client::restart::restart_in_progress()?;
-        let previous_pid = crate::utils::env::bus_data_dir().and_then(|root| {
-            crate::utils::restart_record::read_build_pid(&crate::utils::restart_record::build_path(
-                &root,
-            ))
-        });
+        let previous_pid = self.attached_server.as_ref().and_then(|server| server.pid);
         let marker = match crate::client::restart::wait_for_restart(
             crate::client::restart::RECONNECT_WAIT,
             crate::client::restart::restart_in_progress,
@@ -403,17 +402,17 @@ impl ClientLoopDriver {
         ) {
             Ok(marker) => marker,
             Err(marker) => {
-                return Some(Err(crate::utils::restart_record::reattach_message(
+                return Some(Err(crate::client::restart::record_attach_failure(
+                    self.attached_server.as_ref(),
                     &marker,
                     "the server did not become ready",
                 )));
             }
         };
         if let Err(failure) = self.attach_restarted_server(event_tx) {
-            // No recorded pid: one handshake, then return. The shutdown test
-            // drops every accept and is stuck if this waits for another one.
-            if previous_pid.is_none() || !failure.closed_early {
-                return Some(Err(crate::utils::restart_record::reattach_message(
+            if !failure.closed_early {
+                return Some(Err(crate::client::restart::record_attach_failure(
+                    self.attached_server.as_ref(),
                     &marker,
                     &failure.message,
                 )));
@@ -423,7 +422,8 @@ impl ClientLoopDriver {
             std::thread::sleep(Duration::from_millis(50));
             if let Err(failure) = self.attach_restarted_server(event_tx) {
                 let marker = crate::client::restart::restart_in_progress().unwrap_or(marker);
-                return Some(Err(crate::utils::restart_record::reattach_message(
+                return Some(Err(crate::client::restart::record_attach_failure(
+                    self.attached_server.as_ref(),
                     &marker,
                     &failure.message,
                 )));
@@ -458,7 +458,7 @@ impl ClientLoopDriver {
                 cols: cols.max(1),
                 rows: rows.max(1),
             });
-        if let Err(handshake_error) = handshake::do_handshake(
+        let handshake = handshake::do_handshake(
             &mut stream,
             cell_width_px,
             cell_height_px,
@@ -466,12 +466,11 @@ impl ClientLoopDriver {
             surface,
             false,
             self.state.mouse_capture_active,
-        ) {
-            return Err(AttachFailure {
-                message: handshake_error.to_string(),
-                closed_early: connection_closed_early(&handshake_error),
-            });
-        }
+        )
+        .map_err(|handshake_error| AttachFailure {
+            message: handshake_error.to_string(),
+            closed_early: connection_closed_early(&handshake_error),
+        })?;
         let max_frame_size = if self.state.kitty_graphics_enabled {
             MAX_GRAPHICS_FRAME_SIZE
         } else {
@@ -510,6 +509,7 @@ impl ClientLoopDriver {
                 closed_early: false,
             });
         }
+        self.attached_server = handshake.server;
         Ok(())
     }
 

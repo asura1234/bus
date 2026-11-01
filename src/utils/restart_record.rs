@@ -23,7 +23,8 @@ pub(crate) struct RestartLog {
     pub(crate) new_sha: String,
     pub(crate) old_binary: String,
     pub(crate) new_binary: String,
-    /// `restarted`, `rolled_back`, `rollback_failed`, or `refused`.
+    /// Server: `restarted`, `rolled_back`, `rollback_failed`, `refused`.
+    /// A client appends `client_attach_failed` independently of server health.
     pub(crate) outcome: String,
     pub(crate) reason: String,
 }
@@ -307,7 +308,7 @@ pub(crate) fn append_log(path: &Path, record: &RestartLog) -> Result<(), String>
 pub(crate) struct BuildStamp {
     pub(crate) sha: String,
     pub(crate) binary: Option<String>,
-    /// Process that wrote this record. Absent on servers that predate the field.
+    /// Process that wrote this record. Missing or invalid means incomplete.
     pub(crate) pid: Option<u32>,
 }
 
@@ -321,10 +322,6 @@ pub(crate) fn read_build_binary(path: &Path) -> Option<PathBuf> {
         .and_then(|stamp| stamp.binary)
         .map(PathBuf::from)
         .filter(|binary| binary.is_file())
-}
-
-pub(crate) fn read_build_pid(path: &Path) -> Option<u32> {
-    read_build_stamp(path).and_then(|stamp| stamp.pid)
 }
 
 pub(crate) fn read_build_stamp(path: &Path) -> Option<BuildStamp> {

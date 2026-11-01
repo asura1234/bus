@@ -2,7 +2,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::utils::restart_record::{self, RestartMarker};
+use crate::utils::restart_record::{self, BuildStamp, RestartLog, RestartMarker};
 
 pub(crate) const RECONNECT_WAIT: Duration = Duration::from_secs(60);
 
@@ -43,11 +43,10 @@ pub(crate) fn wait_for_restart(
     }
 }
 
-/// The replacement is ready when its build record is this restart's binary and,
-/// when the dying server recorded a pid, a different process. The socket is
+/// The replacement is ready when its build record is this restart's binary and
+/// a different process from the one this client attached to. The socket is
 /// opened only after that, so a same-binary restart does not handshake with
-/// the server that is still exiting. A record with no pid keeps the old
-/// one-shot check.
+/// the server that is still exiting. Incomplete process records are not ready.
 pub(crate) fn replacement_server_ready(previous_pid: Option<u32>) -> bool {
     let Some(root) = crate::utils::env::bus_data_dir() else {
         return false;
@@ -65,12 +64,50 @@ pub(crate) fn replacement_server_ready(previous_pid: Option<u32>) -> bool {
     }
     match (previous_pid, stamp.pid) {
         (Some(previous), Some(pid)) if pid != previous => {}
-        (None, Some(_)) => {}
-        (None, None) => {}
         _ => return false,
     }
     crate::platform::ipc::connect_local_stream(&crate::utils::socket_paths::client_socket_path())
         .is_ok()
+}
+
+/// Client attachment and helper server health have independent outcomes. Append
+/// the client failure without overwriting the helper's pending server notice.
+pub(crate) fn record_attach_failure(
+    previous: Option<&BuildStamp>,
+    marker: &RestartMarker,
+    reason: &str,
+) -> String {
+    let root = Path::new(&marker.data_dir);
+    let observed = restart_record::read_build_stamp(&restart_record::build_path(root));
+    tracing::warn!(
+        reason, previous_server = ?previous, observed_server = ?observed,
+        marker_binary = %marker.binary, "restart client attachment failed"
+    );
+    let record = RestartLog {
+        at_ms: crate::utils::time::now_ms(),
+        who: format!("client:{}", std::process::id()),
+        old_sha: previous
+            .map_or("unknown", |server| server.sha.as_str())
+            .into(),
+        new_sha: observed
+            .as_ref()
+            .map_or("unknown", |server| server.sha.as_str())
+            .into(),
+        old_binary: previous
+            .and_then(|server| server.binary.clone())
+            .unwrap_or_default(),
+        new_binary: marker.binary.clone(),
+        outcome: "client_attach_failed".into(),
+        reason: reason.into(),
+    };
+    let message = restart_record::reattach_message(marker, reason);
+    match restart_record::append_log(&restart_record::log_path(root), &record) {
+        Ok(()) => message,
+        Err(error) => {
+            tracing::error!(%error, "could not record restart client attachment failure");
+            format!("{message}\nCould not append restarts/log.jsonl: {error}")
+        }
+    }
 }
 
 /// SIGTERM the headless coordinator this restart started, and only that
@@ -102,6 +139,28 @@ pub(crate) fn step_aside_headless_coordinator(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_attachment_storage_failure_is_reported() {
+        let root = crate::utils::test_temp::unique_temp_path("attach-record-error");
+        std::fs::create_dir_all(restart_record::log_path(&root)).unwrap();
+        let marker = RestartMarker {
+            binary: "/new/bus".into(),
+            session_id: None,
+            explicit_data_dir: true,
+            data_dir: root.display().to_string(),
+            dev: true,
+            yolo: true,
+        };
+        let message = record_attach_failure(None, &marker, "handshake rejected");
+        assert!(message.contains("handshake rejected"), "{message}");
+        assert!(
+            message.contains("Could not append restarts/log.jsonl"),
+            "{message}"
+        );
+        assert!(!restart_record::outcome_path(&root).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn wait_keeps_the_newest_marker_when_the_socket_stays_down() {
@@ -205,14 +264,18 @@ mod tests {
         )
         .unwrap();
         assert!(replacement_server_ready(Some(11)));
+        assert!(
+            !replacement_server_ready(None),
+            "an unknown attached process cannot identify its replacement"
+        );
         restart_record::write_json(
             &build,
             &serde_json::json!({ "sha": sha, "binary": "/tmp/bus" }),
         )
         .unwrap();
         assert!(
-            replacement_server_ready(None),
-            "a record with no pid stays a one-shot socket check"
+            !replacement_server_ready(Some(11)),
+            "an incomplete server record is not ready"
         );
         for _ in 0..4 {
             let _ = crate::platform::ipc::connect_local_stream(&socket);
