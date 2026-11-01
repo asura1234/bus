@@ -34,6 +34,7 @@ fn attached_identity_is_read_after_the_server_welcome() {
     let socket = root.join("c.sock");
     let listener = crate::platform::ipc::bind_local_listener(&socket).unwrap();
     let serving_root = root.clone();
+    let (handshake_done, wait_for_handshake) = std::sync::mpsc::channel();
     let serving = std::thread::spawn(move || {
         let mut peer = listener.accept().unwrap();
         set_handshake_recv_timeout(&peer, Some(Duration::from_secs(5)), "test peer timeout")
@@ -57,6 +58,11 @@ fn attached_identity_is_read_after_the_server_welcome() {
             },
         )
         .unwrap();
+        // Keep the peer connected while the client clears its read timeout.
+        // macOS returns EINVAL for that socket option after peer closure.
+        wait_for_handshake
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
     });
     let mut stream = crate::platform::ipc::connect_local_stream(&socket).unwrap();
     let attached = do_handshake(
@@ -67,10 +73,10 @@ fn attached_identity_is_read_after_the_server_welcome() {
         crate::protocol::wire::ClientSurfaceSize { cols: 80, rows: 30 },
         false,
         false,
-    )
-    .unwrap();
+    );
+    let _ = handshake_done.send(());
     serving.join().unwrap();
-    let server = attached.server.unwrap();
+    let server = attached.unwrap().server.unwrap();
     assert_eq!(
         server.pid,
         Some(22),
