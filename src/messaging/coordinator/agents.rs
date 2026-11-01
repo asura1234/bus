@@ -434,7 +434,7 @@ impl Worker {
         // Validate the assignment before any consent prompt or launch side effect.
         bind_launch_orchestrator(&mut state, id, orchestrates)?;
         if !input.consent_project_hooks {
-            let binary = std::env::current_exe().map_err(|e| e.to_string())?;
+            let binary = self.hook_callback_binary(input.provider)?;
             if let Some(notice) =
                 launch::setup_notice(identity::provider_kind(input.provider), &cwd, &binary)
             {
@@ -540,18 +540,24 @@ impl Worker {
             }))
     }
 
+    /// Codex hashes the command string, so the callback path is a data-dir
+    /// bridge. Consent must inspect that same path, or a trusted set looks new.
+    fn hook_callback_binary(&self, provider: Provider) -> Result<std::path::PathBuf, String> {
+        let current = std::env::current_exe().map_err(|e| e.to_string())?;
+        if provider == Provider::Codex {
+            crate::agents::providers::hook_json::codex_callback_binary(&self.data_dir, &current)
+        } else {
+            Ok(current)
+        }
+    }
+
     /// Bus owns messaging identity and routing; providers receive capture facts.
     fn prepare_provider_launch(
         &self,
         input: &AddAgent,
         id: AgentId,
     ) -> Result<(launch::PreparedLaunch, HookContext), String> {
-        let current = std::env::current_exe().map_err(|e| e.to_string())?;
-        let binary = if input.provider == Provider::Codex {
-            crate::agents::providers::hook_json::codex_callback_binary(&self.data_dir, &current)?
-        } else {
-            current
-        };
+        let binary = self.hook_callback_binary(input.provider)?;
         let launch_id = crate::utils::time::digest(
             format!(
                 "{}:{}:{}",
