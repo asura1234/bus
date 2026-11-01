@@ -75,7 +75,11 @@ fn multi_recipient_delivery(provider: Provider) {
     worker.submit_ready().unwrap();
     let expected =
         format!("[Bus message {message} from you to app master 2, bus master 2]\ncoordinate once");
-    assert_eq!(*prompts.lock().unwrap(), [expected.clone()], "{provider:?}");
+    assert_eq!(
+        prompts.lock().unwrap().as_slice(),
+        std::slice::from_ref(&expected),
+        "{provider:?}"
+    );
     // The other recipient uses the identical builder, even before its pane exists.
     assert_eq!(
         worker.state.render_request_payload(requests[0]).unwrap(),
@@ -85,20 +89,30 @@ fn multi_recipient_delivery(provider: Provider) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-macro_rules! recipient_delivery_test {
-    ($name:ident, $provider:expr) => {
-        #[test]
-        fn $name() {
-            multi_recipient_delivery($provider);
-        }
-    };
+#[test]
+fn multi_recipient_claude_delivery() {
+    multi_recipient_delivery(Provider::ClaudeCode);
 }
 
-recipient_delivery_test!(multi_recipient_claude_delivery, Provider::ClaudeCode);
-recipient_delivery_test!(multi_recipient_codex_delivery, Provider::Codex);
-recipient_delivery_test!(multi_recipient_cursor_delivery, Provider::Cursor);
-recipient_delivery_test!(multi_recipient_grok_delivery, Provider::Grok);
-recipient_delivery_test!(multi_recipient_kimi_delivery, Provider::Kimi);
+#[test]
+fn multi_recipient_codex_delivery() {
+    multi_recipient_delivery(Provider::Codex);
+}
+
+#[test]
+fn multi_recipient_cursor_delivery() {
+    multi_recipient_delivery(Provider::Cursor);
+}
+
+#[test]
+fn multi_recipient_grok_delivery() {
+    multi_recipient_delivery(Provider::Grok);
+}
+
+#[test]
+fn multi_recipient_kimi_delivery() {
+    multi_recipient_delivery(Provider::Kimi);
+}
 
 #[test]
 fn cursor_and_grok_launch_prompts_type_once_without_room_history_or_resume_replay() {
