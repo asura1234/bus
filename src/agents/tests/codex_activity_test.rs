@@ -109,7 +109,7 @@ fn codex_running_its_own_updater_is_not_idle() {
         "⠙\n",
     );
     // The stale Codex title must not read as idle either. Working, not
-    // Unknown: an install can outlast the queued-message stall timeout, and
+    // Unknown: an install can outlast the queued-message expiry timeout, and
     // Bus waits on a working agent instead of closing its queue.
     let result = codex_detection(updating, "bus");
     assert_eq!(result.state, AgentState::Working);
