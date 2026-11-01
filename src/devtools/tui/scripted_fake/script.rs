@@ -30,6 +30,11 @@ pub(super) enum Action {
         title: String,
         options: Vec<String>,
     },
+    Screen {
+        id: String,
+        screen: String,
+        input: super::screens::ScreenInput,
+    },
     Send {
         room: String,
         to: String,
@@ -75,6 +80,12 @@ impl Scenario {
                     if options.is_empty() || options.iter().any(|option| option.trim().is_empty()) {
                         return Err("Fake dialogs require nonempty options".into());
                     }
+                }
+                if let Action::Screen { id, screen, input } = action {
+                    if id.trim().is_empty() || screen.trim().is_empty() {
+                        return Err("Fake screens need an id and visible content".into());
+                    }
+                    input.validate(screen)?;
                 }
             }
         }
