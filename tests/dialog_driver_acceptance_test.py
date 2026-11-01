@@ -38,6 +38,23 @@ def reply_text(status):
     )
 
 
+def audit_records(root):
+    return [json.loads(line) for file in root.rglob("fake-dialog-results.jsonl")
+            for line in file.read_bytes().splitlines(keepends=True)
+            if line.endswith(b"\n") and line.strip()]
+
+
+class AuditReaderTests(unittest.TestCase):
+    def test_waits_for_the_complete_audit_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fake-dialog-results.jsonl"
+            prefix = b'{"id":"one","passed":true}\n'
+            path.write_bytes(prefix + b'{"id":"two","answer":"\xe7')
+            self.assertEqual(audit_records(path.parent), [{"id": "one", "passed": True}])
+            path.write_bytes(prefix + b'{"id":"two","passed":true}\n')
+            self.assertEqual([row["id"] for row in audit_records(path.parent)], ["one", "two"])
+
+
 @unittest.skipUnless(os.environ.get("BUS_DIALOG_DRIVER_BINARY") and
                      os.environ.get("BUS_DIALOG_DRIVER_SHA"), "opt-in real Kimi acceptance")
 class DialogDriverAcceptance(unittest.TestCase):
@@ -203,8 +220,7 @@ with the exact unreadable or unanswerable screen and tool problem."""
             seen = set()
 
             def complete():
-                audits = [json.loads(line) for file in (root / "data").rglob("fake-dialog-results.jsonl")
-                          for line in file.read_text().splitlines() if line.strip()]
+                audits = audit_records(root / "data")
                 save("audit", audits)
                 self.assertTrue(all(row["passed"] for row in audits), audits)
                 fake_screen = observe(fake)
