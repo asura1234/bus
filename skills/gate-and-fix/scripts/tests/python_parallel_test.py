@@ -49,6 +49,27 @@ def test_selected_files_overlap_without_splitting_module_fixtures(tmp_path):
     assert len(list(tmp_path.glob('*.fixture'))) == len(list(tmp_path.glob('*.done'))) == 2
 
 
+@pytest.mark.parametrize(('file_count', 'requested', 'expected'), [(1, 4, 0), (2, 4, 2),
+                                                                (2, 8, 2), (5, 4, 4)])
+def test_worker_processes_match_selected_file_parallelism(tmp_path, file_count, requested, expected):
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    (tools / 'conftest.py').write_text(
+        'from pathlib import Path\n'
+        'def pytest_sessionstart(session):\n'
+        '    if hasattr(session.config,"workerinput"):\n'
+        f'        (Path({str(tmp_path)!r})/("worker-"+session.config.workerinput["workerid"])).touch()\n'
+    )
+    for index in range(file_count):
+        (tools / f'case_{index}_test.py').write_text('def test_selected(): pass\n')
+    result = subprocess.run(python_gate(tmp_path, requested).argv, cwd=tmp_path,
+                            env=runner.quality.child_env(PYTEST_ADDOPTS='-n 6'),
+                            capture_output=True, text=True, timeout=25)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'{file_count} passed' in result.stdout
+    assert len(list(tmp_path.glob('worker-*'))) == expected
+
+
 @pytest.mark.parametrize('workers', ['-1', 'auto', '1.5'])
 def test_invalid_worker_count_fails_before_launch(tmp_path, workers):
     (tmp_path / 'tools').mkdir()
@@ -60,11 +81,12 @@ def test_invalid_worker_count_fails_before_launch(tmp_path, workers):
 def test_serial_override_keeps_the_same_test_inventory(tmp_path):
     (tmp_path / 'tools').mkdir()
     (tmp_path / 'tools/example_test.py').write_text('def test_first(): pass\ndef test_second(): pass\n')
+    (tmp_path / 'tools/other_test.py').write_text('def test_third(): pass\n')
     for workers in (0, 2):
         result = subprocess.run(python_gate(tmp_path, workers).argv, cwd=tmp_path,
                                 capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stdout + result.stderr
-        assert '2 passed' in result.stdout
+        assert '3 passed' in result.stdout
 
 
 def test_serial_override_wins_over_inherited_pytest_worker_options(tmp_path):
@@ -83,6 +105,7 @@ def test_serial_override_wins_over_inherited_pytest_worker_options(tmp_path):
 def test_parallel_empty_failure_and_collection_error_remain_distinct(tmp_path, source, passed):
     (tmp_path / 'tools').mkdir()
     (tmp_path / 'tools/example_test.py').write_text(source)
+    (tmp_path / 'tools/other_test.py').write_text('')
     with patch.object(runner.quality, 'ROOT', tmp_path):
         results = runner.batch([python_gate(tmp_path, 2)])
     assert results[0].passed is passed
@@ -93,6 +116,7 @@ def test_parallel_empty_failure_and_collection_error_remain_distinct(tmp_path, s
 def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path, nested):
     tools = tmp_path / 'tools'
     tools.mkdir()
+    (tools / 'other_test.py').write_text('def test_other(): pass\n')
     (tools / 'conftest.py').write_text(
         'import os\nfrom pathlib import Path\n'
         'def pytest_sessionstart(session):\n'

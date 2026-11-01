@@ -167,7 +167,8 @@ def execute(selection: Selection, *, nested: bool = False) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, epilog=
-        "Python uses four file workers; set PYTEST_WORKERS=0 for serial diagnosis, "
+        "Python uses up to four file workers and runs single-file selections serially; "
+        "set PYTEST_WORKERS=0 for serial diagnosis, "
         "or a positive integer to set the worker count.")
     parser.add_argument("--full", action="store_true", help="all tests, lint and fresh coverage floor")
     parser.add_argument("--base", default="origin/master", help="affected merge-base (default: origin/master)")

@@ -85,6 +85,8 @@ def python_test_command(files: list[str]) -> tuple[str, ...]:
         raise ValueError("PYTEST_WORKERS must be a nonnegative integer")
     if importlib.util.find_spec("xdist") is None:
         raise ValueError("missing pytest-xdist; install scripts/requirements.txt from this skill")
+    if files:
+        workers = min(workers, len(files)) if len(files) > 1 else 0
     parallel = ("-n", str(workers), "--dist", "loadfile", "--max-worker-restart=0")
     return (sys.executable, "-m", "pytest", "-q", "-o", "python_files=*_test.py",
             *parallel, "--durations=20", *files)
