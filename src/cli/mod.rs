@@ -204,7 +204,10 @@ fn clear_restart_session_if_data_dir_is_not_its_root(
     let (Some(dir), Some(id)) = (data_dir, session.as_deref().filter(|id| !id.is_empty())) else {
         return Ok(());
     };
-    let Some(root) = registry.root_of(id).map_err(io::Error::other)? else {
+    let Some(root) = registry
+        .root_of(id)
+        .map_err(|error| restart_registry_error(error, Some(dir)))?
+    else {
         return Ok(());
     };
     if restart_command_overrides_data_dir(Some(dir), Some(id), &root) {
@@ -214,26 +217,39 @@ fn clear_restart_session_if_data_dir_is_not_its_root(
     Ok(())
 }
 
-/// Server root for a restart. A set data dir that still carries a session id
-/// belongs to that session's own directory, not whichever session was opened
-/// last. An id that is not a stored registry session falls through to last-opened.
+/// Server root for a restart. A set data dir that carries a registry session
+/// id belongs to that session. A missing directory or invalid record for that
+/// id fails the restart and names the id. Last-opened is used only when this
+/// command has no session id, or the id is not a registry id.
 fn restart_fallback_session(
     registry: &LocalSessionRegistry,
     action: &Action,
-    data_dir_is_set: bool,
+    explicit_root: Option<&std::path::Path>,
 ) -> io::Result<(std::path::PathBuf, String)> {
-    if data_dir_is_set {
+    if explicit_root.is_some() {
         if let Some(id) = std::env::var("BUS_SESSION_ID")
             .ok()
             .filter(|id| !id.is_empty())
         {
-            if let Some(root) = registry.root_of(&id).map_err(io::Error::other)? {
-                return Ok((root, id));
+            match registry.root_of(&id) {
+                Ok(Some(root)) => return Ok((root, id)),
+                Ok(None) => {}
+                Err(error) => return Err(restart_registry_error(error, explicit_root)),
             }
         }
     }
     let session = last_session(registry, action)?;
     Ok((session.root, session.id))
+}
+
+/// A registry failure while resolving the inherited session. A missing
+/// directory names that session and the data dir on this command.
+fn restart_registry_error(error: String, data_dir: Option<&std::path::Path>) -> io::Error {
+    let message = match data_dir {
+        Some(dir) if error.contains("was not found") => format!("{error} at {}", dir.display()),
+        _ => error,
+    };
+    io::Error::other(message)
 }
 
 fn session_root(
@@ -284,7 +300,7 @@ fn session_root(
         Action::Restart(_) => {
             let (root, mut session, mut explicit) =
                 restart_session(explicit_root.as_deref(), || {
-                    restart_fallback_session(registry, &invocation.action, explicit_root.is_some())
+                    restart_fallback_session(registry, &invocation.action, explicit_root.as_deref())
                 })?;
             clear_restart_session_if_data_dir_is_not_its_root(
                 registry,
@@ -749,6 +765,82 @@ mod tests {
             .expect("called")
             .expect_err("invalid session metadata is not an override");
         assert!(error.to_string().contains("metadata is invalid"), "{error}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_with_a_data_dir_reports_missing_inherited_session() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-missing");
+        let inherited_id = "0123456789abcdef";
+        let last_opened_id = "fedcba9876543210";
+        let inherited = base.join("sessions").join(inherited_id);
+        let last_opened = base.join("sessions").join(last_opened_id);
+        std::fs::create_dir_all(&last_opened).unwrap();
+        std::fs::write(
+            last_opened.join("session.json"),
+            format!(r#"{{"version":1,"id":"{last_opened_id}","created_at_ms":1}}"#),
+        )
+        .unwrap();
+        std::fs::write(base.join("last-session"), last_opened_id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(inherited_id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(inherited.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let error = result
+            .expect("called")
+            .expect_err("a missing inherited session must fail the restart");
+        assert!(error.to_string().contains("was not found"), "{error}");
+        assert!(error.to_string().contains(inherited_id), "{error}");
+        assert!(
+            error.to_string().contains(&inherited.display().to_string()),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.join("last-session"))
+                .unwrap()
+                .trim(),
+            last_opened_id
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restart_with_a_missing_inherited_session_directory_is_not_an_override() {
+        let base = crate::utils::test_temp::unique_temp_path("bus-restart-missing");
+        let missing_id = "0123456789abcdef";
+        let other_id = "fedcba9876543210";
+        let missing = base.join("sessions").join(missing_id);
+        let other = base.join("sessions").join(other_id);
+        std::fs::create_dir_all(&other).unwrap();
+        let metadata = format!(r#"{{"version":1,"id":"{other_id}","created_at_ms":1}}"#);
+        std::fs::write(other.join("session.json"), metadata).unwrap();
+        std::fs::write(base.join("last-session"), other_id).unwrap();
+        let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(base.clone());
+        let invocation = parse_invocation(&args(&["--dev", "restart", "--confirm"])).unwrap();
+        let mut explicit = false;
+        let mut result = None;
+        with_session_env(missing_id, || {
+            result = Some(super::session_root(
+                &invocation,
+                Some(missing.clone()),
+                &base,
+                &registry,
+                &mut explicit,
+            ));
+        });
+        let error = result
+            .expect("called")
+            .expect_err("a missing inherited session directory is not an override");
+        assert!(error.to_string().contains("was not found"), "{error}");
         std::fs::remove_dir_all(&base).unwrap();
     }
 
