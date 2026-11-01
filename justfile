@@ -44,7 +44,8 @@ lint:
     {{python}} skills/gate-and-fix/scripts/bus_quality.py lint
 
 # Run PR CI checks
-ci: lint unit-test integration-test coverage
+ci:
+    {{python}} skills/gate-and-fix/scripts/suite_run.py --full
 
 # Run Windows target lint from Unix/macOS to catch cfg(windows) compile and clippy failures before CI
 [unix]

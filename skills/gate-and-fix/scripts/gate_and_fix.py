@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import time
 import uuid
 from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -25,14 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main
 from rebase_base import ensure_feature_branch  # noqa: E402
 
 
-CI_TOOLS = frozenset({"just", "cargo-nextest"})
-QUALITY_SCRIPT = str(Path(__file__).resolve().with_name("bus_quality.py"))
-QUALITY_RECIPES = {
-    "lint": "lint",
-    "unit": "unit-test",
-    "integration": "integration-test",
-    "coverage": "coverage",
-}
+TEST_SCRIPT = str(Path(__file__).resolve().with_name("suite_run.py"))
 MAX_PARALLEL_GATES = 4
 
 
@@ -43,6 +35,7 @@ class Gate:
     resources: frozenset[str] = frozenset()
     requires_exclusive_execution: bool = False
     scrub_session_env: bool = False
+    env: dict[str, str] | None = field(default=None, repr=False)
 
 
 def _validate_paths(changed_files: Sequence[str]) -> tuple[str, ...]:
@@ -66,20 +59,9 @@ def select_gates(
     available_tools: frozenset[str] | None = None,
     python: str = sys.executable,
 ) -> list[Gate]:
-    """Every committed diff gets all four checks; wrappers never change their scope."""
+    """Every committed diff gets the shared full entrypoint, never affected mode."""
     _validate_paths(changed_files)
-    tools = available_tools
-    if tools is None:
-        tools = frozenset(name for name in CI_TOOLS if shutil.which(name))
-    gates = []
-    for lane, recipe in QUALITY_RECIPES.items():
-        argv = (
-            ("just", "--set", "python", python, recipe)
-            if CI_TOOLS.issubset(tools)
-            else (python, QUALITY_SCRIPT, lane)
-        )
-        # Unit creates fresh profiles; integration extends them; coverage consumes them.
-        gates.append(Gate(lane, argv, requires_exclusive_execution=True))
+    gates = [Gate("test-full", (python, TEST_SCRIPT, "--full"))]
     gates.append(Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")))
     return gates
 
@@ -95,8 +77,10 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_"))}
-            if gate.scrub_session_env else None,
+            env=gate.env if gate.env is not None else (
+                {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_"))}
+                if gate.scrub_session_env else None
+            ),
         )
     except OSError as error:
         return GateResult(
@@ -122,14 +106,14 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
     )
 
 
-def run_gates(gates: Sequence[Gate], *, cwd: Path) -> list[GateResult]:
+def run_gates(gates: Sequence[Gate], *, cwd: Path, private_groups: bool = True) -> list[GateResult]:
     """Run independent gates in parallel, serialize writable resources, and isolate exclusive gates."""
     if not gates:
         raise ValueError("at least one gate is required")
     if len({gate.name for gate in gates}) != len(gates):
         raise ValueError("duplicate gate name")
 
-    children = Children()
+    children = Children(private_groups=private_groups)
     with ThreadPoolExecutor(
         max_workers=min(MAX_PARALLEL_GATES, len(gates)), thread_name_prefix="gate-and-fix"
     ) as executor:

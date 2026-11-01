@@ -9,6 +9,7 @@ usage() {
     echo "       ./run dev-control <command> [arguments]" >&2
     echo "       ./run tui <verb> [arguments]" >&2
     echo "       ./run install-skills [--yes]" >&2
+    echo "       ./run test [--full] [--base REF] [--plan]" >&2
     echo "" >&2
     echo "dev builds the dev variant (cargo feature dev-tools: the TUI driver and other" >&2
     echo "test tooling) and launches it with --dev. prod builds the release variant, the" >&2
@@ -52,6 +53,13 @@ print(found)
 }
 
 case "${1:-}" in
+    test)
+        shift
+        cd "$REPO_ROOT"
+        python="$REPO_ROOT/temp/gate-tools/python/bin/python"
+        [[ -x "$python" ]] || python=python3
+        exec "$python" "$REPO_ROOT/skills/gate-and-fix/scripts/suite_run.py" "$@"
+        ;;
     dev)
         shift
         cd "$REPO_ROOT"

@@ -78,12 +78,11 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
     coverage-only tests. Below-floor, missing/empty
     reports, unsuccessful preceding tests, or a different HEAD all fail. Unit starts a new profile
     set, so an old report cannot make a new round pass.
-- When both `just` and `cargo-nextest` exist, the runner invokes `just lint`, `just unit-test`,
-  `just integration-test`, and `just coverage` separately so each check has its own complete log.
-  Otherwise it directly invokes the identical `bus_quality.py` implementations. Rust collection
-  uses nextest when available and `cargo llvm-cov test` otherwise. `just ci` runs the same four
-  recipes; it accepts no filter that could shrink the mandatory set. The artifact records the exact
-  wrapper argv and its logs record every underlying command.
+- The runner invokes the same `suite_run.py --full` implementation as `./run test --full`
+  and `just ci`, recorded as `test-full` alongside `diff-check`. It requires nextest and
+  cannot narrow the final gate through affected selection. Complete task logs and timings
+  are retained under `temp/run-test/`; failures also appear in the gate artifact.
+  See [the test entrypoint](references/testing.md) for modes and scheduling.
 - Coverage reports live in ignored `temp/gate-and-fix/coverage/`. Only the bounded raw-profile
   pools and merged index live in one marked `.gate-profile-runs/run-<id>` directory beneath
   the configured coverage target (by default `target/llvm-cov-target/`). Instrumented build
@@ -172,10 +171,11 @@ reported gap leaves the gate failed.
 
 ## Parallelism and remediation
 
-- The four checks declare exclusive execution and run in lint → unit → integration → coverage
-  order because they share Cargo output and coverage profiles. The independent diff check can run
-  within the concurrency cap. All check results are collected even if an earlier check fails;
-  coverage fails closed when a prerequisite failed.
+- The full entrypoint overlaps normal-target lint with the instrumented preflight build,
+  then runs unit, integration, Python and dev-tools tasks concurrently. Normal-target lint
+  completes before dev-tools uses that target. Coverage consumes fresh profiles after all
+  tasks succeed; the existing nonempty unit-profile checkpoint remains mandatory.
+  The independent diff check can run concurrently. All independent failures are collected.
 - A FAIL round must first collect every gate result and group them by writable owner (not by the
   lint/test category). **How to fix after that is orchestrated by main**: fix sequentially itself,
   dispatch subagents by owner, or mix the two, depending on the size of the failure surface,

@@ -1,7 +1,6 @@
 import base64
 import contextlib
 import io
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,7 +40,7 @@ class GateAndFixTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Command argv"):
                     validate_round(artifact.replace(command_line, "- Command argv: " + bad), expected_base="base")
 
-    def test_every_diff_always_runs_four_checks_and_diff(self) -> None:
+    def test_every_diff_always_runs_full_entrypoint_and_diff(self) -> None:
         for changed in (
             ["src/main.rs"],
             ["skills/pr/SKILL.md"],
@@ -54,34 +53,22 @@ class GateAndFixTest(unittest.TestCase):
                     )
                     self.assertEqual(
                         [g.name for g in gates],
-                        ["lint", "unit", "integration", "coverage", "diff-check"],
+                        ["test-full", "diff-check"],
                     )
-                    self.assertTrue(
-                        all(g.requires_exclusive_execution for g in gates[:4])
-                    )
+                    self.assertIn("--full", gates[0].argv)
                     self.assertEqual(
                         gates[-1].argv,
                         ("git", "diff", "--check", "baseline-sha...HEAD"),
                     )
 
-    def test_fallback_and_just_use_the_same_check_implementation(self) -> None:
+    def test_gate_uses_repository_entrypoint_even_without_just(self) -> None:
         repo = Path(__file__).resolve().parents[4]
-        text = (repo / "justfile").read_text(encoding="utf-8")
         direct = select_gates(["src/main.rs"], base="base", available_tools=frozenset())
         wrapped = select_gates(["src/main.rs"], base="base", available_tools=_CI_TOOLS)
-        for fallback, wrapper in zip(direct[:4], wrapped[:4]):
-            recipe = text.split("\n" + wrapper.argv[-1] + ":\n", 1)[1].split("\n\n", 1)[
-                0
-            ]
-            command = tuple(
-                shlex.split(recipe.strip().replace("{{python}}", sys.executable))
-            )
-            self.assertEqual(fallback.argv, (command[0], str(repo / command[1]), *command[2:]))
-            self.assertEqual(
-                wrapper.argv[:4], ("just", "--set", "python", sys.executable)
-            )
+        self.assertEqual(direct[0].argv, wrapped[0].argv)
+        self.assertEqual(direct[0].argv, (sys.executable, str(repo / "skills/gate-and-fix/scripts/suite_run.py"), "--full"))
 
-    def test_tool_preflight_requires_both_ci_tools(self) -> None:
+    def test_gate_wrapper_does_not_depend_on_optional_just(self) -> None:
         for available in (
             frozenset(),
             frozenset({"just"}),
@@ -89,18 +76,12 @@ class GateAndFixTest(unittest.TestCase):
             _CI_TOOLS,
         ):
             with self.subTest(available=sorted(available)):
-                with patch(
-                    "gate_and_fix.shutil.which",
-                    side_effect=lambda name: (
-                        f"/tools/{name}" if name in available else None
-                    ),
-                ):
-                    gates = select_gates(["src/main.rs"], base="base")
+                gates = select_gates(["src/main.rs"], base="base", available_tools=available)
                 self.assertEqual(
                     gates[0].argv[0],
-                    "just" if available == _CI_TOOLS else sys.executable,
+                    sys.executable,
                 )
-                self.assertEqual(len(gates), 5)
+                self.assertEqual(len(gates), 2)
 
     def test_select_gates_rejects_non_repository_paths(self) -> None:
         with self.assertRaisesRegex(ValueError, "repository-relative"):
