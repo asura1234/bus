@@ -154,8 +154,9 @@ do not add a new per-PR merge OK.
   Inspect the staged diff; leave other workers' changes untouched. Report your
   changed paths, commit/head, checks and any outstanding locks or blockers.
 - Use the PR peers named in your brief: send each pushed head to the verifier
-  and reviewers; verifiers send `VERIFIED` or defects with `file:line` directly
-  to the owner. Owners use `auto-merge-pr`'s owner-run path: keep fixing until
+  and reviewers. Route `VERIFIED`, defects and other results through the
+  [Bus communication guide](bus-communication-guide.md#verdicts-and-results).
+  Owners use `auto-merge-pr`'s owner-run path: keep fixing until
   every reviewer is Ready. Hold and escalate sharp reviewer disagreements, goal
   changes, and destructive or outward-facing actions without existing
   authorization. No out-of-goal repairs, no unresolved FLAG/developer decision,
@@ -163,9 +164,8 @@ do not add a new per-PR merge OK.
   follow-ups, flags and decisions to the orchestrator in finals.
 - Report a missing or replaced peer to the orchestrator, which owns room notes,
   the roster and verifier allocation. Workers do not edit the notes or roster.
-  The PR owner's milestone finals still go to the orchestrator; reviewer and
-  verifier verdicts go to the owner only. Send only the message body; Bus adds
-  the header, so do not sign messages.
+  Milestone finals follow the same result-routing rule. Send only the message
+  body; Bus adds the header, so do not sign messages.
 
 ## Clean up after integration
 

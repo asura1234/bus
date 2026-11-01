@@ -166,9 +166,9 @@ pub(crate) fn agent_onboarding(
          Use --as {} when sending messages. Any agent can message any agent by name or ID. --to orchestrator names your home room's bound orchestrator. \
          [waiting-on-you] pages the developer on Feishu: use it only for a hard blocker only the developer can clear, and state the action needed (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
-         For verification, send VERIFIED with the PR/task and exact head or defects with file:line straight to the owner. \
+         For verdict and result recipients, delivery and evidence paths, follow the Bus communication guide. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
-         Deliverable messages start with [Bus message N from NAME]. Answer with bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\" before claiming delivery. If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header. \
+         Deliverable messages start with [Bus message N from NAME]. For other request replies, use bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\" before claiming delivery. If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
          The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit room notes or the roster. \

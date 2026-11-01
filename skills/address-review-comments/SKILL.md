@@ -6,6 +6,8 @@ description: Author-side adjudication and handling of plan/PR review comments, i
 Respond to `/review-plan`, `/review-pr`, or any free-form review. Reviewer and author are peer decision-makers in a convergence process: the reviewer raises a problem and may suggest a repair, the author independently judges the problem and the correct repair, and a later reviewer verifies the result; this skill is author-side adjudication + remediation and does not treat review as a command.
 
 Resolve `skill_dir` as the absolute directory containing this loaded SKILL.md.
+For Bus result delivery and the triage artifact path, follow the
+[Bus communication guide](../_bus/docs/bus-communication-guide.md#verdicts-and-results).
 
 Before execution, read completely:
 

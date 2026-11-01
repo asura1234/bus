@@ -5,6 +5,9 @@ description: Use on a feature branch that is getting ready to commit, when the r
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 # Gate and Fix
 
+For Bus PASS/FAIL result delivery and the gate artifact path, follow the
+[Bus communication guide](../_bus/docs/bus-communication-guide.md#verdicts-and-results).
+
 Read [guide.md](guide.md) and [gate-round-format.md](references/gate-round-format.md) completely.
 
 ```text

@@ -4,7 +4,7 @@ description: Iterative code review in which the reviewer proves suspicions in th
 ---
 Resolve `SKILL_DIR` to the directory containing this loaded SKILL.md; keep the working directory in the target repository.
 Review principles are in [guide.md](./guide.md); the SOT for the 9 review dimensions, severity, and guardrails is
-[code-review-guide.md](../_bus/docs/guides/code-review-guide.md). This file defines only the executable flow.
+[code-review-guide.md](../_bus/docs/guides/code-review-guide.md). This file defines only the executable flow. Bus verdict delivery and artifact paths follow the [Bus communication guide](../_bus/docs/bus-communication-guide.md#verdicts-and-results).
 
 ```text
 INPUT $ARGUMENTS =

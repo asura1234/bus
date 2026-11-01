@@ -32,8 +32,8 @@ Bus refuses new worker sends in MASTER; replies to requests received there remai
 Most coordination happens between the workers who share a task, not through the
 orchestrator. Settle these directly with the peer:
 
-- Author ↔ reviewer ↔ verifier: new heads, findings, verdicts (Ready, VERIFIED,
-  defects with file:line), probe patches, re-reviews after a push or rebase.
+- Author ↔ reviewer ↔ verifier: new heads, probe patches and re-reviews after a
+  push or rebase. Route verdicts and results as below.
 - Shared files: who edits which hunk, who rebases on whom.
 - Build slots, device locks and other leases between their holders.
 - Clarifying a finding or a test result.
@@ -41,9 +41,19 @@ orchestrator. Settle these directly with the peer:
 For review, investigation and exploration workspace selection, follow
 [Parallel writes](parallel-writes.md#reviews-and-investigations).
 
-Send a verdict to the PR owner only. The owner tells the orchestrator once, when
-it matters (ready to merge, merged, stuck). Don't copy the orchestrator on
-peer traffic.
+### Verdicts and results
+
+Send every verdict or result (Ready / Not ready, VERIFIED, gate PASS/FAIL,
+ready-to-merge) in **one Bus send to both the PR owner and the orchestrator**:
+
+```sh
+bus send --room ROOM --as AGENT --to OWNER,ORCHESTRATOR --text 'VERDICT: PR, exact head, review.md or gate artifact path'
+```
+
+Use the task key before a PR exists. Deduplicate recipients; if you hold either
+role, send to the other role. Include the evidence path in that same message.
+Ordinary peer coordination, such as slots, hunks and shared-file grants, stays
+peer-only. The owner does not forward a second copy of a verdict or result.
 
 ## To the orchestrator
 
@@ -66,8 +76,9 @@ peer traffic.
   "running acceptance now".
 - "Still waiting on X", "nothing to do", "no change", "nothing to report yet".
 - Acknowledgements: "understood", "noted", "will do", restating an instruction.
-- Copies of verdicts, review texts or evidence your peer already has.
-- Re-announcing an unchanged verdict after a rebase. The owner reports it once.
+- Separate copies of a verdict, review text or evidence already delivered to
+  both recipients under [Verdicts and results](#verdicts-and-results).
+- Re-announcing an unchanged verdict without fresh evidence for the new head.
 - Answers to questions nobody asked.
 
 ## To you (the developer)
@@ -104,7 +115,12 @@ chatter relayed by an orchestrator.
 
 ## Replies and turn finals
 
-Answer a finished request with `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID
+For verdicts and results, use [the recipient rule above](#verdicts-and-results).
+`--reply-to` reaches only the request author and cannot be combined with `--to`;
+a multi-recipient send delivers the result but does not settle the original request.
+Do not send a second copy to obtain a correlated reply.
+
+Answer other finished requests with `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID
 --text ANSWER`. A deliverable message starts with `[Bus message N from NAME]`;
 that N is the message ID. The command, the foreground `ok:true` and
 `stage:"replied"` check, and the `bus message status` recovery step live in
@@ -116,7 +132,7 @@ Bus returns the turn's final only to requests that are still outstanding.
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 
-**One copy of each result.** `bus send --reply-to MESSAGE_ID` is that copy. Do not also post the body to the room, and do not send it again because reply capture failed. If `--reply-to` did not land, one explicit send to the intended recipient is the delivery. A later note that says "reply-to failed, the result is in message N" is not a new fact.
+**One copy of each result.** Follow [Verdicts and results](#verdicts-and-results) for its recipients. Do not repeat a delivered result in a room post, correlated reply or turn final, including when reply capture fails. For other requests, `bus send --reply-to MESSAGE_ID` is the one copy; if it did not land, inspect status before retrying. A later note that says "reply-to failed, the result is in message N" is not a new fact.
 
 **No "still working" posts.** A turn that changed nothing sends nothing. Do not send "still in progress", "nothing changed", "already handled", "still paused", "still waiting", or an acknowledgement of a rule or of a late copy. A background job whose head and result are unchanged sends nothing, including when the job exits; a new verdict, finding, blocker, or question is still sent once.
 
@@ -176,8 +192,8 @@ You are the team lead, not a relay.
 ## Quick check before you send
 
 1. Does it change what the receiver does next? If not, don't send.
-2. Is the receiver the one who has to act? Peers before orchestrator, orchestrator
-   before developer.
+2. Are the recipients right? Verdicts and results follow [the recipient rule](#verdicts-and-results);
+   ordinary coordination stays peer-only, and developer posts remain rare.
 3. Has the receiver already got it? Then don't repeat it.
 4. To the developer: is work stopped and only they can unstop it? Then
    `[waiting-on-you]`. Otherwise no tag, or no message.
