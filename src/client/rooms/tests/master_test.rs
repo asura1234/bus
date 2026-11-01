@@ -569,7 +569,7 @@ fn a_master_agent_cannot_be_added_without_a_free_work_room() {
         "{logs}"
     );
     assert!(logs.contains("field=\"orchestrates\""), "{logs}");
-    assert!(logs.contains("agent=\"spare\""), "{logs}");
+    assert!(logs.contains("agent=spare"), "{logs}");
     assert!(logs.contains("Orchestrates room is required"), "{logs}");
     assert!(!ui.pending.iter().any(|p| matches!(
         p.command,
@@ -853,7 +853,7 @@ fn system_prompt_validation_is_log_only_and_keeps_the_form_open() {
     let logs = capture.text();
     assert!(logs.contains("bus.form.validation_failed"), "{logs}");
     assert!(logs.contains("field=\"system_prompt\""), "{logs}");
-    assert!(logs.contains("agent=\"orch\""), "{logs}");
+    assert!(logs.contains("agent=orch"), "{logs}");
     assert!(
         logs.contains(&format!("room_id=Some({})", master.0)),
         "{logs}"

@@ -118,7 +118,7 @@ fn an_uncertain_submission_never_titles_the_composer() {
 }
 
 #[test]
-fn expanded_details_show_uncertain_submission_recovery_without_a_startup_failure() {
+fn expanded_details_keep_uncertain_submission_recovery_in_the_log_only() {
     let (mut ui, _, agent, request) = submitting();
     failed(&mut ui, request);
     let mut snapshot = (*ui.snapshot).clone();
@@ -127,7 +127,8 @@ fn expanded_details_show_uncertain_submission_recovery_without_a_startup_failure
         .set_agent_details_disclosed(agent, true)
         .unwrap();
     snapshot.revision += 1;
-    ui.receive_snapshot(Arc::new(snapshot));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
     ui.compute_view(160, 60);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 160, 60));
     ui.render(&mut buffer);
@@ -138,6 +139,9 @@ fn expanded_details_show_uncertain_submission_recovery_without_a_startup_failure
         }
     }
     for expected in ["draftwasleft", "beforeresending"] {
-        assert!(text.replace(' ', "").contains(expected), "{text}");
+        assert!(!text.replace(' ', "").contains(expected), "{text}");
     }
+    let logs = capture.text();
+    assert!(logs.contains("bus.agent.notice"), "{logs}");
+    assert!(logs.contains(DETAIL), "{logs}");
 }

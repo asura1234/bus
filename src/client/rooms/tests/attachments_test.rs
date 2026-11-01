@@ -198,8 +198,8 @@ fn overflow_mixed_file_chips_keep_full_path_inspection_and_removal() {
             .map(|x| buffer[(x, hit.rect.y)].symbol())
             .collect();
         assert!(
-            chip.contains(if path == &paths[3] { "! ×]" } else { "×]" }),
-            "clipped chip retains error/removal suffix: {chip}"
+            chip.contains("×]") && !chip.contains('!'),
+            "clipped chip retains removal without an error marker: {chip}"
         );
         mouse(&mut ui, Moved, hit.rect.x, hit.rect.y);
         assert_eq!(ui.detail_path.as_deref(), path.to_str());

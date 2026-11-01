@@ -21,7 +21,7 @@ fn agent_errors_are_logged_once_each_and_never_shown_as_room_notices() {
     });
     let logs = capture.text();
     assert_eq!(logs.matches("bus.agent.notice").count(), 2, "{logs}");
-    assert!(logs.contains("agent=\"author\""), "{logs}");
+    assert!(logs.contains("agent=author"), "{logs}");
     assert!(logs.contains(&format!("room_id={}", room.0)), "{logs}");
     assert!(logs.contains("Hook setup needs approval"), "{logs}");
     assert!(!room_screen(&mut ui, 100, 30).contains("Hook setup needs approval"));
