@@ -160,10 +160,10 @@ verifiers instead of making one verifier the room's hub.
 1. **Owner → peers:** send the PR, exact full head SHA, worktree and checks to
    the assigned verifier and reviewers. On **every push**, re-send the new head
    and the delta to those peers; a verdict for an old head does not prove it.
-2. **Verifier → owner:** send `VERIFIED <PR/task> @<full SHA>` with the acceptance
-   evidence, or defects with `file:line`, reproduction and the affected head,
-   straight to the owner. Re-verify each new head. Reviewers likewise send their
-   verdict and findings directly to the owner in their assigned review lanes.
+2. **Verification and review results:** follow the
+   [Bus communication guide](bus-communication-guide.md#verdicts-and-results).
+   Include `VERIFIED <PR/task> @<full SHA>` and acceptance evidence, or defects
+   with `file:line`, reproduction and the affected head. Re-verify each new head.
 3. **Owner → merge:** use the owner-run variant of
    [auto-merge-pr](workflows/auto-merge-pr.md). Before every repair, exclude all
    findings outside the locked goal and report them to the orchestrator in the
@@ -182,14 +182,11 @@ verifiers instead of making one verifier the room's hub.
    ownership map and grant/release protocol in [Parallel writes](parallel-writes.md).
    If ownership must change or a conflict cannot be resolved within the map,
    bring that part to the orchestrator while independent work continues.
-5. **Finals → orchestrator:** the PR owner sends milestone finals and blockers
-   to the orchestrator, once each, with the PR/head, peer verdicts, evidence and
-   next owner or hold. Reviewers and verifiers send their verdicts to the owner
-   only (see [Bus communication guide](bus-communication-guide.md)). Start milestone
+5. **Finals and results:** follow the
+   [Bus communication guide](bus-communication-guide.md#verdicts-and-results),
+   with the PR/head, evidence and next owner or hold. Start milestone
    finals with `READY FOR VERIFY`, `REVIEW READY`, `MERGED`, `DONE` or `BLOCKED`.
-   A peer-started turn replies to that peer, so also send the milestone report
-   to `--to orchestrator`; a reply to an orchestrator-started task already goes
-   there. Send only the body; Bus adds the header, so never sign messages.
+   Send only the body; Bus adds the header, so never sign messages.
 
 The orchestrator retains **staffing and recovery, dialogs, product decisions,
 and announcing replacements**, including room notes, the roster and verifier

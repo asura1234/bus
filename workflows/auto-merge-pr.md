@@ -179,7 +179,7 @@ You handle these yourself:
 | Orchestrator | any | Supplies goal/base, named peers, authority and holds; owns staffing, dialogs, recovery and replacement announcements. Maintains room notes/roster and mirrors repair state from finals. Decides out-of-goal follow-ups and every FLAG, asking the developer for product decisions. In orchestrator-run mode drives the same gates; in owner-run mode receives handbacks and finals without relaying routine peer findings. Approves splits and dispatches cleanup outside the PR worktree. |
 | Developer | - | Approves the workflow goal and authority or declares a hold; supplies the PR goal and non-goals when none is locked. Under a manual-test hold, tests the pinned head while merge-pr holds and approves its merge or supplies feedback that enters the repair loop. Recovers from "PR merge blocked". |
 | Owner / author | any | Drives the owner-run variant, receives peer findings directly, excludes out-of-goal repairs, hands FLAG/developer decisions back, keeps fixing until every reviewer is Ready and re-measures against the 3000-line threshold. Runs address-review-comments, best-of-n for admitted technical issues, and merge-pr under every exact-head gate and hold. Prepares manual-test holds with merge-pr --hold-before-merge, records exact-head approval and routes rejected feedback through the repair loop; other holds go to the orchestrator. Sends milestone finals, adjudicates reviewer tests and records retained uncommitted probes, and reports flaky tests without fixing unrelated code in this PR; continues only when a permitted rerun passes. |
-| Verifier | any | Checks the named PR/task on each pushed head; sends VERIFIED or defects with file:line directly to the owner and a final to the orchestrator. |
+| Verifier | any | Checks the named PR/task on each pushed head; routes VERIFIED or defects with file:line through the [Bus communication guide](../orchestration/bus-communication-guide.md#verdicts-and-results). |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
 Workspace selection and builds follow
@@ -200,11 +200,10 @@ Workers do not edit room notes or the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
 recorded merge authority and explicit holds.
 
-Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
-with evidence, or defects with `file:line` and reproduction, straight to the
-owner (the PR author). Use the task key and worktree head before a PR exists.
-Reviewers send verdicts and findings to the owner. The owner re-sends the full
-head to verifier and reviewers on every push and gets current-head evidence.
+Route verdicts and results through the
+[Bus communication guide](../orchestration/bus-communication-guide.md#verdicts-and-results).
+Include the PR/task, exact head and review or acceptance artifact path. The owner
+re-sends the full head to verifier and reviewers on every push and gets current-head evidence.
 
 If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
 checks before every repair batch and merge, including inside `merge-pr`:
@@ -228,8 +227,8 @@ checks before every repair batch and merge, including inside `merge-pr`:
 
 Before editing shared files, message their owners and read the installed
 [Parallel writes](../parallel-writes.md) at the resolved absolute session path
-and ownership map supplied in your brief. Finals still go to the orchestrator;
-after peer-started work, also send the milestone report to `--to orchestrator`.
+and ownership map supplied in your brief. Milestone finals use the same
+result-routing rule above.
 Staffing and recovery, dialogs, product decisions and replacement announcements
 stay with the orchestrator. It updates the roster/briefs and tells affected
 peers the replacement's name/ID before work resumes.

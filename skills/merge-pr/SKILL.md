@@ -6,7 +6,7 @@ description: Watch an open PR's two signals until it can merge — CI conclusion
 # Merge PR
 
 Read [guide.md](guide.md) completely: the three acceptable kinds of attribution evidence, why log
-tails must not be read, and why only the latest comment round is handled all live there. Without it this skill will release red checks it caused itself.
+tails must not be read, and why only the latest comment round is handled all live there. Without it this skill will release red checks it caused itself. Bus result delivery and evidence paths follow the [Bus communication guide](../_bus/docs/bus-communication-guide.md#verdicts-and-results).
 Resolve `skill_dir` to this skill directory. All host operations use `python3 "<skill_dir>/../_bus/cli_extensions/pr_host.py"` (`pr_host`).
 Run `pr_host host`; stop on an unknown host. For Codeup, read `../_bus/docs/codeup-pr-workflow.md`.
 

@@ -220,8 +220,10 @@ the wrapper remains held.
   and the live room-notes roster; update both on replacement. Assign one verifier
   per 1–2 PRs. Exchange heads and verdicts directly, coordinate
   [shared files](parallel-writes.md) before editing, and have owners merge through
-  `auto-merge-pr`'s guarded owner-run path. Staffing and finals stay with the
-  orchestrator. *Why:* peer loops keep progress moving. Follow the
+  `auto-merge-pr`'s guarded owner-run path. Staffing stays with the orchestrator;
+  verdicts and results follow the
+  [Bus communication guide](bus-communication-guide.md#verdicts-and-results).
+  *Why:* peer loops keep progress moving. Follow the
   [peer messaging SOP](orchestrator-guide.md#open-peer-messaging).
 - **Parallelism is king.** Whenever a change must land in several places,
   split it across agents running in parallel; order only dependent steps.

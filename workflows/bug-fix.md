@@ -125,11 +125,10 @@ Workers do not edit room notes or the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
 recorded merge authority and explicit holds.
 
-Message peers directly. The verifier sends `VERIFIED <PR/task> @<full SHA>`
-with evidence, or defects with `file:line` and reproduction, straight to the
-owner (the PR author). Use the task key and worktree head before a PR exists.
-Reviewers send verdicts and findings to the owner. The owner re-sends the full
-head to verifier and reviewers on every push and gets current-head evidence.
+Route verdicts and results through the
+[Bus communication guide](../orchestration/bus-communication-guide.md#verdicts-and-results).
+Include the PR/task, exact head and review or acceptance artifact path. The owner
+re-sends the full head to verifier and reviewers on every push and gets current-head evidence.
 
 If you own a PR, use the owner-run path in `auto-merge-pr` and enforce these
 checks before every repair batch and merge, including inside `merge-pr`:
@@ -153,8 +152,8 @@ checks before every repair batch and merge, including inside `merge-pr`:
 
 Before editing shared files, message their owners and read the installed
 [Parallel writes](../parallel-writes.md) at the resolved absolute session path
-and ownership map supplied in your brief. Finals still go to the orchestrator;
-after peer-started work, also send the milestone report to `--to orchestrator`.
+and ownership map supplied in your brief. Milestone finals use the same
+result-routing rule above.
 Staffing and recovery, dialogs, product decisions and replacement announcements
 stay with the orchestrator. It updates the roster/briefs and tells affected
 peers the replacement's name/ID before work resumes.
