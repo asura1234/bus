@@ -3,9 +3,6 @@
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::utils::ids::PaneId;
 use bytes::Bytes;
-use ratatui::backend::TestBackend;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier};
 use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
 
@@ -35,7 +32,7 @@ pub(super) struct Feed {
     pub frames: u64,
 }
 
-pub(super) use crate::protocol::api::schema::driver::{Cell, Cursor, Grid};
+pub(super) use crate::protocol::api::schema::driver::{Cell, Grid};
 
 impl Screen {
     pub fn new(cols: u16, rows: u16) -> std::io::Result<Self> {
@@ -127,29 +124,10 @@ impl Screen {
     }
 
     fn render(&self) -> Grid {
-        let area = Rect::new(0, 0, self.cols, self.rows);
-        let Ok(mut terminal) = ratatui::Terminal::new(TestBackend::new(self.cols, self.rows));
-        let drawn = terminal.draw(|frame| self.pane.render(frame, area, false));
-        if drawn.is_err() {
+        let Ok(core) = self.pane.core.lock() else {
             return Grid::blank(self.cols, self.rows);
-        }
-        let links = self.pane.visible_hyperlinks(area);
-        let mut grid = grid_from_buffer(terminal.backend().buffer());
-        for ((x, y), _, uri) in links {
-            if let Some(cell) = grid
-                .cells
-                .get_mut(usize::from(y))
-                .and_then(|row| row.get_mut(usize::from(x)))
-            {
-                cell.link = Some(uri);
-            }
-        }
-        grid.cursor = self.pane.cursor_state().map(|cursor| Cursor {
-            row: cursor.y,
-            col: cursor.x,
-            visible: cursor.visible,
-        });
-        grid
+        };
+        Grid::from_terminal(&core.terminal).unwrap_or_else(|_| Grid::blank(self.cols, self.rows))
     }
 }
 
@@ -232,55 +210,3 @@ pub(super) fn find(grid: &Grid, needle: &Needle<'_>, rows: Option<(u16, u16)>) -
 #[cfg(test)]
 #[path = "tests/screen_test.rs"]
 mod tests;
-
-fn grid_from_buffer(buffer: &ratatui::buffer::Buffer) -> Grid {
-    let area = buffer.area;
-    let cells = (0..area.height)
-        .map(|y| {
-            (0..area.width)
-                .map(|x| {
-                    let cell = &buffer[(x, y)];
-                    Cell {
-                        symbol: cell.symbol().to_owned(),
-                        fg: color_name(cell.fg),
-                        bg: color_name(cell.bg),
-                        attrs: attrs(cell.modifier),
-                        link: None,
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    Grid {
-        cols: area.width,
-        rows: area.height,
-        cells,
-        cursor: None,
-    }
-}
-
-fn color_name(color: Color) -> String {
-    match color {
-        Color::Reset => "default".into(),
-        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        Color::Indexed(index) => format!("idx:{index}"),
-        other => format!("{other:?}").to_lowercase(),
-    }
-}
-
-fn attrs(modifier: Modifier) -> Vec<String> {
-    [
-        (Modifier::BOLD, "bold"),
-        (Modifier::DIM, "dim"),
-        (Modifier::ITALIC, "italic"),
-        (Modifier::UNDERLINED, "underline"),
-        (Modifier::REVERSED, "inverse"),
-        (Modifier::CROSSED_OUT, "strike"),
-        (Modifier::SLOW_BLINK, "blink"),
-        (Modifier::HIDDEN, "hidden"),
-    ]
-    .into_iter()
-    .filter(|(flag, _)| modifier.contains(*flag))
-    .map(|(_, name)| name.to_owned())
-    .collect()
-}

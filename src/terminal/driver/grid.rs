@@ -23,7 +23,7 @@ impl Grid {
 
     /// Read original VT cells; presentation color transforms and dirty acknowledgement
     /// belong to the renderer, not to observation.
-    pub(super) fn from_terminal(
+    pub(crate) fn from_terminal(
         terminal: &crate::terminal::vt::Terminal,
     ) -> Result<Self, crate::terminal::vt::Error> {
         use crate::terminal::vt::{CellColor, CellWide, KITTY_UNICODE_PLACEHOLDER};
