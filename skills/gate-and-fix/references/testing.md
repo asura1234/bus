@@ -18,19 +18,20 @@ fails before any test starts. The initial ownership map is deliberately narrow:
 
 | Changed paths | Selection |
 | --- | --- |
-| `src/<component>/**/tests/*.rs`, `*_test.rs` | All binary unit tests in that component's Rust namespace |
-| `tests/api/**`, `tests/server/**`, `tests/cli/**` | Corresponding integration binary; CLI also exercises dev-tools |
-| `tests/client/**` | Both `client` and `room-screen` binaries |
-| `src/devtools/**/tests/*.rs`, `tests/tui/**` | Dev-tools binary tests and CLI/driver integration tests |
-| Python under an independent `skills/<name>/**` | That skill's Python suite |
-| Python under `scripts`, `tools`, `cli_extensions`, `packaging` | That tooling root's Python suite |
-| Markdown | Python documentation and installation contracts |
-| Production Rust, shared fixtures/skills, manifests, build/configuration, unknown paths | Every suite |
+| Known Rust test module with only references inside its component | All binary unit tests in that component's Rust namespace |
+| Integration source/helper | Cargo test targets reachable through source module/path references |
+| Dev-tools test source/target | Dev-tools binary tests and CLI/driver integration tests |
+| Python with only references inside its owner | That owner's actual `*_test.py` files |
+| Cross-owner references, embedded Markdown/data, build inputs, production Rust, unknown paths | Every suite |
 
-Shared skill infrastructure includes `_bus`, `gate-and-fix`, `worktree-new` and
-`rebase-origin-main`. Rust is one crate with cross-component imports; the runner
-does not assume that a production file's unit-test namespace covers its consumers.
-Extending the map requires a dependency argument and a failing selection test.
+The index scans Rust modules, `#[path]`, `include!`, `include_str!`, `include_bytes!`,
+literal build inputs, and Python imports/path expressions. It also follows Python
+references when deciding whether selected tests require `BUS_TEST_BINARY`.
+Ambiguous literal references can widen the selection. Missing ownership and
+cross-owner references fall back to every suite; this includes embedded skill
+resources watched by `build.rs`. Rust is one crate, so production modules do not
+receive a guessed unit-only scope. Extending narrow selection requires reference
+evidence and a failing regression test.
 An empty diff runs no tests; use `--full` when a fresh complete verdict is needed.
 
 Affected runs, including conservative fallback to every suite, skip the coverage
@@ -47,6 +48,10 @@ in-process `server::tests::` harness. Normal-target lint completes before the
 dev-tools build; coverage artifacts use cargo-llvm-cov's separate target.
 An explicit shared normal/coverage target serializes all binary consumers to
 prevent the feature build from replacing binaries while tests use them.
+Python-only selections that require the CLI build it first in the configured
+target and receive its explicit path, including when no local `target/` exists.
+Empty Python owners are skipped; pytest's no-collection exit is accepted while
+collection errors and genuine test failures remain failures.
 Nextest also parallelizes within each batch (four threads by default; override
 with `NEXTEST_TEST_THREADS`). No separate per-run Cargo target is created.
 
@@ -56,6 +61,8 @@ Python tests so they cannot execute a stale CLI; independent dev-tools still
 runs. The scheduler collects independent failures, stops children on interruption,
 and cleans its owned raw profiles. Live `BUS_*` and `HERDR_*` environment is
 removed; Python receives the explicitly built CLI in `BUS_TEST_BINARY`.
+Nested execution shares the outer gate's process group ownership; standalone
+execution owns its worker groups. Cleanup follows termination of every worker.
 
 Each invocation prints timings and writes complete per-task stdout/stderr and
 the head/selection/result to `temp/run-test/run-<id>.json`. Gate-and-fix wraps the
