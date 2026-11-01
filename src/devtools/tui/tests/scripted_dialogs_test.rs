@@ -72,9 +72,8 @@ fn scripted_screen_invalid_menu_indexes_are_rejected_before_showing_prompt() {
 fn scripted_dialog_suite_loads_fifteen_distinct_screen_shapes() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/dialog-driver/suite.json");
-    let temp = tempfile::tempdir().unwrap();
-    let mut scenario =
-        super::script::Scenario::load(&fixture, temp.path().join("state.json")).unwrap();
+    let state = crate::utils::test_temp::unique_temp_path("fake-screen-state");
+    let mut scenario = super::script::Scenario::load(&fixture, state.clone()).unwrap();
     let actions = scenario.actions("RUN_DIALOG_DRIVER_SUITE").unwrap();
     let ids = actions
         .iter()
@@ -89,4 +88,5 @@ fn scripted_dialog_suite_loads_fifteen_distinct_screen_shapes() {
         actions.last(),
         Some(super::script::Action::Reply { .. })
     ));
+    std::fs::remove_file(state).unwrap();
 }
