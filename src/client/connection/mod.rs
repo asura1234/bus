@@ -23,6 +23,7 @@ pub(in crate::client) fn start_endpoint_transport(
     lifetime: impl Send + 'static,
     event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
     max_frame_size: usize,
+    connection_id: u64,
 ) -> Result<bootstrap::NativeEndpointTransport, ClientError> {
     let reader = stream.try_clone().map_err(ClientError::ConnectionFailed)?;
     let transport = bootstrap::NativeEndpointTransport::with_lifetime(stream, lifetime)
@@ -32,7 +33,7 @@ pub(in crate::client) fn start_endpoint_transport(
     std::thread::Builder::new()
         .name("endpoint-reader".into())
         .spawn(move || {
-            server_reader_thread(reader, event_tx, &stopped, max_frame_size);
+            server_reader_thread(reader, event_tx, &stopped, max_frame_size, connection_id);
         })
         .map_err(ClientError::ConnectionFailed)?;
     Ok(transport)
@@ -44,9 +45,10 @@ pub(in crate::client) fn server_reader_thread(
     event_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     max_frame_size: usize,
+    connection_id: u64,
 ) {
     if stream.set_nonblocking(true).is_err() {
-        let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
+        let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected { connection_id });
         return;
     }
 
@@ -65,6 +67,7 @@ pub(in crate::client) fn server_reader_thread(
             Ok(msg) => {
                 if event_tx
                     .blocking_send(ClientLoopEvent::ServerMessage {
+                        connection_id,
                         message: Box::new(msg),
                         payload_bytes: stream.bytes_read.saturating_sub(4),
                     })
@@ -74,7 +77,8 @@ pub(in crate::client) fn server_reader_thread(
                 }
             }
             Err(wire::FramingError::UnexpectedEof) => {
-                let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
+                let _ =
+                    event_tx.blocking_send(ClientLoopEvent::ServerDisconnected { connection_id });
                 break;
             }
             Err(wire::FramingError::Io(err)) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -82,7 +86,8 @@ pub(in crate::client) fn server_reader_thread(
             }
             Err(err) => {
                 warn!(err = %err, "server read error");
-                let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
+                let _ =
+                    event_tx.blocking_send(ClientLoopEvent::ServerDisconnected { connection_id });
                 break;
             }
         }
