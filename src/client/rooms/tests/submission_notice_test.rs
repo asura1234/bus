@@ -120,15 +120,17 @@ fn an_uncertain_submission_never_titles_the_composer() {
 #[test]
 fn expanded_details_keep_uncertain_submission_recovery_in_the_log_only() {
     let (mut ui, _, agent, request) = submitting();
-    failed(&mut ui, request);
-    let mut snapshot = (*ui.snapshot).clone();
-    snapshot
-        .state
-        .set_agent_details_disclosed(agent, true)
-        .unwrap();
-    snapshot.revision += 1;
     let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
+    capture.run(|| {
+        failed(&mut ui, request);
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .set_agent_details_disclosed(agent, true)
+            .unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
     ui.compute_view(160, 60);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 160, 60));
     ui.render(&mut buffer);
@@ -142,6 +144,6 @@ fn expanded_details_keep_uncertain_submission_recovery_in_the_log_only() {
         assert!(!text.replace(' ', "").contains(expected), "{text}");
     }
     let logs = capture.text();
-    assert!(logs.contains("bus.agent.notice"), "{logs}");
+    assert_eq!(logs.matches("bus.agent.notice").count(), 1, "{logs}");
     assert!(logs.contains(DETAIL), "{logs}");
 }

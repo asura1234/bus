@@ -52,6 +52,8 @@ pub(super) struct Pending {
     pub result: Option<Result<(), String>>,
 }
 
+type ObservedAgentNotices = BTreeMap<AgentId, (Option<String>, Option<String>, Option<RoomId>)>;
+
 pub(in crate::client) struct BusUi {
     pub handle: Option<BusHandle>,
     pub snapshot: Arc<BusSnapshot>,
@@ -67,8 +69,7 @@ pub(in crate::client) struct BusUi {
     pub(super) send_queued: bool,
     pub error: Option<String>,
     /// Agent errors last written to the client log, so each is logged once.
-    pub(super) observed_agent_notices:
-        BTreeMap<AgentId, (Option<String>, Option<String>, Option<RoomId>)>,
+    pub(super) observed_agent_notices: ObservedAgentNotices,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
