@@ -19,13 +19,16 @@ impl Worker {
             (pane, Some(terminal))
         };
         if method == "agent.observe" {
+            let cells = optional_bool(p, "cells")?;
             let observation =
                 native_observe(&target, managed_terminal.as_deref(), &mut |method| {
                     self.transport
                         .request(method)
                         .map_err(|error| error.message)
                 })?;
-            return serde_json::to_value(observation).map_err(|error| error.to_string());
+            return serde_json::to_value(observation)
+                .map(|observation| observation_json(observation, cells))
+                .map_err(|error| error.to_string());
         }
         let explicit_terminal = optional_text(p, "terminal_id")?;
         if explicit_terminal.is_some_and(|expected| {
@@ -188,11 +191,26 @@ fn press_result(
     press.keys = keys;
     press.text_written = text_written;
     let mut result = serde_json::to_value(press).map_err(|error| error.to_string())?;
+    result["observation"] = observation_json(result["observation"].take(), false);
     result["outcome"] = json!(outcome);
     if let Some(error) = error {
         result["reason"] = json!(error);
     }
     Ok(result)
+}
+
+/// Keep the ordinary tool response compact. The native API and selection loop
+/// retain the full typed grid; only the returned control JSON is reduced.
+fn observation_json(mut observation: Value, cells: bool) -> Value {
+    observation["cols"] = observation["grid"]["cols"].clone();
+    observation["rows"] = observation["grid"]["rows"].clone();
+    observation["cursor"] = observation["grid"]["cursor"].clone();
+    if !cells {
+        if let Some(fields) = observation.as_object_mut() {
+            fields.remove("grid");
+        }
+    }
+    observation
 }
 
 #[cfg(test)]
@@ -382,5 +400,22 @@ mod tests {
         assert_eq!(result["text_written"], true);
         assert_eq!(result["keys"], json!(["ctrl+c", "2"]));
         assert_eq!(result["outcome"], "sent");
+        assert!(result["observation"].get("grid").is_none());
+        assert_eq!(result["observation"]["cols"], 40);
+        assert_eq!(result["observation"]["rows"], 4);
+    }
+
+    #[test]
+    fn control_observation_includes_styled_cells_only_when_requested() {
+        let native = serde_json::to_value(observation(1, 4)).unwrap();
+        let compact = observation_json(native.clone(), false);
+        assert!(compact.get("grid").is_none());
+        assert_eq!(compact["text"], native["text"]);
+        assert_eq!(compact["focus"], native["focus"]);
+        assert_eq!(compact["terminal_id"], "term_1");
+        assert_eq!(compact["cols"], 40);
+        assert_eq!(compact["rows"], 4);
+        let styled = observation_json(native.clone(), true);
+        assert_eq!(styled["grid"], native["grid"]);
     }
 }

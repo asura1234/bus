@@ -431,7 +431,7 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "agent.observe",
         "agent observe",
-        &["agent", "pane", "room", "as"],
+        &["agent", "pane", "cells", "room", "as"],
         false,
         Tier::Agent,
     ),

@@ -340,7 +340,8 @@ fn agent_cli() -> Command {
         .subcommand(
             subcommand("observe")
                 .arg(value_arg("agent").required(true))
-                .arg(flag("pane")),
+                .arg(flag("pane"))
+                .arg(flag("cells")),
         )
         .subcommand(
             subcommand("press")
@@ -495,6 +496,9 @@ fn parse_driver(args: &ArgMatches, press: bool) -> Result<Value, String> {
     let mut params = json!({"agent": required(args, "agent")?});
     if args.get_flag("pane") {
         params["pane"] = json!(true);
+    }
+    if !press && args.get_flag("cells") {
+        params["cells"] = json!(true);
     }
     if press {
         for field in ["select", "text"] {

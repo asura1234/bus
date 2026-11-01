@@ -5,6 +5,8 @@ fn terminal_driver_commands_are_available_without_dev_and_preserve_typed_input()
     let observe = command(&["agent", "observe", "w1:p2", "--pane"]).unwrap();
     assert_eq!(observe.method, "agent.observe");
     assert_eq!(observe.params, json!({"agent":"w1:p2", "pane":true}));
+    let cells = command(&["agent", "observe", "worker", "--cells"]).unwrap();
+    assert_eq!(cells.params, json!({"agent":"worker", "cells":true}));
     let press = command(&[
         "agent",
         "press",
