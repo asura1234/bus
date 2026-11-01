@@ -1,5 +1,6 @@
 """The report renderer keeps the developer-facing format unambiguous."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,10 +11,26 @@ ROOT = Path(__file__).resolve().parents[2]
 RENDER = ROOT / "skills/sitrep/scripts/render.py"
 
 
-def render(report):
+@pytest.fixture(autouse=True)
+def fake_lookups(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text("#!/usr/bin/env python3\nimport json, os\nprint(json.dumps({'state': os.environ.get('FAKE_PR_STATE', 'MERGED')}))\n")
+    git = bin_dir / "git"
+    git.write_text("#!/usr/bin/env python3\nimport os, sys\nargs = sys.argv[1:]\nif args[0] == 'symbolic-ref': print('origin/master')\nif args[0] == 'merge-base': sys.exit(int(os.environ.get('FAKE_COMMIT_LANDED', '0')))\n")
+    gh.chmod(0o755)
+    git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def render(report, extra_env=None):
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(RENDER)], input=json.dumps(report), text=True,
-        capture_output=True, check=False,
+        capture_output=True, check=False, env=env,
     )
 
 
@@ -113,30 +130,28 @@ def test_finished_accepts_only_a_merged_pr_or_landed_commit():
     assert f"  - PR/MR: landed {sha}\n" in landed_result.stdout
 
 
-@pytest.mark.parametrize("field", ["name", "tldr", "context"])
-@pytest.mark.parametrize("claim", [
-    "Ready.",
-    "Ready to merge.",
-    "Waiting-to-merge.",
-    "The work is ready.",
-    "Not opened yet.",
-])
-def test_finished_rejects_unmerged_status_claims(field, claim):
+def test_finished_rejects_pr_not_merged_in_gh():
     data = report([])
-    item = {"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "merged [#11 Fix it](https://example.com/pr/11)"}
-    item[field] = claim
-    data["finished"] = [item]
-    result = render(data)
+    data["finished"] = [{"name": "Fix", "tldr": "Merged.", "context": "Shipped today.", "pr": "merged [#11 Fix it](https://example.com/pr/11)"}]
+    result = render(data, {"FAKE_PR_STATE": "OPEN"})
     assert result.returncode != 0
     assert not result.stdout
 
 
-def test_landed_commit_does_not_excuse_not_opened_yet():
+def test_finished_rejects_commit_not_on_default_branch():
     data = report([])
-    data["finished"] = [{"name": "Fix", "tldr": "Not opened yet.", "context": "On the default branch.", "pr": "landed 7cd03ec7a69d4881223643e68064f69edc385369"}]
-    result = render(data)
+    data["finished"] = [{"name": "Fix", "tldr": "Landed.", "context": "On the default branch.", "pr": "landed 6ce810d4641d81c7144752fcadbc0498a4671a16"}]
+    result = render(data, {"FAKE_COMMIT_LANDED": "1"})
     assert result.returncode != 0
     assert not result.stdout
+
+
+def test_finished_uses_real_state_instead_of_status_prose():
+    data = report([])
+    data["finished"] = [{"name": "Fix", "tldr": "Ready.", "context": "The work is ready.", "pr": "merged [#11 Fix it](https://example.com/pr/11)"}]
+    result = render(data)
+    assert result.returncode == 0, result.stderr
+    assert "TLDR: Ready." in result.stdout
 
 
 def test_unmerged_work_stays_under_ongoing():
@@ -147,6 +162,6 @@ def test_unmerged_work_stays_under_ongoing():
     assert "Waiting to merge." in ongoing.stdout.split("## Finished")[0]
     data["ongoing"] = []
     data["finished"] = [{"name": "Feature", "tldr": "Waiting to merge.", "context": "Approved and gate-green.", "pr": "merged [#12 Add it](https://example.com/pr/12)"}]
-    finished = render(data)
+    finished = render(data, {"FAKE_PR_STATE": "OPEN"})
     assert finished.returncode != 0
     assert not finished.stdout

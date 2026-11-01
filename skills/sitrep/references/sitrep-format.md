@@ -16,11 +16,11 @@ The other arrays contain objects with exactly these keys:
 A finished `pr` is merge evidence and nothing else. It is exactly
 `merged [#N title](https://example.com/pr/N)` for a PR merged in the window, or `landed` plus the
 40-hex SHA of a commit that landed on the default branch in the window. The
-renderer rejects any other finished `pr`, including an open link, `not opened
-yet`, or text that the work is ready, approved, gate-green, or waiting to
-merge. It also rejects a finished name, TLDR, or context that says that, or
-that starts with `None` or says `none merged`. Put that work under Ongoing. An
-empty finished array renders exactly `None`.
+renderer verifies the real state: `gh` must report the PR as `MERGED`, and the
+commit must be an ancestor of the fetched default branch. Wording alone is not
+evidence. Any other finished `pr`, failed lookup, or unmerged state is
+rejected; put that work under Ongoing. An empty finished array renders exactly
+`None`.
 
 `status` is exactly `planning`, `in-development`, `test`, `review`, or
 `blocked`. In a blocked task, context names the dependency or developer action.
@@ -58,9 +58,9 @@ None
 ```
 
 Malformed examples include `None for you right now, but ...` in Blockers,
-`none merged, but ...` in Finished, a Finished item that is only ready,
-approved, gate-green, or waiting to merge, multiline fields, omitted sections,
-unknown status values, and bare PR URLs.
+a Finished item whose PR is not `MERGED` or whose commit is not on the default
+branch, multiline fields, omitted sections, unknown status values, and bare PR
+URLs.
 
 ## Room marker
 

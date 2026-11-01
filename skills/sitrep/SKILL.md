@@ -37,8 +37,9 @@ open --author @me --limit 1000` and the equivalent `--state merged`, requesting
 number, title, url, state, headRefName and mergedAt where available. Resolve the
 repository from origin, never guess it. Limit merged entries to since < mergedAt
 <= cutoff; if either query reaches its limit, disclose possible truncation. An
-open PR is never Finished. Never fetch,
-checkout, alter Git config, or create/update PRs. On Codeup, use the shared
+open PR is never Finished. Do not checkout, alter Git config, or create/update
+PRs. The renderer performs the required origin fetch for landed-commit
+verification. On Codeup, use the shared
 PR host supplied by the installed pr skill if it supports read-only listing;
 inspect its help first. If unavailable or listing is unsupported, skip and note
 it in the report. For other hosts or any failed query, note the limitation.
