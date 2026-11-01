@@ -41,7 +41,7 @@ Prepare the format's JSON object in memory and pipe it to:
 If rendering fails, correct only agent-owned fields and rerun; never edit the
 computed state to make a report pass. Send the renderer's output verbatim in
 chat. Only after producing the report, run:
-  python3 "$SKILL_DIR/scripts/marker.py" write --repo "<repo>"
+  python3 "$SKILL_DIR/scripts/marker.py" write --repo "<repo>" --state "$state"
 If it fails, report the failure and do not claim the marker was saved. The
 writer resolves the main worktree itself, including when repo is linked.
 ```

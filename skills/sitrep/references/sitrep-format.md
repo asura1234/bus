@@ -84,6 +84,8 @@ fields, omitted sections, unknown status values, and bare PR URLs.
 The marker is `<main-worktree>/temp/sitrep/last-sitrep-commit`. The main
 worktree is resolved from `git rev-parse --git-common-dir`, including when the
 command starts in a linked worktree. The file contains exactly one 40-hex
-commit and a trailing newline. `marker.py write --repo REPO` fetches the
-current default-branch head and saves it only after a report was produced. A
-missing or malformed marker is an error, not an implicit first run.
+commit and a trailing newline. `marker.py write --repo REPO --state STATE.json`
+saves exactly the computed state's `head` without refetching, only after that
+state was rendered. A commit landing between read and write therefore remains
+in the next sitrep's Git log. A missing or malformed marker is an error, not an
+implicit first run.

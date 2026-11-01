@@ -103,9 +103,12 @@ def read_state(repo, start):
     return {"default_ref": default_ref, "head": head, "finished": finished, "open_prs": open_prs(main)}
 
 
-def write_marker(repo):
+def write_marker(repo, state_path):
     main = main_worktree(repo)
-    _, head = fetch_head(main)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict) or set(state) != {"default_ref", "head", "finished", "open_prs"} or not isinstance(state["head"], str) or not SHA.fullmatch(state["head"]):
+        raise ValueError("write requires computed state with a full head SHA")
+    head = state["head"]
     path = marker_path(main)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".last-sitrep-commit-", dir=path.parent)
@@ -124,9 +127,17 @@ def main():
     parser.add_argument("action", choices=("read", "write"))
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--start", help="explicit starting commit when no marker exists")
+    parser.add_argument("--state", type=Path, help="computed state rendered by this sitrep; required for write")
     args = parser.parse_args()
     try:
-        result = read_state(args.repo, args.start) if args.action == "read" else write_marker(args.repo)
+        if args.action == "read":
+            if args.state is not None:
+                raise ValueError("read does not accept --state")
+            result = read_state(args.repo, args.start)
+        else:
+            if args.state is None:
+                raise ValueError("write requires --state from the rendered report")
+            result = write_marker(args.repo, args.state)
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (OSError, ValueError, TypeError) as error:

@@ -40,14 +40,16 @@ def fixture_repo(tmp_path):
     gh = bin_dir / "gh"
     gh.write_text("#!/usr/bin/env python3\nimport os\nprint(os.environ.get('FAKE_OPEN_PRS', '[]'))\n")
     gh.chmod(0o755)
-    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    env = {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
     return {"origin": origin, "main": main, "base": base, "env": env}
 
 
-def call(repo, fixture, action="read", start=None, extra_env=None):
+def call(repo, fixture, action="read", start=None, extra_env=None, state=None):
     args = [sys.executable, str(SCRIPT), action, "--repo", str(repo)]
     if start:
         args.extend(["--start", start])
+    if state:
+        args.extend(["--state", str(state)])
     env = dict(fixture["env"])
     if extra_env:
         env.update(extra_env)
@@ -76,12 +78,30 @@ def test_git_log_and_open_prs_compute_state_then_marker_advances(fixture_repo):
         "finished": [{"name": "Fix finished work (#12)", "pr": f"landed {landed}"}],
         "open_prs": [r"[#13 Open \[feature\]](https://example.com/pr/13)"],
     }
-    saved = call(main, fixture_repo, action="write")
+    state_path = main.parent / "state.json"
+    state_path.write_text(result.stdout)
+    saved = call(main, fixture_repo, action="write", state=state_path)
     assert saved.returncode == 0, saved.stderr
     assert marker.read_text() == landed + "\n"
     empty = call(main, fixture_repo)
     assert empty.returncode == 0, empty.stderr
     assert json.loads(empty.stdout)["finished"] == []
+
+
+def test_marker_does_not_advance_past_the_rendered_head(fixture_repo):
+    marker = save_marker(fixture_repo)
+    main = fixture_repo["main"]
+    rendered_head = commit(main, "Rendered head")
+    git(main, "push", "origin", "master")
+    result = call(main, fixture_repo)
+    assert result.returncode == 0, result.stderr
+    commit(main, "Landed after rendering")
+    git(main, "push", "origin", "master")
+    state_path = main.parent / "state.json"
+    state_path.write_text(result.stdout)
+    saved = call(main, fixture_repo, action="write", state=state_path)
+    assert saved.returncode == 0, saved.stderr
+    assert marker.read_text() == rendered_head + "\n"
 
 
 def test_missing_marker_requires_an_explicit_start(fixture_repo):
@@ -111,7 +131,9 @@ def test_linked_worktree_uses_main_worktree_marker(fixture_repo):
     result = call(linked, fixture_repo)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["finished"] == [{"name": "Main worktree marker", "pr": f"landed {landed}"}]
-    saved = call(linked, fixture_repo, action="write")
+    state_path = main.parent / "state.json"
+    state_path.write_text(result.stdout)
+    saved = call(linked, fixture_repo, action="write", state=state_path)
     assert saved.returncode == 0, saved.stderr
     assert json.loads(saved.stdout)["saved"] == str(marker)
     assert marker.read_text() == landed + "\n"
