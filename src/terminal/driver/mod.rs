@@ -4,7 +4,7 @@ mod grid;
 pub(crate) mod input;
 mod selection;
 
-pub(crate) use grid::{Cell, Cursor, Grid};
+pub(crate) use grid::{Cursor, Grid};
 pub(crate) use selection::{selection_focus, selection_step, SelectionStep};
 
 use crate::terminal::TerminalRuntime;
