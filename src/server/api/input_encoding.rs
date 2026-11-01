@@ -11,44 +11,18 @@ pub(in crate::server) fn tab_attention_priority(
     }
 }
 
-fn parse_api_key(key: &str) -> Option<crossterm::event::KeyEvent> {
-    let normalized = normalize_api_key_alias(key.trim());
-    let (code, modifiers) = crate::utils::config::parse_key_combo(normalized)?;
-    Some(crossterm::event::KeyEvent::new(code, modifiers))
-}
-
-fn normalize_api_key_alias(key: &str) -> &str {
-    match key {
-        "C-c" | "c-c" => "ctrl+c",
-        "+" => "plus",
-        _ => key,
-    }
-}
-
 pub(in crate::server) fn encode_api_text(
     runtime: &crate::terminal::TerminalRuntime,
     text: &str,
 ) -> Vec<u8> {
-    let bracketed = runtime.bracketed_paste_enabled();
-    if bracketed {
-        format!("\x1b[200~{text}\x1b[201~").into_bytes()
-    } else {
-        text.as_bytes().to_vec()
-    }
+    crate::terminal::driver::input::paste(text, runtime.bracketed_paste_enabled())
 }
 
 pub(in crate::server) fn encode_api_keys(
     runtime: &crate::terminal::TerminalRuntime,
     keys: &[String],
 ) -> Result<Vec<Vec<u8>>, String> {
-    let mut encoded_keys = Vec::with_capacity(keys.len());
-    for key in keys {
-        let Some(key_event) = parse_api_key(key) else {
-            return Err(key.clone());
-        };
-        encoded_keys.push(runtime.encode_terminal_key(key_event.into()));
-    }
-    Ok(encoded_keys)
+    crate::terminal::driver::input::encode_keys_with(keys, |key| runtime.encode_terminal_key(key))
 }
 
 pub(in crate::server) fn encode_api_submission_parts(

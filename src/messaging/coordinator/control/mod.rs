@@ -1,6 +1,7 @@
 //! Control receipts, tiers, validation and routing on the existing single-writer coordinator.
 mod agents;
 mod dialogs;
+mod driver;
 mod inspect;
 mod messages;
 mod rooms;
@@ -254,6 +255,7 @@ impl Worker {
             "agent.dialog.observe" | "agent.dialog.choose" | "agent.dialog.answer" => {
                 self.execute_dialogs(method, p, events)
             }
+            "agent.observe" | "agent.press" => self.execute_driver(method, p),
             "message.send" | "message.status" | "message.seen" | "request.recover" => {
                 self.execute_messages(method, p, events)
             }
@@ -424,6 +426,30 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "agent dialog",
         &["agent", "room", "as"],
         false,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.observe",
+        "agent observe",
+        &["agent", "pane", "cells", "room", "as"],
+        false,
+        Tier::Agent,
+    ),
+    spec(
+        "agent.press",
+        "agent press",
+        &[
+            "agent",
+            "pane",
+            "terminal_id",
+            "select",
+            "text",
+            "keys",
+            "submit",
+            "room",
+            "as",
+        ],
+        true,
         Tier::Agent,
     ),
     spec(

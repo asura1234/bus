@@ -139,6 +139,15 @@ impl Terminal {
         x: u16,
         y: u32,
     ) -> Result<(Vec<u32>, CellStyle), Error> {
+        let (_, graphemes, style) = self.viewport_styled_cell(x, y)?;
+        Ok((graphemes, style))
+    }
+
+    pub(crate) fn viewport_styled_cell(
+        &self,
+        x: u16,
+        y: u32,
+    ) -> Result<(CellWide, Vec<u32>, CellStyle), Error> {
         let grid_ref = self.grid_ref(ghostty_viewport_point(x, y))?;
         let graphemes = grid_ref_graphemes(&grid_ref)?;
         let mut style = ffi::GhosttyStyle {
@@ -148,7 +157,7 @@ impl Terminal {
         unsafe {
             ffi::ghostty_grid_ref_style(&grid_ref, &mut style).into_result()?;
         }
-        Ok((graphemes, style.into()))
+        Ok((grid_ref_wide(&grid_ref)?, graphemes, style.into()))
     }
 
     pub fn viewport_hyperlink_uri(&self, x: u16, y: u32) -> Result<Option<String>, Error> {
@@ -327,6 +336,10 @@ impl Terminal {
 
     pub fn rows(&self) -> Result<u16, Error> {
         self.get_u16(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_ROWS)
+    }
+
+    pub(crate) fn cursor_x(&self) -> Result<u16, Error> {
+        self.get_u16(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_CURSOR_X)
     }
 
     pub fn cursor_y(&self) -> Result<u16, Error> {

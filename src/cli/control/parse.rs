@@ -1,5 +1,5 @@
 //! Control command grammar and request shape.
-use clap::{builder::NonEmptyStringValueParser, Arg, ArgAction, ArgMatches, Command};
+use clap::{builder::NonEmptyStringValueParser, Arg, ArgAction, ArgGroup, ArgMatches, Command};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -338,6 +338,13 @@ fn agent_cli() -> Command {
         )
         .subcommand(subcommand("dialog").arg(value_arg("agent").required(true)))
         .subcommand(
+            subcommand("observe")
+                .arg(value_arg("agent").required(true))
+                .arg(flag("pane"))
+                .arg(flag("cells")),
+        )
+        .subcommand(agent_press_cli())
+        .subcommand(
             subcommand("choose")
                 .arg(value_arg("agent").required(true))
                 .arg(option("option"))
@@ -392,6 +399,27 @@ fn agent_cli() -> Command {
     })
 }
 
+fn agent_press_cli() -> Command {
+    subcommand("press")
+        .arg(value_arg("agent").required(true))
+        .arg(flag("pane"))
+        .arg(value_arg("terminal-id").long("terminal-id"))
+        .arg(
+            value_arg("select")
+                .long("select")
+                .conflicts_with_all(["key", "text", "submit"]),
+        )
+        .arg(value_arg("key").long("key").action(ArgAction::Append))
+        .arg(Arg::new("text").long("text").allow_hyphen_values(true))
+        .arg(flag("submit"))
+        .group(
+            ArgGroup::new("input")
+                .args(["select", "key", "text", "submit"])
+                .multiple(true)
+                .required(true),
+        )
+}
+
 fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
     let (method, mut params) = match args.subcommand() {
         Some(("list", args)) => {
@@ -425,6 +453,8 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         ),
         Some(("add", args)) => return parse_agent_add(args),
         Some(("read", args)) => parse_agent_read(args)?,
+        Some(("observe", args)) => ("agent.observe", parse_driver(args, false)?),
+        Some(("press", args)) => ("agent.press", parse_driver(args, true)?),
         Some(("dialog", args)) => (
             "agent.dialog.observe",
             json!({"agent": required(args, "agent")?}),
@@ -462,6 +492,33 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         }
     }
     Ok((method, params))
+}
+
+fn parse_driver(args: &ArgMatches, press: bool) -> Result<Value, String> {
+    let mut params = json!({"agent": required(args, "agent")?});
+    if args.get_flag("pane") {
+        params["pane"] = json!(true);
+    }
+    if !press && args.get_flag("cells") {
+        params["cells"] = json!(true);
+    }
+    if press {
+        for field in ["select", "text"] {
+            if let Some(value) = args.get_one::<String>(field) {
+                params[field] = json!(value);
+            }
+        }
+        if let Some(value) = args.get_one::<String>("terminal-id") {
+            params["terminal_id"] = json!(value);
+        }
+        if let Some(keys) = args.get_many::<String>("key") {
+            params["keys"] = json!(keys.collect::<Vec<_>>());
+        }
+        if args.get_flag("submit") {
+            params["submit"] = json!(true);
+        }
+    }
+    Ok(params)
 }
 
 fn parse_history(args: &ArgMatches) -> Result<Value, String> {

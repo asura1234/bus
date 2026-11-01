@@ -1085,6 +1085,66 @@
           ],
           "type": "object"
         },
+        "AgentObserveParams": {
+          "additionalProperties": false,
+          "description": "Provider-independent observation, including terminals with no agent.",
+          "properties": {
+            "selection_label": {
+              "description": "Scope focus to this option's menu while following selection redraws.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
+        "AgentPressParams": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_terminal_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "select": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "submit": {
+              "default": false,
+              "type": "boolean"
+            },
+            "target": {
+              "type": "string"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
         "AgentPromptIfIdleParams": {
           "description": "A separate method makes older servers reject the safety guard, never ignore it.",
           "properties": {
@@ -3536,6 +3596,38 @@
         {
           "properties": {
             "method": {
+              "const": "agent.observe",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentObserveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.press",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentPressParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.dialog.observe",
               "type": "string"
             },
@@ -4926,6 +5018,38 @@
           ],
           "type": "string"
         },
+        "Cell": {
+          "description": "One rendered cell. Wide characters occupy their first cell; the cell after\nthem has an empty symbol.",
+          "properties": {
+            "attrs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "bg": {
+              "type": "string"
+            },
+            "fg": {
+              "type": "string"
+            },
+            "link": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "symbol": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "symbol",
+            "fg",
+            "bg"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
@@ -4941,6 +5065,31 @@
             "failed"
           ],
           "type": "string"
+        },
+        "Cursor": {
+          "properties": {
+            "col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "visible": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "row",
+            "col",
+            "visible"
+          ],
+          "type": "object"
         },
         "EventData": {
           "oneOf": [
@@ -5408,6 +5557,47 @@
             "layout_updated"
           ],
           "type": "string"
+        },
+        "Grid": {
+          "properties": {
+            "cells": {
+              "items": {
+                "items": {
+                  "$ref": "#/schemas/success_response/$defs/Cell"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "cols": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cursor": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/Cursor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cols",
+            "rows",
+            "cells"
+          ],
+          "type": "object"
         },
         "LayoutDescription": {
           "properties": {
@@ -6424,6 +6614,38 @@
             },
             {
               "properties": {
+                "observation": {
+                  "$ref": "#/schemas/success_response/$defs/TerminalObservation"
+                },
+                "type": {
+                  "const": "terminal_observed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "observation"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "press": {
+                  "$ref": "#/schemas/success_response/$defs/TerminalPressResult"
+                },
+                "type": {
+                  "const": "terminal_pressed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "press"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "choice": {
                   "$ref": "#/schemas/success_response/$defs/AgentDialogChooseResult"
                 },
@@ -7026,6 +7248,87 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "TerminalObservation": {
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "focus": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "focus_occurrence": {
+              "default": 0,
+              "description": "Zero-based occurrence among options with the focused label. Physical row\nshifts do not change this identity; repeated intermediate labels do.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "grid": {
+              "$ref": "#/schemas/success_response/$defs/Grid"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "pane_id",
+            "content_revision",
+            "text",
+            "grid"
+          ],
+          "type": "object"
+        },
+        "TerminalPressResult": {
+          "properties": {
+            "keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "observation": {
+              "$ref": "#/schemas/success_response/$defs/TerminalObservation"
+            },
+            "selection_pending": {
+              "description": "Navigation is awaiting a focus change; keys can be empty while a prior step is still pending.",
+              "type": "boolean"
+            },
+            "text_written": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "keys",
+            "text_written",
+            "selection_pending",
+            "observation"
           ],
           "type": "object"
         },

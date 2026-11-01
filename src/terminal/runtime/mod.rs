@@ -161,6 +161,8 @@ pub struct TerminalRuntime {
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
     draft_input: draft_input::SharedDraftInput,
+    /// Semantic navigation state is owned exclusively by the terminal driver.
+    driver_state: crate::terminal::driver::DriverState,
     #[cfg(test)]
     dialog_wait_test: Mutex<tests::DialogWaitTest>,
     detection_content_seq: Arc<AtomicU64>,
@@ -196,6 +198,10 @@ pub enum WheelRouting {
 mod tests;
 
 impl TerminalRuntime {
+    pub(super) fn driver_state(&self) -> &crate::terminal::driver::DriverState {
+        &self.driver_state
+    }
+
     /// Native launches into an existing shell must update the detector as well
     /// as the command's environment.
     pub(crate) fn bind_kimi_code_home(&self, home: Option<std::path::PathBuf>) {
