@@ -1,9 +1,12 @@
 //! One key and text encoder for terminal panes and the Bus UI.
-use crate::protocol::keys::{encode_terminal_key, KeyboardProtocol, TerminalKey};
+use crate::protocol::keys::TerminalKey;
+#[cfg(any(test, feature = "dev-tools"))]
+use crate::protocol::keys::{encode_terminal_key, KeyboardProtocol};
 
 /// Encodes one chord such as `ctrl+shift+r`, `enter`, `esc` or `f6` for the
 /// keyboard protocol the client negotiated. With the kitty flags Bus pushes,
 /// Esc becomes `CSI 27 u`, so it never waits out the lone-Esc timeout.
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn encode_key(name: &str, protocol: KeyboardProtocol) -> Result<Vec<u8>, String> {
     let normalized = match name.trim() {
         "+" => "plus",
