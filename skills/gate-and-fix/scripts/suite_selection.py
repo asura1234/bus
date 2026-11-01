@@ -71,7 +71,9 @@ def changed_paths(root: Path, base: str) -> list[str]:
         return result.stdout
     # --no-renames reports both old and new names. NUL delimiters preserve spaces/newlines.
     ancestor = git("merge-base", base, "HEAD").decode().strip()
-    streams = [git("diff", "--name-only", "-z", "--no-renames", ancestor),
+    streams = [git("diff", "--name-only", "-z", "--no-renames", ancestor, "HEAD"),
+               git("diff", "--cached", "--name-only", "-z", "--no-renames"),
+               git("diff", "--name-only", "-z", "--no-renames"),
                git("ls-files", "--others", "--exclude-standard", "-z")]
     return sorted({path.decode(errors="surrogateescape") for stream in streams
                    for path in stream.split(b"\0") if path})

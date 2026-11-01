@@ -45,6 +45,8 @@ used by Python. It then runs default unit tests, default integration tests,
 Python, and dev-tools tests concurrently. Default integration includes the
 in-process `server::tests::` harness. Normal-target lint completes before the
 dev-tools build; coverage artifacts use cargo-llvm-cov's separate target.
+An explicit shared normal/coverage target serializes all binary consumers to
+prevent the feature build from replacing binaries while tests use them.
 Nextest also parallelizes within each batch (four threads by default; override
 with `NEXTEST_TEST_THREADS`). No separate per-run Cargo target is created.
 

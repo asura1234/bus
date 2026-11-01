@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 from contextlib import nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import bus_quality as quality
@@ -79,6 +79,16 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         tests.append(Gate("dev-tools", nextest("--features", "dev-tools", "--bin", "bus",
                           "--test", "cli", "--test", "tui-driver",
                           expression="binary(cli) | binary(tui-driver) | test(/^devtools::/)"), env=env))
+    if selection.full:
+        tests.insert(0, Gate("cli-smoke", (str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus")), "--help"),
+                          env=quality.child_env(LLVM_PROFILE_FILE=str(target / quality.profile_file_name("cli")))))
+    normal = quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
+    if instrumented and target.resolve() == normal.resolve():
+        # A user may explicitly co-locate outputs. Both Cargo writes and all
+        # binary consumers then need serialization across the feature variants.
+        shared = frozenset({"cargo-output"})
+        build = [replace(gate, resources=shared) for gate in build]
+        tests = [replace(gate, resources=shared) for gate in tests]
     return build, tests
 
 

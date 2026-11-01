@@ -83,6 +83,8 @@ def test_changed_paths_include_both_rename_sides_and_every_worktree_state(tmp_pa
     git("mv", "old.py", "renamed with space.py")
     (tmp_path / "staged.py").write_text("after\n")
     git("add", "staged.py")
+    # Index and working copy can cancel in a combined diff against the base.
+    (tmp_path / "staged.py").write_text("before\n")
     (tmp_path / "unstaged.py").write_text("after\n")
     (tmp_path / "deleted.py").unlink()
     (tmp_path / "new.py").write_text("new\n")

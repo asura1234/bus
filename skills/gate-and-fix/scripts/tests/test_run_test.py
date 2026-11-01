@@ -18,7 +18,7 @@ from suite_selection import select  # noqa: E402
 def test_full_build_phases_keep_normal_and_instrumented_builds_independent():
     build, tests = runner.commands(select([], full=True))
     assert {gate.name for gate in build} == {"lint", "instrumented-build"}
-    assert {gate.name for gate in tests} == {"unit", "integration", "python", "dev-tools"}
+    assert {gate.name for gate in tests} == {"unit", "integration", "python", "dev-tools", "cli-smoke"}
     assert "none()" in next(g.argv for g in build if g.name == "instrumented-build")
     unit = next(g for g in tests if g.name == "unit")
     integration = next(g for g in tests if g.name == "integration")
@@ -44,6 +44,15 @@ def test_affected_cli_keeps_default_binary_separate_from_dev_tools_build():
     assert "llvm-cov" in build[0].argv
     assert "llvm-cov" in next(g.argv for g in tests if g.name == "affected-rust")
     assert "llvm-cov" not in next(g.argv for g in tests if g.name == "dev-tools")
+
+
+def test_explicit_shared_normal_and_coverage_target_serializes_binary_consumers(tmp_path):
+    with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(tmp_path), "CARGO_LLVM_COV_TARGET_DIR": str(tmp_path)}):
+        build, tests = runner.commands(select([], full=True))
+    assert build[0].resources.intersection(build[1].resources)
+    dev = next(gate for gate in tests if gate.name == "dev-tools")
+    for gate in tests:
+        assert gate.resources.intersection(dev.resources)
 
 
 def test_partial_run_never_enforces_or_publishes_full_coverage(tmp_path):
