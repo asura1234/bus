@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from suite_selection import select  # noqa: E402
 
@@ -128,3 +130,13 @@ def test_src_tests_reachable_through_integration_containers_fall_back(tmp_path):
     source(tmp_path, 'tests/api/root_test.rs', '#[path="../support/shared_test.rs"] mod shared;')
     source(tmp_path, 'tests/support/shared_test.rs', '#[path="../../src/utils/container.rs"] mod container;')
     assert select(['src/utils/tests/local_test.rs'], root=tmp_path).full
+
+
+@pytest.mark.parametrize('statement', ['import tools.pkg.worker', 'from tools.pkg.worker import run'])
+def test_python_imports_track_each_existing_package_initializer(tmp_path, statement):
+    source(tmp_path, 'tools/__init__.py', '')
+    source(tmp_path, 'tools/pkg/__init__.py', '')
+    source(tmp_path, 'tools/pkg/worker.py', 'def run(): pass\n')
+    source(tmp_path, 'packaging/case_test.py', statement + '\n')
+    for name in ('tools/__init__.py', 'tools/pkg/__init__.py'):
+        assert select([name], root=tmp_path).full

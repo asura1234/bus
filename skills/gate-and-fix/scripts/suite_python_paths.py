@@ -102,7 +102,10 @@ def python_edges(root: Path, name: str, source: str, paths: set[str]) -> set[str
             if not module:
                 continue
             for directory in roots:
-                path = directory / module.replace('.', '/')
+                parts = module.split('.')
+                for end in range(1, len(parts)):
+                    record(directory.joinpath(*parts[:end]) / '__init__.py')
+                path = directory.joinpath(*parts)
                 record(path.with_suffix('.py'))
                 record(path / '__init__.py')
 

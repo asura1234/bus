@@ -41,3 +41,8 @@ def test_src_test_included_through_shared_container_selects_its_integration_bina
     plan = selection.select(["src/utils/tests/launch_paths_test.rs"], root=ROOT)
     assert plan.full or all(f"binary({b})" in (plan.rust_filter or "")
                             for b in ("api", "client", "server")), plan
+
+
+@pytest.mark.parametrize("path", ["tools/__init__.py", "tools/quality/__init__.py"])
+def test_package_initializers_keep_cross_owner_import_consumers(path):
+    assert selection.select([path], root=ROOT).full

@@ -27,7 +27,8 @@ fails before any test starts. The initial ownership map is deliberately narrow:
 The index resolves Rust modules and `#[path]` using the existing Rust syntax
 helpers, and resolves literal includes relative to the containing file. Python
 imports use exact package/source directories and explicit repository `sys.path`
-entries; path expressions require a known anchor such as `Path(__file__).parents`.
+entries, including each existing parent package initializer; path expressions
+require a known anchor such as `Path(__file__).parents`.
 Temporary fixture paths and matching basenames do not create repository edges.
 Rust runtime file literals resolve to exact repository/source paths, including
 `concat!(env!("CARGO_MANIFEST_DIR"), ...)` script arguments. Python helper imports
