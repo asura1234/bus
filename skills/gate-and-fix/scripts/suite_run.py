@@ -27,7 +27,7 @@ SCRIPT = str(Path(__file__).with_name("bus_quality.py"))
 def needs_profiles(selection: Selection) -> bool:
     # The feature build overwrites normal-target binaries. Keep default and
     # dev-tools in different Cargo outputs whenever both variants are selected.
-    return selection.full or (selection.dev_tools and selection.rust_filter != "none()")
+    return selection.full or (selection.dev_tools and (selection.rust_filter != "none()" or selection.binary))
 
 
 def nextest(*targets: str, coverage: bool = False, expression: str | None = None) -> tuple[str, ...]:
@@ -65,16 +65,23 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
             tests.append(Gate("affected-rust", nextest("--all-targets", coverage=instrumented,
                               expression=selection.rust_filter), env=quality.child_env(
                                   LLVM_PROFILE_FILE_NAME=quality.profile_file_name("affected")) if instrumented else env))
+    elif selection.binary:
+        argv = (("cargo", "llvm-cov", "run", "--locked", "--no-report", "--no-rustc-wrapper", "--bin", "bus", "--", "--help")
+                if instrumented else ("cargo", "build", "--locked", "--bin", "bus"))
+        build.append(Gate("cli-build", argv, env=quality.child_env(
+            LLVM_PROFILE_FILE_NAME=quality.profile_file_name("cli")) if instrumented else env))
     if selection.python:
-        roots = tuple(name for name in selection.python if (quality.ROOT / name).exists())
-        if roots:
+        files = sorted({path.relative_to(quality.ROOT).as_posix()
+                        for name in selection.python for path in (quality.ROOT / name).rglob('*_test.py')
+                        if path.is_file()})
+        if files:
             python_env = quality.child_env()
-            if rust:
+            if rust or selection.binary:
                 python_env.update(BUS_TEST_BINARY=str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus")))
             if instrumented:
                 python_env["LLVM_PROFILE_FILE"] = str(target / quality.profile_file_name("cli"))
             tests.append(Gate("python", (sys.executable, "-m", "pytest", "-q",
-                             "-o", "python_files=*_test.py", *roots), env=python_env))
+                             "-o", "python_files=*_test.py", *files), env=python_env))
     if selection.dev_tools:
         tests.append(Gate("dev-tools", nextest("--features", "dev-tools", "--bin", "bus",
                           "--test", "cli", "--test", "tui-driver",
@@ -97,6 +104,9 @@ def batch(gates: list[Gate]) -> list[GateResult]:
         return []
     print("Running concurrently: " + ", ".join(gate.name for gate in gates), flush=True)
     results = run_gates(gates, cwd=quality.ROOT)
+    results = [replace(result, exit_code=0, stdout=result.stdout +
+                       "\npytest exit 5: empty selection, nothing to run\n")
+               if result.name == "python" and result.exit_code == 5 else result for result in results]
     for result in results:
         print(f"{result.name}: {'PASS' if result.passed else 'FAIL'} ({result.duration_ms / 1000:.3f}s)", flush=True)
         if not result.passed:
@@ -160,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         paths = [] if args.full else changed_paths(quality.ROOT, args.base)
-        selection = select(paths, full=args.full)
+        selection = select(paths, full=args.full, root=quality.ROOT)
         if args.plan:
             print(json.dumps({**asdict(selection), "head": quality.head(), "paths": paths,
                               "coverage_floor": args.full}, indent=2))

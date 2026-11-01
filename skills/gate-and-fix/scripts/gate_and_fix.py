@@ -11,7 +11,7 @@ import time
 import uuid
 from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -35,7 +35,7 @@ class Gate:
     resources: frozenset[str] = frozenset()
     requires_exclusive_execution: bool = False
     scrub_session_env: bool = False
-    env: dict[str, str] | None = None
+    env: dict[str, str] | None = field(default=None, repr=False)
 
 
 def _validate_paths(changed_files: Sequence[str]) -> tuple[str, ...]:

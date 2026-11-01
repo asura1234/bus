@@ -9,6 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import suite_selection as selection  # noqa: E402
 
 
+def put(root, name, text):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
 @pytest.mark.parametrize("path", [
     "src/main.rs", "src/protocol/types.rs", "src/client/rooms/ui.rs",
     "Cargo.toml", "Cargo.lock", "build.rs", "build_identity.rs", "run",
@@ -23,15 +29,21 @@ def test_shared_or_unknown_changes_require_every_suite(path):
     assert plan.dev_tools
 
 
-def test_test_only_module_change_selects_owning_rust_namespace():
-    plan = selection.select(["src/agents/providers/codex/tests/hooks_test.rs"])
+def test_test_only_module_change_selects_owning_rust_namespace(tmp_path):
+    put(tmp_path, "src/main.rs", "mod agents;")
+    put(tmp_path, "src/agents/mod.rs", '#[path="tests/local_test.rs"] mod local;')
+    put(tmp_path, "src/agents/tests/local_test.rs", "#[test] fn case() {}")
+    plan = selection.select(["src/agents/tests/local_test.rs"], root=tmp_path)
     assert not plan.full
     assert plan.rust_filter == "(binary(bus) & test(/^agents::/))"
     assert plan.python == ()
 
 
-def test_integration_fixture_selects_all_targets_that_share_its_directory():
-    plan = selection.select(["tests/client/room_screen_test.rs"])
+def test_integration_fixture_selects_all_targets_that_reference_it(tmp_path):
+    put(tmp_path, "Cargo.toml", '[[test]]\nname="client"\npath="tests/client/client_test.rs"\n[[test]]\nname="room-screen"\npath="tests/client/room_screen_test.rs"')
+    put(tmp_path, "tests/client/client_test.rs", '#[path="room_screen_test.rs"] mod shared;')
+    put(tmp_path, "tests/client/room_screen_test.rs", "#[test] fn case() {}")
+    plan = selection.select(["tests/client/room_screen_test.rs"], root=tmp_path)
     assert plan.rust_filter == "binary(client) | binary(room-screen)"
     assert not plan.full
 
@@ -40,17 +52,20 @@ def test_shared_rust_fixture_falls_back_to_all_suites():
     assert selection.select(["tests/common/mod.rs"]).full
 
 
-def test_dev_tool_test_changes_do_not_skip_the_feature_variant():
-    plan = selection.select(["src/devtools/tests/screens_test.rs", "tests/tui/driver_test.rs"])
+def test_dev_tool_test_changes_do_not_skip_the_feature_variant(tmp_path):
+    put(tmp_path, "src/main.rs", "mod devtools;")
+    put(tmp_path, "src/devtools/mod.rs", '#[path="tests/screens_test.rs"] mod screens;')
+    put(tmp_path, "src/devtools/tests/screens_test.rs", "#[test] fn case() {}")
+    put(tmp_path, "Cargo.toml", '[[test]]\nname="tui-driver"\npath="tests/tui/driver_test.rs"')
+    put(tmp_path, "tests/tui/driver_test.rs", "#[test] fn case() {}")
+    plan = selection.select(["src/devtools/tests/screens_test.rs", "tests/tui/driver_test.rs"], root=tmp_path)
     assert plan.dev_tools
     assert not plan.full
 
 
-def test_python_owner_runs_its_suite_without_building_rust():
+def test_embedded_python_skill_requires_all_suites():
     plan = selection.select(["skills/best-of-n/scripts/ledger.py"])
-    assert plan.python == ("skills/best-of-n",)
-    assert plan.rust_filter == "none()"
-    assert not plan.dev_tools
+    assert plan.full and plan.dev_tools and "tools" in plan.python
 
 
 def test_full_flag_cannot_be_narrowed_by_document_only_changes():

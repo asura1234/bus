@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import suite_run as runner  # noqa: E402
-from suite_selection import select  # noqa: E402
+from suite_selection import Selection, select  # noqa: E402
 
 
 def test_full_build_phases_keep_normal_and_instrumented_builds_independent():
@@ -31,14 +31,47 @@ def test_full_build_phases_keep_normal_and_instrumented_builds_independent():
 
 
 def test_python_only_selection_does_not_start_cargo():
-    build, tests = runner.commands(select(["skills/best-of-n/scripts/ledger.py"]))
+    build, tests = runner.commands(Selection(False, "none()", ("skills/best-of-n",), False, "pure tooling"))
     assert not build
     assert len(tests) == 1 and tests[0].name == "python"
-    assert tests[0].argv[-1] == "skills/best-of-n"
+    assert all(path.startswith("skills/best-of-n/") for path in tests[0].argv[6:])
+
+
+def test_empty_python_owner_does_not_launch_pytest(tmp_path):
+    (tmp_path / "skills/empty").mkdir(parents=True)
+    plan = Selection(False, "none()", ("skills/empty",), False, "empty owner")
+    with patch.object(runner.quality, "ROOT", tmp_path):
+        build, tests = runner.commands(plan)
+    assert not build and not tests
+
+
+def test_empty_python_file_collection_is_success_but_real_failures_stay_red(tmp_path):
+    path = tmp_path / "empty_test.py"
+    path.write_text("")
+    result = runner.batch([runner.Gate("python", (sys.executable, "-m", "pytest", "-q", str(path)))])
+    assert result[0].passed
+    path.write_text("def test_fails():\n    assert False, 'real regression'\n")
+    result = runner.batch([runner.Gate("python", (sys.executable, "-m", "pytest", "-q", str(path)))])
+    assert not result[0].passed
+
+
+def test_independent_tool_test_builds_and_passes_external_cli(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "cli_test.py").write_text('import os\nBINARY = os.environ["BUS_TEST_BINARY"]\n')
+    plan = select(["tools/cli_test.py"], root=tmp_path)
+    assert not plan.full and plan.binary and plan.rust_filter == "none()"
+    target = tmp_path / "external-output"
+    with patch.object(runner.quality, "ROOT", tmp_path), patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+        build, tests = runner.commands(plan)
+    assert build[0].argv == ("cargo", "build", "--locked", "--bin", "bus")
+    binary = tests[0].env.get("BUS_TEST_BINARY")
+    assert binary == str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus"))
+    assert not (tmp_path / "target").exists()
 
 
 def test_affected_cli_keeps_default_binary_separate_from_dev_tools_build():
-    plan = select(["tests/cli/cli_test.rs"])
+    plan = Selection(False, "binary(cli)", (), True, "CLI integration")
     assert not plan.coverage_floor
     build, tests = runner.commands(plan)
     assert "llvm-cov" in build[0].argv

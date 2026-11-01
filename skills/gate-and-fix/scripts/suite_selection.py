@@ -5,12 +5,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from suite_references import References
+
 PYTHON = ("scripts", "skills", "cli_extensions", "tools", "packaging")
 SHARED_SKILLS = {"_bus", "gate-and-fix", "worktree-new", "rebase-origin-main"}
-INTEGRATION = {
-    "api": ("api",), "client": ("client", "room-screen"),
-    "server": ("server",), "cli": ("cli",), "tui": ("tui-driver",),
-}
 RUST_OWNERS = {"agents", "cli", "client", "messaging", "platform", "protocol",
                "server", "terminal", "utils", "devtools"}
 
@@ -23,44 +21,55 @@ class Selection:
     dev_tools: bool
     reason: str
     coverage_floor: bool = False
+    binary: bool = False
 
 
-def select(paths: list[str], *, full: bool = False) -> Selection:
+def select(paths: list[str], *, full: bool = False, root: Path | None = None) -> Selection:
     coverage_floor = full
     rust, python = set(), set()
     dev_tools = False
+    root = root or Path(__file__).resolve().parents[3]
+    for name in paths:
+        if not name or PurePosixPath(name).is_absolute() or any(p in {"", ".", ".."} for p in name.split("/")):
+            raise ValueError("paths must be normalized repository-relative paths")
+    references = References(root) if paths and not full else None
+    full |= bool(references and references.uncertain)
     for name in sorted(set(paths)):
         path = PurePosixPath(name)
         if not name or path.is_absolute() or any(p in {"", ".", ".."} for p in name.split("/")):
             raise ValueError("paths must be normalized repository-relative paths")
         parts = path.parts
-        if parts[0] == "src" and path.suffix == ".rs" and (
+        if full:
+            break
+        if name not in references.paths or references.cross_owner(name):
+            full = True
+        elif parts[0] == "src" and path.suffix == ".rs" and (
             "tests" in parts[2:-1] or path.name.endswith("_test.rs")
-        ) and len(parts) > 2 and parts[1] in RUST_OWNERS:
+        ) and len(parts) > 2 and parts[1] in RUST_OWNERS and references.incoming(name):
             owner = parts[1]
             if owner == "devtools":
                 dev_tools = True
             else:
                 rust.add(f"(binary(bus) & test(/^{owner}::/))")
-        elif len(parts) > 2 and parts[0] == "tests" and parts[1] in INTEGRATION:
-            if parts[1] == "tui":
-                dev_tools = True
-            else:
-                rust.update(f"binary({target})" for target in INTEGRATION[parts[1]])
-                dev_tools |= parts[1] == "cli"
+        elif parts[0] == "tests" and path.suffix == ".rs":
+            targets = references.integration_targets(name)
+            if not targets:
+                full = True
+            rust.update(f"binary({target})" for target in targets if target != "tui-driver")
+            dev_tools |= bool(targets.intersection({"cli", "tui-driver"}))
         elif parts[0] == "skills" and len(parts) > 2 and path.suffix == ".py" and parts[1] not in SHARED_SKILLS:
             python.add("/".join(parts[:2]))
         elif parts[0] in {"tools", "scripts", "cli_extensions", "packaging"} and path.suffix == ".py":
             python.add(parts[0])
-        elif path.suffix == ".md":
-            # Documentation has Python contract tests, including installed skill bundles.
-            python.update(PYTHON)
         else:
             full = True
     if full:
-        return Selection(True, None, PYTHON, True, "explicit full mode or shared/unknown input", coverage_floor)
+        return Selection(True, None, PYTHON, True, "explicit full mode or cross-owner/shared/unknown input", coverage_floor, True)
+    tests = [name for name in references.sources if name.endswith('_test.py') and any(
+        name.startswith(prefix + '/') for prefix in python
+    )] if references else []
     return Selection(False, " | ".join(sorted(rust)) or "none()", tuple(sorted(python)),
-                     dev_tools, "explicit test/tooling owners; coverage floor skipped")
+                     dev_tools, "source-reference owners; coverage floor skipped", binary=bool(references and references.needs_binary(tests)))
 
 
 def changed_paths(root: Path, base: str) -> list[str]:
