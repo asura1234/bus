@@ -74,6 +74,29 @@ def test_installed_markdown_links_resolve_inside_the_installed_bundle(tmp_path):
     assert broken == []
 
 
+def test_verdict_guide_is_shipped_for_all_referring_skills_and_providers(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _bus(home, "install", "--yes")
+    target = "../_bus/docs/bus-communication-guide.md"
+    referring_skills = [page.parent.name for page in (ROOT / "skills").glob("*/SKILL.md")
+                        if target in page.read_text()]
+    assert referring_skills
+    canonical = (ROOT / "orchestration/bus-communication-guide.md").read_bytes()
+    for provider in (".claude", ".agents", ".cursor", ".grok", ".kimi-code"):
+        root = home / provider / "skills"
+        guide = root / "_bus/docs/bus-communication-guide.md"
+        assert guide.is_file(), f"{provider}: verdict guide is missing from the bundle"
+        assert not guide.is_symlink()
+        assert guide.read_bytes() == canonical
+        for skill in referring_skills:
+            page = root / skill / "SKILL.md"
+            assert target in page.read_text()
+            resolved = (page.parent / target).resolve()
+            assert resolved == guide.resolve()
+            assert resolved.is_relative_to(root.resolve())
+
+
 @pytest.mark.parametrize("metadata", [".DS_Store", "Thumbs.db"])
 def test_disposable_os_metadata_keeps_bus_ownership(tmp_path, metadata):
     home = tmp_path / "home"
