@@ -946,3 +946,9 @@ idle then deliver, and an approval card without `--yolo`.
   Save exact recovery-marker proof before the editor returns it, and remove that
   proof only after the native composer is empty. A cancelled exchange can yield
   to owned recovery; an unacknowledged active exchange keeps its file ownership.
+  Kimi 2.4.1 can emit several internal `agent.turn.ended` counters inside one
+  outer `turn.prompt`; they are separate ID domains. Read through the matching
+  outer commit and compare its last native final byte-for-byte with Bus. A first
+  internal end cannot freeze the answer or exclude later attested guidance. Keep
+  the last nonempty text within an iteration, including a trailing think-only
+  fragment, while a new silent iteration must not reuse an earlier answer.

@@ -1,4 +1,4 @@
-//! Kimi 2.4.0's private wire is the completion witness. Stop is only a wake.
+//! Kimi 2.4.x's private wire is the completion witness. Stop is only a wake.
 use serde_json::Value;
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -123,18 +123,28 @@ fn scan_committed_outcome(
                 prompts.push(text);
                 owned = true;
             }
-            "prompt.steered" if owned && agent_outcome.is_none() => {
+            "prompt.steered" if owned && turn_reason.is_none() => {
                 if let Some((id, text)) = guidance(&value, &prompt_id) {
                     if guidance_ids.insert(id) {
                         prompts.extend(text);
                     }
                 }
             }
-            "agent.message.appended" if owned && agent_outcome.is_none() => {
-                update_answer(&value, &mut answer)?;
+            "agent.message.appended" if owned && turn_reason.is_none() => {
+                if update_answer(&value, &mut answer, agent_outcome.is_some())? {
+                    agent_outcome = None;
+                    agent_error = None;
+                }
             }
-            "agent.turn.ended" if owned => {
-                if value.get("turnId").and_then(Value::as_u64) == Some(turn_id) {
+            "agent.turn.ended" if owned && turn_reason.is_none() => {
+                // This counts internal agent runs, not outer turn.prompt IDs.
+                // The main wire and owned outer prompt supply its scope.
+                if value.get("turnId").and_then(Value::as_u64).is_some()
+                    && value
+                        .get("agentId")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| id == "main")
+                {
                     agent_outcome = Some(value.get("outcome")?.as_str()?.to_owned());
                     agent_error = value
                         .get("errorMessage")
@@ -178,7 +188,14 @@ fn scan_committed_outcome(
     None
 }
 
-fn update_answer(value: &Value, answer: &mut Option<String>) -> Option<()> {
+fn update_answer(value: &Value, answer: &mut Option<String>, new_iteration: bool) -> Option<bool> {
+    if value
+        .get("agentId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != "main")
+    {
+        return Some(false);
+    }
     let message = value.get("message")?.get("message")?;
     if message.get("role").and_then(Value::as_str) != Some("assistant")
         || value
@@ -186,7 +203,10 @@ fn update_answer(value: &Value, answer: &mut Option<String>) -> Option<()> {
             .and_then(Value::as_str)
             != Some("llm")
     {
-        return Some(());
+        return Some(false);
+    }
+    if new_iteration {
+        *answer = None;
     }
     if message
         .get("toolCalls")
@@ -194,7 +214,7 @@ fn update_answer(value: &Value, answer: &mut Option<String>) -> Option<()> {
         .is_some_and(|calls| !calls.is_empty())
     {
         *answer = None;
-        return Some(());
+        return Some(true);
     }
     let text = message
         .get("content")?
@@ -207,7 +227,7 @@ fn update_answer(value: &Value, answer: &mut Option<String>) -> Option<()> {
     if !text.is_empty() {
         *answer = Some(text);
     }
-    Some(())
+    Some(true)
 }
 
 fn plain_text(value: &Value, field: &str) -> Option<String> {

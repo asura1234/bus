@@ -117,3 +117,184 @@ fn kimi_synchronous_and_delayed_tools_share_only_their_attested_native_final() {
         );
     }
 }
+
+const ITERATIONS: &str =
+    include_str!("../../../../tests/fixtures/kimi-steer/thinking-iterations-2.4.1.jsonl");
+
+#[test]
+fn kimi_inner_agent_iterations_keep_the_last_outer_prompt_final() {
+    let rows: Vec<Value> = ITERATIONS
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let lead = rows[0]["input"][0]["text"].as_str().unwrap();
+    let guidance = rows
+        .iter()
+        .find(|row| row["type"] == "prompt.steered")
+        .unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    // Real 2.4.1 wire: outer prompt 1 contains agent iterations 1 and 2.
+    for prompt in [lead, guidance] {
+        assert_eq!(
+            committed_final(ITERATIONS, 1, prompt).as_deref(),
+            Some("N265_THINK_GUIDED_13631")
+        );
+    }
+}
+
+#[test]
+fn kimi_next_outer_prompt_uses_its_own_internal_iteration_counter() {
+    for inner in [2, 3, 40] {
+        let rows = [
+            serde_json::json!({"type":"turn.prompt","agentId":"main","turnId":2,"promptId":"next","input":[{"type":"text","text":"next task"}]}),
+            serde_json::json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"text","text":"next final"}]}}}),
+            serde_json::json!({"type":"agent.turn.ended","turnId":inner,"outcome":"done"}),
+            serde_json::json!({"type":"turn.ended","agentId":"main","turnId":2,"reason":"completed"}),
+            serde_json::json!({"type":"prompt.completed","agentId":"main","promptId":"next","reason":"completed"}),
+        ];
+        let wire = format!(
+            "{ITERATIONS}{}",
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>()
+        );
+        assert_eq!(
+            committed_final(&wire, 2, "next task").as_deref(),
+            Some("next final"),
+            "internal iteration {inner}"
+        );
+    }
+}
+
+#[test]
+fn kimi_latest_internal_failure_and_incomplete_outer_commit_are_not_an_old_final() {
+    let mut rows: Vec<Value> = ITERATIONS
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let lead = rows[0]["input"][0]["text"].as_str().unwrap().to_owned();
+    let open = rows
+        .iter()
+        .filter(|row| row["type"] != "turn.ended" && row["type"] != "prompt.completed")
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    assert_eq!(
+        committed_outcome(&open, 1, &lead),
+        None,
+        "internal iterations cannot commit an open outer prompt"
+    );
+    let latest = rows
+        .iter_mut()
+        .rev()
+        .find(|row| row["type"] == "agent.turn.ended")
+        .unwrap();
+    latest["outcome"] = serde_json::json!("failed");
+    latest["errorMessage"] = serde_json::json!("later native iteration failed");
+    for row in rows
+        .iter_mut()
+        .filter(|row| row["type"] == "turn.ended" || row["type"] == "prompt.completed")
+    {
+        row["reason"] = serde_json::json!("failed");
+    }
+    let failed = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    assert_eq!(
+        committed_outcome(&failed, 1, &lead),
+        Some(Outcome::Failed("later native iteration failed".into()))
+    );
+}
+
+#[test]
+fn kimi_silent_internal_iteration_does_not_reuse_an_earlier_answer() {
+    let mut rows: Vec<Value> = ITERATIONS
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let lead = rows[0]["input"][0]["text"].as_str().unwrap().to_owned();
+    rows.iter_mut()
+        .rev()
+        .find(|row| row["type"] == "agent.message.appended")
+        .unwrap()["message"]["message"]["content"] = serde_json::json!([]);
+    let wire = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    assert_eq!(committed_outcome(&wire, 1, &lead), Some(Outcome::NoReply));
+}
+
+#[test]
+fn kimi_latest_internal_output_requires_its_own_iteration_end_before_outer_commit() {
+    let mut rows: Vec<Value> = ITERATIONS
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let lead = rows[0]["input"][0]["text"].as_str().unwrap().to_owned();
+    let last_end = rows
+        .iter()
+        .rposition(|row| row["type"] == "agent.turn.ended")
+        .unwrap();
+    rows.remove(last_end);
+    let wire = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    assert_eq!(
+        committed_outcome(&wire, 1, &lead),
+        None,
+        "an earlier iteration cannot attest later output"
+    );
+}
+
+#[test]
+fn kimi_guidance_between_internal_iterations_remains_owned_until_outer_commit() {
+    let mut rows: Vec<Value> = ITERATIONS
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let position = rows
+        .iter()
+        .position(|row| row["type"] == "prompt.steered")
+        .unwrap();
+    let guidance = rows.remove(position);
+    let prompt = guidance["content"][0]["text"].as_str().unwrap().to_owned();
+    let position = rows
+        .iter()
+        .position(|row| row["type"] == "agent.turn.ended")
+        .unwrap()
+        + 1;
+    rows.insert(position, guidance);
+    let wire = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    assert_eq!(
+        committed_final(&wire, 1, &prompt).as_deref(),
+        Some("N265_THINK_GUIDED_13631")
+    );
+}
+
+#[test]
+fn kimi_think_only_message_after_text_keeps_the_same_iteration_answer() {
+    let mut rows: Vec<Value> = ITERATIONS
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let lead = rows[0]["input"][0]["text"].as_str().unwrap().to_owned();
+    let position = rows
+        .iter()
+        .rposition(|row| row["type"] == "agent.message.appended")
+        .unwrap()
+        + 1;
+    rows.insert(position, serde_json::json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"think","think":"same iteration reasoning fragment"}]}}}));
+    let wire = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    assert_eq!(
+        committed_final(&wire, 1, &lead).as_deref(),
+        Some("N265_THINK_GUIDED_13631")
+    );
+}
