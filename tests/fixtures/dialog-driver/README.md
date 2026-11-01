@@ -84,3 +84,12 @@ Modes `text`, `number` and `key` specify an exact `answer`; text renders the dra
 at `{{answer}}` and completes on Enter. Number and key complete immediately.
 
 Each acceptance attempt gets its own evidence directory. A failed rerun cannot expose an older PASS as its result; earlier attempts remain archived.
+
+The private wrapper records only command/target and press receipt metadata, never typed answers. A PASS also requires a native `bus.terminal.driver.result` event with the same control request ID and terminal for every prompt's audited prefix and for the real shell. Raw client/server trace logs, route records and `driver-route-proof.json` are retained. Legacy `send-keys`/`choose`/`answer` and unapproved native pane input invalidate the proof; the runner's single shell-setup request is recorded separately. The real driver's correlated reply must be durably complete/replied.
+
+Cleanup records a failed stop and retains its private root without replacing the original failure. Every attempt prints its evidence path. An unconfirmed cleanup cannot produce PASS.
+
+Fast runner regressions (no provider or private server is launched):
+```sh
+python3 -B tests/dialog_driver_acceptance_test.py AuditReaderTests AcceptanceEvidenceTests -v
+```
