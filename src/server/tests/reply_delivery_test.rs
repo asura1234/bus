@@ -1361,9 +1361,9 @@ fn run_soak() {
         f.state().room(f.work).unwrap().unread_count as usize,
         completed + notices.len()
     );
-    assert_eq!(f.stall_diagnostics(), round);
+    assert_eq!(f.stall_diagnostics(), 0);
     f.assert_publications();
-    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} intentional stall diagnostics, {} idle-worker notices, no repeated stall diagnostics", round * 30, began.elapsed(), f.stall_diagnostics(), notices.len());
+    eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} stall diagnostics, {} idle-worker notices", round * 30, began.elapsed(), f.stall_diagnostics(), notices.len());
 }
 
 /// Negative control: the contract must notice a second visible publication,
