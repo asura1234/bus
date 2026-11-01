@@ -894,7 +894,7 @@ fn sidebar_build_hash_keeps_save_failure_notices_visible() {
 }
 
 #[test]
-fn each_room_has_a_right_aligned_working_or_blocked_agent_count() {
+fn each_room_has_a_right_aligned_working_agent_count() {
     let (mut ui, room, first) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.confirm_hook_setup(first).unwrap();
@@ -923,7 +923,7 @@ fn each_room_has_a_right_aligned_working_or_blocked_agent_count() {
         .map(|x| buffer[(x, row)].symbol())
         .collect();
     assert!(line.starts_with(" Agents"), "{line}");
-    let count = line.find("2/4").expect("active/total count");
+    let count = line.find("1/4").expect("active/total count");
     assert_eq!(count + 3, ui.view.sidebar.width as usize - 2, "{line}");
     assert!(!line.contains("stalled"), "{line}");
 }

@@ -144,11 +144,7 @@ fn sidebar_agent_counts(state: &BusState, room: RoomId) -> (usize, usize) {
         .filter(|agent| agent.room_id == room)
         .fold((0, 0), |(active, total), agent| {
             (
-                active
-                    + usize::from(matches!(
-                        agent.shown_status(),
-                        RuntimeStatus::Working | RuntimeStatus::Blocked
-                    )),
+                active + usize::from(agent.shown_status() == RuntimeStatus::Working),
                 total + 1,
             )
         })
