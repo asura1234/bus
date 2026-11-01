@@ -83,7 +83,7 @@
         {
           "type": "screen",
           "id": "kimi-folder-trust",
-          "screen": "↑↓ navigate · Enter select · Esc exit\nTrust this folder?\n/private/tmp/tui-driver-project\n\n{{options}}\n\n\n",
+          "screen": " ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  Trust this folder?\n  ↑↓ navigate · Enter select · Esc exit\n\n  /private/tmp/tui-driver-project\n\n  No project integrations or instructions to activate.\n\n  Trust is remembered for this folder, including future project config changes.\n  Tool approvals follow your permission settings.\n\n{{options}}\n ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n",
           "input": {
             "mode": "menu",
             "labels": [
