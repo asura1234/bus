@@ -24,15 +24,26 @@ fn post(worker: &mut Worker, room: RoomId, author: AgentId, to: &str, key: &str)
     assert!(response.ok, "{response:?}");
 }
 
+fn orchestrator(worker: &mut Worker, room: RoomId, dir: &std::path::Path) -> AgentId {
+    let master = worker.state.master_room().unwrap().id;
+    let id = worker
+        .state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.into(), None)
+        .unwrap();
+    worker.state.bind_orchestrator(id, room).unwrap();
+    id
+}
+
 #[test]
 fn unread_dot_tracks_only_developer_recipients_and_clears_on_open() {
     let (mut worker, room, author, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
+    let orch = orchestrator(&mut worker, room, &dir);
     let peer = worker
         .state
         .create_agent(room, "peer", Provider::Codex, dir.clone(), None)
         .unwrap();
-    for (target, recipient) in [(room, "you"), (master, "human")] {
+    for (target, author, recipient) in [(room, author, "you"), (master, orch, "human")] {
         worker
             .state
             .select_room(if target == room { master } else { room })
@@ -61,8 +72,9 @@ fn unread_dot_tracks_only_developer_recipients_and_clears_on_open() {
 fn unread_dot_survives_server_reopen_and_seen_state_stays_cleared() {
     let (mut worker, room, author, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
+    let orch = orchestrator(&mut worker, room, &dir);
     post(&mut worker, room, author, "human", "dot-work-restart");
-    post(&mut worker, master, author, "you", "dot-master-restart");
+    post(&mut worker, master, orch, "you", "dot-master-restart");
     drop(worker);
     let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
     for target in [master, room] {

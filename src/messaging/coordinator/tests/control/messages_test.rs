@@ -634,10 +634,10 @@ fn bus_notices_load_beside_reports_to_the_developer() {
 }
 
 #[test]
-fn notify_you_any_sender_can_post_in_any_conversation_room() {
+fn notify_you_worker_can_post_in_any_work_room() {
     let (mut worker, work, sender, dir) = fixture();
-    let master = worker.state.master_room().unwrap().id;
-    for room in [work, master] {
+    let other = worker.state.create_room("other").unwrap();
+    for room in [work, other] {
         for selector in ["you", "YOU", "human"] {
             let sent = call(
                 &mut worker,

@@ -1409,9 +1409,9 @@ async fn reply_contract_rejects_second_visible_publication() {
 #[tokio::test]
 async fn orchestrator_inbox_admits_master_peers_before_background_shells_finish() {
     for restart in [false, true] {
-        let mut f = Delivery::new(&[Provider::Codex], false);
-        let sender = f.agents[0];
-        let orch = f.add_orchestrator();
+        let mut f = Delivery::new(&[Provider::ClaudeCode, Provider::Codex], true);
+        let orch = f.agents[0];
+        let sender = f.agents[1];
         let held = f.send(orch, f.work, "notice", false, None);
         f.tick();
         f.start(orch, "held", "notice");
@@ -1510,9 +1510,9 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
 
 #[tokio::test]
 async fn orchestrator_inbox_human_turn_and_interrupt_cannot_renew_an_old_hold() {
-    let mut f = Delivery::new(&[Provider::Codex], false);
-    let sender = f.agents[0];
-    let orch = f.add_orchestrator();
+    let mut f = Delivery::new(&[Provider::ClaudeCode, Provider::Codex], true);
+    let orch = f.agents[0];
+    let sender = f.agents[1];
     let held = f.send(orch, f.work, "notice", false, None);
     f.tick();
     f.start(orch, "held", "notice");
@@ -1548,9 +1548,9 @@ async fn orchestrator_inbox_human_turn_and_interrupt_cannot_renew_an_old_hold() 
 }
 
 fn orchestrator_inbox_burst(round: usize) {
-    let mut f = Delivery::new(&[Provider::Codex], false);
-    let sender = f.agents[0];
-    let orch = f.add_orchestrator();
+    let mut f = Delivery::new(&[Provider::ClaudeCode, Provider::Codex], true);
+    let orch = f.agents[0];
+    let sender = f.agents[1];
     let held = f.send(orch, f.work, "work notice", false, None);
     f.tick();
     f.start(orch, "held", "work notice");

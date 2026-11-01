@@ -411,6 +411,7 @@ for --off. control_unavailable can occur while reading the completion status.
 See docs/developer-notifications.md for recipient and CLI configuration."#;
 
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
+Bus refuses new worker sends in MASTER (master_reserved); use your own room, or --reply-to for a MASTER request.
 Use --reply-to MESSAGE --as AGENT --text ANSWER to complete only your recipient
 request mid-turn. It infers room/sender; excludes room,to,queue,async,file.
 Run replies in the foreground; require ok:true and stage:"replied" before claiming
