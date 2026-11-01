@@ -43,30 +43,25 @@ fn framed_content(line: &str) -> Option<&str> {
 
 pub(crate) fn composer_border(line: &str) -> bool {
     let line = line.trim();
-    let rules = |text: &str| text.chars().count() >= 3 && text.chars().all(|c| c == '─');
-    if line.chars().filter(|c| *c == '─').count() >= 3
-        && line
-            .chars()
-            .all(|c| matches!(c, '─' | '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘'))
-    {
-        return true;
-    }
-    let Some(inner) = line.strip_prefix('╰').and_then(|s| s.strip_suffix('╯')) else {
+    let edge = [
+        ('╭', '╮', false),
+        ('┌', '┐', false),
+        ('╰', '╯', true),
+        ('└', '┘', true),
+    ]
+    .into_iter()
+    .find_map(|(left, right, bottom)| {
+        line.strip_prefix(left)
+            .and_then(|s| s.strip_suffix(right))
+            .map(|inner| (inner, bottom))
+    });
+    let Some((inner, bottom)) = edge else {
         return false;
     };
-    let Some((rule, label)) = inner.split_once(' ') else {
-        return false;
-    };
-    let Some(model) = label
-        .strip_prefix("Grok ")
-        .and_then(|s| s.strip_suffix(" ─"))
-    else {
-        return false;
-    };
-    rules(rule)
-        && !model.is_empty()
-        && model.len() <= 80
-        && model
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '(' | ')' | ' ' | '-' | '·'))
+    // The model, mode and remaining allowance are changing labels inside the
+    // lower edge. Callers separately require the framed ❯ prompt row.
+    inner.chars().take_while(|c| *c == '─').count() >= 3
+        && inner.ends_with('─')
+        && !inner.chars().any(char::is_control)
+        && (bottom || inner.chars().all(|c| c == '─'))
 }

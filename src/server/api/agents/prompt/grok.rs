@@ -139,10 +139,9 @@ pub(super) fn input(screen: &str) -> Option<String> {
     });
     let native_input_footer =
         footer.starts_with("enter:send") && footer.contains("shift+enter/opt+enter:newline");
-    // The welcome screen ends at the model-labelled lower border; other
+    // The welcome screen ends at the lower border; other
     // layouts have a separate footer beneath the frame.
-    let bottom = if lines[end].trim().starts_with('╰')
-        && lines[end].contains(" Grok ")
+    let bottom = if lines[end].trim().starts_with(['╰', '└'])
         && crate::agents::grok_surface::composer_border(&lines[end])
     {
         end
@@ -364,10 +363,72 @@ mod tests {
                 "  ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
             } else { line }
         }).collect::<Vec<_>>().join("\n");
-        assert_eq!(
-            observe(&unlabelled, "Bus task"),
-            InputObservation::Unavailable
-        );
+        assert_eq!(observe(&unlabelled, "Bus task"), InputObservation::Empty);
+    }
+
+    // Captured from a real Grok 1.0.70 welcome composer when the account's
+    // remaining allowance fell below 10 percent. No Enter had been sent.
+    const WEEKLY_LIMIT: &str =
+        include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-weekly-limit.txt");
+
+    #[test]
+    fn grok_structural_composer_accepts_changing_border_labels() {
+        for label in [
+            "Weekly limit left: 9% · Grok 4.7 (high)",
+            "Grok 4.7 (high) · always-approve",
+            "Model Ω / fast · mode: plan · remaining: 9%",
+            "",
+        ] {
+            let screen = WEEKLY_LIMIT.replace("Weekly limit left: 9% · Grok 4.7 (high)", label);
+            assert_eq!(
+                observe(&screen, "Bus task"),
+                InputObservation::Empty,
+                "{label}"
+            );
+            let draft = screen.replacen("│ ❯ ", "│ ❯ Bus task", 1);
+            assert_eq!(
+                observe(&draft, "Bus task"),
+                InputObservation::Pending,
+                "{label}"
+            );
+            assert_eq!(
+                observe(&draft, "another task"),
+                InputObservation::Unavailable
+            );
+            let historical_card = format!(
+                "{}\n{screen}\nShift+Tab:mode │ Ctrl+.:shortcuts\n",
+                include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt")
+            );
+            assert!(crate::agents::dialog::parse(&historical_card).is_none());
+            assert_eq!(
+                observe(&historical_card, "Bus task"),
+                InputObservation::Empty
+            );
+        }
+    }
+
+    #[test]
+    fn grok_structural_composer_requires_a_prompt_and_complete_box() {
+        for screen in [
+            WEEKLY_LIMIT.replace('❯', " "),
+            WEEKLY_LIMIT.replace('╯', " "),
+            WEEKLY_LIMIT.replace('╭', " "),
+            WEEKLY_LIMIT.replace("│ ❯ ", "│ menu "),
+        ] {
+            assert_eq!(observe(&screen, "Bus task"), InputObservation::Unavailable);
+        }
+        for dialog in [
+            include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt"),
+            include_str!("../../../../../tests/fixtures/grok-dialog/question.txt"),
+            include_str!(
+                "../../../../../tests/fixtures/grok-dialog/native-1.0.70-startup-trust.txt"
+            ),
+        ] {
+            assert_eq!(
+                observe(&format!("{WEEKLY_LIMIT}\n{dialog}"), "Bus task"),
+                InputObservation::Unavailable
+            );
+        }
     }
 
     #[test]
