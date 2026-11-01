@@ -50,7 +50,7 @@ fn refused(code: &str) -> Result<ResponseResult, TransportError> {
 impl Transport for ExitedPane {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList { agents: vec![
                 serde_json::from_value(json!({"terminal_id":"terminal","pane_id":"pane","agent":"claude","interactive_ready":true,"agent_status":"idle","agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"session"},"workspace_id":"w","tab_id":"t","focused":false,"revision":1})).unwrap()
             ] }),
             Method::PaneGet(p) if self.open && p.pane_id == "worker-pane" => Ok(ResponseResult::PaneInfo { pane: serde_json::from_value(json!({
@@ -285,7 +285,7 @@ struct ScreenPane {
 impl Transport for ScreenPane {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
             Method::PaneGet(p) if p.pane_id == self.pane => Ok(ResponseResult::PaneInfo { pane: serde_json::from_value(json!({
                 "pane_id":p.pane_id,"terminal_id":self.terminal,"workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown","revision":1,"agent_process_exited":true
             })).unwrap() }),

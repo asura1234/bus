@@ -14,13 +14,6 @@ pub(crate) struct TransportError {
 
 pub(crate) trait Transport: Send {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError>;
-    /// Non-native transports can retain their ordinary list observation.
-    fn list_with_detection_context(
-        &mut self,
-        _context: crate::protocol::api::schema::AgentDetectionContexts,
-    ) -> Result<ResponseResult, TransportError> {
-        self.request(Method::AgentList(Default::default()))
-    }
 }
 
 pub(crate) struct BusTransport {
@@ -38,12 +31,6 @@ impl BusTransport {
 }
 
 impl Transport for BusTransport {
-    fn list_with_detection_context(
-        &mut self,
-        context: crate::protocol::api::schema::AgentDetectionContexts,
-    ) -> Result<ResponseResult, TransportError> {
-        self.request(Method::AgentListWithDetectionContext(context))
-    }
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         self.request_using(method, ApiClient::request_value_with_timeout)
     }

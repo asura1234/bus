@@ -238,7 +238,7 @@ struct RejectedResume;
 impl Transport for RejectedResume {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![serde_json::from_value(json!({
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList { agents: vec![serde_json::from_value(json!({
                 "terminal_id":"terminal", "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1", "focused":false, "revision":1, "agent_status":"unknown",
                 "native_resume":{"name":"bus-r1-a2","agent":"claude","session_id":"session","command":"claude --resume session","error":"provider exited before startup confirmation"}
             })).unwrap()] }),
@@ -341,7 +341,9 @@ fn missing_pane_after_restart_is_cleared_but_transport_failure_is_not_evidence()
     impl Transport for MissingPane {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
-                Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: vec![] }),
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList { agents: vec![] })
+                }
                 Method::PaneGet(_) => Err(TransportError {
                     code: Some(self.code.into()),
                     message: self.code.into(),
@@ -661,7 +663,7 @@ fn cold_resume_rejects_foreign_missing_and_ambiguous_ownership() {
         );
         assert_eq!(
             *calls.lock().unwrap(),
-            vec!["agent.list", "pane.get"],
+            vec!["agent.list_with_detection_context", "pane.get"],
             "{case}"
         );
         assert_eq!(
@@ -835,9 +837,11 @@ struct ResumeDeliveryTransport {
 impl Transport for ResumeDeliveryTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                agents: vec![self.info.clone()],
-            }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList {
+                    agents: vec![self.info.clone()],
+                })
+            }
             Method::AgentPromptIfIdle(params) => {
                 let saved = JsonStore::new(self.state_path.clone())
                     .load()
@@ -917,7 +921,10 @@ fn cold_resume_save_failure_cannot_deliver_or_adopt_an_unpersisted_identity() {
         worker.state.request(request).unwrap().phase,
         RequestPhase::Queued
     );
-    assert_eq!(*calls.lock().unwrap(), vec!["agent.list"]);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["agent.list_with_detection_context"]
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

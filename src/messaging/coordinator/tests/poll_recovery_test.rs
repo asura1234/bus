@@ -144,7 +144,7 @@ fn long_poll_outage_caps_backoff_and_never_delivers_or_sets_composer_error() {
         .lock()
         .unwrap()
         .iter()
-        .all(|call| *call == "agent.list"));
+        .all(|call| *call == "agent.list_with_detection_context"));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

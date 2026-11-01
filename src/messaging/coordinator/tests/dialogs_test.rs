@@ -90,7 +90,7 @@ impl Transport for FakeServer {
                     "dialog_id": screen.current_dialog().map(|dialog| dialog.id),
                 })).unwrap(),
             }),
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
                 agents: vec![serde_json::from_value(json!({
                     "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
                     "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
@@ -749,7 +749,7 @@ impl Transport for CollapsedCodexQuestion {
         .expect("expanded Codex question parses");
         let mut open = self.0.lock().unwrap();
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
                 agents: vec![serde_json::from_value(json!({
                     "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
                     "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,

@@ -133,7 +133,10 @@ fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
                 .lock()
                 .unwrap()
                 .push(crate::protocol::api::api_method_name(&method));
-            if matches!(method, Method::AgentList(_)) {
+            if matches!(
+                method,
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+            ) {
                 if let Some((commands, agent)) = self.delete_during_poll.take() {
                     commands.send((2, BusCommand::DeleteAgent(agent))).unwrap();
                     commands.send((3, BusCommand::Shutdown)).unwrap();
@@ -172,7 +175,10 @@ fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
         }
         worker.run(receiver, events, Arc::clone(&snapshots));
         let expected = if during_poll {
-            vec!["agent.list", "pane.close_if_identity"]
+            vec![
+                "agent.list_with_detection_context",
+                "pane.close_if_identity",
+            ]
         } else {
             vec!["pane.close_if_identity"]
         };

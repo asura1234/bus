@@ -321,7 +321,10 @@ fn delete_last_room_stays_empty_after_restart_and_ignores_late_callbacks() {
     assert!(!recovered.state.is_pristine());
     assert_eq!(
         *calls.lock().unwrap(),
-        vec!["pane.close_if_identity", "agent.list"]
+        vec![
+            "pane.close_if_identity",
+            "agent.list_with_detection_context"
+        ]
     );
     let new_room = recovered.state.create_room("new room").unwrap();
     assert!(new_room.0 > agent.0);

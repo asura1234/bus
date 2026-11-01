@@ -33,7 +33,7 @@ impl Transport for FreshLaunchNative {
                     argv: params.args,
                 })
             }
-            Method::AgentList(_) => {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 self.polls += 1;
                 self.info.launch_pending = self.polls == 1;
                 self.info.interactive_ready = self.polls > 1;
@@ -152,7 +152,7 @@ struct PollingNative {
 impl Transport for PollingNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 // Model `send --async` polling during every status round trip.
                 let command = if self.shutdown {
                     BusCommand::Shutdown

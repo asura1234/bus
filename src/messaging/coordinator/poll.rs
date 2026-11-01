@@ -9,7 +9,9 @@ impl Worker {
     pub(super) fn poll(&mut self) -> Result<Option<Vec<schema::AgentInfo>>, String> {
         let result = self
             .transport
-            .list_with_detection_context(detection_contexts(&self.state, io::now_ms()));
+            .request(super::Method::AgentListWithDetectionContext(
+                detection_contexts(&self.state, io::now_ms()),
+            ));
         let infos = match result {
             Ok(ResponseResult::AgentList { agents }) => agents,
             other => {
@@ -388,6 +390,83 @@ mod detection_context_tests {
     use crate::messaging::model::{
         AgentRuntimeIdentity, Author, Draft, Provider, SubmissionOutcome,
     };
+
+    #[test]
+    fn poll_sends_queued_obligations_through_the_transport_request_contract() {
+        use crate::messaging::native::{Transport, TransportError};
+        use crate::protocol::api::schema::Method;
+        use std::sync::{Arc, Mutex};
+
+        struct Capture(Arc<Mutex<Vec<Method>>>);
+        impl Transport for Capture {
+            fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+                self.0.lock().unwrap().push(method.clone());
+                Ok(match method {
+                    Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                        ResponseResult::AgentList { agents: Vec::new() }
+                    }
+                    _ => ResponseResult::Ok {},
+                })
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bus-poll-context-{}-{}",
+            std::process::id(),
+            io::now_ns()
+        ));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let mut worker = Worker::open(root.clone(), Box::new(Capture(captured.clone()))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Kimi, root.clone(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "work".into(),
+                    recipient_ids: [agent].into(),
+                    files: Vec::new(),
+                },
+                Author::Developer,
+                io::now_ms(),
+            )
+            .unwrap();
+        worker.save(state).unwrap();
+        worker.poll().unwrap();
+        let methods = captured.lock().unwrap();
+        let Some(Method::AgentListWithDetectionContext(context)) = methods.first() else {
+            panic!(
+                "coordinator discarded detection context at the request boundary: {:?}",
+                methods.first()
+            );
+        };
+        assert_eq!(
+            context.agents,
+            [schema::AgentDetectionContext {
+                terminal_id: "terminal".into(),
+                pane_id: "pane".into(),
+                session_id: None,
+                obligation: true,
+                activity_age_ms: None,
+            }]
+        );
+        drop(methods);
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn queued_submitting_and_current_requests_remain_detection_obligations() {

@@ -8,7 +8,10 @@ struct IdleAgents(Vec<String>);
 
 impl Transport for IdleAgents {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        assert!(matches!(method, Method::AgentList(_)));
+        assert!(matches!(
+            method,
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+        ));
         let agents = self
             .0
             .iter()

@@ -33,9 +33,11 @@ struct DirectoryTransport(schema::AgentInfo);
 impl Transport for DirectoryTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList {
-                agents: vec![self.0.clone()],
-            }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList {
+                    agents: vec![self.0.clone()],
+                })
+            }
             _ => Ok(ResponseResult::Ok {}),
         }
     }
@@ -205,7 +207,9 @@ struct MissingPane;
 impl Transport for MissingPane {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentList(_) => Ok(ResponseResult::AgentList { agents: Vec::new() }),
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                Ok(ResponseResult::AgentList { agents: Vec::new() })
+            }
             Method::PaneGet(_) => Err(TransportError {
                 code: Some("pane_not_found".into()),
                 message: "pane not found".into(),
