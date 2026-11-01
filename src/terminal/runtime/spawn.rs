@@ -781,10 +781,7 @@ impl TerminalRuntime {
             })?)
         };
 
-        let detection_context = Arc::new(Mutex::new(
-            super::detection_context::DetectionContext::default(),
-        ));
-        let (managed_launch_pending, detect_handle) = spawn_detection_task(
+        let (managed_launch_pending, detection_context, detect_handle) = spawn_detection_task(
             pane_id,
             agent_detection,
             initial_state.detected_agent,
@@ -795,7 +792,6 @@ impl TerminalRuntime {
             render_notify.clone(),
             render_dirty.clone(),
             kimi_code_home.clone(),
-            detection_context.clone(),
         );
 
         let (draft_input, startup_suggestion_open) =

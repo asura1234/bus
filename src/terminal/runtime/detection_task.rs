@@ -159,11 +159,17 @@ pub(super) fn spawn_detection_task(
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
-    detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
-) -> (Arc<AtomicBool>, Option<tokio::task::AbortHandle>) {
+) -> (
+    Arc<AtomicBool>,
+    Arc<Mutex<super::detection_context::DetectionContext>>,
+    Option<tokio::task::AbortHandle>,
+) {
     let managed_launch_pending = Arc::new(AtomicBool::new(false));
+    let detection_context = Arc::new(Mutex::new(
+        super::detection_context::DetectionContext::default(),
+    ));
     if agent_detection != AgentDetection::Enabled {
-        return (managed_launch_pending, None);
+        return (managed_launch_pending, detection_context, None);
     }
     let task = DetectionTask {
         pane_id,
@@ -175,10 +181,14 @@ pub(super) fn spawn_detection_task(
         render_notify,
         render_dirty,
         kimi_code_home,
-        detection_context,
+        detection_context: detection_context.clone(),
     };
     let handle = tokio::spawn(task.run(initial_agent));
-    (managed_launch_pending, Some(handle.abort_handle()))
+    (
+        managed_launch_pending,
+        detection_context,
+        Some(handle.abort_handle()),
+    )
 }
 
 const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
