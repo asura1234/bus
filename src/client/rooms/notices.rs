@@ -1,4 +1,4 @@
-use super::{ui::Pending, BusUi};
+use super::{BusUi, Pending};
 use crate::messaging::{
     coordinator::BusCommand,
     model::{AgentId, RoomId},
