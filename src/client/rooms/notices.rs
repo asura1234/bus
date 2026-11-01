@@ -1,6 +1,45 @@
-use super::BusUi;
+use super::{ui::Pending, BusUi};
+use crate::messaging::{
+    coordinator::BusCommand,
+    model::{AgentId, RoomId},
+};
 
 impl BusUi {
+    pub(super) fn record_command_failure(
+        &mut self,
+        pending: &Pending,
+        error: &str,
+        recovered: bool,
+        keep: bool,
+    ) {
+        let (agent, field, path) = match &pending.command {
+            BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => (
+                Some(input.name.as_str()),
+                error.contains("PWD").then_some("pwd"),
+                Some(input.cwd.clone()),
+            ),
+            BusCommand::AttachFile(_, path) => (None, Some("file"), Some(path.clone())),
+            BusCommand::RemoveFile(_, path) => {
+                (None, Some("file"), Some(path.display().to_string()))
+            }
+            BusCommand::Suggestions { input, .. } => (None, Some("path"), Some(input.clone())),
+            _ => (None, None, None),
+        };
+        tracing::warn!(
+            event = "bus.command.failed",
+            command_id = pending.id,
+            command = crate::messaging::perf::command_name(&pending.command),
+            room_id = ?command_room(&pending.command).map(|room| room.0),
+            agent_id = ?command_agent(&pending.command).map(|agent| agent.0),
+            agent = agent.unwrap_or(""),
+            field = field.unwrap_or(""),
+            path = path.as_deref().unwrap_or(""),
+            recovered,
+            keep,
+            %error,
+        );
+    }
+
     pub(super) fn sync_agent_notices(&mut self) {
         let agents: Vec<_> = self.snapshot.state.agents().collect();
         for agent in &agents {
@@ -79,5 +118,36 @@ impl BusUi {
                 %error,
             );
         }
+    }
+}
+
+pub(super) fn command_room(command: &BusCommand) -> Option<RoomId> {
+    match command {
+        BusCommand::RenameRoom(room, _)
+        | BusCommand::SetRoomSound(room, _)
+        | BusCommand::SetRoomSoundName(room, _)
+        | BusCommand::DeleteRoom(room)
+        | BusCommand::SelectRoom(room)
+        | BusCommand::MarkRoomSeen(room)
+        | BusCommand::SetNotes(room, _)
+        | BusCommand::SetDraftText(room, _)
+        | BusCommand::SetRecipients(room, _)
+        | BusCommand::AttachFile(room, _)
+        | BusCommand::RemoveFile(room, _)
+        | BusCommand::Submit(room)
+        | BusCommand::SubmitQueued(room) => Some(*room),
+        BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => Some(input.room),
+        _ => None,
+    }
+}
+
+pub(super) fn command_agent(command: &BusCommand) -> Option<AgentId> {
+    match command {
+        BusCommand::RenameAgent(agent, _)
+        | BusCommand::DeleteAgent(agent)
+        | BusCommand::SetDetails(agent, _)
+        | BusCommand::FocusTerminal(agent)
+        | BusCommand::CompleteHookSetup(agent) => Some(*agent),
+        _ => None,
     }
 }

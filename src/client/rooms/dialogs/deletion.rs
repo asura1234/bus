@@ -126,7 +126,7 @@ impl BusUi {
         true
     }
 
-    pub(super) fn settle_deletion(&mut self, id: u64, _error: Option<&String>) {
+    pub(super) fn settle_deletion(&mut self, id: u64) {
         if self
             .deletion
             .as_ref()
@@ -228,7 +228,7 @@ mod tests {
         let (mut ui, room) = deletion_ui();
         ui.confirm_delete();
         let command = ui.deletion.as_ref().unwrap().command_id.unwrap();
-        ui.settle_deletion(command, Some(&"Close failed".into()));
+        ui.settle_deletion(command);
         ui.send_intent = Some(room);
         ui.queue(BusCommand::Submit(room), Effect::None);
         let pending = ui.pending.len();
