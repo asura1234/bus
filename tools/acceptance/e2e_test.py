@@ -334,14 +334,17 @@ class Run:
         pending = set(providers)
         while pending:
             agents = {a["agent_id"]: a for a in self.bus.cli("diagnostics")["agents"]}
+            blocked = {a["id"] for a in self.bus.cli("state")["agents"] if a["status"] == "blocked"}
             for provider in sorted(pending):
                 agent = agents.get(self.agents[provider])
-                if agent and agent["reason"] is None and agent["status"] == "idle":
+                if self.agents[provider] in blocked:
+                    self.answer_dialogs(provider, "trust")
+                    record[provider] = {"waiting": agent}
+                elif agent and agent["reason"] is None and agent["status"] == "idle":
                     pending.discard(provider)
                     record[provider] = {"ready_after_s": round(time.monotonic() - started, 1),
                                         "identity": agent["identity"]}
                 else:
-                    self.answer_dialogs(provider, "trust")
                     record[provider] = {"waiting": agent}
             if pending and time.monotonic() - started > timeout:
                 for provider in pending:

@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -290,7 +291,7 @@ class EndToEndDialogTests(unittest.TestCase):
         run = e2e.Run.__new__(e2e.Run)
         run.answered_frames = {}
         run.agents = {"claude": 3}
-        run.lock = __import__("threading").Lock()
+        run.lock = threading.Lock()
         run.report = {"dialogs": []}
         observed = {"terminal_id": "terminal-3", "pane_id": "w1:p2",
                     "text": "Accessing workspace:\n❯ 1. No, exit\n  2. Yes, I trust this folder\nEnter to select · Esc to cancel",
@@ -480,6 +481,103 @@ class EndToEndDialogTests(unittest.TestCase):
         self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertTrue(data.endswith(b"IEND\xaeB`\x82"))
 
+
+class EndToEndStartupTests(unittest.TestCase):
+    # Actual non-dialog startup observation and diagnostic from 20261102-174001.
+    STARTUP_OBSERVATION = {
+        "cols": 131, "content_revision": 24,
+        "cursor": {"col": 25, "row": 42, "visible": False},
+        "focus": [41, 'Try "create a util logging.py that..."'], "focus_occurrence": 0,
+        "pane_id": "w1:p2", "rows": 45, "terminal_id": "term_65f47ee3a1e222",
+        "text": ("\n ▐▛███▛█   Claude Code v2.1.316\n▝▜██████▀  Opus 5.5 · Claude Team\n"
+                 " ▝▝   ▝▝   ~/work/bus-universal-dialog/temp/e2e/workspace\n"
+                 + "\n" * 35 + " " * 111 + "◐ medium · /effort\n"
+                 + "─" * 131 + '\n❯\xa0Try "create a util logging.py that..."\n'
+                 + "─" * 25 + "\n\n"),
+    }
+    STARTUP_WAITING = {
+        "agent_id": 3, "current_request": None,
+        "detail": "Not ready; waiting for provider hook readiness.",
+        "identity": {"launch_id": "8cb0ad9b6e029d2c53a89029c4ded766abec9e03e83d27a91ab13220c5e65300",
+                     "pane_id": "w1:p2", "session_id": None, "terminal_id": "term_65f47ee3a1e222"},
+        "name": "claude", "reason": "agent_launching", "status": "launching",
+    }
+
+    def make_run(self, samples, observation):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"claude": 3}
+        run.answered_frames = {}
+        run.lock = __import__("threading").Lock()
+        run.report = {"dialogs": []}
+        run.save = lambda: None
+        samples = iter(samples)
+        current = {}
+        calls, inputs = [], []
+
+        def cli(*argv, **_kwargs):
+            calls.append(argv)
+            if argv == ("diagnostics",):
+                current["diagnostics"], current["shown_status"] = next(samples)
+                return {"agents": [current["diagnostics"]]}
+            if argv == ("state",):
+                return {"agents": [{"id": 3, "status": current["shown_status"]}]}
+            if argv == ("agent", "observe", 3):
+                return observation
+            if argv[:3] == ("agent", "press", 3):
+                inputs.append(argv)
+                return {"outcome": "selected", "selection_pending": False,
+                        "keys": ["down", "enter"], "observation": observation}
+            raise AssertionError(f"unexpected startup call: {argv}")
+
+        run.bus = mock.Mock(cli=cli)
+        return run, calls, inputs
+
+    def ready_diagnostics(self):
+        return {**self.STARTUP_WAITING, "reason": None, "status": "idle",
+                "identity": {**self.STARTUP_WAITING["identity"], "session_id": "ready-session"}}
+
+    def test_focused_composer_waits_for_hook_readiness_without_input(self):
+        ready = self.ready_diagnostics()
+        run, calls, inputs = self.make_run(
+            [(self.STARTUP_WAITING, "launching"), (ready, "idle")], self.STARTUP_OBSERVATION)
+        record = {}
+        with mock.patch.object(e2e.time, "sleep"):
+            run.wait_ready(["claude"], record)
+        self.assertEqual(record["claude"]["identity"], ready["identity"])
+        self.assertEqual(calls.count(("diagnostics",)), 2)
+        self.assertEqual(run.report["dialogs"], [])
+        self.assertEqual(inputs, [])
+
+    def test_public_blocked_trust_is_answered_while_diagnostics_still_launches(self):
+        observed = dialog("Accessing workspace:", "No, exit", "Yes, I trust this folder")
+        ready = self.ready_diagnostics()
+        run, _calls, inputs = self.make_run(
+            [(self.STARTUP_WAITING, "blocked"), (ready, "idle")], observed)
+        record = {}
+        with mock.patch.object(e2e.time, "sleep"):
+            run.wait_ready(["claude"], record)
+        self.assertEqual(record["claude"]["identity"], ready["identity"])
+        self.assertEqual(run.report["dialogs"][0]["label"], "Yes, I trust this folder")
+        self.assertEqual(inputs, [("agent", "press", 3, "--select", "Yes, I trust this folder",
+                                   "--terminal-id", "terminal-fixture")])
+
+    def test_public_blocked_trust_is_not_ready_when_raw_diagnostics_is_idle(self):
+        observed = dialog("Accessing workspace:", "No, exit", "Yes, I trust this folder")
+        ready = self.ready_diagnostics()
+        run, calls, inputs = self.make_run([(ready, "blocked"), (ready, "idle")], observed)
+        with mock.patch.object(e2e.time, "sleep"):
+            run.wait_ready(["claude"], {})
+        self.assertEqual(calls.count(("diagnostics",)), 2)
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(run.report["dialogs"][0]["label"], "Yes, I trust this folder")
+
+    def test_public_blocked_unsupported_dialog_still_fails_without_input(self):
+        observed = dialog("Pick a model", "Opus", "Sonnet")
+        run, _calls, inputs = self.make_run([(self.STARTUP_WAITING, "blocked")], observed)
+        with mock.patch.object(e2e.time, "sleep"), self.assertRaisesRegex(AssertionError, "unexpected trust"):
+            run.wait_ready(["claude"], {})
+        self.assertEqual(inputs, [])
+        self.assertEqual(run.report["dialogs"], [])
 
 class EndToEndReportTests(unittest.TestCase):
     def test_rows_summary_and_table(self):
