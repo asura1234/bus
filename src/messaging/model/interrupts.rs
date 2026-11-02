@@ -34,6 +34,7 @@ impl BusState {
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.interrupt_pending = false;
+        agent_state.provider_retry = None;
         let current = agent_state.current_request;
         let mut closed = Vec::new();
         let replied = current

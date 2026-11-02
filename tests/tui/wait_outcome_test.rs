@@ -51,7 +51,7 @@ fn scripted_message(session: &Session, actions: Value) -> String {
 }
 
 #[test]
-fn bounded_message_wait_reports_a_settled_provider_error() {
+fn bounded_message_wait_recovers_a_transient_provider_error() {
     let session = Session::start("wf");
     let work = session_dir(&session.0).join("work");
     let (code, added) = parse(scratch_bus(
@@ -86,7 +86,7 @@ fn bounded_message_wait_reports_a_settled_provider_error() {
             "--to",
             "error-worker",
             "--text",
-            "fake:api-error",
+            "fake:overload-once fake:raw-reply RECOVERED",
         ],
     ));
     assert_eq!(code, 0, "{sent}");
@@ -95,17 +95,12 @@ fn bounded_message_wait_reports_a_settled_provider_error() {
         &session.0,
         &["wait", "--message", &message, "--timeout", "30s"],
     );
-    assert_eq!(code, 1, "{result}");
-    assert_eq!(
-        result["message"]["error"]["code"], "message_provider_error",
-        "{result}"
-    );
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["message"]["ok"], true, "{result}");
     assert_eq!(result["message"]["result"]["complete"], true, "{result}");
-    assert_eq!(result["error"], result["message"]["error"], "{result}");
-    assert!(result["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("Connection lost mid-response"));
+    let request = &result["message"]["result"]["requests"][0];
+    assert_eq!(request["stage"], "replied", "{result}");
+    assert_eq!(request["reply"]["text"], "RECOVERED", "{result}");
 }
 
 #[test]

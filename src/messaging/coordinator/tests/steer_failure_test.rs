@@ -10,47 +10,51 @@ fn join(f: &mut Fixture, text: &str) -> RequestId {
 }
 
 fn fail(f: &mut Fixture) -> String {
-    let reason =
-        match f.provider {
-            Provider::ClaudeCode => {
-                f.record(
-                    json!({"hook_event_name":"StopFailure","session_id":"session",
-                "prompt_id":"turn-1","error":"server_error",
-                "last_assistant_message":"API Error: Overloaded"}),
-                );
-                "API Error: Overloaded (server_error)"
-            }
-            Provider::Cursor => {
-                f.record(json!({"hook_event_name":"stop","conversation_id":"session",
+    let reason = match f.provider {
+        Provider::ClaudeCode => {
+            f.record(
+                json!({"hook_event_name":"StopFailure","session_id":"session",
+                "prompt_id":"turn-1","error":"authentication_error",
+                "last_assistant_message":"API Error: 401 Authentication failed"}),
+            );
+            "API Error: 401 Authentication failed (authentication_error)"
+        }
+        Provider::Cursor => {
+            f.record(json!({"hook_event_name":"stop","conversation_id":"session",
                 "generation_id":"turn-1","status":"error"}));
-                "Cursor turn error; inspect its terminal."
-            }
-            Provider::Codex => {
-                let rollout = f.dir.join("rollout-steer-error.jsonl");
-                std::fs::write(&rollout, json!({"type":"event_msg","payload":{
-                "type":"task_complete","turn_id":"turn-1",
-                "error":{"message":"Model at capacity","codex_error_info":"server_overloaded"}
-            }}).to_string()).unwrap();
-                // Keep the real Codex no-Stop path: settlement reads the rollout.
-                f.record(
-                    json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+            "Cursor turn error; inspect its terminal."
+        }
+        Provider::Codex => {
+            let rollout = f.dir.join("rollout-steer-error.jsonl");
+            std::fs::write(
+                &rollout,
+                json!({"type":"event_msg","payload":{
+                    "type":"task_complete","turn_id":"turn-1",
+                    "error":{"message":"Invalid model","codex_error_info":"invalid_request"}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            // Keep the real Codex no-Stop path: settlement reads the rollout.
+            f.record(
+                json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
                 "turn_id":"turn-1","prompt":"original work","transcript_path":rollout}),
-                );
-                f.consume();
-                f.status(RuntimeStatus::Idle);
-                f.now += crate::messaging::model::TURN_SETTLE_MS;
-                f.status(RuntimeStatus::Idle);
-                "Model at capacity (server_overloaded)"
-            }
-            Provider::Grok | Provider::Kimi => {
-                panic!("this fixture covers providers with committed final evidence")
-            }
-            #[cfg(feature = "dev-tools")]
-            Provider::Fake => {
-                f.record(json!({"event":"failure","session":"session","turn":"turn-1"}));
-                "Fake turn failed."
-            }
-        };
+            );
+            f.consume();
+            f.status(RuntimeStatus::Idle);
+            f.now += crate::messaging::model::TURN_SETTLE_MS;
+            f.status(RuntimeStatus::Idle);
+            "Invalid model (invalid_request)"
+        }
+        Provider::Grok | Provider::Kimi => {
+            panic!("this fixture covers providers with committed final evidence")
+        }
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => {
+            f.record(json!({"event":"failure","session":"session","turn":"turn-1"}));
+            "Fake turn failed."
+        }
+    };
     f.consume();
     reason.into()
 }
@@ -322,7 +326,7 @@ fn routed_failure_notice(count: usize, error: &str) {
 
 #[test]
 fn steer_failure_routed_notice_survives_many_steers() {
-    routed_failure_notice(16, "API Error: Overloaded");
+    routed_failure_notice(16, "API Error: 401 Authentication failed");
 }
 
 #[test]
@@ -350,5 +354,5 @@ fn steer_failure_unconfirmed_input_does_not_claim_the_recipient_saw_it() {
 
 #[test]
 fn steer_failure_truncated_message_list_points_at_room_history() {
-    routed_failure_notice(24, "API Error: Overloaded");
+    routed_failure_notice(24, "API Error: 401 Authentication failed");
 }

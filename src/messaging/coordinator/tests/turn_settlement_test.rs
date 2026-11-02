@@ -392,13 +392,18 @@ fn a_codex_turn_that_ended_on_a_provider_error_reports_that_error() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     let request = fixture.request(lead);
-    assert_eq!(request.phase, RequestPhase::Abandoned);
-    let expected = "provider_error: Selected model is at capacity. Please try a different model. (server_overloaded)";
-    assert_eq!(request.failure_reason.as_deref(), Some(expected));
-    assert!(fixture
-        .error()
-        .unwrap()
-        .contains("Selected model is at capacity"));
+    assert!(!request.settled());
+    assert!(request.failure_reason.is_none());
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .shown_status(),
+        RuntimeStatus::Working
+    );
+    assert!(fixture.error().is_none());
 }
 
 /// Live (2026-10-13, Claude Code 2.1.296): "API Error: Connection lost
@@ -416,24 +421,19 @@ fn a_claude_turn_ended_by_an_api_error_reports_that_error() {
         "error":"server_error",
         "last_assistant_message":"API Error: Connection lost mid-response. The response above may be incomplete."}));
     fixture.consume();
-    let expected = "provider_error: API Error: Connection lost mid-response. The response above may be incomplete. (server_error)";
     for id in [lead, joined] {
-        assert_eq!(fixture.request(id).phase, RequestPhase::Abandoned);
-        assert_eq!(
-            fixture.request(id).failure_reason.as_deref(),
-            Some(expected)
-        );
+        assert!(!fixture.request(id).settled());
+        assert!(fixture.request(id).failure_reason.is_none());
     }
-    assert!(fixture
-        .error()
-        .unwrap()
-        .contains("Connection lost mid-response"));
+    assert!(fixture.error().is_none());
     let message = fixture.request(joined).prompt.id;
     let status = fixture
         .worker
         .control_message_at(message, fixture.now)
         .unwrap();
-    assert_eq!(status["requests"][0]["reason"], expected);
+    assert_eq!(status["complete"], false);
+    assert_eq!(status["requests"][0]["reason"], Value::Null);
+    assert_eq!(status["requests"][0]["status"], "working");
 }
 
 #[test]
@@ -1259,5 +1259,46 @@ fn unbound_codex_0164_final_is_captured_despite_a_missing_directory_warning() {
                 .count(),
             1
         );
+    }
+}
+
+#[test]
+fn provider_flake_uses_only_fresh_owned_exhausted_quota_metadata_for_the_reset() {
+    use crate::agents::providers::usage::{UsageWindow, UsageWindows};
+    use crate::messaging::coordinator::usage::UsageSnapshot;
+    for valid in [true, false] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut f, "retry after quota", "turn-1");
+        let now = io::now_ms();
+        let reset = now / 1000 + 3600;
+        f.worker.usage.claude = Some(UsageSnapshot {
+            windows: UsageWindows {
+                five_hour: Some(UsageWindow {
+                    used_percent: 100.0,
+                    resets_at: Some(reset),
+                    window_minutes: 300,
+                }),
+                weekly: None,
+            },
+            read_at_ms: now,
+            observed_by_agent: if valid { f.agent } else { AgentId(999999) },
+        });
+        f.record(json!({"hook_event_name":"StopFailure","session_id":"session","prompt_id":"turn-1","error":"rate_limit"}));
+        f.consume();
+        f.worker.submit_ready().unwrap();
+        let held = f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap();
+        if valid {
+            assert!(held.retry_at_ms >= reset * 1000 + 2000);
+        } else {
+            assert!(held.retry_at_ms < now + 301_000);
+        }
+        assert!(!f.request(lead).settled());
     }
 }

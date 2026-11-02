@@ -220,7 +220,14 @@ fn a_provider_failure_during_steering_correlation_cannot_revoke_the_captured_ans
     assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
     assert_eq!(f.request(lead).completed_at_ms, completed);
     assert!(f.request(lead).failure_reason.is_none());
-    assert_eq!(f.request(unknown).phase, RequestPhase::Abandoned);
+    assert!(!f.request(unknown).settled());
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .provider_retry
+        .is_some());
 }
 
 #[test]

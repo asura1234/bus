@@ -456,9 +456,11 @@ change the reported stage. After 5m blocked the reason is blocked_unanswered. A
 captured Stop answer finishes without waiting for background work.
 Captured finals, including empty/whitespace text, settle as replied with raw text.
 Provider-proven no-reply completion also settles as replied, with empty text.
-Missing reply evidence closes as reply_not_captured; provider failure or lost
-availability uses provider_error: MESSAGE or agent_unavailable. Conclusive
-pre-delivery startup failure is agent_startup_failed.
+Transient native provider errors retain the delivery and show Working while Bus retries
+with backoff or waits for a quota reset; details and deadlines go to the client log.
+Permanent-error settlement without a final closes as provider_error: MESSAGE; other
+settlement closes as reply_not_captured,
+or agent_unavailable; conclusive pre-delivery startup failure is agent_startup_failed.
 Bus can abandon unclaimed steering after an autonomous turn ends and another
 starts or stays idle 5s; it releases later queued work. Late finals keep references.
 submission_unconfirmed may have run: inspect transcript/composer before resending
@@ -485,7 +487,7 @@ waiter leaves the request intact and its unseen events eligible for delivery.
 Errors: timeout (exit 1): retain result and continue inspecting; it does not
 cancel work. agent_waiting_on_dialog: use agent observe and agent press, then wait again.
 message_abandoned: inspect reason; repair startup/provider and explicitly resend
-only closed work after checking effects. message_provider_error: provider failed,
+only closed work after checking effects. message_provider_error: a non-transient provider failure ended the turn,
 worth retrying after repair. message_interrupted: inspect history for who stopped it.
 bus_down: async only, four consecutive transport failures; restore session and
 resume wait. Bounded transport failures report immediately; accepted disconnects

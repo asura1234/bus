@@ -1026,3 +1026,14 @@ fn mixed_provider_turn_ids_do_not_repeat_after_resume() {
     assert_eq!(previous.session, resumed.session);
     assert_ne!(previous.next_turn(), resumed.next_turn());
 }
+
+#[test]
+fn fake_overload_once_uses_the_recorded_native_error_shape() {
+    let payload = api_error("claude", "fake:overload-once fake:raw-reply recovered").unwrap();
+    assert_eq!(payload["error"], "server_error");
+    assert_eq!(
+        payload["last_assistant_message"],
+        "API Error: 529 Overloaded."
+    );
+    assert!(api_error("codex", "fake:overload-once").is_none());
+}

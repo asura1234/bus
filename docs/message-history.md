@@ -6,6 +6,13 @@ of a session. Agent deletion retires a runtime and closes unfinished requests as
 requests as `room_deleted`. Neither operation erases the audit record. Context
 clear and provider compaction do not remove Bus messages.
 
+Transient native provider failures do not settle a delivery. Bus retains the same
+request IDs and saved conversation, shows Working while it owns the retry, and
+retries overload/connection errors with capped exponential backoff. Quota errors
+wait for a known reset deadline or use bounded availability probes. Holds survive
+restart; interrupt and deletion cancel them. Raw failure and retry/reset details
+belong to the client log. Permanent errors retain their terminal failure handling.
+
 Deleted participants render as `NAME [deleted]` in history and message status.
 Retired identities are never resumed runtimes. Stale recipient IDs may forward
 under the original-room rules; live names take precedence. Room history

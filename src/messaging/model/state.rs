@@ -48,6 +48,9 @@ pub(crate) struct BusState {
     #[serde(default, skip_serializing)]
     pub(super) consumed_dialog_fingerprints: BTreeSet<String>,
     pub(super) consumed_provider_turns: BTreeSet<String>,
+    /// Failed attempts whose delivery has moved to a guarded new turn.
+    #[serde(default)]
+    pub(super) retried_provider_turns: BTreeSet<String>,
     /// Provider turns the agent started on its own (a task notification, or the
     /// user typing in its terminal). Their later hooks are activity, never a
     /// reply or an error for the request Bus is waiting on.
@@ -133,6 +136,7 @@ impl BusState {
             || self.reply_routes_by_request != previous.reply_routes_by_request
             || self.worker_events != previous.worker_events
             || self.consumed_callbacks != previous.consumed_callbacks
+            || self.retried_provider_turns != previous.retried_provider_turns
             || self.consumed_provider_turns != previous.consumed_provider_turns
             || self.unrelated_provider_turns != previous.unrelated_provider_turns
             || self.visible_room != previous.visible_room
@@ -177,6 +181,7 @@ impl BusState {
             consumed_callback_ids: BTreeSet::new(),
             consumed_dialog_fingerprints: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
+            retried_provider_turns: BTreeSet::new(),
             unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
             spent_dialog_answers: BTreeMap::new(),

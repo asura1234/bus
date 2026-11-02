@@ -36,6 +36,9 @@ impl BusState {
         let Some(owner) = self.agents.get(&agent).filter(|a| {
             matches!(a.status, RuntimeStatus::Idle | RuntimeStatus::Unavailable)
                 && !a.dialog
+                && a.provider_retry
+                    .as_ref()
+                    .is_none_or(|h| a.current_request != Some(h.lead))
                 && !a.deletion_pending
                 && !a.session_binding_invalidated
         }) else {
@@ -322,7 +325,10 @@ impl BusState {
     /// exited, say) settles too, or async waiters on it would never finish.
     fn settle_candidate(&self, agent: AgentId) -> Option<&Request> {
         let agent_state = self.agents.get(&agent)?;
-        if agent_state.provider_retry.is_some()
+        if agent_state
+            .provider_retry
+            .as_ref()
+            .is_some_and(|h| agent_state.current_request == Some(h.lead))
             || agent_state.provider == super::Provider::Kimi
             || agent_state.deletion_pending
             || agent_state.missing_binary.is_some()
@@ -430,7 +436,10 @@ impl BusState {
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
-        if owner.provider_retry.is_some()
+        if owner
+            .provider_retry
+            .as_ref()
+            .is_some_and(|h| owner.current_request == Some(h.lead))
             || owner.deletion_pending
             || owner.session_binding_invalidated
         {

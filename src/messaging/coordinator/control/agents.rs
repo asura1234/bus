@@ -320,6 +320,15 @@ impl Worker {
         let mut row = json!({"agent_id": id, "name": agent.name});
         let status = agent.activity_status();
         match status {
+            RuntimeStatus::Unavailable if agent.provider_retry.is_some() => {
+                state
+                    .close_interrupted(id, now)
+                    .map_err(|e| e.to_string())?;
+                state
+                    .post_interrupt_notice(room, interrupter.clone(), id, now)
+                    .map_err(|e| e.to_string())?;
+                row["outcome"] = json!("already_idle");
+            }
             RuntimeStatus::Idle if !needs_stop(state, agent) => {
                 // Nothing to stop. A turn Bus still holds (settling, or
                 // waiting on background shells) and the queue close.
@@ -403,6 +412,7 @@ fn needs_stop(
 ) -> bool {
     match agent.activity_status() {
         RuntimeStatus::Working | RuntimeStatus::Blocked => true,
+        RuntimeStatus::Idle if agent.provider_retry.is_some() => false,
         RuntimeStatus::Idle => agent
             .current_request
             .and_then(|id| state.request(id))

@@ -2,7 +2,7 @@
 //! evidence are inventoried in docs/reply-delivery-tests.md.
 use crate::agents::AgentState;
 use crate::messaging::coordinator::reply_delivery_support::Delivery;
-use crate::messaging::model::{Provider, RequestPhase};
+use crate::messaging::model::{Provider, RequestPhase, RuntimeStatus};
 use serde_json::json;
 
 #[tokio::test]
@@ -1064,12 +1064,22 @@ async fn codex_rollout_provider_error_is_explicit_and_does_not_poison_next_reply
     f.tick();
     f.elapse(6_000);
     let r = f.state().request(first).unwrap();
-    assert_eq!(r.phase, RequestPhase::Abandoned);
-    assert!(r
-        .failure_reason
-        .as_ref()
-        .unwrap()
-        .contains("provider_error: Model at capacity"));
+    assert!(!r.settled());
+    assert!(r.failure_reason.is_none());
+    assert_eq!(
+        f.state().agent(agent).unwrap().shown_status(),
+        RuntimeStatus::Working
+    );
+    // A native same-turn recovery can still win before Bus starts its next attempt.
+    f.stop(
+        agent,
+        "capacity",
+        "capacity recovered",
+        json!([]),
+        json!([]),
+    );
+    f.assert_reply(first, "capacity recovered");
+    f.tick();
     f.start(agent, "retry", "retry task");
     f.stop(agent, "retry", "retry succeeded", json!([]), json!([]));
     f.assert_reply(next, "retry succeeded");

@@ -57,10 +57,12 @@ impl BusState {
             .get_mut(&agent_id)
             .ok_or(ModelError::InvalidTransition)?;
         queue.remove(0);
-        self.agents
+        let agent = self
+            .agents
             .get_mut(&agent_id)
-            .ok_or(ModelError::UnknownAgent(agent_id))?
-            .current_request = Some(request);
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        agent.current_request = Some(request);
+        agent.provider_retry = None;
         let request_state = self
             .requests
             .get_mut(&request)
@@ -141,6 +143,7 @@ impl BusState {
                         .into(),
                 );
                 agent.actionable_error = rejection;
+                self.retain_rejected_provider_retry(request);
             }
             SubmissionOutcome::Confirmed {
                 provider_session_id,
@@ -206,7 +209,9 @@ impl BusState {
             None => request,
         };
         let agent = self.agents.get(&lead.agent_id)?;
-        if agent.provider_retry.is_some() {
+        if agent.provider_retry.is_some()
+            || lead.phase == RequestPhase::Queued && lead.provider_retry_attempts > 0
+        {
             return None;
         }
         if let Some(reason) = self.expired_queue_rejection(lead, now_ms) {
@@ -257,6 +262,7 @@ impl BusState {
                 QUEUED_STALL_MS,
                 lead.prompt
                     .submitted_at_ms
+                    .max(lead.progress_at_ms.unwrap_or(0))
                     .max(agent.status_since_ms)
                     .max(self.last_progress_ms(lead.agent_id)),
             )
@@ -453,6 +459,7 @@ impl BusState {
             agent_state.status,
             RuntimeStatus::Working | RuntimeStatus::Idle
         ) || agent_state.dialog
+            || agent_state.provider_retry.is_some()
             || agent_state.deletion_pending
             // A pressed stop key ends the turn: its queue closes with it.
             || agent_state.interrupt_pending

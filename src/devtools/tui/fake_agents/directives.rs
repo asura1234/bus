@@ -92,6 +92,11 @@ pub(super) fn show_dialog(seconds: u64) {
 /// error ends a real one: no reply, and a StopFailure hook with the payload
 /// measured from Claude Code 2.1.296. Returns that payload's extra fields.
 pub(super) fn api_error(provider: &str, prompt: &str) -> Option<Value> {
+    if provider == "claude" && prompt.contains("fake:overload-once") {
+        return Some(
+            json!({"error":"server_error", "last_assistant_message":"API Error: 529 Overloaded."}),
+        );
+    }
     (provider == "claude" && prompt.contains("fake:api-error")).then(|| {
         json!({
             "error": "server_error",
