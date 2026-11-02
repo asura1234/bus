@@ -296,26 +296,46 @@ fn requester_ack_cancels_queued_wake_without_a_false_outcome_to_the_orchestrator
 }
 
 #[test]
-fn an_orchestrators_reply_notification_does_not_open_another_orchestrator_task() {
+fn captured_orchestrator_final_does_not_wake_the_worker_requester() {
+    for cross_room in [false, true] {
+        let mut f = requester(Provider::Codex, cross_room);
+        f.agent = f.worker.state.orchestrator_of(f.room).unwrap().id;
+        let source = f.send(Author::Agent(f.orch), "question for orchestrator");
+        f.finish(source, "Decision for the developer");
+        f.worker.submit_ready().unwrap();
+        assert!(
+            f.notices().is_empty(),
+            "a manager's final is not a worker instruction"
+        );
+        assert!(f.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            f.worker
+                .state
+                .request(source)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .text,
+            "Decision for the developer"
+        );
+        f.reopen();
+        f.worker.submit_ready().unwrap();
+        assert!(
+            f.notices().is_empty(),
+            "restart must not replay the manager's final"
+        );
+    }
+}
+
+#[test]
+fn explicit_orchestrator_answer_still_reaches_the_worker_requester() {
     let mut f = requester(Provider::Codex, false);
     f.agent = f.worker.state.orchestrator_of(f.room).unwrap().id;
     let source = f.send(Author::Agent(f.orch), "question for orchestrator");
-    f.finish(source, "GO from orchestrator");
+    explicit(&mut f, source, "Use the fallback");
     f.worker.submit_ready().unwrap();
     assert_eq!(f.notices().len(), 1);
-    let mut state = f.worker.state.clone();
-    state.record_worker_exit(f.orch, io::now_ms() + 3_000);
-    state
-        .route_worker_replies(io::now_ms() + 6_000, &BTreeSet::new())
-        .unwrap();
-    f.worker.save(state).unwrap();
-    f.worker.submit_ready().unwrap();
-    assert_eq!(
-        f.worker.state.requests().count(),
-        2,
-        "a reply notification must not generate a new open-task exit outcome"
-    );
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(f.calls.lock().unwrap()[0].contains("Use the fallback"));
 }
 
 #[test]
@@ -612,4 +632,70 @@ fn legacy_orchestrator_group_routes_keep_their_seen_or_pending_state_on_upgrade(
         assert_eq!(f.notices().len(), usize::from(!seen));
         assert_eq!(f.calls.lock().unwrap().len(), usize::from(!seen));
     }
+}
+
+#[test]
+fn noise_explicit_result_in_another_room_supersedes_the_captured_copy() {
+    let mut f = requester(Provider::Codex, false);
+    let source = f.send(Author::Agent(f.orch), "peer task");
+    f.finish(source, "Exact verdict and evidence");
+    let mut state = f.worker.state.clone();
+    let other = state.create_room("result-conversation").unwrap();
+    state
+        .submit_message_from(
+            other,
+            Draft {
+                text: "Exact verdict and evidence".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms() - 2_000,
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.notices().iter().all(|request| !request.bus_generated),
+        "the requester already received the result explicitly"
+    );
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(!f.calls.lock().unwrap()[0].contains("Reply to message"));
+}
+
+#[test]
+fn noise_restart_withdraws_an_old_queued_orchestrator_final_wake() {
+    let mut f = requester(Provider::Codex, false);
+    f.agent = f.worker.state.orchestrator_of(f.room).unwrap().id;
+    let source = f.send(Author::Agent(f.orch), "worker result");
+    f.finish(source, "Old manager summary");
+    let mut state = f.worker.state.clone();
+    let notice = state
+        .submit_bus_message_with(
+            f.room,
+            Draft {
+                text: "Reply to message 1.\nOld manager summary".into(),
+                files: vec![],
+                recipient_ids: [f.orch].into(),
+            },
+            Author::Agent(f.agent),
+            io::now_ms() - 2_000,
+            false,
+        )
+        .unwrap()[0];
+    let mut document = serde_json::to_value(state).unwrap();
+    document["reply_routes"] = json!({source.0.to_string(): {"routed":notice.0}});
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.calls.lock().unwrap().is_empty(),
+        "a retained summary must not be pasted after upgrade"
+    );
+    assert_eq!(
+        f.worker.state.request(notice).unwrap().phase,
+        RequestPhase::Abandoned
+    );
 }

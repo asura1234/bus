@@ -652,6 +652,7 @@ impl BusState {
         if pending.text.trim().is_empty() {
             return Ok(());
         }
+        self.publish_orchestrator_final(lead, members, pending)?;
         let published_rooms: std::collections::BTreeSet<_> = std::iter::once(&lead)
             .chain(members)
             .filter_map(|id| self.requests.get(id))

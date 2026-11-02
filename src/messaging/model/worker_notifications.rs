@@ -101,8 +101,10 @@ impl BusState {
         let mut changed = false;
         let stored: BTreeSet<_> = self
             .requests()
-            .filter(|request| self.reply_needs_ack(request))
-            .filter(|request| self.captured_reply_already_sent(request))
+            .filter(|request| {
+                self.orchestrator_final_to_worker(request)
+                    || self.reply_needs_ack(request) && self.captured_reply_already_sent(request)
+            })
             .map(|request| (reply_key(request), request.prompt.author.clone()))
             .collect();
         let keys: Vec<_> = if stored.is_empty() {

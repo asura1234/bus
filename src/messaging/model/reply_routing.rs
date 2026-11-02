@@ -51,11 +51,86 @@ impl BusState {
                 .as_ref()
                 .is_some_and(|reply| reply.group.is_some());
         (!captured_wake
+            && !self.orchestrator_final_to_worker(request)
             && author.id != worker.id
             && !author.deletion_pending
             && !worker.deletion_pending
             && !room.deletion_pending)
             .then_some(author.id)
+    }
+
+    pub(super) fn orchestrator_final_to_worker(&self, request: &Request) -> bool {
+        matches!(request.prompt.author, Author::Agent(author)
+            if self.agent(author).is_some_and(|agent| agent.orchestrates.is_none()))
+            && self
+                .agent(request.agent_id)
+                .is_some_and(|agent| agent.orchestrates.is_some())
+            && request
+                .completed_reply
+                .as_ref()
+                .is_some_and(|reply| reply.group.is_some())
+    }
+
+    /// A decision made in response to a worker belongs in MASTER. The source
+    /// request keeps its durable answer, without opening a new worker task.
+    pub(super) fn publish_orchestrator_final(
+        &mut self,
+        lead: RequestId,
+        members: &[RequestId],
+        pending: &super::PendingFinal,
+    ) -> Result<(), ModelError> {
+        let Some(source) = self.request(lead) else {
+            return Ok(());
+        };
+        let Some(owner) = self
+            .agent(source.agent_id)
+            .filter(|agent| agent.orchestrates.is_some())
+        else {
+            return Ok(());
+        };
+        let Some(master) = self.master_room().map(|room| room.id) else {
+            return Ok(());
+        };
+        let agent = owner.id;
+        let group: Vec<_> = std::iter::once(&lead)
+            .chain(members)
+            .filter_map(|id| self.request(*id))
+            .collect();
+        // A participating MASTER request already displays this final. A
+        // repeated settlement of a partly claimed group has already posted it.
+        if group
+            .iter()
+            .any(|request| request.room_id == master || request.reply() == Some(pending))
+        {
+            return Ok(());
+        }
+        let worker_request = group
+            .iter()
+            .filter(|request| !request.settled())
+            .find(|request| {
+                matches!(request.prompt.author, Author::Agent(id)
+                if self.agent(id).is_some_and(|author| author.orchestrates.is_none()))
+            });
+        let Some(worker_request) = worker_request else {
+            return Ok(());
+        };
+        let start = worker_request.prompt.submitted_at_ms;
+        // An explicit developer post of this same decision is the one copy.
+        let explicit = self.notices(master).any(|prompt| {
+            prompt.author == Author::Agent(agent)
+                && prompt.text.trim() == pending.text.trim()
+                && (start..=pending.received_at_ms).contains(&prompt.submitted_at_ms)
+        });
+        if !explicit {
+            self.post_to_developer(
+                master,
+                agent,
+                pending.text.clone(),
+                vec![],
+                pending.received_at_ms,
+            )?;
+        }
+        Ok(())
     }
 
     /// Old routes belonged only to the room orchestrator, but used a group's

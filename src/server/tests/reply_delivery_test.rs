@@ -171,12 +171,12 @@ async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_set
     f.stop(
         orchestrator,
         "worker-blocker",
-        "Try the fallback",
+        "MASTER_DECISION: use the fallback",
         json!([]),
         json!([]),
     );
     f.elapse(6_000);
-    f.assert_reply(request, "Try the fallback");
+    f.assert_reply(request, "MASTER_DECISION: use the fallback");
     let history = f.call("room.history", json!({"room":f.work.0.to_string()}));
     assert_eq!(
         history["messages"][0]["prompt"]["author"],
@@ -188,12 +188,36 @@ async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_set
     );
     assert_eq!(
         history["messages"][0]["delivery"]["requests"][0]["reply"]["text"],
-        "Try the fallback"
+        "MASTER_DECISION: use the fallback"
     );
-    assert!(f.call("room.history", json!({"room":"master"}))["messages"]
+    let master = f.call("room.history", json!({"room":"master"}));
+    let decisions: Vec<_> = master["messages"]
         .as_array()
         .unwrap()
-        .is_empty());
+        .iter()
+        .filter(|row| row["prompt"]["text"] == "MASTER_DECISION: use the fallback")
+        .collect();
+    assert_eq!(decisions.len(), 1, "{master}");
+    assert_eq!(
+        decisions[0]["prompt"]["author"],
+        json!({"agent":orchestrator})
+    );
+    assert!(
+        f.typed(worker).is_empty(),
+        "MASTER decisions must not enter worker composers"
+    );
+    f.reopen();
+    f.tick();
+    let master = f.call("room.history", json!({"room":"master"}));
+    assert_eq!(
+        master["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["prompt"]["text"] == "MASTER_DECISION: use the fallback")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
