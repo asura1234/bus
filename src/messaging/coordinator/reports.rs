@@ -1,15 +1,7 @@
-//! An orchestrator's status report. A turn that answers a message ends in that
-//! message's reply, which shows in the message's own room: MASTER for the
-//! developer's message, the work room for a worker's (a worker said it is
-//! done or blocked). When a MASTER orchestrator ends a turn no message started
-//! (a background command exited), that turn's final text is routine status,
-//! so Bus shows it in the work room the orchestrator runs as its own message to
-//! the developer. MASTER carries only what needs the developer: the replies to
-//! their MASTER messages, and what the orchestrator posts there itself with
-//! `send --to human`. A final that arrives after its request already closed
-//! (`reply_not_captured`) still shows in that request's room, so a late answer
-//! to the developer's MASTER message stays in MASTER. Bus authors nothing: the
-//! text is the agent's.
+//! Orchestrator finals outside normal request settlement. Worker-woken
+//! decisions belong in MASTER, including a final arriving after capture-window
+//! closure. Other late answers stay in their source room; an unprompted status
+//! report goes to the orchestrator's work room. The text remains the agent's.
 use super::{
     AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
     ProviderCallback, RoomId,
@@ -19,8 +11,8 @@ use crate::messaging::model::RequestPhase;
 /// An orchestrator's final text, taken before `accept_callback` settles it.
 pub(super) struct PendingReport {
     master: RoomId,
-    /// Where the report shows: the room of the message whose turn it ends,
-    /// else the work room the orchestrator runs.
+    /// The decision's audience: MASTER for worker-woken turns, otherwise the
+    /// source room, or the work room for an unprompted status report.
     room: RoomId,
     agent: AgentId,
     text: String,
@@ -53,10 +45,7 @@ pub(super) fn pending_report(
     if agent.room_id != master || !text.chars().any(char::is_alphanumeric) {
         return None;
     }
-    // A final that arrives after its request closed (say as
-    // `reply_not_captured`) still answers that request's message, so it
-    // belongs in the message's room; only a turn no message started goes to
-    // the work room.
+    // Keep the closed request's attested identity when its final arrives late.
     let owner = callback.provider_turn_id.as_deref().and_then(|turn| {
         state.requests().find(|request| {
             request.agent_id == agent.id
@@ -85,7 +74,13 @@ pub(super) fn pending_report(
                 .is_some_and(|answer| answer.text.trim() == text.trim())
         });
     let room = owner
-        .map(|request| request.room_id)
+        .map(|request| {
+            if state.worker_woken_orchestrator(request) {
+                master
+            } else {
+                request.room_id
+            }
+        })
         .or(agent.orchestrates)
         .unwrap_or(master);
     Some(PendingReport {
@@ -109,10 +104,10 @@ pub(super) fn pending_report(
     })
 }
 
-/// Posts the report once its callback is applied. Only a final ending a turn
-/// Bus did not start is a report; a final accepted for a request is that
-/// request's reply and already shows in its room. Changed finals of a completed,
-/// attested turn are separate follow-ups, each published once by text identity.
+/// Posts late, unprompted or changed finals once their callback is applied.
+/// Normal accepted finals use request settlement and its MASTER publication.
+/// Changed finals of a completed, attested turn are separate follow-ups, each
+/// published once by text identity.
 pub(super) fn post_report(
     state: &mut BusState,
     report: PendingReport,

@@ -668,3 +668,56 @@ fn a_late_final_after_stop_failure_for_a_master_request_stays_in_master() {
     assert_eq!(bus.reports(), ["Review is done; merging next."]);
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }
+
+#[test]
+fn a_late_worker_woken_orchestrator_decision_is_published_in_master_once() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
+    let typed = bus.deliver(
+        room,
+        Author::Agent(builder),
+        orchestrator,
+        "Worker result is ready.",
+    );
+    let request = bus
+        .worker
+        .state
+        .agent(orchestrator)
+        .unwrap()
+        .current_request
+        .unwrap();
+    let spool = bus.dir.join("callbacks/orch");
+    callbacks::append(&spool, "orch", Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"worker-late","prompt":typed}),
+        &[], false).unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    let mut state = bus.worker.state.clone();
+    let now = crate::messaging::storage::io::now_ms();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Working, now)
+        .unwrap();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Idle, now)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(
+            orchestrator,
+            now + crate::messaging::model::TURN_SETTLE_MS,
+            |_| None
+        ),
+        Some(request)
+    );
+    assert_eq!(
+        state.request(request).unwrap().failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    bus.worker.save(state).unwrap();
+    for _ in 0..2 {
+        callbacks::append(&spool, "orch", Provider::ClaudeCode,
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"worker-late","last_assistant_message":"Use the fallback after the late result."}),
+            &[], false).unwrap();
+        bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    }
+    assert_eq!(bus.reports(), ["Use the fallback after the late result."]);
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
+}
