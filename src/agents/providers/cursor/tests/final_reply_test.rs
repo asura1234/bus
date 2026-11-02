@@ -17,6 +17,86 @@ fn cursor_final_reply_excludes_question_commentary_and_keeps_message_blocks() {
     }
 }
 
+#[test]
+fn noise_cursor_empty_final_preserves_explicit_text_after_commentary() {
+    for text in ["", " \t\n"] {
+        let rows = [
+            serde_json::json!({"role":"user","message":{"content":[{"type":"text","text":"review"}]}}),
+            serde_json::json!({"role":"assistant","message":{"content":[{"type":"text","text":"Checking."},{"type":"tool_use","name":"Read"}]}}),
+            serde_json::json!({"role":"assistant","message":{"content":[{"type":"text","text":text}]}}),
+            serde_json::json!({"type":"turn_ended","status":"success"}),
+        ];
+        let transcript = rows
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>();
+        for hook in [format!("Checking.{text}"), text.to_owned()] {
+            assert_eq!(
+                matching_completed_message(&transcript, &hook).as_deref(),
+                Some(text),
+                "hook {hook:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn noise_cursor_empty_final_requires_a_final_text_part() {
+    for content in [
+        serde_json::json!([]),
+        serde_json::json!([{"type":"text"}]),
+        serde_json::json!([{"type":"text","text":null}]),
+        serde_json::json!([{"type":"tool_use","name":"Read"}]),
+    ] {
+        let transcript = format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({"role":"user","message":{"content":[]}}),
+            serde_json::json!({"role":"assistant","message":{"content":content}}),
+            serde_json::json!({"type":"turn_ended","status":"success"}),
+        );
+        assert!(
+            matching_completed_message(&transcript, "").is_none(),
+            "{transcript}"
+        );
+    }
+    let failed = concat!(
+        "{\"role\":\"user\",\"message\":{\"content\":[]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"\"}]}}\n",
+        "{\"type\":\"turn_ended\",\"status\":\"error\"}\n",
+    );
+    assert!(matching_completed_message(failed, "").is_none());
+}
+
+#[test]
+fn noise_cursor_empty_final_settles_explicit_hook_text_without_a_transcript() {
+    for text in ["", " \t\n"] {
+        let value = serde_json::json!({"text":text});
+        assert_eq!(settle_text(&value, false).as_deref(), Ok(text));
+    }
+    for value in [serde_json::json!({}), serde_json::json!({"text":null})] {
+        assert!(settle_text(&value, true).is_err());
+    }
+}
+
+#[test]
+fn noise_cursor_empty_final_uses_explicit_hook_text_when_idle_after_transcript_diverges() {
+    let path = crate::utils::test_temp::unique_temp_path("cursor-empty-final");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"unrelated\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    for text in ["", " \t\n"] {
+        let value = serde_json::json!({"text":text,"transcript_path":path});
+        assert!(settle_text(&value, false).is_err());
+        assert_eq!(settle_text(&value, true).as_deref(), Ok(text));
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
 /// 消息 1422：后续问题的说明块比钩子多一段后缀，且 jsonl 没有 turn_ended。
 #[test]
 fn cursor_final_reply_ignores_commentary_suffix_the_hook_omits() {

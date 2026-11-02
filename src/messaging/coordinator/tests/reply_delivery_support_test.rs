@@ -938,14 +938,34 @@ impl Delivery {
         );
         assert_eq!(r.reply().unwrap().text, text);
         self.assert_publications();
+        let captured = r
+            .completed_reply
+            .as_ref()
+            .is_some_and(|reply| reply.group.is_some());
+        let worker_woke_orchestrator = self
+            .state()
+            .agent(r.agent_id)
+            .is_some_and(|a| a.orchestrates.is_some())
+            && matches!(r.prompt.author, Author::Agent(id) if self.state().agent(id).is_some_and(|a| a.orchestrates.is_none()));
+        let shared_in_master = self
+            .state()
+            .requests()
+            .any(|other| other.room_id == self.master && other.reply() == r.reply());
         for room in self.state().rooms() {
+            let expected = usize::from(
+                captured
+                    && worker_woke_orchestrator
+                    && !shared_in_master
+                    && room.id == self.master
+                    && !text.trim().is_empty(),
+            );
             assert_eq!(
                 self.state()
                     .notices(room.id)
                     .filter(|n| n.author == Author::Agent(r.agent_id) && n.text == text)
                     .count(),
-                0,
-                "reply mirrored as a notice in {}",
+                expected,
+                "orchestrator decision publication in {}",
                 room.name
             );
         }
@@ -977,7 +997,25 @@ impl Delivery {
             .filter(|row| row["request_id"].as_u64() == Some(request.0))
             .collect();
         assert_eq!(replies.len(), 1, "reply missing/duplicated: {history}");
-        assert_eq!(replies[0]["reply"]["text"], text);
+        let source = r
+            .completed_reply
+            .as_ref()
+            .and_then(|reply| reply.group)
+            .and_then(|group| {
+                self.state()
+                    .shared_reply_sources(r.room_id, |_| true)
+                    .get(&group)
+                    .copied()
+            });
+        if let Some(source) = source.filter(|source| *source != request) {
+            assert!(replies[0]["reply"].is_null());
+            assert_eq!(
+                replies[0]["answered_with_message"],
+                json!(self.state().request(source).unwrap().prompt.id)
+            );
+        } else {
+            assert_eq!(replies[0]["reply"]["text"], text);
+        }
     }
 }
 impl Drop for Delivery {

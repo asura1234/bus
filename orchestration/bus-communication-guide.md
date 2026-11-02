@@ -133,7 +133,9 @@ that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction,
 restart) omit that header. This completes your request immediately, including
 while a watcher turn stays open.
 Bus returns the turn's final only to requests that are still outstanding.
-Replies and captured finals reach an agent requester, including ordinary workers.
+Worker replies and captured finals reach an agent requester, including ordinary workers.
+An orchestrator's captured final is not forwarded to a worker requester; a non-empty
+final from a worker-woken orchestrator turn is published in MASTER for the developer.
 Captured finals of Bus-generated reply wakes do not generate further reply wakes.
 Without a live author waiter consuming the answer, Bus queues an ordinary message
 from responder to requester in the original room; history shows that addressing too.
@@ -142,13 +144,13 @@ terminal delivery resumes after lease expiry. Busy agents and drafts use the usu
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 
-**One copy of each result.** Follow [Verdicts and results](#verdicts-and-results) for its recipients. Do not repeat a delivered result in a room post, correlated reply or turn final, including when reply capture fails. For other requests, `bus send --reply-to MESSAGE_ID` is the one copy. If it did not land, inspect status before retrying; one explicit send to the intended recipient is the delivery. A later note that says "reply-to failed, the result is in message N" is not a new fact.
+**One copy of each result.** Follow [Verdicts and results](#verdicts-and-results) for its recipients. After an explicit send of your verdict or result, end the turn with no text. Do not repeat a delivered result in a room post, correlated reply or turn final, including when reply capture fails. For other requests, `bus send --reply-to MESSAGE_ID` is the one copy. If it did not land, inspect status before retrying; one explicit send to the intended recipient is the delivery. A later note that says "reply-to failed, the result is in message N" is not a new fact.
 
 **No "still working" posts.** A turn that changed nothing sends nothing. Do not send "still in progress", "nothing changed", "already handled", "still paused", "still waiting", or an acknowledgement of a rule or of a late copy. A background job whose head and result are unchanged sends nothing, including when the job exits; a new verdict, finding, blocker, or question is still sent once.
 
-**Bus does not wrap a result.** There is no `Reply to message N` line, no `Late reply`, and no `Turn final` in the room or in a stored body. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) are not answered. Do not answer one with "that notice was nothing". Agents are only Idle, Working, Blocked or Unavailable. Working means the request is in progress; a stuck screen is Blocked; a dead launch is Unavailable; an Idle agent that finishes without a captured reply gets one final outcome.
+**Bus reply wrappers.** Bus forwards a non-empty turn final to the agent who sent the message, as `Reply to message N`, subject to the routing rules above. An empty or whitespace-only turn final is not forwarded. Provider-proven silent completion settles as `replied`: an empty final has empty text, and whitespace-only text is preserved in durable message status. Bus can also emit `Late reply` and `Turn final` wrappers for later or ungrouped results. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) are not answered. Do not answer one with "that notice was nothing". Agents are only Idle, Working, Blocked or Unavailable. Working means the request is in progress; a stuck screen is Blocked; a dead launch is Unavailable; an Idle agent that finishes without a captured reply gets one final outcome.
 
-**The orchestrator does not narrate.** Do not post that an instruction was passed on, that capture failed, that a late copy added nothing, or that agents are working before their tasks exist. Put standing rules in the room notes, once. A rule does not open a reply. A shared blocker (disk, slots) is one room notice until it clears.
+**The orchestrator does not narrate.** An orchestrator turn woken by a worker's message ends with no text unless it records a decision or changes the plan. Send instructions with an explicit send. Do not post that an instruction was passed on, that capture failed, that a late copy added nothing, or that agents are working before their tasks exist. Put standing rules in the room notes, once. A rule does not open a reply. A shared blocker (disk, slots) is one room notice until it clears.
 
 **One developer post per review round.** The body is the verdict, the head, and the `file:line`. The review text stays in its file. A fix or review brief is a file path (`Read <path> and do what it says`), including when two reviewers receive the same brief. A retry of a failed delivery repeats the path only.
 

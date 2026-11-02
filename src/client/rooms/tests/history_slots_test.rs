@@ -915,7 +915,7 @@ fn file_detail_popup_hides_history_thumbnails_it_covers() {
 }
 
 #[test]
-fn a_steered_group_shows_its_messages_stacked_with_one_reply() {
+fn a_steered_group_shows_one_reply_under_the_lead_and_a_follower_reference() {
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let mut ids = Vec::new();
@@ -962,8 +962,19 @@ fn a_steered_group_shows_its_messages_stacked_with_one_reply() {
             .count(),
         1
     );
-    assert!(position("write the parser") < position("use streaming instead"));
-    assert!(position("use streaming instead") < position("streaming parser written"));
+    let lead = snapshot.state.request(ids[0]).unwrap().prompt.id;
+    let reference = format!("Answered with message {}", lead.0);
+    let positions = [
+        "write the parser",
+        "streaming parser written",
+        "use streaming instead",
+        &reference,
+    ]
+    .map(|needle| position(needle).unwrap_or_else(|| panic!("missing {needle}: {texts:?}")));
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{texts:?}"
+    );
 }
 
 #[test]

@@ -134,12 +134,12 @@ an actionable final outcome (startup failure, session limit, unsent submission).
 Working means the request is in progress; a stuck screen is Blocked; a dead launch
 is Unavailable; an Idle agent without a captured reply gets one final outcome.
 Agents are only Idle, Working, Blocked or Unavailable. Results already in the room
-are not repeated, and Bus does not wrap results or post process-exit messages to
-MASTER. Worker-to-worker replies reach their author only. Interrupt/delete outcomes
+are not repeated. Bus does not post process-exit messages to MASTER.
+Worker-to-worker replies reach their author only. Interrupt/delete outcomes
 do not generate notices. There are no idle-worker/request nudges or room monitors.
 
-Agent requesters receive replies and captured finals through live waiters or queued
-messages. Captured finals of Bus-generated reply wakes do not produce more wakes.
+Reply routes, captured-final exceptions and Bus wrappers follow
+[Replies and turn finals](bus-communication-guide.md#replies-and-turn-finals).
 Waiters defer only their own wakes and mark only flushed output seen; use `message seen` only after reading.
 A killed waiter's lease expires, resuming delivery with composer guards. Deleted requesters are not replaced.
 stdout and native injection can expose an already-delivered wake.

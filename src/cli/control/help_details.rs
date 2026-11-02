@@ -340,7 +340,11 @@ Default is the full history. --limit N takes newest N in chronological order;
 --before ID is exclusive, requires --limit. Reduce N to fit the 16 MiB response.
 Result: {room_id,room_name,deleted,messages:[{prompt,author_name,recipient_names,
   delivery}],has_more?,next_before?}. prompt holds id,author,text,files,
-  recipient_ids,submitted_at_ms; delivery is message status or null for notices.
+  recipient_ids,submitted_at_ms; delivery is null for notices. Otherwise it is
+  message status with a history projection: each shared reply body appears once
+  per room. Follower request rows set reply:null and
+  answered_with_message:LEAD_MESSAGE_ID. Use message status to read every
+  request's full reply.
   Pagination adds has_more/next_before; pass next_before for the older page.
   Text is raw Markdown; file/image paths are absolute. Deleted agent labels end
   in [deleted]; room_name stays plain and deleted:true marks a deleted room.
@@ -418,7 +422,10 @@ ordinary messages form one ordered prompt/group with batch position/time headers
 Explicit replies complete individually; the final answers outstanding requests
 without replacing earlier answers. Raw text/files remain queryable after restart.
 Replies and captured finals reach an agent requester through ordinary messages,
-except captured finals of Bus-generated reply wakes, which do not create more wakes.
+except captured orchestrator finals to workers and captured finals of Bus-generated
+reply wakes. Empty or whitespace-only finals are not forwarded; they settle as
+replied with their raw text preserved. A non-empty worker-woken orchestrator final
+is published in MASTER.
 An --as author async waiter renews a 3s lease deferring its reply wake
 (and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
@@ -454,8 +461,11 @@ abandoned closed, will not run later. Queued untyped work may close abandoned af
 prior_request_active, unavailable). Recovery deadlines stay internal and never
 change the reported stage. After 5m blocked the reason is blocked_unanswered. A
 captured Stop answer finishes without waiting for background work.
-Settlement without a final closes as reply_not_captured, provider_error: MESSAGE,
-or agent_unavailable; conclusive pre-delivery startup failure is agent_startup_failed.
+Captured finals, including empty/whitespace text, settle as replied with raw text.
+Provider-proven no-reply completion also settles as replied, with empty text.
+Missing reply evidence closes as reply_not_captured; provider failure or lost
+availability uses provider_error: MESSAGE or agent_unavailable. Conclusive
+pre-delivery startup failure is agent_startup_failed.
 Bus can abandon unclaimed steering after an autonomous turn ends and another
 starts or stays idle 5s; it releases later queued work. Late finals keep references.
 submission_unconfirmed may have run: inspect transcript/composer before resending

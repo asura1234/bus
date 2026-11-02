@@ -225,7 +225,7 @@ fn kimi_terminal_failure_can_still_settle_without_a_final_reply() {
 }
 
 #[test]
-fn kimi_successful_silent_turn_completes_without_a_reply() {
+fn kimi_successful_silent_turn_completes_with_an_empty_reply() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
     let request = submit_text(&mut state, room, agent, "run task");
@@ -242,7 +242,8 @@ fn kimi_successful_silent_turn_completes_without_a_reply() {
     );
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(settled.reply().unwrap().text, "");
+    assert!(settled.failure_reason.is_none());
 }
 
 #[test]
@@ -532,4 +533,66 @@ fn recovery_abandons_only_an_idle_current_request_and_releases_its_agent() {
     assert_eq!(state.agent(agent).unwrap().current_request, None);
     assert_eq!(state.next_queued_request(agent), Some(queued));
     assert!(state.room(room).unwrap().latest_replies.is_empty());
+}
+
+#[test]
+fn every_provider_empty_final_is_durable_and_has_no_room_publication() {
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for text in ["", " \t\n"] {
+            let (mut state, room, agent, requester) = state_with_room_and_agents();
+            state.agents.get_mut(&agent).unwrap().provider = provider;
+            let request = state
+                .submit_message_from(
+                    room,
+                    Draft {
+                        text: "finish silently".into(),
+                        files: vec![],
+                        recipient_ids: [agent].into(),
+                    },
+                    Author::Agent(requester),
+                    10,
+                )
+                .unwrap()[0];
+            start_request(&mut state, request, "launch-codex", 10);
+            let unread = state.room(room).unwrap().unread_count;
+            let prompt = state.request(request).unwrap().prompt.rendered_payload();
+            assert_eq!(
+                state.accept_callback(ProviderCallback::final_event(
+                    "empty-final",
+                    12,
+                    agent,
+                    "launch-codex",
+                    "provider-session",
+                    "turn-1",
+                    &prompt,
+                    text
+                )),
+                CallbackDisposition::AcceptedCompleted,
+                "{provider:?}"
+            );
+            let mut restored: BusState =
+                serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let reply = restored.request(request).unwrap();
+            assert_eq!(reply.phase, RequestPhase::Completed);
+            assert_eq!(reply.reply().unwrap().text, text, "{provider:?}");
+            assert!(reply.failure_reason.is_none());
+            assert_eq!(restored.agent(agent).unwrap().current_request, None);
+            assert!(restored.room(room).unwrap().latest_replies.is_empty());
+            assert_eq!(restored.room(room).unwrap().unread_count, unread);
+            restored
+                .route_worker_replies(100_000, &std::collections::BTreeSet::new())
+                .unwrap();
+            assert_eq!(
+                restored.requests().count(),
+                1,
+                "{provider:?}: empty final generated a message"
+            );
+        }
+    }
 }

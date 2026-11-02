@@ -216,16 +216,16 @@ fn update_answer(value: &Value, answer: &mut Option<String>, new_iteration: bool
         *answer = None;
         return Some(true);
     }
-    let text = message
+    let parts = message
         .get("content")?
         .as_array()?
         .iter()
         .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
         .map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<Option<Vec<_>>>()?
-        .concat();
-    if !text.is_empty() {
-        *answer = Some(text);
+        .collect::<Option<Vec<_>>>()?;
+    // An explicit empty text is a final; no text parts remain NoReply.
+    if !parts.is_empty() {
+        *answer = Some(parts.concat());
     }
     Some(true)
 }

@@ -28,12 +28,7 @@ impl BusState {
             .reply()
             .is_some_and(|reply| !reply.text.trim().is_empty())
             && self
-                .assigned_copy_at(
-                    request,
-                    None,
-                    self.reply_recipient(request)
-                        .filter(|_| self.reply_orchestrator(request).is_none()),
-                )
+                .assigned_copy_at(request, None, self.reply_recipient(request))
                 .is_some()
     }
 
@@ -258,16 +253,24 @@ impl BusState {
                 }
                 found.entry(id).or_insert(at);
             };
-        for prompt in self.notices(room) {
-            keep(
-                prompt.id,
-                prompt.submitted_at_ms,
-                &prompt.author,
-                &prompt.text,
-                &prompt.recipient_ids,
-            );
+        for source in self
+            .rooms()
+            .filter(|source| recipient.is_some() || source.id == room)
+        {
+            for prompt in self.notices(source.id) {
+                keep(
+                    prompt.id,
+                    prompt.submitted_at_ms,
+                    &prompt.author,
+                    &prompt.text,
+                    &prompt.recipient_ids,
+                );
+            }
         }
-        for request in self.requests().filter(|request| request.room_id == room) {
+        for request in self
+            .requests()
+            .filter(|request| recipient.is_some() || request.room_id == room)
+        {
             keep(
                 request.prompt.id,
                 request.prompt.submitted_at_ms,
@@ -291,7 +294,7 @@ impl BusState {
         let mut claimants: Vec<_> = self
             .requests()
             .filter(|request| {
-                request.room_id == room
+                (recipient.is_some() || request.room_id == room)
                     && request.agent_id == worker
                     && recipient.is_none_or(|target| request.prompt.author == Author::Agent(target))
                     && request

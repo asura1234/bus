@@ -16,6 +16,29 @@ struct Exchange<'a> {
     requests: BTreeMap<AgentId, &'a Request>,
 }
 
+struct ReplyGroups {
+    members: BTreeMap<RequestId, Vec<RequestId>>,
+    shared_sources: BTreeMap<RequestId, RequestId>,
+}
+
+impl ReplyGroups {
+    fn for_room(state: &BusState, room: RoomId) -> Self {
+        Self {
+            members: state.groups(),
+            shared_sources: state.shared_reply_sources(room, visible_request),
+        }
+    }
+
+    fn reference(&self, state: &BusState, request: &Request) -> Option<String> {
+        let group = request.completed_reply.as_ref()?.group?;
+        let source = *self.shared_sources.get(&group)?;
+        (source != request.id)
+            .then(|| state.request(source))
+            .flatten()
+            .map(|source| format!("Answered with message {}", source.prompt.id.0))
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/history_group_test.rs"]
 mod group_tests;
@@ -61,7 +84,10 @@ impl History {
         let reason = rebuild_reason(self.key, key);
         let (groups, exchanges) = {
             let _timer = super::phases::GROUPING.start();
-            (state.groups(), exchanges(state, room))
+            (
+                ReplyGroups::for_room(state, room.id),
+                exchanges(state, room),
+            )
         };
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
@@ -87,15 +113,7 @@ impl History {
             }
             self.rebuilt += 1;
             let prompt = exchange.prompt;
-            // HH:MM is constant until this prompt becomes older than one day.
-            // Keep both bounds so moving the wall clock backwards is safe too.
-            if let Some(expires) = prompt.submitted_at_ms.checked_add(86_400_001) {
-                if now >= expires {
-                    age_valid.start = age_valid.start.max(expires);
-                } else {
-                    age_valid.end = age_valid.end.min(expires);
-                }
-            }
+            update_age_validity(&mut age_valid, prompt.submitted_at_ms, now);
             self.push_prompt_lines(
                 &mut lines,
                 &mut active_markdown,
@@ -240,7 +258,7 @@ impl History {
         state: &BusState,
         room: &Room,
         exchange: &Exchange<'_>,
-        groups: &BTreeMap<RequestId, Vec<RequestId>>,
+        groups: &ReplyGroups,
         width: u16,
     ) {
         let prompt = exchange.prompt;
@@ -251,15 +269,12 @@ impl History {
                 .map(|a| a.provider)
                 .or_else(|| state.retired_agent(*agent_id).and_then(|a| a.provider));
             let request = exchange.requests.get(agent_id).copied();
-            // A group's messages share one reply per room, shown under that
-            // room's newest visible message even when the group spans MASTER.
-            if let Some(request) = request.filter(|request| {
-                request
-                    .completed_reply
-                    .as_ref()
-                    .is_none_or(|reply| reply.group.is_some())
-            }) {
+            // Pending groups keep one waiting row under their newest visible
+            // member. Completed groups show the body under the first visible
+            // exchange and leave an answer reference under every other member.
+            if let Some(request) = request.filter(|request| request.completed_reply.is_none()) {
                 let members = groups
+                    .members
                     .get(&request.reply_key())
                     .map_or(&[][..], Vec::as_slice);
                 let newest = members.iter().rev().find(|id| {
@@ -271,7 +286,10 @@ impl History {
                     continue;
                 }
             }
-            let (text, quote) = exchange_reply(request);
+            let reference = request.and_then(|request| groups.reference(state, request));
+            let (text, quote) = reference
+                .as_deref()
+                .map_or_else(|| exchange_reply(request), |text| (text, None));
             // One blank row between replies, as at every other block
             // boundary; the exchange's own Gap row follows the last one.
             if replied {
@@ -343,6 +361,18 @@ impl History {
             for line in &mut lines[start..] {
                 line.to_developer = to_developer;
             }
+        }
+    }
+}
+
+fn update_age_validity(valid: &mut std::ops::Range<u64>, submitted_at_ms: u64, now: u64) {
+    // HH:MM is constant until this prompt becomes older than one day.
+    // Keep both bounds so moving the wall clock backwards is safe too.
+    if let Some(expires) = submitted_at_ms.checked_add(86_400_001) {
+        if now >= expires {
+            valid.start = valid.start.max(expires);
+        } else {
+            valid.end = valid.end.min(expires);
         }
     }
 }

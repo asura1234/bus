@@ -551,7 +551,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   just test-one kimi_
   just test-one committed_final_survives_an_oversized_line_before_the_turn
   just test-one malformed_wire_is_an_error_not_pending_evidence
-  just test-one kimi_successful_silent_turn_completes_without_a_reply
+  just test-one kimi_successful_silent_turn_completes_with_an_empty_reply
   just test-one launch_rejects_attached_session_and_prompt_short_options
   just test-one launch_rejects_positional_input_after_the_option_terminator
   just test-one unstarted_kimi_resume_rejects_attached_session_and_prompt_options

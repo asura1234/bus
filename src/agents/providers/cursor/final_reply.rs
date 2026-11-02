@@ -37,15 +37,7 @@ fn read_transcript(path: &str) -> Result<String, String> {
 /// own text is the reply: the turn is over, and waiting for a perfect
 /// transcript match leaves the request delivered forever.
 pub(crate) fn settle_text(value: &Value, idle: bool) -> Result<String, String> {
-    let text = value
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|v| !v.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "Hook missing text; update the CLI and verify Bus hooks. No prompt will be retried."
-                .to_owned()
-        })?;
+    let text = super::hooks::response_text(value)?;
     let Some(path) = value.get("transcript_path").and_then(Value::as_str) else {
         return Ok(text);
     };
@@ -55,7 +47,7 @@ pub(crate) fn settle_text(value: &Value, idle: bool) -> Result<String, String> {
         // 转录还是钩子的前缀，说明写盘还没赶上，先留着再读。
         ReplyMatch::Waiting => Err(PENDING.into()),
         // 已经对不上，且代理空闲：用钩子正文结算，避免请求一直停在 delivered。
-        ReplyMatch::Diverged if idle && !text.trim().is_empty() => Ok(text),
+        ReplyMatch::Diverged if idle => Ok(text),
         ReplyMatch::Diverged => Err(PENDING.into()),
     }
 }
@@ -139,16 +131,17 @@ fn classify(transcript: &str, hook_text: &str) -> ReplyMatch {
                 else {
                     return ReplyMatch::Waiting;
                 };
-                let text = content
+                let text_parts = content
                     .iter()
                     .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
-                    .collect::<String>();
+                    .collect::<Vec<_>>();
+                let text = text_parts.concat();
                 // 带工具调用的是说明，不是终稿。说明末尾可能多出钩子删掉的内容。
                 let commentary = content
                     .iter()
                     .any(|part| part.get("type").and_then(Value::as_str) == Some("tool_use"));
-                let final_text = (!text.trim().is_empty() && !commentary).then_some(text.clone());
+                let final_text = (!text_parts.is_empty() && !commentary).then_some(text.clone());
                 let mut next = Vec::new();
                 for (accumulated, _) in &candidates {
                     let piece = if commentary {

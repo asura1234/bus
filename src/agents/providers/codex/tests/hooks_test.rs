@@ -67,7 +67,12 @@ fn hook(event: &str) -> Value {
 
 #[test]
 fn codex_empty_stop_keeps_the_turn_with_null_missing_or_empty_text() {
-    for text in [None, Some(Value::Null), Some(json!(""))] {
+    for (text, expected) in [
+        (None, ""),
+        (Some(Value::Null), ""),
+        (Some(json!("")), ""),
+        (Some(json!(" \t\n")), " \t\n"),
+    ] {
         let mut value = hook("Stop");
         value
             .as_object_mut()
@@ -81,7 +86,7 @@ fn codex_empty_stop_keeps_the_turn_with_null_missing_or_empty_text() {
             Parsed::Final {
                 session: "s".into(),
                 turn: "t".into(),
-                text: String::new(),
+                text: expected.into(),
             }
         );
     }

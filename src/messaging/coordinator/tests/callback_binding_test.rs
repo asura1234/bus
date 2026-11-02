@@ -819,3 +819,64 @@ fn abandoned_request_does_not_spend_its_turn_on_a_first_interim_late_final() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn noise_cursor_empty_response_requires_its_own_completed_stop_and_survives_reload() {
+    for text in ["", " \t\n"] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Cursor, vec![]);
+        let request = queue(&mut worker, room, agent, "finish silently");
+        worker.submit_ready().unwrap();
+        let prompt = worker.state.render_request_payload(request).unwrap();
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"beforeSubmitPrompt",
+            "conversation_id":"session","generation_id":"turn","prompt":prompt}),
+        );
+        consume(&mut worker, agent, &dir);
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"afterAgentResponse",
+            "conversation_id":"session","generation_id":"foreign","text":text}),
+        );
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"stop",
+            "conversation_id":"session","generation_id":"turn","status":"completed"}),
+        );
+        consume(&mut worker, agent, &dir);
+        assert!(
+            worker.state.request(request).unwrap().reply().is_none(),
+            "a foreign response must not satisfy the completed turn"
+        );
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"afterAgentResponse",
+            "conversation_id":"session","generation_id":"turn","text":text}),
+        );
+        consume(&mut worker, agent, &dir);
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+            .unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        drop(worker);
+        let mut worker = reopen_saved(&dir);
+        let reply = worker.state.request(request).unwrap();
+        assert_eq!(reply.phase, RequestPhase::Completed);
+        assert_eq!(reply.reply().unwrap().text, text);
+        assert!(reply.failure_reason.is_none());
+        assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+        assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
+        worker
+            .state
+            .route_worker_replies(io::now_ms() + 10_000, &BTreeSet::new())
+            .unwrap();
+        assert!(!worker.state.requests().any(|r| r.bus_generated));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

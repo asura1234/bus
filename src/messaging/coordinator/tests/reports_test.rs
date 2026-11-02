@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::messaging::model::{RequestPhase, SubmissionOutcome};
 use crate::messaging::native::TransportError;
 use serde_json::json;
 
@@ -256,7 +257,7 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
 }
 
 #[test]
-fn a_turn_that_answers_a_worker_replies_in_its_work_room_only() {
+fn a_turn_that_answers_a_worker_keeps_its_reply_and_reports_in_master() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
     let typed = bus.deliver(
@@ -271,18 +272,18 @@ fn a_turn_that_answers_a_worker_replies_in_its_work_room_only() {
         &typed,
         "builder finished; tests pass.",
     );
-    // The final is the reply to the worker's message, which shows in the work
-    // room under it; no report repeats it there or in MASTER.
+    // Keep the durable answer in the source room and publish the developer's
+    // MASTER report, without making another work-room post.
     assert_eq!(
         bus.reply(),
         Some((room, "builder finished; tests pass.".to_owned()))
     );
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
-    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+    assert_eq!(bus.reports(), ["builder finished; tests pass."]);
 }
 
 #[test]
-fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_replies_in_its_work_room_only() {
+fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_reports_its_decision_in_master() {
     // The 11:21 case: a worker's open dialog sends "Blocked, needs help to
     // continue." to the orchestrator, which approves it and ends its turn.
     let mut bus = fixture(Provider::ClaudeCode);
@@ -307,7 +308,10 @@ fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_replies_in_its_work_room_only(
         ))
     );
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
-    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+    assert_eq!(
+        bus.reports(),
+        ["I approved formatting one test file. Nothing is waiting on you."]
+    );
 }
 
 #[test]
@@ -664,4 +668,208 @@ fn a_late_final_after_stop_failure_for_a_master_request_stays_in_master() {
     bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
     assert_eq!(bus.reports(), ["Review is done; merging next."]);
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
+}
+
+#[test]
+fn a_late_worker_woken_orchestrator_decision_is_published_in_master_once() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
+    let typed = bus.deliver(
+        room,
+        Author::Agent(builder),
+        orchestrator,
+        "Worker result is ready.",
+    );
+    let request = bus
+        .worker
+        .state
+        .agent(orchestrator)
+        .unwrap()
+        .current_request
+        .unwrap();
+    let spool = bus.dir.join("callbacks/orch");
+    callbacks::append(&spool, "orch", Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"worker-late","prompt":typed}),
+        &[], false).unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    let mut state = bus.worker.state.clone();
+    let now = crate::messaging::storage::io::now_ms();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Working, now)
+        .unwrap();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Idle, now)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(
+            orchestrator,
+            now + crate::messaging::model::TURN_SETTLE_MS,
+            |_| None
+        ),
+        Some(request)
+    );
+    assert_eq!(
+        state.request(request).unwrap().failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    bus.worker.save(state).unwrap();
+    for _ in 0..2 {
+        callbacks::append(&spool, "orch", Provider::ClaudeCode,
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"worker-late","last_assistant_message":"Use the fallback after the late result."}),
+            &[], false).unwrap();
+        bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+    }
+    assert_eq!(bus.reports(), ["Use the fallback after the late result."]);
+    assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
+}
+
+#[test]
+fn a_late_decision_for_a_developer_lead_with_worker_steering_reaches_master_once() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
+    let typed = bus.deliver(
+        room,
+        Author::Developer,
+        orchestrator,
+        "Evaluate the current work.",
+    );
+    let lead = bus
+        .worker
+        .state
+        .agent(orchestrator)
+        .unwrap()
+        .current_request
+        .unwrap();
+    let spool = bus.dir.join("callbacks/orch");
+    callbacks::append(
+        &spool,
+        "orch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"mixed-late","prompt":typed}),
+        &[],
+        false,
+    )
+    .unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+
+    let mut state = bus.worker.state.clone();
+    let now = crate::messaging::storage::io::now_ms();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Working, now)
+        .unwrap();
+    let member = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "The worker result changes the decision.".into(),
+                files: Vec::new(),
+                recipient_ids: [orchestrator].into(),
+            },
+            Author::Agent(builder),
+            now,
+        )
+        .unwrap()[0];
+    let steering = state.render_request_payload(member).unwrap();
+    assert_eq!(state.next_steering(orchestrator), Some((member, lead)));
+    state.begin_steering(member, lead).unwrap();
+    state
+        .record_steering(
+            member,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session-orch".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    bus.worker.save(state).unwrap();
+    callbacks::append(
+        &spool,
+        "orch",
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"mixed-late","prompt":steering}),
+        &[],
+        false,
+    )
+    .unwrap();
+    bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+
+    let mut state = bus.worker.state.clone();
+    assert!(lead < member, "the developer request is the turn's lead");
+    assert_eq!(
+        state.request(lead).unwrap().prompt.author,
+        Author::Developer
+    );
+    assert_eq!(
+        state.request(member).unwrap().prompt.author,
+        Author::Agent(builder)
+    );
+    assert_eq!(state.request(member).unwrap().group, Some(lead));
+    assert!(state.request(member).unwrap().steered);
+    assert!(state.request(lead).unwrap().submission_boundary.is_some());
+    assert_eq!(state.request(member).unwrap().submission_boundary, None);
+    assert_eq!(
+        state.agent(orchestrator).unwrap().current_request,
+        Some(lead)
+    );
+    for id in [lead, member] {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.phase, RequestPhase::Active);
+        assert!(
+            request.trusted_start_bound,
+            "the native submit hook claimed {id:?}"
+        );
+        assert!(!request.uncertain_outcome);
+        assert_eq!(request.expected_launch_id.as_deref(), Some("orch"));
+        assert_eq!(request.provider_session_id.as_deref(), Some("session-orch"));
+        assert_eq!(request.provider_turn_id.as_deref(), Some("mixed-late"));
+        assert!(request.reply().is_none());
+    }
+    let now = crate::messaging::storage::io::now_ms();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Idle, now)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(
+            orchestrator,
+            now + crate::messaging::model::TURN_SETTLE_MS,
+            |_| None,
+        ),
+        Some(lead)
+    );
+    for id in [lead, member] {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.phase, RequestPhase::Abandoned);
+        assert_eq!(
+            request.failure_reason.as_deref(),
+            Some("reply_not_captured")
+        );
+        assert!(request.trusted_start_bound);
+        assert_eq!(request.provider_session_id.as_deref(), Some("session-orch"));
+        assert_eq!(request.provider_turn_id.as_deref(), Some("mixed-late"));
+        assert!(request.reply().is_none());
+    }
+    assert!(state.agent(orchestrator).unwrap().current_request.is_none());
+    bus.worker.save(state).unwrap();
+    assert!(bus.reports().is_empty());
+    assert!(bus.room_reports().is_empty());
+
+    const DECISION: &str = "Use the fallback after considering the worker result.";
+    for _ in 0..2 {
+        callbacks::append(
+            &spool,
+            "orch",
+            Provider::ClaudeCode,
+            json!({"hook_event_name":"Stop","session_id":"session-orch","prompt_id":"mixed-late","last_assistant_message":DECISION}),
+            &[],
+            false,
+        )
+        .unwrap();
+        bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
+        assert_eq!(
+            bus.reports(),
+            [DECISION],
+            "a late decision incorporating claimed worker steering belongs in MASTER once"
+        );
+        assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
+    }
 }

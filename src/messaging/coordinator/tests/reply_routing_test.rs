@@ -17,6 +17,9 @@ mod rejected_notice;
 #[path = "requester_replies_test.rs"]
 mod requester_replies;
 
+#[path = "shared_final_history_test.rs"]
+mod shared_final_history;
+
 static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct Accepting(Arc<Mutex<Vec<String>>>);

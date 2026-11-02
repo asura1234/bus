@@ -91,7 +91,10 @@ fn kimi_silent_synchronous_turn_and_guidance_do_not_strand_the_inbox() {
         stop(&f);
         f.consume();
         assert!(f.request(lead).settled());
-        assert_eq!(f.reply(lead).as_deref(), guidance.then_some("STEER"));
+        assert_eq!(
+            f.reply(lead).as_deref(),
+            Some(if guidance { "STEER" } else { "" })
+        );
         if let Some(id) = steer {
             assert_eq!(f.reply(id).as_deref(), Some("STEER"));
         }
@@ -166,10 +169,7 @@ fn kimi_missing_stop_poll_retains_a_follow_up_after_answered_or_silent_completio
         f.consume();
         f.worker.settle_requests().unwrap();
         assert_eq!(f.reply(follow).as_deref(), Some("later final"));
-        assert_eq!(
-            f.reply(lead).as_deref(),
-            (!answer.is_empty()).then_some(answer)
-        );
+        assert_eq!(f.reply(lead).as_deref(), Some(answer));
     }
 }
 

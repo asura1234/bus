@@ -457,6 +457,71 @@ fn grok_1070_committed_turn_uses_prompt_id_and_full_native_reply() {
 }
 
 #[test]
+fn noise_grok_empty_final_requires_a_committed_native_text_chunk() {
+    for text in ["", " \t\n"] {
+        let mut rows: Vec<Value> = include_str!("fixtures/native-1.0.70/ordinary.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        rows[1]["params"]["update"]["content"]["text"] = json!(text);
+        let fixture = NativeFixture::new(
+            "session-ordinary",
+            &rows
+                .iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        );
+        assert_eq!(
+            resolve_candidate(&fixture.stop("prompt-ordinary"), true).unwrap(),
+            CompletionResolution::Final {
+                session: "session-ordinary".into(),
+                turn: "prompt-ordinary".into(),
+                text: text.into(),
+            }
+        );
+        assert_eq!(
+            resolve_candidate(&fixture.stop("prompt-ordinary"), false).unwrap(),
+            CompletionResolution::Pending
+        );
+        assert_eq!(
+            resolve_candidate(&fixture.stop("foreign-prompt"), true).unwrap(),
+            CompletionResolution::Pending
+        );
+        for missing in ["text", "chunk", "completion"] {
+            let mut incomplete = rows.clone();
+            match missing {
+                "text" => {
+                    incomplete[1]["params"]["update"]["content"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("text");
+                }
+                "chunk" => {
+                    incomplete.remove(1);
+                }
+                "completion" => {
+                    incomplete.pop();
+                }
+                _ => unreachable!(),
+            }
+            std::fs::write(
+                &fixture.path,
+                incomplete
+                    .iter()
+                    .map(|row| format!("{row}\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            assert_eq!(
+                resolve_candidate(&fixture.stop("prompt-ordinary"), true).unwrap(),
+                CompletionResolution::Pending,
+                "missing {missing}"
+            );
+        }
+    }
+}
+
+#[test]
 fn grok_1070_continuation_selects_only_its_own_unicode_answer() {
     let fixture = NativeFixture::new(
         "session-unicode-continuation",
