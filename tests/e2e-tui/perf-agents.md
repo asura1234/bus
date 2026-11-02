@@ -2,7 +2,8 @@
 
 ## Run contract and setup recipes
 
-- Use a fresh scratch `bus --dev tui` session at 120×40, fake providers only.
+- Use a fresh scratch `bus --dev tui` session at 120×40 unless a case specifies
+  another size, fake providers only.
   Never use the running Bus, its data directory, `target/debug`, or desktop automation.
 - Setup may use the driver's scratch `bus room create` and `bus agent add` commands
   to create rooms and fake Claude workers, with PWD set to the session's scratch
@@ -108,3 +109,37 @@ idle fake Claude worker; default room `bus` open.
    rows and an inspected screenshot.
 
 **Pass criteria:** agent counts remain in the sidebar independently of the overlay.
+
+
+### SIDEBAR-06 — Opening an offscreen room reveals its count
+
+**Preconditions/setup:** fresh scratch session at 100×12; use the scratch CLI to
+create `extra-1` through `extra-20`; default room `bus` open, no workers needed.
+
+1. Press Ctrl+N, type `final-room` and press Enter → the new room is created and
+   its main pane title reads `# final-room`. Capture state and an inspected
+   screenshot.
+2. Press F6 to open the current room → both its selected sidebar name/status and
+   the `Agents 0/0` row fit within sidebar body rows 0–8. Named hits contain four
+   `room:final-room` targets: name, status, Agents and 0/0. Capture the hits and an
+   inspected screenshot.
+
+**Pass criteria:** opening the offscreen room makes its complete two-row entry
+visible without additional manual scrolling.
+
+### SIDEBAR-07 — A sidebar that fits exactly does not scroll
+
+**Preconditions/setup:** fresh scratch session at 120×20; create work room
+`fit-extra` and fake Claude orchestrator `fit-alpha` in MASTER with
+`--orchestrates bus`; wait for idle and open MASTER. Its 17-row sidebar body fits
+MASTER, two work rooms, their counts and the orchestrator card exactly.
+
+1. Inspect MASTER → MASTER shows `Agents 0/1`, bus and fit-extra show `Agents 0/0`,
+   and the full orchestrator card fits above the footer. Capture named hit
+   positions and an inspected screenshot.
+2. Scroll down three notches over the sidebar → room and agent hit positions do
+   not move; the name/count rows and full orchestrator card remain visible.
+   Capture the hits and an inspected screenshot.
+
+**Pass criteria:** a wheel event cannot move an already fully visible sidebar by
+an extra blank row.
