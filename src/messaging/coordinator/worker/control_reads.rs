@@ -23,6 +23,7 @@ impl Worker {
 pub(super) fn interrupts_delivery(command: &BusCommand) -> bool {
     match command {
         BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
+        BusCommand::NativeWake => false,
         _ => true,
     }
 }

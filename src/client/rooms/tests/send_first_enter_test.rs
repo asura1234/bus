@@ -110,7 +110,8 @@ fn enter_on_an_empty_composer_after_a_send_is_not_a_rejected_send() {
 
 #[tokio::test]
 async fn snapshot_publication_wakes_the_client_without_an_idle_poll() {
-    let (ui, room, dir) = live_room();
+    let (mut ui, room, dir) = live_room();
+    ui.status_animation_last_tick = None;
     let handle = ui.handle.as_ref().unwrap();
     assert_eq!(ui.tick_interval(), Duration::from_secs(3600));
     let wake = handle.snapshot_wake.clone();

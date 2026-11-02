@@ -186,6 +186,7 @@ pub(super) fn spawn_detection_task(
         kimi_code_home,
         detection_context: detection_context.clone(),
     };
+    task.detection_notify.notify_one();
     let handle = tokio::spawn(task.run(initial_agent));
     (
         managed_launch_pending,
