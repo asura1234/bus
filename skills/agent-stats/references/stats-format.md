@@ -29,3 +29,17 @@ section decision, never a new rating. The collector verifies referenced reviews
 and claim outcomes; it does not decide which assertions share a root cause.
 Missing source/round mappings are coverage omissions. Copies and unresolved
 carry-forward assertions never create new roots.
+
+Task phase events use automatically sampled UTC times (seconds or milliseconds)
+and a monotonic clock. An end references its start ID and contains the computed
+elapsed milliseconds. `task-end --artifact PATH` binds that exact artifact hash
+to the assignment identity and completion time. `task-end` also returns an
+immutable event receipt, usable by the runner for measured slot waiting.
+
+For an applied root detected by a gate/live runner, a provenance source may be
+`run@relative-report.json#exact-failing-test-id`. The referenced report must
+record that failure ID; the canonical claim must cite repository `path:line`.
+These are links to existing triage evidence, not new adjudications. Escapes need
+an observed Ready completion earlier than the linked detection, ancestry, and
+identical cited Git blobs. Unknown ordering or changed blobs emits no escape.
+Root credit is still per canonical claim and reporting reviewer, not per test.

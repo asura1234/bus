@@ -33,7 +33,7 @@ def change_stats(repo, old, new):
     )
 
 
-def collect(task, artifacts, gh=None, repo=None, workflow=None):
+def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
     root = Path(artifacts)
     if not root.is_dir():
         raise ValueError("invalid artifacts directory")
@@ -87,19 +87,55 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None):
                 raise ValueError(f"invalid conflicting review copies: {key}")
             continue
         unique[key] = (lane, data, at, path, text)
-        emit(
+        bindings = [
+            x
+            for x in history
+            if x["task"] == task
+            and x["kind"] == "phase"
+            and x["data"]["transition"] == "end"
+            and x["data"]["phase"] == "in_review"
+            and x["agent"]["name"] == lane
+            and x["data"]["artifact_sha"] == source(path)["sha256"]
+        ]
+        actors = {digest(x["agent"]) for x in bindings}
+        if len(actors) > 1:
+            raise ValueError("invalid conflicting artifact identity bindings")
+        actor = bindings[0]["agent"] if bindings else unknown(lane)
+        at = min(x["ts"] for x in bindings) if bindings else at
+        emitted = emit(
             "review",
             "reviewer",
             data,
             path,
-            unknown(lane),
+            actor,
             at,
             "review headers/actionable sections",
         )
+        if bindings:
+            emitted["orchestrator"] = bindings[0]["orchestrator"]
+            emitted["sources"].extend(bindings[0]["sources"])
+            emitted["id"] = digest({k: v for k, v in emitted.items() if k != "id"})
     parsed = list(unique.values())
     lanes = {r[0] for r in parsed}
     for _, text in texts:
         lanes.update(re.findall(r"\blane=(?:external:)?([\w-]+)\s*\|", text))
+    seen_runs = set()
+    for path in paths:
+        if path.suffix != ".json":
+            continue
+        value = read_json(path)
+        data = runner(value)
+        if data is not None:
+            token = digest(value)
+            if token in seen_runs:
+                continue
+            seen_runs.add(token)
+            emit("run", "tester", data, path, ts=data["started_at"])
+    run_lookup = {
+        str(Path(row["sources"][0]["path"]).relative_to(root.resolve())): row
+        for row in rows
+        if row["kind"] == "run"
+    }
     seen_triage = set()
     for path, text in texts:
         if "triage" not in path.name or "**模式**" not in text:
@@ -108,7 +144,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None):
         if token in seen_triage:
             continue
         seen_triage.add(token)
-        items = triage(text, lanes, parsed)
+        items = triage(text, lanes, parsed, run_lookup)
         if not items and re.search(r"(?mi)^## APPLY\s*$", text):
             emit(
                 "coverage",
@@ -116,7 +152,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None):
                 dict(field="root_cause", reason="canonical source mapping unavailable"),
                 path,
             )
-        for claim, outcome, refs in items:
+        for claim, outcome, refs, run_ids, locations in items:
             head_match = re.search(
                 r"(?i)(?:head\s*[:=]?\s*`?|@\s*)([0-9a-f]{7,40})\b", text
             )
@@ -131,22 +167,12 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None):
                     outcome=outcome,
                     reviewers=sorted({r["reviewer"] for r in refs}),
                     source_refs=refs,
+                    run_ids=run_ids,
+                    locations=locations,
                 ),
                 path,
                 locator=f"{outcome}/{claim}",
             )
-    seen_runs = set()
-    for path in paths:
-        if path.suffix != ".json":
-            continue
-        value = read_json(path)
-        data = runner(value)
-        if data is not None:
-            token = digest(value)
-            if token in seen_runs:
-                continue
-            seen_runs.add(token)
-            emit("run", "tester", data, path, ts=data["started_at"])
     if metadata:
         data = dict(
             number=metadata["number"],
@@ -232,4 +258,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None):
                 workflow,
                 locator=f"L{n}",
             )
+    from stats_escapes import escapes
+
+    rows.extend(escapes(rows, repo))
     return rows

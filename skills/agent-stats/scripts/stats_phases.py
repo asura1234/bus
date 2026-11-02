@@ -1,6 +1,7 @@
 """Clock-backed task phase boundaries; assignments supply identity, not ratings."""
 
 import time
+import subprocess
 from datetime import datetime, timezone
 
 from stats_schema import read_json, record, source
@@ -42,31 +43,56 @@ def phase(args, store):
         monotonic_ns=now_ns,
         observed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
+    try:
+        clock["head"] = subprocess.run(
+            ["git", "rev-parse", "HEAD"], check=True, text=True, capture_output=True
+        ).stdout.strip()
+    except subprocess.CalledProcessError:
+        clock["head"] = None
+    clock["observed_at"] = (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
     duration = None
     if open_:
         old = read_json(open_["sources"][0]["path"])
+        clock["start_monotonic_ns"] = old["monotonic_ns"]
         duration = (now_ns - old["monotonic_ns"]) // 1000000
         if duration < 0:
             raise ValueError(
                 "invalid phase clock: host restarted or monotonic clock reset"
             )
     path = snapshot(store, clock)
+    sources = [source(path)]
+    artifact_sha = None
+    if args.artifact:
+        if transition != "end":
+            raise ValueError("invalid artifact: only completed phases bind artifacts")
+        artifact = source(args.artifact)
+        artifact_sha = artifact["sha256"]
+        sources.append(artifact)
     value = record(
         "phase",
         args.task,
         assignment["role"],
         actor,
         assignment["orchestrator"],
-        [source(path)],
+        sources,
         dict(
             phase=args.phase,
+            artifact_sha=artifact_sha,
             transition=transition,
             start_id=open_["id"] if open_ else None,
             duration_ms=duration,
         ),
         clock["observed_at"],
     )
-    return dict(appended=append(store, [value]), id=value["id"])
+    return dict(
+        appended=append(store, [value]),
+        id=value["id"],
+        receipt=str(snapshot(store, value)),
+    )
 
 
 def validate_phases(rows):

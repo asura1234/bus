@@ -140,6 +140,7 @@ def main():
             choices=SCHEMA["data_schemas"]["phase"]["properties"]["phase"]["enum"],
             required=True,
         )
+        p.add_argument("--artifact", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "validate":
@@ -153,7 +154,12 @@ def main():
 
             store = args.store or default_store()
             records = collect(
-                args.task, args.artifacts, args.gh, args.repo, args.workflow
+                args.task,
+                args.artifacts,
+                args.gh,
+                args.repo,
+                args.workflow,
+                read_records(store / "events.jsonl"),
             )
             result = {"appended": append(store, records), "collected": len(records)}
         elif args.command == "report":

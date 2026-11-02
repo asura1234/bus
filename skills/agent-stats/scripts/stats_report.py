@@ -19,6 +19,7 @@ def report(rows):
                 assignments=0,
                 handovers=0,
                 review_rounds=0,
+                escaped_defects=0,
                 unique_issues=0,
                 shared_issues=0,
                 applied=0,
@@ -65,6 +66,8 @@ def report(rows):
                         "WITHDRAWN": "withdrawn",
                     }[data["outcome"]]
                 ] += 1
+        elif kind == "escape":
+            entry(row)["escaped_defects"] += 1
         elif kind == "review":
             entry(row)["review_rounds"] += 1
         elif kind in ("assignment", "handover"):

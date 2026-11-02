@@ -90,9 +90,11 @@ def check(value, spec, where="$"):
         ):
             raise ValueError(f"invalid {where}: bad string")
         if spec.get("format") == "date-time":
-            if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", value):
+            if not re.fullmatch(
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3,6})?Z", value
+            ):
                 raise ValueError(f"invalid {where}: expected UTC timestamp")
-            datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
     elif type(value) is int and value < spec.get("minimum", value):
         raise ValueError(f"invalid {where}: below minimum")
 

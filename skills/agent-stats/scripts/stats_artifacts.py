@@ -83,11 +83,11 @@ def review(text):
             verdict=verdict[0],
             findings=findings,
         ),
-        field(text, "Completed at", False),
+        None,
     )
 
 
-def triage(text, lanes, reviews):
+def triage(text, lanes, reviews, runs=None):
     """Keep exactly the canonical items and corroborating lanes the author recorded."""
     text = unfenced(text)
     structured = section(text, "Root cause provenance")
@@ -104,8 +104,24 @@ def triage(text, lanes, reviews):
             if len(cells) != 3:
                 raise ValueError("invalid root provenance table")
             claim, outcome, sources = cells
-            refs = []
+            refs, run_ids = [], []
             for raw in sources.split(","):
+                if raw.strip().startswith("run@"):
+                    pointer = raw.strip()[4:]
+                    if "#" not in pointer:
+                        raise ValueError("invalid run source reference")
+                    path, test_id = pointer.split("#", 1)
+                    matched = (runs or {}).get(path)
+                    if (
+                        not matched
+                        or matched["data"]["result"] != "FAIL"
+                        or test_id not in matched["data"]["failing_test_ids"]
+                    ):
+                        raise ValueError(
+                            "invalid run source: missing failed test evidence"
+                        )
+                    run_ids.append(matched["id"])
+                    continue
                 m = re.fullmatch(r"([\w-]+)@(\d+):([\w-]+)", raw.strip())
                 if not m:
                     raise ValueError("invalid root source reference")
@@ -125,7 +141,14 @@ def triage(text, lanes, reviews):
                 r"(?m)^\s*(?:- |\d+\. )?" + re.escape(claim) + r"\b", body
             ):
                 raise ValueError("invalid root outcome: absent canonical claim")
-            items.append((claim, outcome, refs))
+            canonical_item = re.search(
+                r"(?m)^(?:- |\d+\. )" + re.escape(claim) + r"\b.*$", body
+            )
+            locations = re.findall(
+                r"(?<![\w/])([\w./-]+):\d+",
+                canonical_item.group() if canonical_item else "",
+            )
+            items.append((claim, outcome, refs, run_ids, locations))
         if len({x[0] for x in items}) != len(items):
             raise ValueError("invalid duplicate canonical claim")
         return items
@@ -165,7 +188,7 @@ def triage(text, lanes, reviews):
                     )
             if refs:
                 items.append(
-                    (claim, outcome, sorted(refs, key=lambda x: x["reviewer"]))
+                    (claim, outcome, sorted(refs, key=lambda x: x["reviewer"]), [], [])
                 )
     return items
 
@@ -173,6 +196,23 @@ def triage(text, lanes, reviews):
 def runner(value):
     if not isinstance(value, dict):
         return None
+    if (
+        value.get("kind") in ("gate", "e2e", "live")
+        and {"head", "result", "started_at", "finished_at"} <= value.keys()
+    ):
+        return dict(
+            kind=value["kind"],
+            head=value["head"],
+            result=value["result"],
+            duration_ms=value.get("duration_ms"),
+            failure_cause=value.get("failure_cause"),
+            full=value.get("full"),
+            lanes=value.get("lanes", []),
+            started_at=value["started_at"],
+            finished_at=value["finished_at"],
+            slot_wait_ms=value.get("slot_wait_ms"),
+            failing_test_ids=value.get("failing_test_ids", []),
+        )
     if {"head", "duration_ms", "exit_code", "results"} <= value.keys():
         if (
             type(value["exit_code"]) is not int
