@@ -420,3 +420,9 @@ def test_unavailable_pane_logs_assignment_with_unknown_model(tmp_path):
     row = json.loads((tmp_path / "stats/events.jsonl").read_text())
     assert row["agent"]["provider"] == "kimi"
     assert row["agent"]["model"] == "unknown"
+
+
+def test_validate_missing_input_does_not_claim_an_empty_valid_dataset(tmp_path):
+    r = call("validate", tmp_path / "missing.jsonl")
+    assert r.returncode == 1
+    assert "missing" in r.stderr

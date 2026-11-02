@@ -214,6 +214,8 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == "validate":
+            if not args.file.is_file():
+                raise ValueError("missing validation input: " + str(args.file))
             result = {"validated": len(read_records(args.file))}
         elif args.command in ("task-start", "task-end"):
             from stats_phases import phase
