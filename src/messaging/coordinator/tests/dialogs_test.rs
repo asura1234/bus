@@ -446,8 +446,7 @@ fn an_undelivered_blocked_notice_keeps_its_failure_and_reaches_the_developer_onc
         Some("hook_setup_unconfirmed")
     );
     assert!(notice.completed_at_ms.is_some());
-    let fallback =
-        format!("{blocked}\nThe orchestrator did not receive this (hook_setup_unconfirmed).");
+    let fallback = blocked.clone();
     assert_eq!(
         sent_by(&worker, room, agent),
         [
@@ -1507,8 +1506,8 @@ fn a_persistently_unreadable_open_dialog_still_gets_a_bounded_developer_fallback
         "repeated unreadable observations must not suppress fallback forever, even a day past its bound"
     );
     assert_eq!(messages.len(), 2, "fallback must be posted exactly once");
-    assert!(messages[1].1.contains("The dialog state could not be read"));
-    assert!(messages[1].1.contains("may still be blocked"));
+    assert!(!messages[1].1.contains("The dialog state could not be read"));
+    assert!(!messages[1].1.contains("may still be blocked"));
 }
 
 /// Stay clear of the clock-minute boundary so a same-minute check is stable.

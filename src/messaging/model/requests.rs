@@ -216,11 +216,15 @@ impl BusState {
         ) {
             return None;
         }
+        // A missing executable has no delivery opportunity. Keep its queue
+        // independently of the Unavailable state shown for the unusable agent.
         // A visible dialog blocks the agent even while Codex reports Idle.
-        if matches!(
-            agent.activity_status(),
-            RuntimeStatus::Working | RuntimeStatus::Blocked
-        ) {
+        if agent.missing_binary.is_some()
+            || matches!(
+                agent.activity_status(),
+                RuntimeStatus::Working | RuntimeStatus::Blocked
+            )
+        {
             return None;
         }
         match lead.phase {

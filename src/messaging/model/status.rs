@@ -58,7 +58,7 @@ impl RoomAgent {
     /// turn can still settle from its rollout. Agent rows, control reads and
     /// room status all use this projection.
     pub(crate) fn shown_status(&self) -> RuntimeStatus {
-        if self.working_directory_error.is_some() {
+        if self.working_directory_error.is_some() || self.missing_binary.is_some() {
             RuntimeStatus::Unavailable
         } else {
             self.activity_status()

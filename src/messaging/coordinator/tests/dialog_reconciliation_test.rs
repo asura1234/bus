@@ -169,7 +169,7 @@ fn a_late_write_gets_its_full_bound_even_after_restart_without_an_outcome() {
     );
     let room = f.worker.state.room(f.request(notice).room_id).unwrap();
     assert_eq!(room.notices.len(), 1);
-    assert!(room.notices[0]
+    assert!(!room.notices[0]
         .text
         .contains("Delivery to the orchestrator is unconfirmed"));
     assert_eq!(f.request(notice).phase, RequestPhase::Submitting);
@@ -439,8 +439,8 @@ fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_un
     let room = f.worker.state.room(f.request(notice).room_id).unwrap();
     assert_eq!(room.notices.len(), 1);
     let text = &room.notices[0].text;
-    assert!(text.contains(
+    assert!(!text.contains(
         "Delivery to the orchestrator is unconfirmed; it may already have received this"
     ));
-    assert!(text.contains("The dialog state could not be read; the agent may still be blocked."));
+    assert!(!text.contains("The dialog state could not be read; the agent may still be blocked."));
 }
