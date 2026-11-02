@@ -400,6 +400,9 @@ impl BusState {
             // A provider that names its error (Claude's StopFailure) closes the
             // turn with the same retryable reason settlement gives Codex's.
             (true, Some(error)) => {
+                if self.hold_provider_error(request_id, &error, callback.occurred_at_ms) {
+                    return CallbackDisposition::AcceptedError;
+                }
                 let (reason, message) = super::settlement::provider_error_outcome(&error);
                 let at_ms = callback.occurred_at_ms;
                 match self.close_turn_with_reason(request_id, at_ms, reason) {

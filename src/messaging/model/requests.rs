@@ -206,6 +206,9 @@ impl BusState {
             None => request,
         };
         let agent = self.agents.get(&lead.agent_id)?;
+        if agent.provider_retry.is_some() {
+            return None;
+        }
         if let Some(reason) = self.expired_queue_rejection(lead, now_ms) {
             return Some(reason.into());
         }

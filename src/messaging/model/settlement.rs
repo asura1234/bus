@@ -322,7 +322,8 @@ impl BusState {
     /// exited, say) settles too, or async waiters on it would never finish.
     fn settle_candidate(&self, agent: AgentId) -> Option<&Request> {
         let agent_state = self.agents.get(&agent)?;
-        if agent_state.provider == super::Provider::Kimi
+        if agent_state.provider_retry.is_some()
+            || agent_state.provider == super::Provider::Kimi
             || agent_state.deletion_pending
             || agent_state.missing_binary.is_some()
             || agent_state.session_binding_invalidated
@@ -429,7 +430,10 @@ impl BusState {
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
-        if owner.deletion_pending || owner.session_binding_invalidated {
+        if owner.provider_retry.is_some()
+            || owner.deletion_pending
+            || owner.session_binding_invalidated
+        {
             return None;
         }
         let request = self.requests.get(&owner.current_request?)?;
@@ -477,6 +481,11 @@ impl BusState {
         unavailable_error: &str,
         no_reply_error: &str,
     ) -> Option<RequestId> {
+        if let Some(RecordedTurnEnd::Error(message)) = &recorded {
+            if self.hold_provider_error(id, message, now_ms) {
+                return Some(id);
+            }
+        }
         let provider_error = match recorded {
             Some(RecordedTurnEnd::Final {
                 turn_id,
