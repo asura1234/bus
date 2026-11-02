@@ -72,6 +72,7 @@ const INHERITED_VARS: &[&str] = &[
     "LLVM_PROFILE_FILE",
     "ProgramFiles",
     "ProgramFiles(x86)",
+    "BUS_SPIKE_SKIP_CONFIRM",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

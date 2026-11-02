@@ -253,6 +253,7 @@ impl TerminalRuntime {
         std::thread::spawn(move || {
             tracing::dispatcher::with_default(&dispatch, || {
                 let _entered = span.enter();
+                submission.diagnostics.identify(&text);
                 submission.diagnostics.begin(
                     submission.clock.now(),
                     submission.deadline.get(),
@@ -605,16 +606,15 @@ impl ObservedSubmission {
     ) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
-        match self.observe_initial("initial")? {
-            InputObservation::Empty => {}
-            InputObservation::Pending | InputObservation::Other => {
-                self.diagnose_refusal("initial_refusal");
-                return Err(io::Error::other(PromptNotShown::InputOccupied));
-            }
-            _ => {
-                self.diagnose_refusal("initial_refusal");
-                return Err(io::Error::other(PromptNotShown::NotSubmitted));
-            }
+        let initial = self.observe_initial("initial")?;
+        if initial != InputObservation::Empty {
+            self.diagnose_refusal("initial_refusal");
+            return Err(io::Error::other(match initial {
+                InputObservation::Pending | InputObservation::Other => {
+                    PromptNotShown::InputOccupied
+                }
+                _ => PromptNotShown::NotSubmitted,
+            }));
         }
         if let Err(error) = self.write(text, delay) {
             return if PromptNotShown::is(&error) {
@@ -623,29 +623,45 @@ impl ObservedSubmission {
                 self.withdraw_before_enter(error)
             };
         }
-        // Paste may be buffered by the provider after the PTY flush. Wait for
-        // the owned draft to render before attempting the first Enter.
+        let fast_path = std::env::var_os("BUS_SPIKE_SKIP_CONFIRM").is_some();
         let mut verified_lease = None;
-        loop {
-            let generation = self.clock.generation();
-            let observation = self.observe("await_paste");
-            if observation == InputObservation::Pending {
-                break;
-            }
-            if observation == InputObservation::Other {
-                verified_lease = self.verified_paste_lease(delay, lease, exchange)?;
-                if verified_lease.is_some() {
+        if !fast_path {
+            // Paste may be buffered by the provider after the PTY flush. Wait for
+            // the owned draft to render before attempting the first Enter.
+            loop {
+                let generation = self.clock.generation();
+                let observation = self.observe("await_paste");
+                if observation == InputObservation::Pending {
                     break;
                 }
+                if observation == InputObservation::Other {
+                    verified_lease = self.verified_paste_lease(delay, lease, exchange)?;
+                    if verified_lease.is_some() {
+                        break;
+                    }
+                }
+                if let Err(error) = self.check_deadline() {
+                    return self.withdraw_before_enter(error);
+                }
+                #[cfg(test)]
+                self.clock.waiting_for_draft();
+                self.clock.sleep(Duration::from_millis(20), generation);
             }
-            if let Err(error) = self.check_deadline() {
-                return self.withdraw_before_enter(error);
-            }
-            #[cfg(test)]
-            self.clock.waiting_for_draft();
-            self.clock.sleep(Duration::from_millis(20), generation);
         }
         let mut last_enter = None;
+        if fast_path {
+            self.diagnostics.fast_path(self.clock.now());
+            let guard = self
+                .content_lock
+                .lock()
+                .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+            let completion = self.enqueue_enter();
+            drop(guard);
+            if let Err(error) = self.finish_enter(completion) {
+                return self.withdraw_pending(error);
+            }
+            last_enter = Some(self.clock.now());
+        }
         loop {
             let generation = self.clock.generation();
             let guard = self
