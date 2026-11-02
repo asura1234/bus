@@ -1247,13 +1247,13 @@ fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
     ui.compute_view(100, rows);
     // MASTER, gap, ROOMS, gap, two rooms, divider, `# MASTER` header, gap,
     // then a four-row orchestrator card below the leading blank row.
-    assert_eq!(ui.view.sidebar_max_scroll, 18 - 10);
+    assert_eq!(ui.view.sidebar_max_scroll, 17 - 10);
     ui.sidebar_scroll = usize::MAX;
     ui.compute_view(100, rows);
     let rows_of = |action| hit_rows(&ui, action);
-    assert_eq!(rows_of(render::Action::Agent(orchestrator)), [5, 5, 6]);
-    assert_eq!(rows_of(render::Action::Room(pr)), [7]);
-    assert_eq!(rows_of(render::Action::NewAgent), [3]);
+    assert_eq!(rows_of(render::Action::Agent(orchestrator)), [6, 6, 7]);
+    assert_eq!(rows_of(render::Action::Room(pr)), [0, 0, 8]);
+    assert_eq!(rows_of(render::Action::NewAgent), [4]);
 }
 
 #[test]
@@ -1344,5 +1344,28 @@ fn master_directory_warning_is_log_only_and_clears_after_recovery() {
     assert_eq!(
         ui.snapshot.state.agent(agent).unwrap().runtime_identity,
         identity
+    );
+}
+
+#[test]
+fn master_sidebar_that_fits_does_not_scroll_an_extra_blank_row() {
+    let (mut ui, master, pr, _, orchestrator) = master_fixture();
+    ui.open_room(master);
+    // Seventeen content rows fit the leading gap, MASTER's two rows, ROOMS,
+    // two two-row work entries, the divider/header and one four-row agent card.
+    let rows = 19 + u16::from(cfg!(feature = "dev-tools"));
+    ui.compute_view(100, rows);
+    assert_eq!(ui.view.sidebar_body.height, 17);
+    assert!(hit_rows(&ui, render::Action::Agent(orchestrator)).contains(&13));
+    assert!(hit_rows(&ui, render::Action::Room(pr)).contains(&15));
+    assert_eq!(
+        ui.view.sidebar_max_scroll, 0,
+        "the entire sidebar already fits, including its final gap"
+    );
+    mouse(&mut ui, crossterm::event::MouseEventKind::ScrollDown, 2, 2);
+    ui.compute_view(100, rows);
+    assert_eq!(
+        ui.sidebar_scroll, 0,
+        "a wheel event must not move a fully visible sidebar"
     );
 }

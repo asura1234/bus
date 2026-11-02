@@ -314,15 +314,12 @@ impl BusUi {
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
         let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
-        let master_header_rows = if self.snapshot.state.master_room().is_some() {
-            MASTER_SECTION_ROWS - 1
-        } else {
-            0
-        };
+        // Both MASTER rows are already included in rooms.len() * 2.
+        let master_gap_rows = usize::from(self.snapshot.state.master_room().is_some());
         // Leading gap, ROOMS header, gap, divider, `# room` agents header,
         // gap: six fixed rows around the room and agent entries.
         let content_height = 6
-            + master_header_rows
+            + master_gap_rows
             + rooms.len() * 2
             + agents.iter().map(|entry| entry.height).sum::<usize>();
         let notices = u16::from(self.quitting.is_some());
