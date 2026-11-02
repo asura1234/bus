@@ -1,40 +1,99 @@
-"""Deterministic summaries of observed facts, with explicit denominators."""
+"""Deterministic projections with measured denominators and explicit unknowns."""
 
+import re
 from collections import defaultdict
+
+COUNTS = (
+    "assignments",
+    "handovers",
+    "review_rounds",
+    "unique_issues",
+    "shared_issues",
+    "applied",
+    "rejected",
+    "flagged",
+    "withdrawn",
+    "escaped_defects",
+    "stopped_early",
+    "gate_pass",
+    "gate_fail",
+    "e2e_pass",
+    "e2e_fail",
+    "live_pass",
+    "live_fail",
+    "abandoned_deliveries",
+)
+
+
+def projected(rows):
+    facts = {}
+    for r in rows:
+        kind = r["kind"]
+        d = r["data"]
+        key = r["id"]
+        if kind == "workflow":
+            key = (r["task"], kind, d["text"])
+        elif kind == "pr":
+            key = (r["task"], kind, d["number"])
+        elif kind == "review":
+            key = (r["task"], kind, r["agent"]["name"], d["round"], d["head"])
+        elif kind == "run":
+            key = (r["task"], kind, r["sources"][0]["sha256"])
+        elif kind == "root_cause":
+            src = r["sources"][0]
+            origin = (
+                src["locator"].split("#", 1)[0]
+                if "#" in src["locator"]
+                else src["path"]
+            )
+            key = (r["task"], kind, origin, d["claim_id"])
+        if key in facts and kind == "review" and facts[key]["data"] != d:
+            raise ValueError("conflicting stored review facts")
+        facts[key] = r
+    wrapped = {
+        sha
+        for r in facts.values()
+        if r["kind"] == "run"
+        for sha in r["data"].get("wrapped_sources", [])
+    }
+    return [
+        r
+        for r in facts.values()
+        if r["kind"] != "run" or r["sources"][0]["sha256"] not in wrapped
+    ]
 
 
 def report(rows):
+    rows = projected(rows)
     board = {}
+    reviews = [r for r in rows if r["kind"] == "review"]
+    last_delivery = {
+        (r["task"], r["data"]["request_id"]): r["id"]
+        for r in rows
+        if r["kind"] == "delivery"
+    }
+    compactions = {}
+    for r in rows:
+        if r["kind"] == "compaction":
+            compactions[r["agent"]["name"]] = max(
+                compactions.get(r["agent"]["name"], 0), r["data"]["count"]
+            )
 
-    def entry(row, name=None):
-        actor = row["agent"]
-        model = actor["model"] if name is None or name == actor["name"] else "unknown"
+    def entry(row, name=None, actor=None):
+        actor = actor or row["agent"]
         name = name or actor["name"]
-        key = (row["role"], model, name)
+        model = actor["model"] if name == actor["name"] else "unknown"
+        provider = actor["provider"] if name == actor["name"] else "unknown"
+        key = (row["role"], provider, model, name)
         if key not in board:
             board[key] = dict(
                 role=key[0],
+                provider=provider,
                 model=model,
                 agent=name,
-                assignments=0,
-                handovers=0,
-                review_rounds=0,
-                escaped_defects=0,
-                stopped_early=0,
+                **{x: 0 for x in COUNTS},
                 assignment_outcomes={},
-                unique_issues=0,
-                shared_issues=0,
-                applied=0,
-                rejected=0,
-                flagged=0,
-                withdrawn=0,
-                gate_pass=0,
-                gate_fail=0,
-                e2e_pass=0,
-                e2e_fail=0,
-                live_pass=0,
-                live_fail=0,
-                abandoned_deliveries=0,
+                findings_by_dimension={},
             )
         return board[key]
 
@@ -42,21 +101,31 @@ def report(rows):
     measured = defaultdict(int)
     unmeasured = set()
     roots = set()
-    for row in sorted(
-        rows, key=lambda x: (x["task"], x["ts"] or "", x["kind"], x["id"])
-    ):
+    escaped = set()
+    for row in rows:
         kind, data = row["kind"], row["data"]
         timeline[row["task"]].append(row)
         if kind == "coverage":
             unmeasured.add(data["field"] + ": " + data["reason"])
             continue
         if kind == "root_cause":
-            root = (row["task"], data["adjudication"], data["claim_id"])
-            if root in roots:
+            key = (row["task"], data["adjudication"], data["claim_id"])
+            if key in roots:
                 continue
-            roots.add(root)
+            roots.add(key)
             for lane in data["reviewers"]:
-                value = entry(row, lane)
+                refs = [r for r in data["source_refs"] if r["reviewer"] == lane]
+                related = [
+                    r
+                    for r in reviews
+                    if r["task"] == row["task"]
+                    and r["agent"]["name"] == lane
+                    and any(x["round"] == r["data"]["round"] for x in refs)
+                ]
+                actors = {str(r["agent"]) for r in related}
+                value = entry(
+                    row, lane, related[0]["agent"] if len(actors) == 1 else None
+                )
                 value[
                     "unique_issues" if len(data["reviewers"]) == 1 else "shared_issues"
                 ] += 1
@@ -68,8 +137,29 @@ def report(rows):
                         "WITHDRAWN": "withdrawn",
                     }[data["outcome"]]
                 ] += 1
+                dimensions = {
+                    re.match(r"[1-9]\b", f["dimension"]).group()
+                    for r in related
+                    for f in r["data"]["findings"]
+                    if f["dimension"]
+                    and re.match(r"[1-9]\b", f["dimension"])
+                    and any(x["finding_id"] == f["id"] for x in refs)
+                }
+                for dimension in dimensions or {"unknown"}:
+                    value["findings_by_dimension"][dimension] = (
+                        value["findings_by_dimension"].get(dimension, 0) + 1
+                    )
+        elif kind == "review":
+            entry(row)["review_rounds"] += 1
         elif kind == "escape":
-            entry(row)["escaped_defects"] += 1
+            key = (row["task"], row["agent"]["name"], data["claim_event"])
+            if key not in escaped:
+                entry(row)["escaped_defects"] += 1
+                escaped.add(key)
+        elif kind in ("assignment", "handover"):
+            entry(row)["assignments"] += 1
+            if kind == "handover":
+                entry(row)["handovers"] += 1
         elif kind == "assignment_end":
             value = entry(row)
             value["assignment_outcomes"][data["outcome"]] = (
@@ -77,12 +167,6 @@ def report(rows):
             )
             if data["outcome"] == "stopped_early" and data["proven"]:
                 value["stopped_early"] += 1
-        elif kind == "review":
-            entry(row)["review_rounds"] += 1
-        elif kind in ("assignment", "handover"):
-            entry(row)["assignments"] += 1
-            if kind == "handover":
-                entry(row)["handovers"] += 1
         elif kind == "run":
             if data["result"] in ("PASS", "FAIL"):
                 entry(row)[data["kind"] + "_" + data["result"].lower()] += 1
@@ -95,8 +179,37 @@ def report(rows):
                 measured["slot_wait_ms"] += data["slot_wait_ms"]
         elif kind == "phase" and data["transition"] == "end":
             measured["phase_" + data["phase"] + "_ms"] += data["duration_ms"]
-        elif kind == "delivery" and data["stage"] == "abandoned":
+        elif (
+            kind == "delivery"
+            and data["stage"] == "abandoned"
+            and last_delivery[(row["task"], data["request_id"])] == row["id"]
+        ):
             entry(row)["abandoned_deliveries"] += 1
+
+    def precision(value):
+        denominator = value["applied"] + value["rejected"]
+        value.update(
+            precision_denominator=denominator,
+            precision=value["applied"] / denominator if denominator else None,
+        )
+        return value
+
+    models = {}
+    for v in board.values():
+        key = (v["role"], v["provider"], v["model"])
+        m = models.setdefault(
+            key,
+            dict(
+                role=key[0],
+                provider=key[1],
+                model=key[2],
+                agents=0,
+                **{x: 0 for x in COUNTS},
+            ),
+        )
+        m["agents"] += 1
+        for k in COUNTS:
+            m[k] += v[k]
     starts = {
         r["id"]
         for r in rows
@@ -107,22 +220,26 @@ def report(rows):
         for r in rows
         if r["kind"] == "phase" and r["data"]["transition"] == "end"
     }
-    for value in board.values():
-        denominator = value["applied"] + value["rejected"]
-        value["precision_denominator"] = denominator
-        value["precision"] = value["applied"] / denominator if denominator else None
     return dict(
         leaderboard=sorted(
-            board.values(),
+            [precision(v) for v in board.values()],
             key=lambda x: (x["role"], x["model"], -x["unique_issues"], x["agent"]),
         ),
-        prs=dict(sorted(timeline.items())),
+        model_leaderboard=sorted(
+            [precision(v) for v in models.values()],
+            key=lambda x: (x["role"], x["model"]),
+        ),
+        prs={
+            k: sorted(v, key=lambda r: (r["ts"] or "", r["kind"], r["id"]))
+            for k, v in sorted(timeline.items())
+        },
         bottlenecks=dict(
             measured=dict(sorted(measured.items())),
             open_phases=len(starts - ends),
             unmeasured=sorted(unmeasured),
         ),
         root_causes=len(roots),
+        compactions_by_agent=dict(sorted(compactions.items())),
     )
 
 
@@ -130,46 +247,43 @@ def markdown(value):
     lines = [
         "# Agent work statistics",
         "",
-        "Observed counts only; unknown means unavailable. Different workloads are not normalized.",
+        "Observed counts and sample sizes; unknown means unavailable. Workload is not normalized. Proven-event counts do not establish zero incidence when evidence is missing.",
         "",
-        "| Role | Model | Agent | Assignments | Review rounds | Unique | Shared | APPLY | REJECT | Precision |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Role | Provider / model | Agents | Unique | Shared | APPLY / REJECT | Stopped early |",
+        "|---|---|---:|---:|---:|---:|---:|",
     ]
-    for row in value["leaderboard"]:
-        precision = (
+    for r in value["model_leaderboard"]:
+        lines.append(
+            f"| {r['role']} | {r['provider']} / {r['model']} | {r['agents']} | {r['unique_issues']} | {r['shared_issues']} | {r['applied']} / {r['rejected']} | {r['stopped_early']} |"
+        )
+    lines += [
+        "",
+        "## Per agent",
+        "",
+        "| Role | Model | Agent | Assignments | Rounds | Unique | Shared | APPLY / REJECT | Precision | Proven escapes | Proven stopped early |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for r in value["leaderboard"]:
+        p = (
             "unknown"
-            if row["precision"] is None
-            else f"{row['precision']:.0%} ({row['precision_denominator']})"
+            if r["precision"] is None
+            else f"{r['precision']:.0%} (n={r['precision_denominator']})"
         )
         lines.append(
-            "| "
-            + " | ".join(
-                str(row[x]).replace("|", "\\|")
-                for x in (
-                    "role",
-                    "model",
-                    "agent",
-                    "assignments",
-                    "review_rounds",
-                    "unique_issues",
-                    "shared_issues",
-                    "applied",
-                    "rejected",
-                )
-            )
-            + " | "
-            + precision
-            + " |"
+            f"| {r['role']} | {r['model']} | {r['agent']} | {r['assignments']} | {r['review_rounds']} | {r['unique_issues']} | {r['shared_issues']} | {r['applied']} / {r['rejected']} | {p} | {r['escaped_defects']} | {r['stopped_early']} |"
         )
     lines += [
         "",
         "## Bottlenecks",
         "",
-        "Measured elapsed and lane durations can overlap; they are not additive wall time.",
+        "Measured lane durations may overlap; they are not additive wall time.",
         "",
     ]
-    for name, ms in value["bottlenecks"]["measured"].items():
-        lines.append(f"- {name}: {ms / 1000:.3f}s")
+    lines += [
+        f"- {name}: {ms / 1000:.3f}s"
+        for name, ms in value["bottlenecks"]["measured"].items()
+    ]
+    lines += [f"- Open task phases: {value['bottlenecks']['open_phases']}"]
     for task, rows in value["prs"].items():
         lines += [
             "",
@@ -178,29 +292,32 @@ def markdown(value):
             "| Time | Fact | Agent | Evidence |",
             "|---|---|---|---|",
         ]
-        for row in rows:
-            data = row["data"]
-            if row["kind"] == "coverage":
+        for r in rows:
+            d = r["data"]
+            kind = r["kind"]
+            if kind == "coverage":
                 continue
-            detail = row["kind"] + ": " + str(data)
-            if row["kind"] == "review":
-                detail = f"R{data['round']} {data['verdict']} @{data['head'][:8]} ({len(data['findings'])} assertions)"
-            elif row["kind"] == "run":
-                detail = f"{data['kind']} {data['result']} @{data['head'][:8]}, duration={data['duration_ms']}ms, cause={data['failure_cause']}"
-            elif row["kind"] == "root_cause":
-                detail = f"root {data['claim_id']} {data['outcome']}: {', '.join(data['reviewers'])}"
-            src = row["sources"][0]
-            evidence = f"[{src['locator']}]({src['path']})"
+            detail = kind + ": " + str(d)
+            if kind == "pr":
+                detail = f"Merged {d['merge_sha'][:8]}; {d['commit_count']} commits; +{d['additions']} / -{d['deletions']}; {d['files']} files; assigned authors: {', '.join(d['authors']) or 'unknown'}"
+            elif kind == "review":
+                detail = f"R{d['round']} {d['verdict']} @{d['head'][:8]} ({len(d['findings'])} assertions)"
+            elif kind == "run":
+                detail = f"{d['kind']} {d['result']} @{d['head'][:8]}; elapsed: {str(d['duration_ms']) + 'ms' if d['duration_ms'] is not None else 'unknown'}; cause: {d['failure_cause'] or 'unknown'}"
+            elif kind == "root_cause":
+                detail = f"root {d['claim_id']} {d['outcome']}: {', '.join(d['reviewers']) or 'runner only'}"
+            elif kind == "workflow":
+                detail = d["event"] + ": " + d["text"]
+            src = r["sources"][0]
+            evidence = f"[source]({src['path']})"
+            time = r["ts"] or (
+                d["date"] + " (day only)" if kind == "review" else "unknown"
+            )
             lines.append(
                 "| "
                 + " | ".join(
                     x.replace("|", "\\|").replace("\n", " ")
-                    for x in [
-                        row["ts"] or "unknown",
-                        detail,
-                        row["agent"]["name"],
-                        evidence,
-                    ]
+                    for x in [time, detail, r["agent"]["name"], evidence]
                 )
                 + " |"
             )

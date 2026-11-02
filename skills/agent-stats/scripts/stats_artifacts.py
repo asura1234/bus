@@ -152,6 +152,30 @@ def triage(text, lanes, reviews, runs=None):
         if len({x[0] for x in items}) != len(items):
             raise ValueError("invalid duplicate canonical claim")
         return items
+    single = re.search(r"one canonical claim from ([\w-]+) round (\d+)\b", text)
+    disposition = re.findall(r"(?m)^(APPLY)-(?:SAFE|BEHAVIOR)\b", text)
+    if single and len(disposition) == 1:
+        lane, round_ = single.groups()
+        ids = {
+            f["id"]
+            for r in reviews
+            if r[0] == lane and r[1]["round"] == int(round_)
+            for f in r[1]["findings"]
+        }
+        if len(ids) == 1:
+            return [
+                (
+                    "sole-claim",
+                    "APPLY",
+                    [
+                        dict(
+                            reviewer=lane, round=int(round_), finding_id=next(iter(ids))
+                        )
+                    ],
+                    [],
+                    [],
+                )
+            ]
     items = []
     # Canonical historical items are top-level list entries. Continuations are evidence,
     # not additional claims. No title/location similarity deduplication is performed.
@@ -163,12 +187,26 @@ def triage(text, lanes, reviews, runs=None):
                 continue
             claim = m.group(1) or m.group(2)
             refs = []
+            before, separator, after = line.partition(" — ")
+            explicit = any(
+                re.search(
+                    r"(?<![\w-])" + re.escape(lane) + r"(?=$|[^A-Za-z_-])", before
+                )
+                for lane in lanes
+            )
+            source_span = (
+                before
+                if separator and explicit
+                else after.split(";", 1)[0]
+                if separator
+                else line
+            )
             for lane in sorted(lanes, key=lambda x: (-len(x), x)):
                 lm = re.search(
-                    r"(?<![\w-])" + re.escape(lane) + r"(?=$|[^A-Za-z_-])", line
+                    r"(?<![\w-])" + re.escape(lane) + r"(?=$|[^A-Za-z_-])", source_span
                 )
                 if lm:
-                    suffix = line[lm.end() :]
+                    suffix = source_span[lm.end() :]
                     fm = re.match(r"(?:\s+finding\s+|\s*#?)(\d+)\b", suffix)
                     finding = fm.group(1) if fm else None
                     candidates = [
@@ -295,12 +333,61 @@ def markdown_run(text):
         return data
     if plain.startswith("# E2E TUI Run\n"):
         head = re.search(r"^- Commit: `([0-9a-f]{7,64})`$", plain, re.M)
-        verdict = re.findall(r"^Verdict: (GREEN|RED|BLOCKED)\s*$", plain, re.M)
+        summary = section(text, "Summary") or ""
+        fenced = re.fullmatch(r"```(?:text)?\s*\n(.*?)\n```", summary, re.S)
+        if fenced:
+            summary = fenced.group(1)
+        verdict = re.findall(
+            r"^Verdict: (GREEN|RED|BLOCKED|INCOMPLETE(?: \(\d+ case\(s\) not fully run\))?)\s*$",
+            summary,
+            re.M,
+        )
+        verdict = ["INCOMPLETE" if x.startswith("INCOMPLETE") else x for x in verdict]
         if not head or len(verdict) != 1:
             raise ValueError("invalid E2E runner metadata")
         return run_defaults(
             "e2e",
             head.group(1),
-            {"GREEN": "PASS", "RED": "FAIL", "BLOCKED": "INTERRUPTED"}[verdict[0]],
+            {
+                "GREEN": "PASS",
+                "RED": "FAIL",
+                "BLOCKED": "INTERRUPTED",
+                "INCOMPLETE": "INCOMPLETE",
+            }[verdict[0]],
         )
     return None
+
+
+def wrapped_reports(text, head, candidates):
+    """Link only runner paths actually printed in the gate's encoded output."""
+    import base64
+    from pathlib import Path
+
+    decoded = []
+    for raw in re.findall(r"```base64\n(.*?)\n```", text, re.S):
+        decoded.append(base64.b64decode(raw, validate=True).decode("utf-8"))
+    output = "\n".join(decoded)
+    refs = re.findall(r"Test report: (.+?\.json)\s*$", output, re.M)
+    elapsed = {
+        round(float(x) * 1000) for x in re.findall(r"Elapsed: ([0-9.]+)s", output)
+    }
+    found = []
+    for ref in refs:
+        matches = [(p, v) for p, v in candidates if p.name == Path(ref).name]
+        if not matches and len(refs) == 1:
+            matches = [
+                (p, v)
+                for p, v in candidates
+                if v.get("head") == head and v.get("duration_ms") in elapsed
+            ]
+        from stats_schema import digest
+
+        identities = {digest(v) for _, v in matches}
+        if len(identities) > 1:
+            raise ValueError("ambiguous wrapped runner report")
+        if matches:
+            p, value = matches[0]
+            if value.get("head") != head:
+                raise ValueError("wrapped runner head disagrees with gate")
+            found.append(p)
+    return found

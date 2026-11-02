@@ -4,8 +4,15 @@ import re
 import subprocess
 from pathlib import Path
 
-from stats_artifacts import review, runner, triage, unfenced, markdown_run
-from stats_schema import digest, read_json, record, source, unknown
+from stats_artifacts import (
+    review,
+    runner,
+    triage,
+    unfenced,
+    markdown_run,
+    wrapped_reports,
+)
+from stats_schema import digest, loads, record, source, unknown
 
 
 def git(repo, *args):
@@ -37,6 +44,27 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
     root = Path(artifacts)
     if not root.is_dir():
         raise ValueError("invalid artifacts directory")
+    import hashlib
+
+    observed = {}
+
+    def read_text_checked(path):
+        raw = Path(path).read_bytes()
+        key = str(Path(path).resolve())
+        checksum = hashlib.sha256(raw).hexdigest()
+        if observed.setdefault(key, checksum) != checksum:
+            raise ValueError("source changed during collection: " + key)
+        return raw.decode("utf-8")
+
+    def json_at(path):
+        return loads(read_text_checked(path))
+
+    def checked_source(path, locator="$"):
+        proof = source(path, locator)
+        if proof["path"] in observed and observed[proof["path"]] != proof["sha256"]:
+            raise ValueError("source changed during collection: " + proof["path"])
+        return proof
+
     rows, parsed, texts = [], [], []
     orch = unknown()
 
@@ -47,14 +75,32 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
             role,
             actor or unknown(),
             orch,
-            [source(path, locator)],
+            [checked_source(path, locator)],
             data,
             ts,
         )
+        if kind == "run":
+            hashes = {value["sources"][0]["sha256"], *data.get("wrapped_sources", [])}
+            bindings = [
+                r
+                for r in history
+                if r["task"] == task
+                and r["kind"] == "phase"
+                and r["data"]["transition"] == "end"
+                and r["data"]["artifact_sha"] in hashes
+            ]
+            identities = {digest(r["agent"]) for r in bindings}
+            if len(identities) > 1:
+                raise ValueError("conflicting validation artifact identity bindings")
+            if bindings:
+                value["agent"] = bindings[0]["agent"]
+                value["orchestrator"] = bindings[0]["orchestrator"]
+                value["sources"].extend(bindings[0]["sources"])
+                value["id"] = digest({k: v for k, v in value.items() if k != "id"})
         rows.append(value)
         return value
 
-    metadata = read_json(gh) if gh else None
+    metadata = json_at(gh) if gh else None
     if metadata and (metadata.get("state") != "MERGED" or not metadata.get("mergedAt")):
         raise ValueError("invalid PR metadata: expected merged PR")
     paths = sorted(
@@ -70,7 +116,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
     for path in paths:
         if path.suffix != ".md":
             continue
-        text = path.read_text(encoding="utf-8")
+        text = read_text_checked(path)
         plain = unfenced(text)
         texts.append((path, text))
         if plain.startswith("# Review Round ") and "代码审查" in plain.splitlines()[0]:
@@ -95,7 +141,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
             and x["data"]["transition"] == "end"
             and x["data"]["phase"] == "in_review"
             and x["agent"]["name"] == lane
-            and x["data"]["artifact_sha"] == source(path)["sha256"]
+            and x["data"]["artifact_sha"] == checked_source(path)["sha256"]
         ]
         actors = {digest(x["agent"]) for x in bindings}
         if len(actors) > 1:
@@ -117,19 +163,53 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
             emitted["id"] = digest({k: v for k, v in emitted.items() if k != "id"})
     parsed = list(unique.values())
     lanes = {r[0] for r in parsed}
-    for _, text in texts:
-        lanes.update(re.findall(r"\blane=(?:external:)?([\w-]+)\s*\|", text))
+    provenance = {}
+    for p, text in texts:
+        entries = []
+        for lane, round_, ids in re.findall(
+            r"\blane=(?:external:)?([\w-]+)(?:[（(][^|]*)?\s*\| round=(\d+) \| file=[^\n]+? \| finding-ids=([^\n]+)",
+            text,
+        ):
+            lanes.add(lane)
+            findings = [
+                dict(id=x.strip()) for x in ids.split(",") if x.strip().isdigit()
+            ]
+            entries.append((lane, dict(round=int(round_), findings=findings)))
+        if entries:
+            provenance[p] = entries
+    candidate_reports = []
+    for p in paths:
+        if p.suffix == ".json":
+            value = json_at(p)
+            if (
+                isinstance(value, dict)
+                and {"head", "duration_ms", "exit_code", "results"} <= value.keys()
+            ):
+                candidate_reports.append((p, value))
     seen_markdown_runs = set()
     for path, text in texts:
         data = markdown_run(text)
         if data and digest(text) not in seen_markdown_runs:
             seen_markdown_runs.add(digest(text))
-            emit("run", "tester", data, path, locator="runner metadata")
+            linked = (
+                wrapped_reports(text, data["head"], candidate_reports)
+                if data["kind"] == "gate"
+                else []
+            )
+            if linked:
+                data["wrapped_sources"] = [checked_source(p)["sha256"] for p in linked]
+                if len(data["lanes"]) == 1:
+                    data["duration_ms"] = data["lanes"][0]["duration_ms"]
+            emitted = emit("run", "tester", data, path, locator="runner metadata")
+            emitted["sources"].extend(
+                checked_source(p, "wrapped runner") for p in linked
+            )
+            emitted["id"] = digest({k: v for k, v in emitted.items() if k != "id"})
     seen_runs = set()
     for path in paths:
         if path.suffix != ".json":
             continue
-        value = read_json(path)
+        value = json_at(path)
         data = runner(value)
         if data is not None:
             token = digest(value)
@@ -157,7 +237,9 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
         if token in seen_triage:
             continue
         seen_triage.add(token)
-        items = triage(text, lanes, parsed, run_lookup)
+        siblings = [p for p in provenance if p.parent == path.parent]
+        inputs = parsed + [entry for p in siblings for entry in provenance[p]]
+        items = triage(text, lanes, inputs, run_lookup)
         if not items and re.search(r"(?mi)^## APPLY\s*$", text):
             emit(
                 "coverage",
@@ -166,11 +248,13 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                 path,
             )
         for claim, outcome, refs, run_ids, locations in items:
+            targets = re.findall(r"(?mi)^(?:\*\*)?Target[^\n]*", text)
+            header = "\n".join(targets)
             head_match = re.search(
-                r"(?i)(?:head\s*[:=]?\s*`?|@\s*)([0-9a-f]{7,40})\b", text
+                r"(?i)(?:head\s*[:=]?\s*`?|@\s*|#\d+\s+)([0-9a-f]{7,40})\b", header
             )
             head = resolve(repo, head_match.group(1)) if head_match else None
-            emit(
+            emitted = emit(
                 "root_cause",
                 "reviewer",
                 dict(
@@ -186,6 +270,21 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                 path,
                 locator=f"{outcome}/{claim}",
             )
+            for p in siblings:
+                emitted["sources"].append(
+                    checked_source(p, "sanitized source lane/round/finding ids")
+                )
+            emitted["id"] = digest({k: v for k, v in emitted.items() if k != "id"})
+            if any(r["round"] is None or r["finding_id"] is None for r in refs):
+                emit(
+                    "coverage",
+                    "reviewer",
+                    dict(
+                        field="root_cause.source_round",
+                        reason="exact source assertion or round absent from canonical ledger",
+                    ),
+                    path,
+                )
     if metadata:
         data = dict(
             number=metadata["number"],
@@ -249,7 +348,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                 gh or paths[0],
             )
     if workflow:
-        for n, text in enumerate(Path(workflow).read_text().splitlines(), 1):
+        for n, text in enumerate(read_text_checked(workflow).splitlines(), 1):
             pr = re.fullmatch(r"pr-(\d+)", task)
             if not pr or not re.search(r"#" + pr.group(1) + r"\b", text):
                 continue
