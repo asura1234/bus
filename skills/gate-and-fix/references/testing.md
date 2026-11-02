@@ -51,8 +51,9 @@ Rust line floor after successful tests and nonempty unit profile evidence.
 
 Full scheduling overlaps normal-target lint with an instrumented nextest
 preflight build. That preflight deliberately selects no tests and builds the CLI
-used by Python. It then runs default unit tests, default integration tests,
-Python, and dev-tools tests concurrently. Default integration includes the
+used by Python. Default-target unit/integration builders and CLI/Python consumers
+then serialize: preflight does not prevent a later Cargo rebuild or relink.
+Dev-tools tests can overlap on their separate normal target. Default integration includes the
 in-process `server::tests::` harness. Normal-target lint completes before the
 dev-tools build; coverage artifacts use cargo-llvm-cov's separate target.
 An explicit shared normal/coverage target serializes all binary consumers to

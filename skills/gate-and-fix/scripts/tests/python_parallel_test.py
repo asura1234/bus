@@ -1,4 +1,5 @@
 """The Python lane keeps every selected case while running independent files together."""
+from dataclasses import replace
 import os
 from pathlib import Path
 import signal
@@ -19,7 +20,32 @@ def python_gate(root, workers):
     with patch.object(runner.quality, 'ROOT', root), patch.dict(os.environ, PYTEST_WORKERS=str(workers)):
         build, tests = runner.commands(selection)
     assert not build
-    return tests[0]
+    # Default numbered roots register shared retention cleanup at interpreter
+    # exit; that sweep can outlive the nested test run's own work and timeout.
+    return replace(tests[0], argv=(*tests[0].argv, '--basetemp', str(root / 'pytest-temp')))
+
+
+def test_nested_pytest_does_not_sweep_shared_numbered_temp_roots(tmp_path):
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    global_temp = tmp_path / 'other-runs'
+    global_temp.mkdir()
+    marker = tmp_path / 'shared-cleanup-attempted'
+    (tools / 'conftest.py').write_text(
+        'import os\nfrom pathlib import Path\nimport _pytest.pathlib as paths\n'
+        'def reject_shared_cleanup(*args,**kwargs):\n'
+        f'    Path({str(marker)!r}).touch()\n'
+        '    os._exit(87)\n'
+        'paths.cleanup_numbered_dir=reject_shared_cleanup\n'
+    )
+    for name in ('first', 'second'):
+        (tools / f'{name}_test.py').write_text('def test_selected(): pass\n')
+    result = subprocess.run(python_gate(tmp_path, 2).argv, cwd=tmp_path,
+                            env=runner.quality.child_env(PYTEST_DEBUG_TEMPROOT=str(global_temp)),
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '2 passed' in result.stdout
+    assert not marker.exists(), 'nested fixture must not clean other runs temporary directories'
 
 
 def test_selected_files_overlap_without_splitting_module_fixtures(tmp_path):
@@ -140,11 +166,13 @@ def test_interrupt_stops_xdist_workers_and_their_descendants(tmp_path, nested):
     scripts = str(Path(runner.__file__).parent)
     script = (
         f'import sys;sys.path.insert(0,{scripts!r});import suite_run as r;from pathlib import Path;'
+        'from dataclasses import replace;'
         'from gate_process import interrupt_signals,Interrupted;'
         f'r.quality.ROOT=Path({str(tmp_path)!r})\n'
         'try:\n'
         '    with interrupt_signals():\n'
         '        _,tests=r.commands(r.Selection(False,"none()",("tools",),False,"fixture"))\n'
+        '        tests=[replace(g,argv=(*g.argv,"--basetemp",str(r.quality.ROOT/"pytest-temp"))) for g in tests]\n'
         f'        r.batch(tests,nested={nested!r})\n'
         'except Interrupted as error: sys.exit(128+error.signum)\n'
     )

@@ -171,8 +171,10 @@ reported gap leaves the gate failed.
 
 ## Parallelism and remediation
 
-- The full entrypoint overlaps normal-target lint with the instrumented preflight build,
-  then runs unit, integration, Python and dev-tools tasks concurrently. Normal-target lint
+- The full entrypoint overlaps normal-target lint with the instrumented preflight build.
+  Default-target unit/integration builders and CLI/Python consumers then serialize because
+  Cargo may rebuild despite preflight. Dev-tools can overlap on its separate normal target;
+  explicitly co-located outputs serialize every binary consumer. Normal-target lint
   completes before dev-tools uses that target. Coverage consumes fresh profiles after all
   tasks succeed; the existing nonempty unit-profile checkpoint remains mandatory.
   The independent diff check can run concurrently. All independent failures are collected.
