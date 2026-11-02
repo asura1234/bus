@@ -195,3 +195,33 @@ def test_archived_gate_and_e2e_formats_preserve_results_without_inventing_elapse
         {"name": "lint", "result": "PASS", "duration_ms": 124992}
     ]
     assert all(x["duration_ms"] is None for x in runs.values())
+
+
+def test_collection_preserves_input_bytes_after_original_artifacts_change(tmp_path):
+    import hashlib
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    path = root / "review.md"
+    path.write_bytes((FIXTURE / "clauderev5/round-02/review.md").read_bytes())
+    r = call(
+        "collect",
+        "--store",
+        tmp_path / "stats",
+        "--task",
+        "pr-295",
+        "--artifacts",
+        root,
+    )
+    assert r.returncode == 0, r.stderr
+    path.write_text("evidence removed after worktree close")
+    rows = [
+        json.loads(x)
+        for x in (tmp_path / "stats/events.jsonl").read_text().splitlines()
+    ]
+    for row in rows:
+        for src in row["sources"]:
+            assert (
+                hashlib.sha256(Path(src["path"]).read_bytes()).hexdigest()
+                == src["sha256"]
+            )

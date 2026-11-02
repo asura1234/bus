@@ -203,6 +203,9 @@ def main():
                 args.workflow,
                 read_records(store / "events.jsonl"),
             )
+            from stats_evidence import preserve
+
+            records = preserve(records, store)
             result = {"appended": append(store, records), "collected": len(records)}
         elif args.command == "report":
             from stats_report import report, markdown
