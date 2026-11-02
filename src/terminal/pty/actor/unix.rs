@@ -81,6 +81,7 @@ enum PtyIoDataCommand {
         permit: WritePermit,
         reply: std_mpsc::Sender<std::io::Result<()>>,
         timestamps: SharedSubmissionTimestamps,
+        record_text_write: bool,
     },
 }
 
@@ -153,6 +154,7 @@ impl PtyIoActorHandle {
             delay,
             deadline,
             &InputScope::default(),
+            true,
         )
     }
 
@@ -167,6 +169,7 @@ impl PtyIoActorHandle {
         delay: Duration,
         deadline: Option<Instant>,
         scope: &InputScope,
+        record_text_write: bool,
     ) -> std::io::Result<InputCompletion> {
         let user_writes = self
             .user_writes
@@ -193,6 +196,7 @@ impl PtyIoActorHandle {
                 permit: permit.clone(),
                 reply: reply_tx,
                 timestamps: scope.timestamps(),
+                record_text_write,
             })
             .map_err(|err| match err {
                 mpsc::error::TrySendError::Full(_) => {
@@ -372,6 +376,7 @@ struct ActiveSubmission {
     phase: SubmissionPhase,
     reply: std_mpsc::Sender<std::io::Result<()>>,
     timestamps: SharedSubmissionTimestamps,
+    record_text_write: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]

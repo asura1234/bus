@@ -283,3 +283,35 @@ fn error_response_round_trips() {
     let restored: ErrorResponse = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
 }
+
+#[test]
+fn legacy_agent_prompted_response_defaults_to_empty_timestamps() {
+    let response: SuccessResponse = serde_json::from_value(serde_json::json!({
+        "id": "legacy-prompt",
+        "result": {
+            "type": "agent_prompted",
+            "agent": {
+                "terminal_id": "terminal",
+                "pane_id": "pane",
+                "name": "worker",
+                "agent": "claude",
+                "agent_status": "idle",
+                "agent_session": {
+                    "source": "herdr:claude",
+                    "agent": "claude",
+                    "kind": "id",
+                    "value": "session"
+                },
+                "workspace_id": "workspace",
+                "tab_id": "tab",
+                "focused": false,
+                "revision": 1
+            }
+        }
+    }))
+    .unwrap();
+    let ResponseResult::AgentPrompted { timestamps, .. } = response.result else {
+        panic!("expected agent_prompted")
+    };
+    assert!(timestamps.is_empty());
+}

@@ -388,7 +388,7 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown::NotSubmitted))?;
         self.diagnostics
             .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
-        let completion = self.io.queue_input_write_scoped(
+        let completion = self.io.queue_payload_input_write_scoped(
             bytes,
             Bytes::new(),
             delay,

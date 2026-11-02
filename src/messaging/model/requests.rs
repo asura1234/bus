@@ -6,77 +6,12 @@ use super::{
     DELIVERED_STALL_MS, QUEUED_STALL_MS,
 };
 
+mod latency;
 mod queue_order;
 mod rejection;
 mod submit;
 
 impl BusState {
-    pub(crate) fn record_queued(
-        &mut self,
-        request: RequestId,
-        at_ms: u64,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        request.latency.queued_at_ms.get_or_insert(at_ms);
-        Ok(())
-    }
-
-    pub(crate) fn record_picked(
-        &mut self,
-        request: RequestId,
-        at_ms: u64,
-        agent_waited: bool,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        request.latency.picked_at_ms.get_or_insert(at_ms);
-        request.latency.agent_waited |= agent_waited;
-        Ok(())
-    }
-
-    pub(crate) fn record_native_requested(
-        &mut self,
-        request: RequestId,
-        at_ms: u64,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        request.latency.native_requested_at_ms.get_or_insert(at_ms);
-        Ok(())
-    }
-
-    pub(crate) fn record_native_timestamps(
-        &mut self,
-        request: RequestId,
-        timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        request.latency.native.merge_from(timestamps);
-        Ok(())
-    }
-
-    pub(crate) fn record_provider_started(&mut self, request: RequestId, at_ms: u64) {
-        if let Some(request) = self.requests.get_mut(&request) {
-            request.latency.provider_started_at_ms.get_or_insert(at_ms);
-        }
-    }
-
-    pub(crate) fn record_reply_captured(&mut self, request: RequestId, at_ms: u64) {
-        if let Some(request) = self.requests.get_mut(&request) {
-            request.latency.reply_captured_at_ms.get_or_insert(at_ms);
-        }
-    }
-
     pub(crate) fn begin_submission(
         &mut self,
         request: RequestId,
