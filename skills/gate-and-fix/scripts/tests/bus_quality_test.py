@@ -528,6 +528,21 @@ class BusQualityTest(unittest.TestCase):
         self.assertEqual(env["KEEP_ME"], "1")
         self.assertTrue(set(secrets).isdisjoint(env))
 
+    def test_mocked_rust_commands_respect_three_requested_workers(self):
+        for nextest in (False, True):
+            with (
+                self.subTest(nextest=nextest),
+                patch.dict(os.environ, {"NEXTEST_TEST_THREADS": "3"}),
+                patch.object(
+                    quality.shutil, "which", return_value="nextest" if nextest else None
+                ),
+                patch.object(quality, "run", return_value=0) as run,
+            ):
+                quality.rust_test("--bin", "bus", in_process_server=False)
+                args = run.call_args.args
+                self.assertEqual(args[args.index("--test-threads") + 1], "3")
+
+    @patch.dict(os.environ, {"NEXTEST_TEST_THREADS": "4"})
     def test_optional_nextest_has_a_real_cargo_fallback(self):
         for nextest in (False, True):
             with (
@@ -548,6 +563,7 @@ class BusQualityTest(unittest.TestCase):
                         run.call_args.args[-5:], ("--", "--test-threads", "4", "--skip", "server::tests::")
                     )
 
+    @patch.dict(os.environ, {"NEXTEST_TEST_THREADS": "4"})
     def test_server_prefix_changes_apply_to_nextest_and_libtest_in_both_lanes(self):
         prefix = "server::tests::"
         for nextest in (False, True):
