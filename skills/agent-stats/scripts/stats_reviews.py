@@ -65,12 +65,13 @@ def validate_reviews(rows):
         seen[key] = data
 
 
-def source_reference(lane, round_, finding, reviews):
+def source_reference(lane, round_, finding, reviews, scope_hash=None):
     candidates = [
         r[1]
         for r in reviews
         if r[0] == lane
         and r[1]["round"] == round_
+        and (scope_hash is None or r[1].get("scope_hash") == scope_hash)
         and any(f["id"] == finding for f in r[1]["findings"])
     ]
     detailed = [r for r in candidates if r.get("head")]

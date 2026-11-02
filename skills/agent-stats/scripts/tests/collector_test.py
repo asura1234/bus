@@ -440,7 +440,7 @@ def test_source_rewrite_between_parse_and_hash_fails_closed(tmp_path, monkeypatc
         stats_collect.collect("pr-295", root)
 
 
-def test_current_gate_artifact_uses_its_canonical_verifier(tmp_path):
+def test_current_gate_artifact_uses_its_canonical_verifier(tmp_path, monkeypatch):
     import importlib.util
 
     path = CLI.parents[2] / "gate-and-fix/scripts/gate_artifact.py"
@@ -464,6 +464,22 @@ def test_current_gate_artifact_uses_its_canonical_verifier(tmp_path):
     )
     assert r.returncode == 1
     assert not (tmp_path / "stats/events.jsonl").exists()
+    artifact.write_text(text)
+    sys.path.insert(0, str(CLI.parent))
+    from stats_collect import collect
+
+    actual_run = subprocess.run
+    operations = []
+
+    def observed_run(argv, *args, **kwargs):
+        if len(argv) > 2 and Path(argv[1]).name == "gate_and_fix.py":
+            operations.append(argv[2])
+        return actual_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", observed_run)
+    rows = collect("pr-1", root)
+    assert next(row for row in rows if row["kind"] == "run")["data"]["result"] == "PASS"
+    assert "verify" in operations and "show" in operations
 
 
 def test_author_assignments_link_exact_pr_or_branch_before_merge(tmp_path):
@@ -564,3 +580,123 @@ def test_unknown_runner_identity_does_not_imply_one_unique_agent(tmp_path):
     model = report(collect("pr-7", tmp_path))["model_leaderboard"][0]
     assert model["gate_pass"] == 1
     assert model["agents"] is None
+
+
+def test_recorded_bare_canonical_roots_keep_exact_legacy_source_ids(tmp_path):
+    for pr, expected in [
+        (284, {"A": ["codexrevd", "kimirevc"], "B": []}),
+        (285, {"B1": ["clauderev4"], "B2": ["clauderev4"]}),
+    ]:
+        fixture = FIXTURE.parent / f"legacy-pr{pr}"
+        store = tmp_path / str(pr)
+        result = call(
+            "collect", "--store", store, "--task", f"pr-{pr}", "--artifacts", fixture
+        )
+        assert result.returncode == 0, result.stderr
+        rows = [
+            json.loads(x) for x in (store / "events.jsonl").read_text().splitlines()
+        ]
+        roots = {
+            r["data"]["claim_id"]: r["data"] for r in rows if r["kind"] == "root_cause"
+        }
+        assert {cid: r["reviewers"] for cid, r in roots.items()} == expected
+        if pr == 284:
+            assert {
+                (r["reviewer"], r["round"], r["finding_id"])
+                for r in roots["A"]["source_refs"]
+            } == {("codexrevd", 4, "1"), ("kimirevc", 4, "1")}
+        else:
+            assert [
+                (r["round"], r["finding_id"]) for r in roots["B1"]["source_refs"]
+            ] == [(1, "1")]
+            assert [
+                (r["round"], r["finding_id"]) for r in roots["B2"]["source_refs"]
+            ] == [(1, "2")]
+        report = json.loads(call("report", "--store", store, "--json").stdout)
+        credits = {r["agent"]: r for r in report["leaderboard"]}
+        if pr == 284:
+            assert (
+                credits["kimirevc"]["shared_issues"]
+                == credits["codexrevd"]["shared_issues"]
+                == 1
+            )
+        else:
+            assert credits["clauderev4"]["unique_issues"] == 2
+
+
+def test_schema_two_conflicts_reject_before_appending_any_records(tmp_path):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    for aggregate, lane, exitcode in [
+        ("PASS", "FAIL", 1),
+        ("FAIL", "PASS", 0),
+        ("PASS", "PASS", 1),
+        ("FAIL", "FAIL", 0),
+    ]:
+        text = (
+            "# Gate-and-Fix Round\n\n- Schema: `2`\n- Round: `1`\n- Base: `"
+            + "b" * 40
+            + "`\n- Head: `"
+            + "a" * 40
+            + f"`\n- Outcome: `{aggregate}`\n\n## Gate results\n\n### repository-gate — {lane}\n\n- Exit code: `{exitcode}`\n- Duration: `1000ms`\n"
+        )
+        (root / "round.md").write_text(text)
+        store = tmp_path / (aggregate + lane + str(exitcode))
+        result = call(
+            "collect", "--store", store, "--task", "pr-1", "--artifacts", root
+        )
+        assert result.returncode == 1, (
+            aggregate,
+            lane,
+            exitcode,
+            result.stdout,
+            result.stderr,
+        )
+        assert not (store / "events.jsonl").exists()
+
+
+def test_passing_wrapper_cannot_hide_its_explicit_failed_runner(tmp_path):
+    import base64
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    name = "run-" + "d" * 32 + ".json"
+    runner = dict(head="a" * 40, exit_code=1, duration_ms=1000, results=[])
+    (root / name).write_text(json.dumps(runner))
+    log = base64.b64encode(("Test report: /archived/" + name + "\n").encode()).decode()
+    wrapper = (
+        "# Gate-and-Fix Round\n\n- Schema: `2`\n- Round: `1`\n- Base: `"
+        + "b" * 40
+        + "`\n- Head: `"
+        + "a" * 40
+        + "`\n- Outcome: `PASS`\n\n## Gate results\n\n### repository-gate — PASS\n\n- Exit code: `0`\n- Duration: `1000ms`\n\n#### stdout\n\n```base64\n"
+        + log
+        + "\n```\n"
+    )
+    (root / "round.md").write_text(wrapper)
+    store = tmp_path / "stats"
+    result = call("collect", "--store", store, "--task", "pr-1", "--artifacts", root)
+    assert result.returncode == 1
+    assert "outcome disagrees" in result.stderr
+    assert not (store / "events.jsonl").exists()
+
+    runner["exit_code"] = 0
+    (root / name).write_text(json.dumps(runner))
+    result = call("collect", "--store", store, "--task", "pr-1", "--artifacts", root)
+    assert result.returncode == 0, result.stderr
+    value = json.loads(call("report", "--store", store, "--json").stdout)
+    assert sum(row["gate_pass"] for row in value["leaderboard"]) == 1
+
+
+def test_current_review_must_pass_the_canonical_section_boundary(tmp_path):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    original = (FIXTURE / "codexrevf/round-01/review.md").read_text()
+    (root / "review.md").write_text(
+        original.replace("## 本轮探索区域", "## Extra section")
+    )
+    store = tmp_path / "stats"
+    result = call("collect", "--store", store, "--task", "pr-1", "--artifacts", root)
+    assert result.returncode == 1
+    assert "section" in result.stderr
+    assert not (store / "events.jsonl").exists()

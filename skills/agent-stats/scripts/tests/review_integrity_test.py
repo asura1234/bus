@@ -330,3 +330,64 @@ def test_ambiguous_scope_source_preserves_root_without_guessing_which_review(tmp
         r["kind"] == "coverage" and "scope unavailable" in r["data"]["reason"]
         for r in rows
     )
+    scoped = root / "triage.md"
+    scoped.write_text("**范围哈希**：" + "1" * 64 + "\n" + scoped.read_text())
+    selected = tmp_path / "selected-scope"
+    result = collect(root, selected)
+    assert result.returncode == 0, result.stderr
+    ref = next(r for r in records(selected) if r["kind"] == "root_cause")["data"][
+        "source_refs"
+    ][0]
+    assert ref["round"] == 1 and ref["scope_hash"] == "1" * 64
+
+
+def test_ready_finder_is_not_its_own_escape_after_gate_corroboration(tmp_path):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    head = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+    ).strip()
+    review = (FIXTURE / "codexrevf/round-01/review.md").read_text()
+    review = (
+        review.replace("codexrevf", "finder")
+        .replace(
+            "fix/codex-rollout-final-answer @ 45fffccda08b626b111afbe61aa77b192c0c9f1d",
+            "feature @ " + head,
+        )
+        .replace("**判定**：Needs Refinement", "**判定**：Ready")
+    )
+    (root / "review.md").write_text(review)
+    (root / "failed.json").write_text(
+        json.dumps(
+            dict(
+                kind="gate",
+                head=head,
+                result="FAIL",
+                started_at="2026-11-02T02:00:00Z",
+                finished_at="2026-11-02T02:00:01Z",
+                failing_test_ids=["reported-case"],
+            )
+        )
+    )
+    prefix = (
+        "**模式**：pr\nTarget head "
+        + head
+        + "\n\n## APPLY\n\n- C1 — src/messaging/model/status.rs:61\n\n## Root cause provenance\n\n| claim_id | outcome | sources |\n|---|---|---|\n"
+    )
+    triage = root / "triage.md"
+    triage.write_text(
+        prefix + "| C1 | APPLY | finder@1:1, run@failed.json#reported-case |\n"
+    )
+    store = tmp_path / "finder-and-gate"
+    observed_completion(store, root / "review.md", "finder", "2026-11-02T01:00:00Z")
+    result = collect(root, store, ROOT)
+    assert result.returncode == 0, result.stderr
+    assert not [row for row in records(store) if row["kind"] == "escape"]
+
+    # Without an earlier finding, this exact gate and unchanged blob prove an escape.
+    triage.write_text(prefix + "| C1 | APPLY | run@failed.json#reported-case |\n")
+    store = tmp_path / "gate-only"
+    observed_completion(store, root / "review.md", "finder", "2026-11-02T01:00:00Z")
+    result = collect(root, store, ROOT)
+    assert result.returncode == 0, result.stderr
+    assert len([row for row in records(store) if row["kind"] == "escape"]) == 1

@@ -82,25 +82,31 @@ def review(text, path):
     )
 
 
+def owned_provenance(text):
+    import sys
+    from pathlib import Path
+
+    scripts = Path(__file__).resolve().parents[2] / "address-review-comments/scripts"
+    if not (scripts / "root_provenance.py").is_file():
+        raise ValueError("canonical root provenance reader unavailable")
+    sys.path.insert(0, str(scripts))
+    from root_provenance import parse_provenance, provenance_scope
+
+    return parse_provenance(text), provenance_scope(text)
+
+
 def triage(text, lanes, reviews, runs=None):
     """Keep exactly the canonical items and corroborating lanes the author recorded."""
+    structured, scope_hash = owned_provenance(text)
     text = unfenced(text)
-    structured = section(text, "Root cause provenance")
     if structured is not None:
         items = []
-        for line in structured.splitlines():
-            cells = [x.strip() for x in line.strip().strip("|").split("|")]
-            if (
-                not line.startswith("|")
-                or cells[0] == "claim_id"
-                or cells[0].startswith("-")
-            ):
-                continue
-            if len(cells) != 3:
-                raise ValueError("invalid root provenance table")
-            claim, outcome, sources = cells
+        for decision in structured:
+            claim, outcome, sources = (
+                decision[k] for k in ("claim_id", "outcome", "sources")
+            )
             refs, run_ids = [], []
-            for raw in sources.split(","):
+            for raw in sources:
                 if raw.strip().startswith("run@"):
                     pointer = raw.strip()[4:]
                     if "#" not in pointer:
@@ -124,28 +130,23 @@ def triage(text, lanes, reviews, runs=None):
                 if not any(
                     r[0] == lane
                     and r[1]["round"] == int(round_)
+                    and (scope_hash is None or r[1].get("scope_hash") == scope_hash)
                     and any(f["id"] == finding for f in r[1]["findings"])
                     for r in reviews
                 ):
                     raise ValueError(f"invalid root source: {raw}")
-                refs.append(source_reference(lane, int(round_), finding, reviews))
-            if outcome not in ("APPLY", "REJECT", "FLAG", "WITHDRAWN"):
-                raise ValueError("invalid root outcome")
+                refs.append(
+                    source_reference(lane, int(round_), finding, reviews, scope_hash)
+                )
             body = section(text, outcome)
-            if body is None or not re.search(
-                r"(?m)^\s*(?:- |\d+\. )?" + re.escape(claim) + r"\b", body
-            ):
-                raise ValueError("invalid root outcome: absent canonical claim")
             canonical_item = re.search(
-                r"(?m)^(?:- |\d+\. )" + re.escape(claim) + r"\b.*$", body
+                r"(?m)^(?:- )?" + re.escape(claim) + r"(?![\w-]).*$", body
             )
             locations = re.findall(
                 r"(?<![\w/])([\w./-]+):\d+",
                 canonical_item.group() if canonical_item else "",
             )
             items.append((claim, outcome, refs, run_ids, locations))
-        if len({x[0] for x in items}) != len(items):
-            raise ValueError("invalid duplicate canonical claim")
         return items
     single = re.search(r"one canonical claim from ([\w-]+) round (\d+)\b", text)
     disposition = re.findall(r"(?m)^(APPLY)-(?:SAFE|BEHAVIOR)\b", text)
@@ -173,10 +174,12 @@ def triage(text, lanes, reviews, runs=None):
     for outcome in ("APPLY", "REJECT", "FLAG", "WITHDRAWN"):
         body = section(text, outcome) or ""
         for line in body.splitlines():
-            m = re.match(r"^(?:- ([A-Za-z][\w-]*)\b|([0-9]+)\. )", line)
+            m = re.match(
+                r"^(?:- ([A-Za-z][\w-]*)\b|([0-9]+)\. |([A-Z][A-Z0-9_-]*)\s*/\s*)", line
+            )
             if not m:
                 continue
-            claim = m.group(1) or m.group(2)
+            claim = m.group(1) or m.group(2) or m.group(3)
             refs = []
             before, separator, after = line.partition(" — ")
             explicit = any(
@@ -198,6 +201,27 @@ def triage(text, lanes, reviews, runs=None):
                 )
                 if lm:
                     suffix = source_span[lm.end() :]
+                    explicit = re.match(r"\s+R(\d+)-([\w-]+)\b", suffix)
+                    if explicit:
+                        round_, finding = int(explicit.group(1)), explicit.group(2)
+                        known = [
+                            r
+                            for r in reviews
+                            if r[0] == lane
+                            and r[1]["round"] == round_
+                            and any(f["id"] == finding for f in r[1]["findings"])
+                        ]
+                        refs.append(
+                            source_reference(lane, round_, finding, reviews, scope_hash)
+                            if known
+                            else dict(
+                                reviewer=lane,
+                                round=round_,
+                                finding_id=finding,
+                                scope_hash=scope_hash,
+                            )
+                        )
+                        continue
                     fm = re.match(r"(?:\s+finding\s+|\s*#?)(\d+)\b", suffix)
                     finding = fm.group(1) if fm else None
                     candidates = [
@@ -218,7 +242,7 @@ def triage(text, lanes, reviews, runs=None):
                             scope_hash=None,
                         )
                     )
-            if refs:
+            if refs or m.group(3):
                 items.append(
                     (claim, outcome, sorted(refs, key=lambda x: x["reviewer"]), [], [])
                 )
@@ -296,33 +320,69 @@ def run_defaults(kind, head, result, **fields):
     )
 
 
-def verified_current_gate(text):
-    import importlib.util
+def verified_current_gate(text, artifact=None, decode=False):
+    """Use only the owning skill's public verify/show protocol."""
+    import subprocess
     import sys
+    from contextlib import nullcontext
     from pathlib import Path
+    from tempfile import TemporaryDirectory
 
-    name = "_agent_stats_gate_verifier"
-    if name not in sys.modules:
-        path = (
-            Path(__file__).resolve().parents[2]
-            / "gate-and-fix/scripts/gate_artifact.py"
-        )
-        if not path.is_file():
-            raise ValueError(
-                "current gate format requires its canonical gate-and-fix verifier"
-            )
-        spec = importlib.util.spec_from_file_location(name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-    module = sys.modules[name]
-    base = re.search(r"^- Base: `([^`]+)`$", text, re.M)
+    script = (
+        Path(__file__).resolve().parents[2] / "gate-and-fix/scripts/gate_and_fix.py"
+    )
+    if not script.is_file():
+        raise ValueError("canonical gate command unavailable")
+    plain = unfenced(text)
+    base = re.search(r"^- Base: `([^`]+)`$", plain, re.M)
     if not base:
         raise ValueError("invalid gate base")
-    return module._parse_round(text, expected_base=base.group(1))
+    with (
+        TemporaryDirectory(prefix="bus-stats-gate-")
+        if artifact is None
+        else nullcontext(None) as scratch
+    ):
+        path = Path(scratch) / "round.md" if artifact is None else Path(artifact)
+        if artifact is None:
+            path.write_text(text)
+
+        def call(operation, *arguments):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    operation,
+                    "--artifact",
+                    str(path),
+                    "--base",
+                    base.group(1),
+                    *arguments,
+                ],
+                capture_output=True,
+            )
+            if result.returncode:
+                raise ValueError(
+                    "canonical gate "
+                    + operation
+                    + ": "
+                    + result.stderr.decode("utf-8", errors="replace")
+                )
+            return result.stdout.decode("utf-8")
+
+        outcome = call("verify").strip()
+        if outcome not in ("PASS", "FAIL"):
+            raise ValueError("invalid canonical gate verification result")
+        if not decode:
+            return outcome
+        names = re.findall(r"^### ([a-z][a-z0-9-]*) — (?:PASS|FAIL)$", plain, re.M)
+        return [
+            call("show", "--gate", name, "--stream", stream)
+            for name in names
+            for stream in ("stdout", "stderr")
+        ]
 
 
-def markdown_run(text):
+def markdown_run(text, artifact=None):
     plain = unfenced(text)
     if plain.startswith("# Gate-and-Fix Round\n"):
 
@@ -337,12 +397,18 @@ def markdown_run(text):
         if scalar("Schema") not in ("2", "3"):
             raise ValueError("invalid gate schema")
         if scalar("Schema") == "3":
-            verified_current_gate(text)
+            verified_current_gate(text, artifact)
         data = run_defaults("gate", scalar("Head"), scalar("Outcome"))
         for name, result, body in re.findall(
             r"^### (.+?) — (PASS|FAIL)\n(.*?)(?=^### |\Z)", plain, re.M | re.S
         ):
             duration = re.search(r"^- Duration: `(\d+)ms`$", body, re.M)
+            if scalar("Schema") == "2":
+                exits = re.findall(r"^- Exit code: `([^`]+)`$", body, re.M)
+                if len(exits) != 1 or not re.fullmatch(r"-?\d+|launch-error", exits[0]):
+                    raise ValueError("invalid legacy gate exit code")
+                if (exits[0] == "0") != (result == "PASS"):
+                    raise ValueError("legacy gate status disagrees with exit code")
             data["lanes"].append(
                 dict(
                     name=name,
@@ -352,6 +418,13 @@ def markdown_run(text):
             )
         if not data["lanes"]:
             raise ValueError("invalid gate: no runner lanes")
+        expected = (
+            "PASS"
+            if all(lane["result"] == "PASS" for lane in data["lanes"])
+            else "FAIL"
+        )
+        if data["result"] != expected:
+            raise ValueError("gate aggregate disagrees with lane results")
         return data
     if plain.startswith("# E2E TUI Run\n"):
         head = re.search(r"^- Commit: `([0-9a-f]{7,64})`$", plain, re.M)
@@ -380,17 +453,14 @@ def markdown_run(text):
     return None
 
 
-def wrapped_reports(text, head, candidates, outcome):
+def wrapped_reports(text, head, candidates, outcome, artifact=None):
     """Link only runner paths actually printed in the gate's encoded output."""
     import base64
     from pathlib import Path
 
     decoded = []
-    if re.search(r"^- Schema: `3`$", text, re.M):
-        _, gates = verified_current_gate(text)
-        decoded = [
-            stream for gate in gates.values() for stream in (gate.stdout, gate.stderr)
-        ]
+    if re.search(r"^- Schema: `3`$", unfenced(text), re.M):
+        decoded = verified_current_gate(text, artifact, decode=True)
     else:
         for raw in re.findall(r"```base64\n(.*?)\n```", text, re.S):
             decoded.append(base64.b64decode(raw, validate=True).decode("utf-8"))

@@ -221,11 +221,13 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                 candidate_reports.append((p, value))
     seen_markdown_runs = set()
     for path, text in texts:
-        data = markdown_run(text)
+        data = markdown_run(text, path)
         if data and digest(text) not in seen_markdown_runs:
             seen_markdown_runs.add(digest(text))
             linked, missing = (
-                wrapped_reports(text, data["head"], candidate_reports, data["result"])
+                wrapped_reports(
+                    text, data["head"], candidate_reports, data["result"], path
+                )
                 if data["kind"] == "gate"
                 else ([], [])
             )
@@ -319,6 +321,16 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                     checked_source(p, "sanitized source lane/round/finding ids")
                 )
             emitted["id"] = digest({k: v for k, v in emitted.items() if k != "id"})
+            if not refs and not run_ids:
+                emit(
+                    "coverage",
+                    "reviewer",
+                    dict(
+                        field="root_cause.reviewers",
+                        reason="canonical root has no verifiable reviewer attribution",
+                    ),
+                    path,
+                )
             if any(r["round"] is None or r["finding_id"] is None for r in refs):
                 emit(
                     "coverage",

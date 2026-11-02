@@ -31,15 +31,12 @@ an explicit scope header from their checksum-verified saved source. Ambiguous
 scoped finding references omit exact review attribution with a coverage reason.
 Rendered chat summaries do not substitute for canonical detailed reviews.
 
-Root causes come from address-review-comments canonical items only. Existing
-prose source lists can be imported only when explicit and unambiguous. A
-structured table under `## Root cause provenance` may serialize the existing
-canonical decisions: `claim_id | outcome | sources`, where each source is
-`lane@round:finding-id`, separated by commas. Outcome is the existing triage
-section decision, never a new rating. The collector verifies referenced reviews
-and claim outcomes; it does not decide which assertions share a root cause.
-Missing source/round mappings are coverage omissions. Copies and unresolved
-carry-forward assertions never create new roots.
+Root causes come only from address-review-comments' canonical items. That skill
+owns the [root provenance format](../../address-review-comments/references/root-cause-provenance-format.md)
+and its public `parse_provenance` reader. This add-on only consumes that reader;
+it neither defines the table contract nor decides which findings share a root.
+Explicit historical prose source lists have a separate bounded legacy adapter.
+Missing or ambiguous source mappings are coverage omissions.
 
 Task phase events use automatically sampled UTC times (seconds or milliseconds)
 and a monotonic clock. An end references its start ID and contains the computed
@@ -47,8 +44,7 @@ elapsed milliseconds. `task-end --artifact PATH` binds that exact artifact hash
 to the assignment identity and completion time. `task-end` also returns an
 immutable event receipt, usable by the runner for measured slot waiting.
 
-For an applied root detected by a gate/live runner, a provenance source may be
-`run@relative-report.json#exact-failing-test-id`. The referenced report must
+For an applied root detected by a gate/live runner, the owning provenance format links its exact failure ID. The referenced report must
 record that failure ID; the canonical claim must cite repository `path:line`.
 These are links to existing triage evidence, not new adjudications. Escapes need
 an observed Ready completion earlier than the linked detection, ancestry, and
