@@ -308,6 +308,45 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn native_timeout_start_methods_receive_the_startup_watchdog_budget() {
+        use crate::protocol::api::schema::{
+            AgentStartIfIdentityParams, AgentStartParams, EmptyParams,
+        };
+        let params = AgentStartParams {
+            name: "budgeted".into(),
+            kind: "claude".into(),
+            pane_id: "w1:p2".into(),
+            args: vec![],
+            executable: None,
+            grok_home: None,
+            kimi_home: None,
+            timeout_ms: None,
+        };
+        let startup = crate::protocol::api::AGENT_START_TIMEOUT
+            + crate::protocol::api::submission::RPC_MARGIN;
+        for (method, expected) in [
+            (Method::AgentStart(params.clone()), startup),
+            (
+                Method::AgentStartIfIdentity(AgentStartIfIdentityParams {
+                    expected_terminal_id: "owned-terminal".into(),
+                    start: params,
+                }),
+                startup,
+            ),
+            (Method::AgentList(EmptyParams {}), Duration::from_secs(3)),
+        ] {
+            let mut client = BusTransport::new(ConnectionTarget::SocketPath("unused".into()));
+            let outcome = client.request_using(method, |_, request, timeout| {
+                // Observe the actual receive budget without a scheduling-sensitive
+                // sleep between the client's write and its blocking read.
+                assert_eq!(timeout, expected, "{:?}", request.method);
+                Ok(serde_json::json!({"id":request.id,"result":{"type":"ok"}}))
+            });
+            assert!(outcome.is_ok(), "{outcome:?}");
+        }
+    }
+
+    #[test]
     fn native_timeout_agent_start_waits_for_a_slow_server_acknowledgement() {
         use interprocess::local_socket::traits::Listener;
         use std::io::{BufRead, Write};
