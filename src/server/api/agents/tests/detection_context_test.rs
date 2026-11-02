@@ -57,11 +57,10 @@ async fn detect(
         .set_detected_state(Some(kind), state);
     let info = app.agent_info(0, pane).unwrap();
     if screen == UPDATE {
-        assert_eq!(
-            info.dialog_id, None,
-            "the universal notice must not depend on a parser"
+        assert!(
+            info.dialog_id.is_some(),
+            "visible generic controls have a driver episode ID"
         );
-        assert!(observe_dialog(&mut app).dialog.is_none());
     }
     assert!(
         writes.try_recv().is_err(),
@@ -71,7 +70,7 @@ async fn detect(
 }
 
 #[tokio::test]
-async fn native_context_blocks_update_and_busy_composer_only_with_obligation() {
+async fn native_controls_block_without_obligation_and_busy_drafts_require_one() {
     for screen in [UPDATE, DRAFT] {
         assert_eq!(
             detect(AgentKind::Kimi, screen, true, None, false).await,
@@ -79,7 +78,11 @@ async fn native_context_blocks_update_and_busy_composer_only_with_obligation() {
         );
         assert_eq!(
             detect(AgentKind::Kimi, screen, false, None, false).await,
-            AgentState::Idle
+            if screen == UPDATE {
+                AgentState::Blocked
+            } else {
+                AgentState::Idle
+            }
         );
     }
     assert_eq!(
@@ -88,7 +91,7 @@ async fn native_context_blocks_update_and_busy_composer_only_with_obligation() {
     );
     assert_eq!(
         detect(AgentKind::Kimi, UPDATE, true, None, true).await,
-        AgentState::Idle
+        AgentState::Blocked
     );
 }
 

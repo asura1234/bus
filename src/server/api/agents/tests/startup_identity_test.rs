@@ -41,11 +41,36 @@ async fn startup_timeout_keeps_owned_terminal_readable_and_trust_chooser_address
     assert!(read
         .text
         .contains("Do you trust the contents of this directory?"));
-    let observed = observe_dialog(&mut app);
-    assert_eq!(observed.terminal_id, before.terminal_id);
-    assert_eq!(observed.pane_id, before.pane_id);
-    let dialog = observed.dialog.as_ref().expect("late trust chooser");
-    assert!(chosen(&choose(&mut app, &observed, None, &dialog.digest, 1)).written);
+    let observed = app.handle_agent_observe(
+        "observe".into(),
+        crate::protocol::api::schema::AgentObserveParams {
+            target: "reviewer".into(),
+            selection_label: None,
+        },
+    );
+    let observed: SuccessResponse = serde_json::from_str(&observed).unwrap();
+    let ResponseResult::TerminalObserved { observation } = observed.result else {
+        panic!("driver observation");
+    };
+    assert_eq!(observation.terminal_id, before.terminal_id);
+    assert_eq!(observation.pane_id, before.pane_id);
+    assert!(observation.text.contains("Trust this workspace"));
+    let result = app.handle_agent_press(
+        "trust".into(),
+        crate::protocol::api::schema::AgentPressParams {
+            target: "reviewer".into(),
+            expected_terminal_id: Some(observation.terminal_id),
+            select: None,
+            text: None,
+            keys: vec!["a".into()],
+            submit: false,
+        },
+    );
+    let result: SuccessResponse = serde_json::from_str(&result).unwrap();
+    assert!(matches!(
+        result.result,
+        ResponseResult::TerminalPressed { .. }
+    ));
     assert_eq!(writes.recv().await.unwrap().as_ref(), b"a");
     let terminal = app.state.terminals.get_mut(&id).unwrap();
     terminal.set_detected_state(Some(AgentKind::Cursor), AgentState::Idle);

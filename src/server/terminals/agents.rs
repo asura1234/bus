@@ -509,21 +509,8 @@ impl App {
         let pane = self.pane_info(ws_idx, pane_id)?;
         let dialog = self
             .lookup_runtime_sender(ws_idx, pane_id)
-            .and_then(|runtime| runtime.visible_ansi_snapshot_with_seq())
-            .and_then(|(screen, _)| {
-                crate::agents::dialog::parse(&screen)
-                    .map(|dialog| (dialog.id(), true))
-                    .or_else(|| {
-                        (terminal.effective_known_agent() == Some(crate::agents::AgentKind::Codex)
-                            && crate::agents::dialog::codex_question_pending(&screen))
-                        .then(|| {
-                            (
-                                crate::agents::dialog::CODEX_PENDING_QUESTION_ID.to_owned(),
-                                false,
-                            )
-                        })
-                    })
-            });
+            .and_then(|runtime| crate::terminal::driver::observe(runtime).ok())
+            .and_then(|(grid, _)| crate::terminal::driver::blocker(&grid));
         Some(crate::protocol::api::schema::AgentInfo {
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)
@@ -549,7 +536,7 @@ impl App {
             display_agent: pane.display_agent,
             agent_status: pane.agent_status,
             screen_detection_skipped: false,
-            dialog_id: dialog.map(|(id, _)| id),
+            dialog_id: dialog,
             update_error: None,
             state_labels: pane.state_labels,
             tokens: pane.tokens,

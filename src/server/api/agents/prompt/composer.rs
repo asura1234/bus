@@ -86,9 +86,8 @@ pub(super) fn observe_since_launch(
     );
     // Choosers use the same prompt marker as the composer. Inspect live
     // controls before reading input, including collapsed async questions.
-    if !composer_frame(kind, &plain)
-        && (detection.visible_blocker || crate::agents::dialog::parse(screen).is_some())
-        || kind == AgentKind::Codex && crate::agents::dialog::codex_question_pending(screen)
+    if (!composer_frame(kind, &plain) && detection.visible_blocker)
+        || crate::terminal::driver::has_input_controls(&plain)
     {
         return InputObservation::Unavailable;
     }

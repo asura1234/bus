@@ -192,7 +192,7 @@ pub(crate) fn selection_identity(
     Ok(SelectionIdentity { label, occurrence })
 }
 
-fn option_body(row: &str) -> (&str, bool) {
+pub(super) fn option_body(row: &str) -> (&str, bool) {
     let row = row.trim().trim_matches(['│', '┃']).trim();
     let selected = row.starts_with(['❯', '›', '>', '●', '◉', '▶', '→']);
     let row = if selected {
@@ -206,7 +206,7 @@ fn option_body(row: &str) -> (&str, bool) {
     (row, selected)
 }
 
-fn option_label(row: &str) -> (&str, bool) {
+pub(super) fn option_label(row: &str) -> (&str, bool) {
     let (row, selected) = option_body(row);
     let digits = row.bytes().take_while(u8::is_ascii_digit).count();
     let row = if digits > 0
