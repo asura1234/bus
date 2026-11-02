@@ -149,7 +149,7 @@ class Bus:
         except (OSError, ValueError):
             return None
         return next((agent for agent in response.get("result", {}).get("agents", [])
-                     if target in (agent.get("name"), agent.get("pane_id"), agent.get("terminal_id"))), None)
+                     if target in (agent.get("name"), agent.get("agent"), agent.get("pane_id"), agent.get("terminal_id"))), None)
 
     def wait_native_ready(self, name, timeout=30):
         """Wait for a recreated, interactive native provider, not just control/UI readiness."""
