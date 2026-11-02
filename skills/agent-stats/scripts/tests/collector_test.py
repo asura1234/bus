@@ -551,3 +551,16 @@ def test_completed_rebase_receipts_are_counted_once_not_workflow_mentions(tmp_pa
     rows = collect("pr-7", tmp_path)
     assert len([r for r in rows if r["kind"] == "rebase"]) == 1
     assert report(rows)["rebases_by_task"] == {"pr-7": 1}
+
+
+def test_unknown_runner_identity_does_not_imply_one_unique_agent(tmp_path):
+    sys.path.insert(0, str(CLI.parent))
+    from stats_collect import collect
+    from stats_report import report
+
+    (tmp_path / "run.json").write_text(
+        json.dumps(dict(head="a" * 40, exit_code=0, duration_ms=12, results=[]))
+    )
+    model = report(collect("pr-7", tmp_path))["model_leaderboard"][0]
+    assert model["gate_pass"] == 1
+    assert model["agents"] is None

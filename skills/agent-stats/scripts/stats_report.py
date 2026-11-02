@@ -226,7 +226,9 @@ def report(rows):
                 **{x: 0 for x in COUNTS},
             ),
         )
-        m["agents"] += 1
+        m["agents"] = (
+            None if v["agent"] == "unknown" or m["agents"] is None else m["agents"] + 1
+        )
         for k in COUNTS:
             m[k] += v[k]
     starts = {
@@ -283,7 +285,7 @@ def markdown(value):
     ]
     for r in value["model_leaderboard"]:
         lines.append(
-            f"| {r['role']} | {r['provider']} / {r['model']} | {r['agents']} | {r['authored_prs']} | {r['unique_issues']} | {r['shared_issues']} | {r['applied']} / {r['rejected']} | {r['stopped_early']} |"
+            f"| {r['role']} | {r['provider']} / {r['model']} | {r['agents'] if r['agents'] is not None else 'unknown'} | {r['authored_prs']} | {r['unique_issues']} | {r['shared_issues']} | {r['applied']} / {r['rejected']} | {r['stopped_early']} |"
         )
     lines += [
         "",
