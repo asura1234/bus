@@ -38,6 +38,7 @@ impl Transport for Accepting {
                 "workspace_id":"workspace", "tab_id":"tab", "focused":false, "revision":1
             }))
             .unwrap(),
+            timestamps: Default::default(),
         })
     }
 }

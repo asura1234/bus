@@ -191,6 +191,7 @@ impl Worker {
             .prompt
             .id;
         self.save(state)?;
+        self.note_requests_queued(&ids)?;
         for id in &ids {
             crate::messaging::diagnostics::request(
                 &self.state,

@@ -443,10 +443,14 @@ impl Worker {
         state
             .begin_submission(request, launch, boundary)
             .map_err(|e| e.to_string())?;
+        state
+            .record_picked(request, io::now_ms(), waited)
+            .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
         self.trace_provider_retry(agent, request);
+        self.note_native_requested(request, io::now_ms())?;
         let started = std::time::Instant::now();
         let _span = tracing::info_span!(
             "bus.delivery",
@@ -461,7 +465,12 @@ impl Worker {
             "Bus payload metadata"
         );
         let method = submission_method(agent, text, terminal, pane, steer);
-        let outcome = match self.transport.request(method) {
+        let response = self.transport.request(method);
+        let native_timestamps = match &response {
+            Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
+            _ => Default::default(),
+        };
+        let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: identity.session_id.clone(),
                 provider_turn_id: None,
@@ -498,6 +507,9 @@ impl Worker {
             "Native submit result; uncertain outcomes are never retried"
         );
         let mut state = self.state.clone();
+        state
+            .record_native_timestamps(request, native_timestamps)
+            .map_err(|e| e.to_string())?;
         state
             .record_submission(request, outcome.clone())
             .map_err(|e| e.to_string())?;
@@ -556,21 +568,30 @@ impl Worker {
         state
             .begin_steering(request, lead)
             .map_err(|e| e.to_string())?;
+        state
+            .record_picked(request, io::now_ms(), true)
+            .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
+        self.note_native_requested(request, io::now_ms())?;
         let started = std::time::Instant::now();
-        let outcome = match self.transport.request(Method::AgentPromptIfIdle(
-            schema::AgentPromptIfIdleParams {
-                target: pane.clone(),
-                text,
-                expected_terminal_id: terminal.clone(),
-                expected_pane_id: pane.clone(),
-                expected_agent: launch::provider_kind(agent.provider).into(),
-                expected_session_id: session.clone(),
-                steer: true,
-            },
-        )) {
+        let response =
+            self.transport
+                .request(Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
+                    target: pane.clone(),
+                    text,
+                    expected_terminal_id: terminal.clone(),
+                    expected_pane_id: pane.clone(),
+                    expected_agent: launch::provider_kind(agent.provider).into(),
+                    expected_session_id: session.clone(),
+                    steer: true,
+                }));
+        let native_timestamps = match &response {
+            Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
+            _ => Default::default(),
+        };
+        let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: Some(session.clone()),
                 provider_turn_id: None,
@@ -594,6 +615,9 @@ impl Worker {
             mode = "steer", outcome = ?outcome,
             elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
         let mut state = self.state.clone();
+        state
+            .record_native_timestamps(request, native_timestamps)
+            .map_err(|e| e.to_string())?;
         state
             .record_steering(request, outcome.clone())
             .map_err(|e| e.to_string())?;

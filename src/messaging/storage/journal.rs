@@ -10,7 +10,7 @@
 //! and every full save folds them in.
 use serde::{Deserialize, Serialize};
 
-use crate::messaging::model::{BusState, Draft, ModelError, RoomId};
+use crate::messaging::model::{BusState, Draft, ModelError, RequestId, RoomId};
 
 const JOURNAL_VERSION: u64 = 1;
 
@@ -33,6 +33,14 @@ pub(crate) enum JournalOp {
         queued: bool,
         now_ms: u64,
     },
+    DeliveryTimestamps {
+        room: RoomId,
+        request_id: RequestId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queued_at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_requested_at_ms: Option<u64>,
+    },
 }
 
 impl JournalOp {
@@ -40,7 +48,8 @@ impl JournalOp {
         match self {
             Self::DraftText { room, .. }
             | Self::Submit { room, .. }
-            | Self::SubmitDraft { room, .. } => *room,
+            | Self::SubmitDraft { room, .. }
+            | Self::DeliveryTimestamps { room, .. } => *room,
         }
     }
 
@@ -65,6 +74,20 @@ impl JournalOp {
             } => state
                 .submit_draft_exact(*room, draft.clone(), *now_ms, *queued)
                 .map(drop),
+            Self::DeliveryTimestamps {
+                request_id,
+                queued_at_ms,
+                native_requested_at_ms,
+                ..
+            } => {
+                if let Some(at_ms) = queued_at_ms {
+                    state.record_queued(*request_id, *at_ms)?;
+                }
+                if let Some(at_ms) = native_requested_at_ms {
+                    state.record_native_requested(*request_id, *at_ms)?;
+                }
+                Ok(())
+            }
         }
     }
 }

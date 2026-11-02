@@ -222,6 +222,49 @@ impl Worker {
     /// last write only in status-only observations writes nothing: those are
     /// never persisted on their own (see `apply_poll`), so rewriting the same
     /// durable content is pure cost. Inside a batch the write waits for
+    pub(super) fn note_requests_queued(&mut self, ids: &[RequestId]) -> Result<(), String> {
+        let at_ms = io::now_ms();
+        for id in ids {
+            let mut state = self.state.clone();
+            state.record_queued(*id, at_ms).map_err(|e| e.to_string())?;
+            let room = state.request(*id).ok_or("Missing queued request")?.room_id;
+            self.journal(
+                state,
+                JournalOp::DeliveryTimestamps {
+                    room,
+                    request_id: *id,
+                    queued_at_ms: Some(at_ms),
+                    native_requested_at_ms: None,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn note_native_requested(
+        &mut self,
+        id: RequestId,
+        at_ms: u64,
+    ) -> Result<(), String> {
+        let mut state = self.state.clone();
+        state
+            .record_native_requested(id, at_ms)
+            .map_err(|e| e.to_string())?;
+        let room = state
+            .request(id)
+            .ok_or("Missing submitting request")?
+            .room_id;
+        self.journal(
+            state,
+            JournalOp::DeliveryTimestamps {
+                room,
+                request_id: id,
+                queued_at_ms: None,
+                native_requested_at_ms: Some(at_ms),
+            },
+        )
+    }
+
     /// [`Self::finish_batch`].
     pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
         if !self.store.has_unfolded_journal()
@@ -246,7 +289,8 @@ impl Worker {
         Ok(())
     }
 
-    fn write(&mut self, state: BusState) -> Result<(), String> {
+    fn write(&mut self, mut state: BusState) -> Result<(), String> {
+        state.mark_new_replies_delivered(&self.durable_state, io::now_ms());
         if let Err(error) = self.store.save(&state) {
             if crate::utils::error_pipe::is_suppressed() {
                 tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
