@@ -2,7 +2,7 @@
 
 #![cfg(unix)]
 
-#[path = "../support/fixture_dir_test.rs"]
+#[path = "../../src/utils/tests/temp_path_test.rs"]
 mod fixture_dirs;
 
 // Separate instances retain the original suite's cleanup registry and support test identities.
@@ -35,7 +35,7 @@ mod client_mode {
     };
 
     fn unique_test_dir() -> PathBuf {
-        crate::fixture_dirs::unique_test_dir("bus-client-test")
+        crate::fixture_dirs::unique_temp_path("bus-client-test")
     }
 
     struct SpawnedBus {
@@ -248,7 +248,7 @@ mod cross_area {
     };
 
     fn unique_test_dir() -> PathBuf {
-        crate::fixture_dirs::unique_test_dir("bus-cross-area-test")
+        crate::fixture_dirs::unique_temp_path("bus-cross-area-test")
     }
 
     struct SpawnedBus {

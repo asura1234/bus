@@ -12,11 +12,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 pub(super) fn unique_test_dir() -> PathBuf {
-    crate::fixture_dirs::unique_test_dir("bus-room-screen")
+    crate::fixture_dirs::unique_temp_path("bus-room-screen")
 }
 
 pub(super) fn unique_test_dir_at(timestamp: SystemTime) -> PathBuf {
-    crate::fixture_dirs::unique_test_dir_at("bus-room-screen", timestamp)
+    crate::fixture_dirs::unique_temp_path_at("bus-room-screen", timestamp)
 }
 
 fn control_stream(root: &Path) -> std::io::Result<Stream> {
