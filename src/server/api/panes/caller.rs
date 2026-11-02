@@ -71,6 +71,13 @@ impl App {
                 last.pid == 1
                     || platform::process_parent(last.pid)
                         .is_some_and(|pid| pid == 1 || !platform::process_exists(pid))
+            })
+            // A detached server may share only protected OS ancestors with an
+            // external client. Once this readable prefix reaches a process
+            // older than the server, no unseen ancestor can be one of its PTYs.
+            // macOS uses a separate monotonic stamp, never the opaque birth key.
+            || ancestry.last().zip(server_ancestry.first()).is_some_and(|(ancestor, server)| {
+                platform::caller_precedes_server(*ancestor, *server) == Some(true)
             });
         complete.then_some(CallerLocation {
             pane: None,
