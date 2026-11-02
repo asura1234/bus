@@ -203,6 +203,10 @@ impl History {
         &self.lines
     }
 
+    pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {
+        self.key.map_or_else(Default::default, |key| key.5)
+    }
+
     pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {
         self.lines.get(index).map(|line| line.anchor)
     }

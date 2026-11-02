@@ -105,6 +105,7 @@ impl BusUi {
             width,
             &mut self.main_scroll,
             &mut self.history_follow_tail,
+            self.history.current_filters() == room.history_filters,
         );
         self.main_scroll = if self.history_follow_tail {
             view.history_max_scroll
@@ -549,10 +550,11 @@ fn update_chat_search(
     width: u16,
     scroll: &mut usize,
     follow_tail: &mut bool,
+    filters_current: bool,
 ) {
     if let Some(search) = chat_search.as_mut() {
         let count = view.search_matches.len();
-        if search.jump_to_newest {
+        if search.jump_to_newest && filters_current {
             // A new query starts from the newest match, nearest the bottom.
             search.jump_to_newest = false;
             search.current = count.saturating_sub(1);

@@ -443,3 +443,109 @@ fn changing_a_filter_keeps_the_selected_find_match_visible() {
         ui.main_scroll + usize::from(ui.view.history.height)
     );
 }
+
+#[test]
+fn finished_filter_commands_compose_until_the_snapshot_acknowledges_them() {
+    let cases = [
+        ('i', RoomHistoryFilters::default()),
+        (
+            'o',
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: true,
+            },
+        ),
+    ];
+    let mut observed = Vec::new();
+    let mut expected = Vec::new();
+    for (second_key, expected_filters) in cases {
+        let (mut ui, room, _) = fixture();
+        ui.open_room(room);
+        key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
+        let id = ui
+            .pending
+            .iter()
+            .find(|pending| matches!(pending.command, BusCommand::SetRoomHistoryFilters(..)))
+            .unwrap()
+            .id;
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: id,
+            result: Ok(()),
+        });
+        assert!(ui.snapshot.last_command_id < id);
+        assert_eq!(
+            ui.snapshot.state.room(room).unwrap().history_filters,
+            RoomHistoryFilters::default()
+        );
+        key(&mut ui, KeyCode::Char(second_key), KeyModifiers::ALT);
+        apply_filter_commands(&mut ui);
+        observed.push(ui.snapshot.state.room(room).unwrap().history_filters);
+        expected.push(expected_filters);
+    }
+    assert_eq!(
+        observed, expected,
+        "CommandFinished is not a snapshot acknowledgment"
+    );
+}
+
+#[test]
+fn filter_acknowledgment_keeps_find_selection_visible_after_an_old_frame() {
+    use crate::messaging::model::{Author, Draft};
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    for i in 0..40u64 {
+        let id = snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("Needle outgoing {i:02}"),
+                    files: Vec::new(),
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1000 + i * 10,
+            )
+            .unwrap()[0];
+        snapshot
+            .state
+            .finish_for_test(id, "ordinary answer", 1001 + i * 10);
+        snapshot
+            .state
+            .post_to_developer(
+                room,
+                agent,
+                format!("Needle incoming {i:02}"),
+                Vec::new(),
+                1002 + i * 10,
+            )
+            .unwrap();
+    }
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
+    apply_filter_commands(&mut ui);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    for c in "needle".chars() {
+        key(&mut ui, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+    room_screen(&mut ui, 100, 30);
+    assert_eq!(ui.view.search_matches.len(), 40);
+    let row = ui.view.search_matches[ui.chat_search.as_ref().unwrap().current].0;
+    assert!((ui.main_scroll..ui.main_scroll + usize::from(ui.view.history.height)).contains(&row));
+    key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
+    room_screen(&mut ui, 100, 30);
+    assert!(!ui.chat_search.as_ref().unwrap().jump_to_newest);
+    apply_filter_commands(&mut ui);
+    room_screen(&mut ui, 100, 30);
+    assert_eq!(ui.view.search_matches.len(), 80);
+    let current = ui.chat_search.as_ref().unwrap().current;
+    let row = ui.view.search_matches[current].0;
+    assert!(
+        (ui.main_scroll..ui.main_scroll + usize::from(ui.view.history.height)).contains(&row),
+        "snapshot selects result {current} at row {row}, outside viewport {}..{}",
+        ui.main_scroll,
+        ui.main_scroll + usize::from(ui.view.history.height)
+    );
+}

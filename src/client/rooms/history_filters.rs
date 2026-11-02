@@ -12,7 +12,7 @@ impl BusUi {
             .rev()
             .find_map(|pending| match pending.command {
                 BusCommand::SetRoomHistoryFilters(id, filters)
-                    if id == room && pending.result.is_none() =>
+                    if id == room && !matches!(&pending.result, Some(Err(_))) =>
                 {
                     Some(filters)
                 }
@@ -32,9 +32,6 @@ impl BusUi {
             filters.from_you = !filters.from_you;
         }
         self.clear_selection();
-        if let Some(search) = &mut self.chat_search {
-            search.jump_to_newest = true;
-        }
         self.queue(
             BusCommand::SetRoomHistoryFilters(room, filters),
             Effect::None,
