@@ -85,76 +85,52 @@ fn footer(driver: &mut ClientLoopDriver) -> String {
         .map(|x| buffer[(x, 38)].symbol())
         .take_while(|symbol| *symbol != "│")
         .collect::<String>();
+    let label = row.trim_end().to_owned();
     for y in 0..40 {
-        for x in 28..120 {
-            // The version must stay out of the main view and composer.
-            assert_ne!(buffer[(x, y)].symbol(), "·");
-        }
+        let main = (28..120)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>();
+        assert!(!main.contains(&label), "version must stay in the sidebar");
+        assert!(!main.contains("TUI"));
     }
-    row.trim_end().to_owned()
+    assert!(!label.contains("TUI"), "show only the server version");
+    label
 }
 
 #[test]
-fn footer_version_tracks_replacement_server_and_matching_build() {
+fn footer_version_tracks_the_running_server_after_restart() {
     let _lock = crate::utils::config::test_config_env_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let scratch = Scratch::new();
     let (mut driver, _) = driver(120);
     let client = env!("BUS_BUILD_SHA");
-    let short = client.get(..8).unwrap();
     scratch.attach(&mut driver, Some(client));
-    assert_eq!(footer(&mut driver), env!("BUS_BUILD_SHORT_SHA"));
 
-    let other = if client.starts_with("ab") { "cd" } else { "ab" }.repeat(20);
-    scratch.attach(&mut driver, Some(&other));
-    assert_eq!(
-        footer(&mut driver),
-        format!("{} · TUI {short}", &other[..8])
-    );
+    let server = if client.starts_with("ab") { "cd" } else { "ab" }.repeat(20);
+    scratch.attach(&mut driver, Some(&server));
+    assert_eq!(footer(&mut driver), &server[..8]);
 
-    // A rollback clears the mismatch instead of retaining the replacement SHA.
+    // A rollback must replace the previous server's label too.
     scratch.attach(&mut driver, Some(client));
-    assert_eq!(footer(&mut driver), env!("BUS_BUILD_SHORT_SHA"));
+    assert_eq!(footer(&mut driver), &client[..8]);
 }
 
 #[test]
-fn footer_version_compares_full_shas_not_just_the_visible_prefix() {
+fn footer_version_unknown_server_is_not_replaced_by_the_client_sha() {
     let _lock = crate::utils::config::test_config_env_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let scratch = Scratch::new();
     let (mut driver, _) = driver(120);
-    let client = env!("BUS_BUILD_SHA");
-    let mut other = client.to_owned();
-    other.replace_range(39.., if client.ends_with('a') { "b" } else { "a" });
-    scratch.attach(&mut driver, Some(&other));
-    assert_eq!(
-        footer(&mut driver),
-        format!("{} · TUI {}", &other[..8], &client[..8])
-    );
-}
-
-#[test]
-fn footer_version_does_not_present_the_client_as_an_unknown_server() {
-    let _lock = crate::utils::config::test_config_env_lock()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let scratch = Scratch::new();
-    let (mut driver, _) = driver(120);
-    for sha in [Some(env!("BUS_BUILD_SHA")), None, Some("invalid")] {
+    for sha in [None, Some("invalid")] {
         scratch.attach(&mut driver, sha);
-        let expected = if sha == Some(env!("BUS_BUILD_SHA")) {
-            env!("BUS_BUILD_SHORT_SHA").to_owned()
-        } else {
-            format!("unknown · TUI {}", &env!("BUS_BUILD_SHA")[..8])
-        };
-        assert_eq!(footer(&mut driver), expected);
+        assert_eq!(footer(&mut driver), "unknown");
     }
 }
 
 #[test]
-fn footer_version_keeps_both_builds_visible_at_minimum_sidebar_width() {
+fn footer_version_server_sha_fits_the_minimum_sidebar_width() {
     let _lock = crate::utils::config::test_config_env_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -162,10 +138,7 @@ fn footer_version_keeps_both_builds_visible_at_minimum_sidebar_width() {
     let (mut driver, _) = driver(120);
     receive_width(&mut driver, 20);
     let client = env!("BUS_BUILD_SHA");
-    let other = if client.starts_with("ab") { "cd" } else { "ab" }.repeat(20);
-    scratch.attach(&mut driver, Some(&other));
-    assert_eq!(
-        footer(&mut driver),
-        format!("{} · TUI {}", &other[..5], &client[..5])
-    );
+    let server = if client.starts_with("ab") { "cd" } else { "ab" }.repeat(20);
+    scratch.attach(&mut driver, Some(&server));
+    assert_eq!(footer(&mut driver), &server[..8]);
 }
