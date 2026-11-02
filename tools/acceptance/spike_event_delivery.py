@@ -158,7 +158,7 @@ class Scratch:
             replies = [s for s in self.strings(transcript) if 'fake draft bytes: ' in s]
             if not replies:
                 raise RuntimeError(('draft reply missing', transcript))
-            restored = json.loads(replies[-1].split('fake draft bytes: ', 1)[1])
+            restored = json.loads(replies[-1].split('fake draft bytes: ', 1)[1].replace('\n', ''))
             if restored != draft + '-END':
                 raise RuntimeError(('draft mismatch', repr(restored), repr(draft + '-END')))
             record['draft_exact'] = True
