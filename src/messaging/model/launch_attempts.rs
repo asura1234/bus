@@ -1,7 +1,43 @@
 //! Durable launch audit records, including attempts rejected before roster insertion.
-use super::{AgentId, AgentRuntimeIdentity, BusState, ModelError, Provider, RoomId};
+use super::{
+    AgentId, AgentRuntimeIdentity, BusState, ModelError, Provider, Request, RequestPhase, RoomId,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+pub(crate) fn request_pre_start_failure(request: &Request) -> bool {
+    matches!(
+        request
+            .failure_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or("missing_reason"),
+        "submission_unconfirmed"
+            | "prompt_not_shown"
+            | "delivery_error"
+            | "prior_request_active"
+            | "not_submitted"
+            | "session_hook_missing"
+    )
+}
+
+pub(crate) fn request_start_bound(state: &BusState, request: &Request) -> bool {
+    request.trusted_start_bound
+        || (!request.uncertain_outcome
+            && (request.phase == RequestPhase::Active
+                || request.phase == RequestPhase::Abandoned && !request.steered)
+            && request
+                .group
+                .and_then(|id| state.request(id))
+                .is_some_and(|lead| {
+                    lead.agent_id == request.agent_id
+                        && !request_pre_start_failure(lead)
+                        && (lead.trusted_start_bound
+                            || lead.reply().is_some()
+                            || lead.phase == RequestPhase::Completed)
+                }))
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -196,7 +232,7 @@ impl BusState {
         };
         self.requests.values().any(|r| {
             r.agent_id == agent
-                && r.trusted_start_bound
+                && request_start_bound(self, r)
                 && r.expected_launch_id.as_deref() == Some(launch)
                 && r.submission_status_revision >= floor
         })
