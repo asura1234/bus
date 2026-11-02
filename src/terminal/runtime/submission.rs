@@ -127,7 +127,7 @@ pub(crate) trait SubmissionInspector: Send {
         self.draft_preservation_with_cursor(screen, cursor)
     }
     fn native_stash_visible(&self, _screen: &str) -> bool {
-        true
+        false
     }
     fn native_draft_restored(&self, _screen: &str) -> bool {
         false
