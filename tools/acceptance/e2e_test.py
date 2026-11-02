@@ -119,6 +119,7 @@ def visible_option_labels(observation):
     number or sends arrows itself. Ambiguous candidates are rejected below.
     """
     labels = []
+    numbered_labels = []
     for row in observation["text"].splitlines():
         body = row.strip().strip("│┃║").strip()
         if body.startswith(("❯", "›", ">", "●", "◉", "▶", "→")):
@@ -128,7 +129,10 @@ def visible_option_labels(observation):
             body = numbered[1]
         if body and not body.endswith(("?", ":")):
             labels.append(body)
-    return labels
+            if numbered:
+                numbered_labels.append(body)
+    # Explicit numbered choices distinguish labels from captions and help.
+    return numbered_labels or labels
 
 
 def pick_option(observation, purpose):

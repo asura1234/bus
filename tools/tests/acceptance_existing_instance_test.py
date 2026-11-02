@@ -381,6 +381,34 @@ class EndToEndDialogTests(unittest.TestCase):
                        "focus": [2, "[q] Quit"]}
         self.assertEqual(e2e.pick_option(observation, "trust"), "[a] Trust this workspace")
 
+    def test_trust_caption_above_numbered_options_is_not_a_choice(self):
+        # Captured from the failed 20261102-171610 scratch run's setup_error.
+        observation = {
+            "cols": 131, "content_revision": 106,
+            "cursor": {"col": 1, "row": 42, "visible": False},
+            "focus": [7, "Trust and continue"], "focus_occurrence": 0,
+            "pane_id": "w1:p3", "rows": 45, "terminal_id": "term_65f4798ea5f483",
+            "text": "\n  Folder access\n"
+                    "  /Users/dylanliu/work/bus-universal-dialog/temp/e2e/workspace\n\n"
+                    "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code\n"
+                    "  automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.\n\n"
+                    "› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n" + "\n" * 33,
+        }
+        self.assertEqual(e2e.pick_option(observation, "trust"), "Trust and continue")
+
+    def test_permission_caption_above_numbered_options_is_not_a_choice(self):
+        observed = dialog("Allow this command to edit the scratch file.", "Approve once", "No, cancel")
+        self.assertEqual(e2e.pick_option(observed, "allow"), "Approve once")
+
+    def test_multiple_trust_options_remain_ambiguous_with_or_without_numbers(self):
+        for observed in (
+            dialog("Trust this directory?", "Trust and continue", "Yes, continue", "Quit"),
+            {"text": "Trust this directory?\n❯ Trust and continue\n  Yes, continue\n  Quit",
+             "focus": [1, "Trust and continue"]},
+        ):
+            with self.subTest(observed=observed), self.assertRaisesRegex(AssertionError, "ambiguous"):
+                e2e.pick_option(observed, "trust")
+
     def test_ambiguous_permission_labels_are_rejected(self):
         observed = dialog("Would you like to run the following command?", "Yes, proceed", "Approve once")
         with self.assertRaisesRegex(AssertionError, "ambiguous"):
