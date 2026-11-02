@@ -1778,6 +1778,16 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
         ],
     ));
     assert_eq!(code, 0, "{selected}");
+    assert_eq!(selected["result"]["outcome"], "selected", "{selected}");
+    // Press acknowledges queued input. Wait for the fake's native final/idle
+    // transition before asking message wait to reject any remaining blocker.
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
     let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
     let request = &result["message"]["result"]["requests"][0];
     assert_eq!(request["stage"], "replied", "{result}");
