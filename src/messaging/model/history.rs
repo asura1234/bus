@@ -147,8 +147,8 @@ impl History {
     }
 }
 
-/// A dialog fingerprint answers only within this long of its observation.
-pub(crate) const DIALOG_ANSWER_TTL_MS: u64 = 60 * 60 * 1000;
+/// Retention bound for historical spent-fingerprint metadata.
+const DIALOG_ANSWER_TTL_MS: u64 = 60 * 60 * 1000;
 
 impl super::BusState {
     /// Establish the recovery boundary before any routing/event pass can run.

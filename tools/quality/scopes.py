@@ -73,11 +73,6 @@ def _evaluate(expression, values: dict[str, bool]) -> bool:
     return (all if kind == "all" else any)(_evaluate(child, values) for child in value)
 
 
-def cfg_requires_test(expression: str) -> bool:
-    """True only when this condition cannot hold with cfg(test) disabled."""
-    return _requires_test(_cfg_expression(expression))
-
-
 def _requires_test(expression) -> bool:
     atoms = sorted(_atoms(expression) - {"test"})
     # Fail conservatively on unexpectedly enormous generated predicates.

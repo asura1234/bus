@@ -32,7 +32,7 @@ use requests::rejection_reason;
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 pub(crate) use developer_notifications::{developer_alerts, new_developer_notifications};
 pub(crate) use error::ModelError;
-pub(crate) use history::{Archived, History, DIALOG_ANSWER_TTL_MS};
+pub(crate) use history::{Archived, History};
 #[cfg(test)]
 pub(crate) use history::{ARCHIVE_AFTER_MS, HISTORY_RETENTION_MS};
 #[cfg(test)]
@@ -41,7 +41,7 @@ pub(crate) use interrupts::INTERRUPTED;
 #[cfg(test)]
 use payload::payload_matches;
 pub(crate) use settlement::RecordedTurnEnd;
-pub(crate) use state::{fingerprint_digest, BusState};
+pub(crate) use state::BusState;
 pub(crate) use {
     crate::messaging::model::types::RoomAgent,
     types::{

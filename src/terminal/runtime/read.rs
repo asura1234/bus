@@ -324,24 +324,6 @@ impl TerminalRuntime {
         self.terminal.visible_text()
     }
 
-    /// A coherent ANSI dialog screen outside an unfinished synchronized update.
-    /// Preserve logical lines: soft wraps must not split options or key hints.
-    pub(crate) fn visible_ansi_snapshot_with_seq(&self) -> Option<(String, u64)> {
-        for _ in 0..3 {
-            let before = self.content_seq.load(Ordering::Acquire);
-            if !before.is_multiple_of(2) || self.synchronized_output_active() {
-                continue;
-            }
-            let text = self.terminal.visible_ansi_unwrapped();
-            let synchronized = self.synchronized_output_active();
-            let after = self.content_seq.load(Ordering::Acquire);
-            if before == after && !synchronized {
-                return Some((text, after));
-            }
-        }
-        None
-    }
-
     pub(crate) fn visible_text_snapshot_with_dimensions(&self) -> Option<(String, u16, u16, u64)> {
         for _ in 0..3 {
             let before = self.content_seq.load(Ordering::Acquire);

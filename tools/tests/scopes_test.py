@@ -1,6 +1,5 @@
 from tools.quality.rust_source import mask_comments_and_literals
 from tools.quality.scopes import (
-    cfg_requires_test,
     is_test_path,
     production_code,
     production_line_count,
@@ -34,7 +33,10 @@ def test_shared_path_scope_near_misses(path):
     ("all()", False), ("any()", True),
 ))
 def test_cfg_implication_handles_balanced_boolean_expressions(expression, expected):
-    assert cfg_requires_test(expression) is expected
+    source = f"#[cfg({expression})]\nfn gated() {{}}\nfn always() {{}}\n"
+    code = production_code(source)
+    assert ("fn gated" not in code) is expected
+    assert "fn always" in code
 
 
 def test_masker_preserves_offsets_literals_lifetimes_and_nested_comments():

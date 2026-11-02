@@ -35,5 +35,5 @@ ready; subsequent built-in modal interactions and shutdown remain intact. No mod
 
 This proves a normal composer whose bottom border contains the model label.
 It does not establish authenticated cards, final completion, long-paste chips,
-or native background wake. The same normal frame must be accepted by both the
-input observer and the dialog exclusion parser. Ownership guards still apply.
+or native background wake. The same normal frame must be accepted by the
+input observer. Ownership guards still apply.

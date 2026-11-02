@@ -29,9 +29,6 @@ ignored by pyte; the provider receives normal terminal query responses.
 Raw output, helper, exporter, provider transcripts and the incident RCA remain
 at `/Users/dylanliu/work/bus/temp/rca-stale-dialog/` and are not included here.
 
-The tests distinguish Codex's unrelated status redraw, which preserves the
-digest, from cursor movement in both providers, which the existing exact-dialog
-contract rejects. They verify hashed-component observation/write diagnostics;
-they do not claim that cursor movement caused the historical unexplained
+The captures do not claim that cursor movement caused the historical unexplained
 rejection. The hashes omit plaintext but are unsalted; they are not a
 confidentiality guarantee.

@@ -263,10 +263,6 @@ impl PaneTerminal {
         self.ghostty.visible_ansi()
     }
 
-    pub(crate) fn visible_ansi_unwrapped(&self) -> String {
-        self.ghostty.visible_ansi_unwrapped()
-    }
-
     pub fn detection_text(&self) -> String {
         self.ghostty.detection_text()
     }

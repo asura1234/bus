@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tools.quality.rust_source import mask_comments_and_literals as mask_comments_and_literals
 from tools.quality.scopes import is_test_path, production_code
 
 
@@ -48,7 +47,7 @@ FORBIDDEN_CALLS = (
 )
 
 
-def source_paths(group: str, root: Path = PROJECT_ROOT) -> tuple[Path, ...]:
+def source_paths(group: str, root: Path) -> tuple[Path, ...]:
     paths = {
         path
         for pattern in SOURCES[group]
@@ -65,7 +64,7 @@ def source_paths(group: str, root: Path = PROJECT_ROOT) -> tuple[Path, ...]:
     return tuple(sorted(paths))
 
 
-def find_violations(paths, rules, root: Path = PROJECT_ROOT) -> list[str]:
+def find_violations(paths, rules, root: Path) -> list[str]:
     violations: list[str] = []
     for path in paths:
         code = production_code(path.read_text(encoding="utf-8"))

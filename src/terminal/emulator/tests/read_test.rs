@@ -331,14 +331,14 @@ fn key_event_utf8_is_independent_of_source_mutation() {
 }
 
 #[test]
-fn unwrapped_ansi_keeps_hard_line_breaks_of_full_width_rows() {
+fn visible_ansi_keeps_hard_line_breaks_of_full_width_rows() {
     let (tx, _rx) = mpsc::channel(4);
     let mut terminal = crate::terminal::vt::Terminal::new(20, 4, 100).unwrap();
     terminal.write(b"  1. Yes, proceed yy\r\n  2. No\x1b[3;1H01234567890123456789\x1b[4;1Hnext");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
     let plain: Vec<String> = pane
-        .visible_ansi_unwrapped()
+        .visible_ansi()
         .lines()
         .map(|line| {
             let mut text = String::new();
