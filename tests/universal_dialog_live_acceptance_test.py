@@ -61,6 +61,26 @@ def menu_rows(observation):
     return rows
 
 
+def owned_bus_followup(text, message, agent, token):
+    """Read-only-sandbox setup can require approval for the agent's own reply CLI."""
+    if "Would you like to run the following command?" not in text:
+        return None
+    commands = re.findall(r"(?m)^[ \t]+\$ ([^\n]+)", text)
+    if not commands:
+        return None
+    try:
+        argv = shlex.split(commands[-1])
+    except ValueError:
+        return None
+    if argv == ["bus", "message", "status", message]:
+        return tuple(argv)
+    if len(argv) == 8 and argv[:2] == ["bus", "send"]:
+        flags = dict(zip(argv[2::2], argv[3::2]))
+        if flags == {"--reply-to": message, "--as": agent, "--text": token}:
+            return tuple(argv)
+    return None
+
+
 def route_proof(traces, actions):
     """Every action must match its own native driver result, including metadata."""
     events, alternate = {}, []
@@ -103,6 +123,24 @@ def route_proof(traces, actions):
 
 
 class RouteProofTests(unittest.TestCase):
+    def test_native_bus_followup_is_for_this_message_and_reply_only(self):
+        policy = globals().get("owned_bus_followup")
+        self.assertTrue(callable(policy), "native settlement needs its own Bus command policy")
+        def screen(command):
+            return ("Would you like to run the following command?\n\n  $ " + command
+                    + "\n\n› 1. Yes, proceed (y)\n  2. No (esc)\nPress enter to confirm or esc to cancel")
+        for command in ["bus message status 9",
+                        "bus send --reply-to 9 --as 5 --text APPROVED_123",
+                        "bus send --text 'APPROVED_123' --as 5 --reply-to 9"]:
+            self.assertTrue(policy(screen(command), "9", "5", "APPROVED_123"), command)
+        for command in ["bus message status 10", "bus message status 9; echo changed",
+                        "bus send --reply-to 10 --as 5 --text APPROVED_123",
+                        "bus send --reply-to 9 --as 6 --text APPROVED_123",
+                        "bus send --reply-to 9 --as 5 --text different",
+                        "bus send --to 5 --as 5 --text APPROVED_123", "echo APPROVED_123"]:
+            self.assertFalse(policy(screen(command), "9", "5", "APPROVED_123"), command)
+        self.assertFalse(policy("historical $ bus message status 9", "9", "5", "APPROVED_123"))
+
     def test_receipts_alone_or_mismatched_native_metadata_cannot_prove_routes(self):
         actions = [{"case": case, "acceptance": True, "method": "agent.press",
                     "request_id": f"request-{index}", "ok": True,
@@ -265,12 +303,23 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
             return str(save(name, control("send", "--room", room, "--to", agent,
                                           "--text", text))["result"]["message_id"])
 
-        def settle(message, name, token):
+        def settle(message, name, token, agent):
+            followups = set()
             def poll():
                 status = save(name, control("message", "status", message)["result"])
                 replies = "\n".join((item.get("reply") or {}).get("text", "")
                                     for item in status.get("requests", []))
-                return status if status.get("complete") and token in replies else None
+                if status.get("complete") and token in replies:
+                    return status
+                if any(item.get("dialog") for item in status.get("requests", [])):
+                    screen = observe(agent, name + "-bus-followup")
+                    command = owned_bus_followup(screen["text"], message, agent, token)
+                    if command and command not in followups:
+                        label = unique_label(screen, lambda value: value in {"Yes", "Yes, proceed (y)"})
+                        blocked(name + "-bus-followup", agent)
+                        followups.add(command)
+                        press(name + "-bus-followup", agent, screen, "--select", label)
+                return None
             return wait(name, poll, int(os.environ.get("BUS_UNIVERSAL_DIALOG_TIMEOUT", "180")))
 
         try:
@@ -409,7 +458,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 press(case, agent, screen, "--select", label, acceptance=True)
                 wait(case + " command executes", lambda: marker.exists())
                 self.assertEqual(marker.read_text(), token + "\n")
-                settle(message, case + "-status", token)
+                settle(message, case + "-status", token, agent)
                 completed.add(case)
 
             agent, case = agents["codex"], "codex-question"
@@ -459,7 +508,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
             self.assertEqual(screen["focus"][1], "Other", "custom field was not reached")
             self.assertNotIn(token, screen["text"], "answer must originate from this typed action")
             press(case, agent, screen, "--text", token, "--submit", acceptance=True)
-            settle(message, case + "-status", token)
+            settle(message, case + "-status", token, agent)
             completed.add(case)
         finally:
             primary = sys.exc_info()[1]
