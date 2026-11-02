@@ -162,3 +162,31 @@ fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
     );
     assert!(state.request(RequestId(100)).is_some());
 }
+
+// Catches aggregating only providers, losing deleted recipients, attributing
+// cross-room requests to the agent's home room, and a drill-down with no IDs.
+#[test]
+fn recipient_room_and_failure_views_preserve_auditable_request_metadata() {
+    let cases = cases();
+    let records = [cases[0].record.clone(), cases[4].record.clone(), cases[15].record.clone()];
+    let mut state = fixture_state(records);
+    state.delete_agent(AgentId(2), 1).unwrap();
+    let report = serde_json::to_value(snapshot(&state, singapore_hour)).unwrap();
+    assert_eq!(report["recipients"]["2"]["name"], "claude [deleted]");
+    assert_eq!(report["recipients"]["2"]["series"]["counts"]["attempts"], 3);
+    assert_eq!(report["rooms"]["1"]["name"], "dashboard");
+    assert_eq!(report["rooms"]["1"]["series"]["counts"]["attempts"], 3);
+    let failures = report["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 3);
+    let lost = failures.iter().find(|f| f["request_id"] == 104).unwrap();
+    assert_eq!(lost["message_id"], 94);
+    assert_eq!(lost["recipient_id"], 2);
+    assert_eq!(lost["provider"], "claude");
+    assert_eq!(lost["room_id"], 1);
+    assert_eq!(lost["sent_at_ms"], 1793577599999_u64);
+    assert_eq!(lost["hour"], "2026-11-02 07:00 UTC+08:00");
+    assert_eq!(lost["stage"], "abandoned");
+    assert_eq!(lost["reason"], "reply_not_captured");
+    assert_eq!(lost["cause"], "bus");
+    assert_eq!(lost["delivery"], "delivered");
+}
