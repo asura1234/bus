@@ -37,3 +37,13 @@ This proves a normal composer whose bottom border contains the model label.
 It does not establish authenticated cards, final completion, long-paste chips,
 or native background wake. The same normal frame must be accepted by the
 input observer. Ownership guards still apply.
+
+## Privacy banner capture
+
+`native-1.0.70-privacy-banner.txt` is the 98-column native screen excerpt
+observed on 2026-11-02 at 13:13:27.537Z, supplied by bus master 2 from its
+retained `agent observe`/`press` results. The composer accepted input via
+`press --text` while this banner remained visible. No grid or key hints
+were retained. The inline buttons are not vertical keyboard-menu rows.
+The lower border carries `Weekly limit left: 1%` before the Grok model;
+neighbor percentages in tests are derived cases, not new native captures.

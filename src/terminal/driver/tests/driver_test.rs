@@ -343,3 +343,6 @@ fn driver_blocker_reads_captured_claude_multiselect() {
 
 #[path = "blocker_test.rs"]
 mod blocker_regressions;
+
+#[path = "selection_test.rs"]
+mod selection_regressions;

@@ -338,6 +338,107 @@ mod tests {
     const NATIVE_1070_WELCOME: &str =
         include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-welcome.txt");
 
+    #[tokio::test]
+    async fn grok_privacy_banner_does_not_block_delivery_obligation() {
+        use crate::agents::{AgentKind, AgentState};
+        const SCREEN: &str = include_str!(
+            "../../../../../tests/fixtures/grok-composer/native-1.0.70-privacy-banner.txt"
+        );
+        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(98, 40);
+        runtime.test_process_pty_bytes(SCREEN.replace('\n', "\r\n").as_bytes());
+        runtime.set_detection_context(
+            AgentKind::Grok,
+            true,
+            None,
+            Some(Box::new(super::super::composer::observer(
+                AgentKind::Grok,
+                String::new(),
+            ))),
+        );
+        assert_eq!(
+            runtime
+                .test_scan_detection_context(AgentKind::Grok, AgentState::Blocked)
+                .await,
+            (AgentState::Idle, false),
+            "captured usable composer must release a pending request"
+        );
+        assert_eq!(observe(SCREEN, "Bus task"), InputObservation::Empty);
+        let draft = SCREEN.replace("│ ❯ ", "│ ❯ developer draft");
+        assert_eq!(observe(&draft, "Bus task"), InputObservation::Unavailable);
+        for controls in [
+            include_str!(
+                "../../../../../tests/fixtures/grok-dialog/native-1.0.70-command-approval.txt"
+            ),
+            include_str!("../../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
+        ] {
+            assert_eq!(
+                observe(&format!("{SCREEN}\n{controls}"), "Bus task"),
+                InputObservation::Unavailable
+            );
+        }
+        assert!(
+            writes.try_recv().is_err(),
+            "classification must enqueue no input"
+        );
+    }
+
+    #[tokio::test]
+    async fn grok_privacy_banner_neighbors_keep_native_permission_and_login_blocked() {
+        use crate::agents::{AgentKind, AgentState};
+        for screen in [
+            include_str!(
+                "../../../../../tests/fixtures/grok-dialog/native-1.0.70-command-approval.txt"
+            ),
+            include_str!("../../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
+        ] {
+            let (runtime, mut writes) =
+                crate::terminal::TerminalRuntime::test_with_channel(180, 64);
+            runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+            runtime.set_detection_context(
+                AgentKind::Grok,
+                true,
+                None,
+                Some(Box::new(super::super::composer::observer(
+                    AgentKind::Grok,
+                    String::new(),
+                ))),
+            );
+            assert_eq!(
+                runtime
+                    .test_scan_detection_context(AgentKind::Grok, AgentState::Idle)
+                    .await,
+                (AgentState::Blocked, true),
+                "{screen}"
+            );
+            assert!(writes.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn grok_privacy_banner_weekly_limit_border_stays_bounded() {
+        let screen = include_str!(
+            "../../../../../tests/fixtures/grok-composer/native-1.0.70-privacy-banner.txt"
+        );
+        for limit in ["0", "2", "100"] {
+            assert_eq!(
+                observe(
+                    &screen.replace("left: 1%", &format!("left: {limit}%")),
+                    "task"
+                ),
+                InputObservation::Empty
+            );
+        }
+        for limit in ["-1", "101", "unknown", "1% · Confirm"] {
+            assert_eq!(
+                observe(
+                    &screen.replace("left: 1%", &format!("left: {limit}%")),
+                    "task"
+                ),
+                InputObservation::Unavailable
+            );
+        }
+    }
+
     #[test]
     fn grok_1070_welcome_composer_accepts_empty_but_preserves_drafts_and_dialogs() {
         assert_eq!(

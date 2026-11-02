@@ -57,6 +57,22 @@ pub(crate) fn composer_border(line: &str) -> bool {
     let Some((rule, label)) = inner.split_once(' ') else {
         return false;
     };
+    // Grok 1.0.70 adds allowance chrome before the same model-labelled border.
+    // It remains the composer while the optional privacy banner is visible.
+    let label = if let Some(weekly) = label.strip_prefix("Weekly limit left: ") {
+        let Some((percent, model)) = weekly.split_once("% · ") else {
+            return false;
+        };
+        if percent.is_empty()
+            || !percent.bytes().all(|ch| ch.is_ascii_digit())
+            || !percent.parse::<u8>().is_ok_and(|value| value <= 100)
+        {
+            return false;
+        }
+        model
+    } else {
+        label
+    };
     let Some(model) = label
         .strip_prefix("Grok ")
         .and_then(|s| s.strip_suffix(" ─"))

@@ -13,17 +13,7 @@ pub(crate) fn selection_step(grid: &Grid, label: &str) -> Result<SelectionStep, 
         return Err("Select needs one complete option label".into());
     }
     let rows = grid.rows_text();
-    let targets: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| option_label(row).0 == label)
-        .map(|(index, _)| index)
-        .collect();
-    let [target] = targets.as_slice() else {
-        return Err(
-            "Option label is missing or ambiguous; read the screen or send explicit keys".into(),
-        );
-    };
+    let target = option_row(&rows, label)?;
     let (focused, _) = selection_focus_for_label(grid, Some(label))?;
     Ok(match target.cmp(&focused) {
         std::cmp::Ordering::Equal => SelectionStep::Confirm,
@@ -95,6 +85,23 @@ impl MenuScope {
     }
 }
 
+fn option_row(rows: &[String], label: &str) -> Result<usize, String> {
+    let mut matches = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| option_label(row).0 == label)
+        .map(|(index, _)| index);
+    let Some(target) = matches.next() else {
+        return Err(
+            "No complete menu row matches this label; read the screen or send explicit keys".into(),
+        );
+    };
+    if matches.next().is_some() {
+        return Err("Option label is ambiguous; read the screen or send explicit keys".into());
+    }
+    Ok(target)
+}
+
 fn menu_scope(grid: &Grid, rows: &[String], label: Option<&str>) -> Result<MenuScope, String> {
     let Some(label) = label else {
         return Ok(MenuScope {
@@ -102,25 +109,15 @@ fn menu_scope(grid: &Grid, rows: &[String], label: Option<&str>) -> Result<MenuS
             option: None,
         });
     };
-    let targets: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, text)| option_label(text).0 == label)
-        .map(|(row, _)| row)
-        .collect();
-    let [target] = targets.as_slice() else {
-        return Err(
-            "Option label is missing or ambiguous; read the screen or send explicit keys".into(),
-        );
-    };
+    let target = option_row(rows, label)?;
     let option =
-        option_layout(grid, *target, &rows[*target]).ok_or("Option layout is unavailable")?;
+        option_layout(grid, target, &rows[target]).ok_or("Option layout is unavailable")?;
     let belongs = |row: usize| {
         rows[row].trim().is_empty()
             || option_layout(grid, row, &rows[row])
                 .is_some_and(|other| option.same_level(other) || other.body >= option.body)
     };
-    let mut start = *target;
+    let mut start = target;
     while start > 0 && belongs(start - 1) {
         start -= 1;
     }
