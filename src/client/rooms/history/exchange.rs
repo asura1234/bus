@@ -113,15 +113,7 @@ impl History {
             }
             self.rebuilt += 1;
             let prompt = exchange.prompt;
-            // HH:MM is constant until this prompt becomes older than one day.
-            // Keep both bounds so moving the wall clock backwards is safe too.
-            if let Some(expires) = prompt.submitted_at_ms.checked_add(86_400_001) {
-                if now >= expires {
-                    age_valid.start = age_valid.start.max(expires);
-                } else {
-                    age_valid.end = age_valid.end.min(expires);
-                }
-            }
+            update_age_validity(&mut age_valid, prompt.submitted_at_ms, now);
             self.push_prompt_lines(
                 &mut lines,
                 &mut active_markdown,
@@ -369,6 +361,18 @@ impl History {
             for line in &mut lines[start..] {
                 line.to_developer = to_developer;
             }
+        }
+    }
+}
+
+fn update_age_validity(valid: &mut std::ops::Range<u64>, submitted_at_ms: u64, now: u64) {
+    // HH:MM is constant until this prompt becomes older than one day.
+    // Keep both bounds so moving the wall clock backwards is safe too.
+    if let Some(expires) = submitted_at_ms.checked_add(86_400_001) {
+        if now >= expires {
+            valid.start = valid.start.max(expires);
+        } else {
+            valid.end = valid.end.min(expires);
         }
     }
 }
