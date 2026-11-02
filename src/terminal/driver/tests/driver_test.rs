@@ -247,3 +247,43 @@ fn driver_does_not_guess_between_conflicting_focus_signals() {
     }
     assert!(selection_step(&grid, "Yes").is_err());
 }
+
+#[tokio::test]
+async fn driver_refuses_changed_or_incomplete_frame_before_enqueue() {
+    use crate::protocol::api::schema::{AgentPressParams, TerminalObservation};
+    for changed in [
+        b"\rDifferent prompt".as_slice(),
+        b"\x1b[?2026hpartial".as_slice(),
+    ] {
+        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 12);
+        runtime.test_process_pty_bytes(b"Original prompt [y/n]");
+        let (grid, content_revision) = observe(&runtime).unwrap();
+        let observation = TerminalObservation {
+            terminal_id: "terminal".into(),
+            pane_id: "pane".into(),
+            content_revision,
+            text: grid.text(),
+            focus: None,
+            focus_occurrence: 0,
+            grid,
+        };
+        runtime.test_process_pty_bytes(changed);
+        let result = press(
+            &runtime,
+            AgentPressParams {
+                target: "pane".into(),
+                expected_terminal_id: None,
+                select: None,
+                text: Some("answer".into()),
+                keys: vec![],
+                submit: false,
+            },
+            observation,
+        );
+        assert!(
+            result.is_err(),
+            "input must be refused when the observed frame changed"
+        );
+        assert!(writes.try_recv().is_err(), "refusal must enqueue no bytes");
+    }
+}
