@@ -318,23 +318,17 @@ fn rollout_0164_recovers_the_actual_four_lost_finals() {
     let dir = rollout_dir("0164-lost-finals");
     let path = dir.join("rollout-recorded.jsonl");
     std::fs::write(&path, FINAL_0164).unwrap();
-    for (turn, expected) in [
-        ("01a19a4c-21df-7ba1-93ea-4e073e8af0e0", concat!(
-            "<oai-mem-citation>\n<citation_entries>\n",
-            "MEMORY.md:276-277|note=[review convergence and reuse of unchanged evidence]\n",
-            "</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>")),
-        ("01a19a5b-fdfc-7682-955d-bb17d87142ff", concat!(
-            "<oai-mem-citation>\n<citation_entries>\n",
-            "MEMORY.md:276-277|note=[closed-world review convergence and bounded evidence claims]\n",
-            "</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>")),
-        ("01a19a71-3f41-7a62-aba0-76c60d69c99c", concat!(
-            "<oai-mem-citation>\n<citation_entries>\n",
-            "MEMORY.md:276-277|note=[carry-forward review bound to unchanged source evidence]\n",
-            "</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>")),
-        ("01a19a73-1b61-7ca1-83c3-106c97f20b45", ""),
+    for turn in [
+        "01a19a4c-21df-7ba1-93ea-4e073e8af0e0",
+        "01a19a5b-fdfc-7682-955d-bb17d87142ff",
+        "01a19a71-3f41-7a62-aba0-76c60d69c99c",
+        "01a19a73-1b61-7ca1-83c3-106c97f20b45",
     ] {
-        assert_eq!(read_codex_turn_end(&path, turn).unwrap(),
-            Some(CodexTurnEnd::Final(expected.into())), "{turn}");
+        assert_eq!(
+            read_codex_turn_end(&path, turn).unwrap(),
+            Some(CodexTurnEnd::Final("".into())),
+            "{turn}"
+        );
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -448,6 +442,49 @@ fn rollout_0164_requires_a_completed_final_for_the_same_turn_before_its_end() {
     assert_eq!(
         read_codex_turn_end(&path, turn).unwrap(),
         Some(CodexTurnEnd::Error("failed (provider_error)".into()))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_0164_matches_the_recorded_stop_reply_without_citation_metadata() {
+    let dir = rollout_dir("0164-hook-parity");
+    let path = dir.join("rollout-recorded.jsonl");
+    std::fs::write(&path, include_str!("fixtures/hook-captured-0.164.0.jsonl")).unwrap();
+    let turn = "01a19a28-e395-7f02-a277-81cd025bb7b9";
+    // The same launch's working Stop settled request 36975 with empty text.
+    let hook = super::super::hooks::parse(&json!({
+        "hook_event_name":"Stop", "session_id":"01a19a28-ce89-7311-8b3f-79b16616ac7f",
+        "turn_id":turn, "transcript_path":path, "last_assistant_message":null
+    }))
+    .unwrap();
+    let crate::agents::providers::spool::Parsed::Final { text, .. } = hook else {
+        panic!("recorded Stop must decode as a final");
+    };
+    assert_eq!(text, "");
+    assert_eq!(
+        read_codex_turn_end(&path, turn).unwrap(),
+        Some(CodexTurnEnd::Final(text))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_0164_does_not_forward_citation_only_response_metadata() {
+    let dir = rollout_dir("0164-response-metadata");
+    let path = dir.join("rollout-recorded.jsonl");
+    let records = include_str!("fixtures/hook-captured-0.164.0.jsonl");
+    let lines: Vec<_> = records
+        .lines()
+        .filter(|line| {
+            let event: Value = serde_json::from_str(line).unwrap();
+            event["payload"]["type"] != "item_completed"
+        })
+        .collect();
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    assert_eq!(
+        read_codex_turn_end(&path, "01a19a28-e395-7f02-a277-81cd025bb7b9").unwrap(),
+        Some(CodexTurnEnd::Final("".into()))
     );
     std::fs::remove_dir_all(dir).unwrap();
 }

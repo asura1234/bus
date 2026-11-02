@@ -101,18 +101,20 @@ pub(crate) fn read_codex_turn_end(
         .as_str()
         .map(str::to_owned)
         .or_else(|| {
-            events[..end]
-                .iter()
-                .rev()
-                .find_map(|event| completed_final_text(event, turn_id))
+            ["event_msg", "response_item"].into_iter().find_map(|kind| {
+                events[..end]
+                    .iter()
+                    .rev()
+                    .filter(|event| event["type"] == kind)
+                    .find_map(|event| completed_final_text(event, turn_id))
+            })
         });
     Ok(answer.map(CodexTurnEnd::Final))
 }
 
 /// Codex 0.164.0 writes final text separately from `task_complete`. The
-/// completed response preserves rendered text (including memory citations),
-/// whereas the preceding AgentMessage can have empty text plus structured
-/// citations. Prefer that newer response when both representations exist.
+/// native AgentMessage carries the answer body with citations kept as metadata.
+/// A rendered response can contain only citation markup for an empty final.
 fn completed_final_text(event: &Value, turn_id: &str) -> Option<String> {
     let payload = &event["payload"];
     let (message, text_type) = if event["type"] == "response_item"
@@ -141,7 +143,18 @@ fn completed_final_text(event: &Value, turn_id: &str) -> Option<String> {
         .filter_map(|part| part["text"].as_str())
         .collect();
     // An explicitly empty text is a final; absent text is not one.
-    (!parts.is_empty()).then(|| parts.concat())
+    if parts.is_empty() {
+        return None;
+    }
+    let text = parts.concat();
+    if event["type"] == "response_item"
+        && text.trim().starts_with("<oai-mem-citation>")
+        && text.trim().ends_with("</oai-mem-citation>")
+    {
+        Some(String::new())
+    } else {
+        Some(text)
+    }
 }
 
 /// Where the prompt of a message Bus typed but never saw start ran, per

@@ -8,3 +8,8 @@ Original one-based source lines: 537, 602, 603, 606, 625, 681, 682, 685, 702, 74
 Reasoning, tool calls and unrelated prompts are omitted. The first three response
 items preserve citation-only finals, distinct from the empty AgentMessage text;
 the fourth final is explicitly empty. Every task_complete has null last_agent_message.
+
+`hook-captured-0.164.0.jsonl` preserves source lines 2, 205, 206 and 209 from
+the same launch. Its working Stop settled request 36975 with empty text
+(`history-before-37106.json`). This control establishes that the native
+AgentMessage Text is the final body; citation markup is separate metadata.
