@@ -259,6 +259,7 @@ struct Fixture {
     state: BusState,
     provider: Provider,
     agent: AgentId,
+    _path: crate::utils::env::PathOverride,
 }
 
 impl Fixture {
@@ -271,6 +272,18 @@ impl Fixture {
         ));
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in ["codex", "claude", "cursor-agent"] {
+            let path = bin.join(name);
+            std::fs::write(&path, "fixture executable").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let path_override = crate::utils::env::PathOverride::set(&bin);
         let binary = std::env::current_exe().unwrap();
         let mut state = BusState::new();
         let room = state.create_room("original room").unwrap();
@@ -325,6 +338,7 @@ impl Fixture {
             state,
             provider,
             agent,
+            _path: path_override,
         };
         fixture.save();
         fixture.write_hooks();
@@ -414,6 +428,17 @@ impl Fixture {
         }
     }
 
+    fn assert_env(&self, actual: &[(String, String)]) {
+        let expected = self.expected_env();
+        let actual_map: std::collections::BTreeMap<_, _> = actual.iter().cloned().collect();
+        assert_eq!(
+            actual_map.len(),
+            actual.len(),
+            "capture environment must contain no duplicate keys"
+        );
+        assert_eq!(actual_map, expected.into_iter().collect());
+    }
+
     /// Callback capture env for the saved launch.
     fn expected_env(&self) -> Vec<(String, String)> {
         let mut env: Vec<_> = [
@@ -428,6 +453,14 @@ impl Fixture {
         ]
         .map(|(key, value)| (key.to_owned(), value))
         .into();
+        #[cfg(unix)]
+        if self.provider == Provider::Codex {
+            let bin = self.root.join("bin").to_string_lossy().into_owned();
+            env.extend([
+                ("BUS_CODEX_NATIVE".into(), "1".into()),
+                ("PATH".into(), format!("{bin}:{bin}")),
+            ]);
+        }
         env.extend(crate::agents::providers::launch::runtime_env(self.provider));
         #[cfg(unix)]
         if identity::provider_kind(self.provider) == crate::agents::providers::ProviderKind::Codex {
@@ -681,7 +714,7 @@ fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
         crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
-    assert_eq!(extras.env, fixture.expected_env());
+    fixture.assert_env(&extras.env);
     let argv: Vec<_> = fixture.plan.argv.iter().chain(extras.args.iter()).collect();
     assert_eq!(
         argv.iter()
@@ -738,7 +771,7 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
         let fixture = Fixture::new(provider);
         let original = fixture.plan.clone();
         let extras = fixture.load().unwrap();
-        assert_eq!(extras.env, fixture.expected_env());
+        fixture.assert_env(&extras.env);
         assert_eq!(
             extras.args,
             match provider {
@@ -836,7 +869,7 @@ fn bus_resume_follows_the_conversation_bus_bound_when_the_terminal_kept_another(
     fixture.state = serde_json::from_value(value).unwrap();
     fixture.save();
     let extras = fixture.load().unwrap();
-    assert_eq!(extras.env, fixture.expected_env());
+    fixture.assert_env(&extras.env);
     let session = extras.session.unwrap();
     assert_eq!(session.session_ref.value, "new-chat");
     assert_eq!(session.agent, "cursor");
@@ -876,7 +909,7 @@ fn bus_resume_takes_back_hooks_another_bus_executable_rewrote() {
         let extras = fixture
             .load()
             .unwrap_or_else(|error| panic!("{provider:?}: {error}"));
-        assert_eq!(extras.env, fixture.expected_env());
+        fixture.assert_env(&extras.env);
         let after = std::fs::read_to_string(fixture.hook_path()).unwrap();
         assert!(!after.contains("throwaway"), "{after}");
         let expected = if provider == Provider::Codex {
@@ -908,7 +941,7 @@ fn bus_resume_preserves_unconfirmed_delivery_gate_without_blocking_native_setup(
     value["agents"][fixture.agent.0.to_string()]["hook_setup_confirmed"] = json!(false);
     fixture.state = serde_json::from_value(value).unwrap();
     fixture.save();
-    assert_eq!(fixture.load().unwrap().env, fixture.expected_env());
+    fixture.assert_env(&fixture.load().unwrap().env);
     let saved = JsonStore::new(fixture.root.join("state.json"))
         .load()
         .unwrap()
@@ -1430,7 +1463,7 @@ fn startup_timeout_sessionless_capture_retains_provider_ownership() {
             crate::messaging::coordinator::resume::unstarted_plan(&fixture.facts, None).unwrap();
         fixture.save();
         let extras = fixture.load().unwrap();
-        assert_eq!(extras.env, fixture.expected_env());
+        fixture.assert_env(&extras.env);
         assert!(extras.session.is_none());
         // A copied name alone cannot change the saved provider owner.
         fixture.facts.managed_agent = Some(

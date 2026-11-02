@@ -710,7 +710,13 @@ impl Worker {
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
         self.mark_live_dispatch(request, DispatchMark::Diagnostics);
         let started = std::time::Instant::now();
-        let method = submission_method(agent, text, terminal, pane, true, self.serving_generation);
+        let mut method = submission_method(agent, text, terminal, pane, true, self.serving_generation);
+        if let Method::AgentPromptIfIdleAtGeneration(params) = &mut method {
+            params.expected_turn_id = self
+                .state
+                .request(lead)
+                .and_then(|request| request.provider_turn_id.clone());
+        }
         self.mark_live_dispatch(request, DispatchMark::Method);
         let response = self.transport.request(method);
         self.note_native_requested(request, io::now_ms());

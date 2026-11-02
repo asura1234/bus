@@ -363,7 +363,20 @@ impl Worker {
                         .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
                             target: pane,
                             keys: vec![key.into()],
-                            native_interrupt: None,
+                            native_interrupt: (agent.provider == Provider::Codex)
+                                .then(|| {
+                                    Some(schema::NativeInterruptIdentity {
+                                        expected_terminal_id: agent
+                                            .runtime_identity
+                                            .terminal_id
+                                            .clone()?,
+                                        expected_session_id: agent
+                                            .runtime_identity
+                                            .session_id
+                                            .clone()?,
+                                    })
+                                })
+                                .flatten(),
                         }));
                 match sent {
                     Err(error) if error.definitely_rejected => {
