@@ -3,7 +3,7 @@ use super::*;
 // The callback spool gets a bounded grace period after the first settled poll.
 const CALLBACK_GRACE_MS: u64 = crate::messaging::model::TURN_SETTLE_MS;
 
-fn restart(fixture: &mut Fixture) {
+fn reload(fixture: &mut Fixture) {
     let placeholder = Worker::open(
         fixture.dir.join("restart-placeholder"),
         Box::new(Native(fixture.native.clone())),
@@ -15,6 +15,12 @@ fn restart(fixture: &mut Fixture) {
         Box::new(Native(fixture.native.clone())),
     )
     .unwrap();
+}
+
+fn restart(fixture: &mut Fixture) {
+    reload(fixture);
+    let agent = fixture.worker.state.agent(fixture.agent).unwrap().clone();
+    fixture.worker.note_restored_request(&agent);
 }
 
 fn server_restart(fixture: &mut Fixture) {
@@ -95,6 +101,26 @@ fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_ev
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn restart_request_plain_coordinator_reopen_keeps_a_live_turn() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(
+        &mut fixture,
+        "continue after a plain coordinator reopen",
+        "turn-1",
+    );
+    reload(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.stopped("turn-1", "completed after the coordinator reopened");
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("completed after the coordinator reopened")
+    );
 }
 
 #[cfg(unix)]

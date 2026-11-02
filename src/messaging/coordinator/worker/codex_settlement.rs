@@ -1,5 +1,21 @@
 //! Read Codex terminal evidence before settling a request.
-use std::path::Path;
+use crate::messaging::model::{AgentId, BusState};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
+pub(super) fn saved_rollouts(state: &BusState) -> BTreeMap<AgentId, PathBuf> {
+    state
+        .agents()
+        .filter_map(|agent| {
+            agent
+                .codex_rollout
+                .clone()
+                .map(|rollout| (agent.id, rollout))
+        })
+        .collect()
+}
 
 /// How Codex recorded the end of `request`'s turn in its rollout: the bound
 /// turn, or else the one turn that ran the typed prompt after it was sent.

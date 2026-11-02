@@ -50,6 +50,7 @@ impl Worker {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
                 {
+                    self.note_restored_request(agent);
                     rebound.push(rebind_agent(&mut state, agent, info)?);
                 }
             }
@@ -140,6 +141,15 @@ impl Worker {
         // Do not sleep inside the transport or replay any mutating request.
         // The coordinator can still accept commands between failed polls.
         Duration::from_millis(500 << self.poll_failures.saturating_sub(1).min(2))
+    }
+
+    pub(in crate::messaging::coordinator) fn note_restored_request(&mut self, agent: &RoomAgent) {
+        let Some(request) = self.resume_requests.get(&agent.id).copied() else {
+            return;
+        };
+        if agent.current_request == Some(request) {
+            self.restart_requests.insert(agent.id, request);
+        }
     }
 
     fn observe_native_unavailable(&mut self) -> Result<(), String> {

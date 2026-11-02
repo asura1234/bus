@@ -17,7 +17,7 @@ mod history;
 mod kimi_settlement;
 mod restart_notice;
 mod restored_prompt;
-use codex_settlement::recorded_codex_end;
+use codex_settlement::{recorded_codex_end, saved_rollouts};
 use control_reads::interrupts_delivery;
 use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 
@@ -33,6 +33,8 @@ pub(super) struct Worker {
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
     /// Current requests loaded when this coordinator process opened.
+    pub(super) resume_requests: BTreeMap<AgentId, RequestId>,
+    /// Requests interrupted by native resume or a recorded restart.
     pub(super) restart_requests: BTreeMap<AgentId, RequestId>,
     /// The restart outcome whose requests were captured by a surviving coordinator.
     pub(super) restart_outcome_at: Option<u64>,
@@ -130,19 +132,11 @@ impl Worker {
             .expire_stalled_queued_requests(io::now_ms())
             .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
-        let restart_requests = state
+        let resume_requests = state
             .agents()
             .filter_map(|agent| agent.current_request.map(|request| (agent.id, request)))
             .collect();
-        let codex_rollouts = state
-            .agents()
-            .filter_map(|agent| {
-                agent
-                    .codex_rollout
-                    .clone()
-                    .map(|rollout| (agent.id, rollout))
-            })
-            .collect();
+        let codex_rollouts = saved_rollouts(&state);
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
             super::recovery::check_saved_project_hooks(&mut state, id)?;
@@ -165,7 +159,8 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
-            restart_requests,
+            resume_requests,
+            restart_requests: BTreeMap::new(),
             restart_outcome_at: None,
             state,
             store,
