@@ -58,6 +58,52 @@ fn interrupt_presses_each_providers_stop_key_once_and_records_who_interrupted_wh
     }
 }
 
+/// The reported Kimi failure: its empty composer was classified Idle while a
+/// bound foreground command was still running. Idle must not suppress the stop
+/// key or make a room interrupt omit an agent whose native turn is still open.
+#[test]
+fn an_idle_observation_cannot_skip_interrupting_a_bound_open_turn() {
+    for (provider, key) in [
+        (Provider::ClaudeCode, "esc"),
+        (Provider::Codex, "esc"),
+        (Provider::Cursor, "ctrl+c"),
+        (Provider::Grok, "ctrl+c"),
+        #[cfg(unix)]
+        (Provider::Kimi, "esc"),
+    ] {
+        for room in [false, true] {
+            let mut f = Fixture::new(provider);
+            #[cfg(unix)]
+            if provider == Provider::Kimi {
+                super::kimi_steering_tests::home(&f);
+            }
+            let lead = running(&mut f, "run sleep 120 in the foreground", "1");
+            f.status(RuntimeStatus::Idle);
+            assert!(f.request(lead).trusted_start_bound);
+            assert_eq!(f.request(lead).phase, RequestPhase::Active);
+            let params = if room {
+                json!({"room": f.room.0.to_string()})
+            } else {
+                json!({"agent": "builder"})
+            };
+            let response = interrupt(&mut f, params);
+            assert!(response.ok, "{provider:?}: {response:?}");
+            assert_eq!(
+                response.result["agents"],
+                json!([{"agent_id":f.agent,"name":"builder","outcome":"interrupting","key":key}]),
+                "{provider:?}, room={room}"
+            );
+            assert_eq!(keys(&f), [("pane".to_owned(), vec![key.to_owned()])]);
+            assert!(!f.request(lead).settled(), "a key write is not a stop");
+            f.status(RuntimeStatus::Idle);
+            assert_eq!(
+                f.request(lead).failure_reason.as_deref(),
+                Some("interrupted")
+            );
+        }
+    }
+}
+
 #[test]
 fn an_orchestrator_interrupt_is_recorded_as_written_by_it() {
     let mut fixture = Fixture::new(Provider::Codex);
@@ -209,11 +255,16 @@ fn interrupting_an_idle_agent_types_nothing_and_closes_what_it_still_holds() {
             .interrupt_pending
     );
 
-    // A turn the provider already ended but Bus still holds (settling, or
-    // waiting on background shells) closes as interrupted, with no key.
+    // A native Stop can end foreground work while Bus holds the request for
+    // background agents. This positive end evidence needs no stop key.
     let lead = running(&mut fixture, "write the parser", "turn-1");
+    fixture.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"turn-1",
+        "last_assistant_message":"","session_crons":[],
+        "background_tasks":[{"id":"b1","type":"agent","status":"running","description":"Analyze the parser"}]}));
+    fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    assert!(fixture.request(lead).awaiting_background);
     let response = interrupt(&mut fixture, json!({"agent": "builder"}));
     assert_eq!(response.result["agents"][0]["outcome"], "already_idle");
     assert!(keys(&fixture).is_empty());
@@ -306,13 +357,14 @@ fn room_history_shows_the_interrupt_with_its_author_and_time() {
 }
 
 #[test]
-fn closing_an_idle_agents_held_turn_as_interrupted_records_the_interrupt_in_history() {
+fn interrupting_a_bound_turn_with_an_idle_screen_records_the_interrupt_in_history() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "write the parser", "turn-1");
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
     let response = interrupt(&mut fixture, json!({"agent": "builder"}));
-    assert_eq!(response.result["agents"][0]["outcome"], "already_idle");
+    assert_eq!(response.result["agents"][0]["outcome"], "interrupting");
+    fixture.status(RuntimeStatus::Idle);
     assert_eq!(
         fixture.request(lead).failure_reason.as_deref(),
         Some("interrupted")
@@ -366,6 +418,7 @@ fn interrupting_with_another_conversation_room_records_the_notice_where_the_turn
     fixture.status(RuntimeStatus::Idle);
     let response = interrupt(&mut fixture, json!({"agent": "builder", "room": "side"}));
     assert!(response.ok, "{response:?}");
+    fixture.status(RuntimeStatus::Idle);
     assert_eq!(
         fixture.request(lead).failure_reason.as_deref(),
         Some("interrupted")

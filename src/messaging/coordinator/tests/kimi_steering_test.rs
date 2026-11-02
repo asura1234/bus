@@ -1,7 +1,7 @@
 use super::*;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
-fn home(fixture: &Fixture) -> PathBuf {
+pub(super) fn home(fixture: &Fixture) -> PathBuf {
     let spool = fixture.dir.join("callbacks/launch");
     let home = spool.join("kimi-home");
     let source = fixture.dir.join("synthetic-auth");
