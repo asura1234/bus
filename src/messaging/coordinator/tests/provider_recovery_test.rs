@@ -19,7 +19,7 @@ impl Transport for MissingNative {
 }
 
 #[test]
-fn missing_binary_blocks_the_room_once_and_retains_queued_work() {
+fn missing_binary_retains_queued_work_without_a_chat_error() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "recoverable task");
     let mut state = worker.state.clone();
@@ -59,8 +59,8 @@ fn missing_binary_blocks_the_room_once_and_retains_queued_work() {
         .collect();
     assert_eq!(
         notices.len(),
-        1,
-        "one room notice must replace per-agent failures"
+        0,
+        "provider diagnostics belong only in the client log"
     );
     assert!(worker.state.agent(agent).is_some());
     assert!(worker.state.agent(second).is_some());
@@ -174,7 +174,7 @@ fn room_resume_preserves_the_session_queue_and_capture_and_refuses_an_unsafe_clo
 }
 
 #[test]
-fn room_outage_survives_restart_with_one_notice_and_resolves_when_provider_recovers() {
+fn room_outage_survives_restart_without_chat_errors_and_resolves_when_provider_recovers() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut state = worker.state.clone();
     state.report_missing_binary(room, "codex", 100).unwrap();
@@ -189,7 +189,7 @@ fn room_outage_survives_restart_with_one_notice_and_resolves_when_provider_recov
             .notices(room)
             .filter(|p| p.text.starts_with("BLOCKED"))
             .count(),
-        1
+        0
     );
     assert_eq!(
         state.agent(agent).unwrap().missing_binary.as_deref(),
@@ -233,7 +233,7 @@ fn room_outage_survives_restart_with_one_notice_and_resolves_when_provider_recov
             .notices(room)
             .filter(|p| p.text.starts_with("BLOCKED"))
             .count(),
-        1
+        0
     );
     drop(recovered);
     std::fs::remove_dir_all(dir).unwrap();

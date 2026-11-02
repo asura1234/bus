@@ -141,7 +141,7 @@ fn blocked_dialog_falls_back_on_its_own_deadline_when_orchestrator_is_blocked() 
         .unwrap()
         .notices;
     assert_eq!(notices.len(), 1);
-    assert!(notices[0]
+    assert!(!notices[0]
         .text
         .contains("The orchestrator did not receive this"));
     f.expire_after_reconciliation(f.now + 60_000);
@@ -223,8 +223,8 @@ fn an_uncertain_dialog_write_escalates_without_replaying_or_closing_its_active_g
         .unwrap()
         .notices[0]
         .text;
-    assert!(attention.contains("Delivery to the orchestrator is unconfirmed"));
-    assert!(attention.contains("it may already have received this"));
+    assert!(!attention.contains("Delivery to the orchestrator is unconfirmed"));
+    assert!(!attention.contains("it may already have received this"));
     assert!(!attention.contains("The orchestrator did not receive this"));
     assert_eq!(f.worker.state.queued_requests(f.agent), &[head]);
     f.deliver();

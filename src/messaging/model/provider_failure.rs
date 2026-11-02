@@ -13,16 +13,14 @@ impl BusState {
         &mut self,
         room: RoomId,
         binary: &str,
-        now: u64,
+        _now: u64,
     ) -> Result<String, ModelError> {
         let text = Self::missing_binary_message(room, binary);
         let record = self
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
-        if record.missing_provider_binaries.insert(binary.into()) {
-            self.post_bus_notice(room, None, text.clone(), now)?;
-        }
+        record.missing_provider_binaries.insert(binary.into());
         Ok(text)
     }
 

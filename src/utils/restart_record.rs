@@ -130,32 +130,13 @@ pub(crate) fn who_label(agent: Option<&str>, user: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn notice_text(record: &RestartLog) -> String {
-    match record.outcome.as_str() {
-        "restarted" => {
-            let notice = format!(
-                "Restarted {} -> {} (by {}).",
-                record.old_sha, record.new_sha, record.who
-            );
-            if record.reason.is_empty() {
-                notice
-            } else {
-                format!("{notice} {}", record.reason)
-            }
-        }
-        "rolled_back" => format!(
-            "Bus restart rolled back to {}. {} did not become healthy: {}.",
-            record.old_sha, record.new_sha, record.reason
-        ),
-        "refused" => format!(
-            "Bus restart was refused before any stop. The server is still running unchanged and still serving {}. {} was not started: {}.",
-            record.old_sha, record.new_binary, record.reason
-        ),
-        _ => format!(
-            "Bus restart failed and the session is not serving {}. {} did not become healthy: {}.",
-            record.old_sha, record.new_sha, record.reason
-        ),
-    }
+pub(crate) fn notice_text(record: &RestartLog) -> Option<String> {
+    (record.outcome == "restarted").then(|| {
+        format!(
+            "Restarted {} -> {} (by {}).",
+            record.old_sha, record.new_sha, record.who
+        )
+    })
 }
 
 fn shell_quote(value: &str) -> String {
@@ -490,8 +471,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notice_text_names_the_outcome() {
-        let restarted = RestartLog {
+    fn notice_text_contains_only_successful_restart_metadata() {
+        let record = RestartLog {
             at_ms: 1,
             who: "agent:9 user:ada".into(),
             old_sha: "a".repeat(40),
@@ -499,64 +480,28 @@ mod tests {
             old_binary: "/old".into(),
             new_binary: "/new".into(),
             outcome: "restarted".into(),
-            reason: String::new(),
+            reason: "PRIVATE_RESTART_DIAGNOSTIC".into(),
         };
         assert_eq!(
-            notice_text(&restarted),
-            format!(
+            notice_text(&record),
+            Some(format!(
                 "Restarted {} -> {} (by agent:9 user:ada).",
                 "a".repeat(40),
                 "b".repeat(40)
-            )
+            ))
         );
-        let rolled = RestartLog {
-            outcome: "rolled_back".into(),
-            reason: "socket timeout".into(),
-            ..restarted
-        };
-        assert_eq!(
-            notice_text(&rolled),
-            format!(
-                "Bus restart rolled back to {}. {} did not become healthy: socket timeout.",
-                "a".repeat(40),
-                "b".repeat(40)
-            )
-        );
-        let failed = RestartLog {
-            outcome: "rollback_failed".into(),
-            reason: "server exited".into(),
-            ..rolled
-        };
-        let failed_notice = notice_text(&failed);
-        assert!(!failed_notice.contains("rolled back"), "{failed_notice}");
-        assert!(failed_notice.contains("not serving"));
-        let refused = RestartLog {
-            outcome: "refused".into(),
-            ..failed
-        };
-        let refused_notice = notice_text(&refused);
-        assert!(
-            refused_notice.contains("refused before any stop"),
-            "{refused_notice}"
-        );
-        assert!(
-            refused_notice.contains("still running unchanged"),
-            "{refused_notice}"
-        );
-        let old_sha = "a".repeat(40);
-        assert!(
-            refused_notice.contains(&format!("still serving {old_sha}")),
-            "{refused_notice}"
-        );
-        assert!(
-            refused_notice.contains("/new was not started"),
-            "{refused_notice}"
-        );
-        assert!(
-            !refused_notice.contains(&"b".repeat(40)),
-            "{refused_notice}"
-        );
-        assert!(!refused_notice.contains("not serving"), "{refused_notice}");
+        for outcome in [
+            "rolled_back",
+            "refused",
+            "rollback_failed",
+            "client_attach_failed",
+        ] {
+            assert!(notice_text(&RestartLog {
+                outcome: outcome.into(),
+                ..record.clone()
+            })
+            .is_none());
+        }
     }
 
     #[test]

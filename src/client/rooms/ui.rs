@@ -9,7 +9,7 @@ use super::{
 use crate::messaging::model::{BusState, Provider};
 use crate::messaging::{
     coordinator::{BusCommand, BusEvent, BusHandle, BusSnapshot},
-    model::{AgentId, RoomId, RoomKind, RuntimeStatus},
+    model::{AgentId, RequestId, RoomId, RoomKind, RuntimeStatus},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -69,6 +69,7 @@ pub(in crate::client) struct BusUi {
     /// Agent errors last written to the client log, so each is logged once.
     pub(super) observed_agent_notices: BTreeMap<AgentId, super::notices::AgentNotices>,
     pub(super) observed_snapshot_error: Option<String>,
+    pub(super) observed_request_notices: BTreeMap<RequestId, super::notices::RequestNotices>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
@@ -172,6 +173,9 @@ impl BusUi {
             .map(|r| (r.id, LocalRoom::from(r)))
             .collect();
         let seed_first_room = snapshot.state.is_pristine();
+        // Existing outcomes were observed before this client attached. Only a new
+        // request or a changed cause should create another diagnostic event.
+        let observed_request_notices = super::notices::RequestNotices::seed(&snapshot.state);
         let mut ui = Self {
             handle: None,
             clipboard_image_reader,
@@ -187,6 +191,7 @@ impl BusUi {
             error: None,
             observed_agent_notices: BTreeMap::new(),
             observed_snapshot_error: None,
+            observed_request_notices,
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -558,6 +563,7 @@ impl BusUi {
         }
         self.reconcile_deleted_targets(&previous.state);
         self.sync_agent_notices();
+        self.sync_request_notices();
     }
 
     pub fn settle(&mut self) {

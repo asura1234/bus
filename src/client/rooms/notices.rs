@@ -1,7 +1,7 @@
 use super::{BusUi, Pending};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, RoomId},
+    model::{AgentId, BusState, Request, RequestId, RoomId},
 };
 use std::collections::BTreeMap;
 
@@ -10,9 +10,85 @@ pub(super) struct AgentNotices {
     directory_error: Option<String>,
     orchestration_unavailable: bool,
     orchestration_target: Option<RoomId>,
+    exit_error: Option<String>,
+}
+
+#[derive(Eq, PartialEq)]
+pub(super) struct RequestNotices {
+    reason: Option<String>,
+    detail: Option<String>,
+}
+
+impl RequestNotices {
+    fn from_request(request: &Request) -> Option<Self> {
+        (request.failure_reason.is_some() || request.submission_error.is_some()).then(|| Self {
+            reason: request.failure_reason.clone(),
+            detail: request.submission_error.clone(),
+        })
+    }
+
+    pub(super) fn seed(state: &BusState) -> BTreeMap<RequestId, Self> {
+        state
+            .requests()
+            .filter_map(|request| Self::from_request(request).map(|notice| (request.id, notice)))
+            .collect()
+    }
+
+    fn deliberate(&self) -> bool {
+        matches!(
+            self.reason.as_deref(),
+            Some(
+                "interrupted"
+                    | "agent_deleted"
+                    | "room_deleted"
+                    | "github_watch_retired"
+                    | "room_digest_retired"
+                    | "messaging_onboarding_retired"
+                    | "operational_notice_retired"
+                    | "background_wait_superseded"
+            )
+        )
+    }
 }
 
 impl BusUi {
+    /// Durable request diagnostics must not borrow the agent's latest error:
+    /// an intervening failure or an archived request still owns its cause.
+    pub(super) fn sync_request_notices(&mut self) {
+        let mut observed = BTreeMap::new();
+        for request in self.snapshot.state.requests() {
+            let Some(current) = RequestNotices::from_request(request) else {
+                continue;
+            };
+            if self.observed_request_notices.get(&request.id) != Some(&current) {
+                let _report = crate::utils::error_pipe::suppress(request.is_error_report());
+                if current.deliberate() {
+                    tracing::info!(
+                        event = "bus.request.closed",
+                        request_id = request.id.0,
+                        message_id = request.prompt.id.0,
+                        agent_id = request.agent_id.0,
+                        room_id = request.room_id.0,
+                        reason = current.reason.as_deref().unwrap_or(""),
+                        detail = current.detail.as_deref().unwrap_or(""),
+                    );
+                } else {
+                    tracing::warn!(
+                        event = "bus.request.failed",
+                        request_id = request.id.0,
+                        message_id = request.prompt.id.0,
+                        agent_id = request.agent_id.0,
+                        room_id = request.room_id.0,
+                        reason = current.reason.as_deref().unwrap_or(""),
+                        detail = current.detail.as_deref().unwrap_or(""),
+                    );
+                }
+            }
+            observed.insert(request.id, current);
+        }
+        self.observed_request_notices = observed;
+    }
+
     pub(super) fn record_command_failure(
         &mut self,
         pending: &Pending,
@@ -58,6 +134,10 @@ impl BusUi {
                 orchestration_target: agent
                     .orchestrates
                     .or(agent.unavailable_orchestration_target),
+                exit_error: agent
+                    .exit_snapshot
+                    .as_ref()
+                    .and_then(|exit| exit.error.clone()),
             };
             let previous = self.observed_agent_notices.get(&agent.id);
             if current.error != current.directory_error
@@ -69,6 +149,22 @@ impl BusUi {
                         agent_id = agent.id.0,
                         agent = %agent.name,
                         room_id = agent.room_id.0,
+                        %error,
+                    );
+                }
+            }
+            if previous.is_none_or(|previous| previous.exit_error != current.exit_error) {
+                if let Some(error) = &current.exit_error {
+                    let exit = agent
+                        .exit_snapshot
+                        .as_ref()
+                        .expect("exit error has a snapshot");
+                    tracing::warn!(
+                        event = "bus.agent.exit_snapshot_failed",
+                        agent_id = agent.id.0,
+                        room_id = agent.room_id.0,
+                        launch_id = exit.launch_id.as_deref().unwrap_or(""),
+                        terminal_id = %exit.terminal_id,
                         %error,
                     );
                 }

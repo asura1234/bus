@@ -787,7 +787,19 @@ fn fresh_eyes_pending_reply_not_captured_is_withdrawn_by_restart() {
     );
     state.route_worker_replies(now, &BTreeSet::new()).unwrap();
     assert!(state
-        .announce_restart("Restarted old -> new (by agent:9).", now)
+        .announce_restart(
+            &crate::utils::restart_record::RestartLog {
+                at_ms: now,
+                who: "agent:9".into(),
+                old_sha: "old".into(),
+                new_sha: "new".into(),
+                old_binary: "/old".into(),
+                new_binary: "/new".into(),
+                outcome: "restarted".into(),
+                reason: String::new()
+            },
+            now
+        )
         .unwrap());
     f.worker.save(state).unwrap();
     let mut state = f.worker.state.clone();

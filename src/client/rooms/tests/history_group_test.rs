@@ -574,3 +574,74 @@ fn audit_history_renders_deleted_sender_recipient_and_reply_by_name() {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
 }
+
+#[test]
+fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let room = state.create_room("work").unwrap();
+    let orch = state
+        .create_agent(
+            master,
+            "orch",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orch, room).unwrap();
+    let worker = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    let lead = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "AUTHORED_QUESTION".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Developer,
+            1_000,
+        )
+        .unwrap()[0];
+    let hidden = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "HIDDEN_ROUTING_ENVELOPE".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(worker),
+            1_001,
+            false,
+        )
+        .unwrap()[0];
+    assert!(state.coalesce_queue(lead).is_some());
+    for id in [lead, hidden] {
+        state.finish_for_test(id, "SHARED_AUTHORED_ANSWER", 2_000);
+    }
+    let render = |state: &BusState| {
+        History::default()
+            .lines(
+                state,
+                state.room(room).unwrap(),
+                100,
+                1,
+                3_000,
+                &mut Thumbnails::default(),
+            )
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = render(&state);
+    assert!(text.contains("AUTHORED_QUESTION"), "{text}");
+    assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
+    assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
+    assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+    let text = render(&state);
+    assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
+}
