@@ -137,7 +137,7 @@ async fn startup_controls_between_initial_observation_and_paste_receive_no_messa
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|screen: &str| {
-            if crate::agents::dialog::parse(screen).is_some() {
+            if crate::terminal::driver::has_input_controls(screen) {
                 InputObservation::Unavailable
             } else {
                 InputObservation::Empty

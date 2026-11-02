@@ -2,7 +2,6 @@
 mod compression;
 mod detection_process;
 mod detection_task;
-mod dialog;
 mod draft_input;
 mod io;
 mod read;
@@ -84,7 +83,6 @@ use detection_process::PROCESS_RECHECK_IDENTIFIED;
 use detection_process::PROCESS_RECHECK_MISSING_FOREGROUND_GROUP;
 #[cfg(test)]
 use detection_task::publish_state_changed_event;
-pub(crate) use dialog::DialogChoice;
 #[cfg(all(test, unix))]
 use portable_pty::native_pty_system;
 #[cfg(test)]
@@ -163,8 +161,6 @@ pub struct TerminalRuntime {
     draft_input: draft_input::SharedDraftInput,
     /// Semantic navigation state is owned exclusively by the terminal driver.
     driver_state: crate::terminal::driver::DriverState,
-    #[cfg(test)]
-    dialog_wait_test: Mutex<tests::DialogWaitTest>,
     detection_content_seq: Arc<AtomicU64>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,

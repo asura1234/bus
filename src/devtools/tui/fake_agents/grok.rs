@@ -721,19 +721,6 @@ mod scenario_tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn grok_fake_cards_match_joined_dialog_contract() {
-        let root = Scratch::new();
-        for prompt in ["fake:card", "fake:question", "fake:free-text"] {
-            let mut g = agent(root.path());
-            g.submit(prompt, Instant::now()).unwrap();
-            let screen = g.screen();
-            let dialog = crate::agents::dialog::parse(&screen)
-                .expect("fake must use the supported synthetic contract");
-            assert!(!dialog.options.is_empty() || dialog.input.is_some());
-        }
-    }
-
-    #[test]
     fn grok_question_shortcut_selects_and_finishes_the_card() {
         let root = Scratch::new();
         let mut g = agent(root.path());

@@ -68,7 +68,6 @@ fn codex_background_activity_with_a_collapsed_question_remains_working() {
         assert_eq!(result.state, AgentState::Working, "{screen}");
         assert!(result.visible_working, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
-        assert!(crate::agents::dialog::parse(&screen).is_none(), "{screen}");
     }
 }
 
