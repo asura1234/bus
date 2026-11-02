@@ -268,6 +268,10 @@ impl Worker {
             Ok(ResponseResult::AgentStarted { .. }) => {}
             other => return self.record_failed_agent_start(agent.id, args, other),
         }
+        self.finish_resume_start(agent, root_pane.pane_id)
+    }
+
+    fn finish_resume_start(&mut self, agent: &RoomAgent, pane_id: String) -> Result<(), String> {
         // The new launch now owns diagnosis. Keeping the previous missing
         // marker would suppress both startup settlement and a second outage.
         let mut state = self.state.clone();
@@ -281,7 +285,7 @@ impl Worker {
         self.report_adopted_session(
             agent.id,
             agent.provider,
-            root_pane.pane_id,
+            pane_id,
             agent
                 .runtime_identity
                 .session_id
