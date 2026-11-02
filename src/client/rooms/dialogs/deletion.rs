@@ -184,6 +184,7 @@ impl BusUi {
 pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
     match command {
         BusCommand::RenameRoom(id, _)
+        | BusCommand::SetRoomHistoryFilters(id, _)
         | BusCommand::SelectRoom(id)
         | BusCommand::MarkRoomSeen(id)
         | BusCommand::SetDraftText(id, _)

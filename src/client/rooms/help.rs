@@ -20,11 +20,10 @@ Option+Y       After Ctrl+Y, cycle earlier deletions
 Esc Esc        Clear the draft and save it so Up brings it back
 Ctrl+R         Search prompt history
 Ctrl+F         Find in chat history, newest first; Up older, Down newer, Esc closes
-               In text: Enter older, Shift+Enter newer
-Tab in Find    Tab/Shift+Tab focus text, * → You, You → *
-               Enter/Space or click toggles a filter; click text to focus it
-               * → You finds addressed messages; You → * finds your sent messages
-               Both filters include either direction; empty text steps messages
+               Enter older, Shift+Enter newer
+Alt+I          Toggle * → You: only messages addressed to you
+Alt+O          Toggle You → *: only messages you sent
+               Both checked include either direction; Find narrows the filtered history
 Ctrl+S         Stash the current prompt; empty composer restores it
 Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image

@@ -6,29 +6,9 @@ use super::BusUi;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::ops::Range;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SearchFocus {
-    Query,
-    ToYou,
-    FromYou,
-}
-
-impl SearchFocus {
-    fn advance(self, backwards: bool) -> Self {
-        match (self, backwards) {
-            (Self::Query, false) | (Self::FromYou, true) => Self::ToYou,
-            (Self::ToYou, false) | (Self::Query, true) => Self::FromYou,
-            (Self::FromYou, false) | (Self::ToYou, true) => Self::Query,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct ChatSearch {
     pub query: String,
-    pub you_only: bool,
-    pub from_you: bool,
-    pub focus: SearchFocus,
     /// The selected match, an index into `View::search_matches`.
     pub current: usize,
     /// Set when the query changes: the next render selects the newest match
@@ -42,37 +22,12 @@ pub(super) fn find_matches(
     lines: &[super::history::Line],
     search: &ChatSearch,
 ) -> Vec<(usize, Range<usize>)> {
-    let ChatSearch {
-        query,
-        you_only,
-        from_you,
-        ..
-    } = search;
-    let (you_only, from_you) = (*you_only, *from_you);
-    let accepts = |line: &super::history::Line| {
-        (!you_only && !from_you)
-            || (you_only && line.to_developer)
-            || (from_you && line.from_developer)
-    };
-    let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    let needle: Vec<char> = search.query.chars().flat_map(char::to_lowercase).collect();
     if needle.is_empty() {
-        return if you_only || from_you {
-            lines
-                .iter()
-                .enumerate()
-                .filter_map(|(row, line)| {
-                    (accepts(line) && line.starts_message()).then_some((row, 0..line.text.len()))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        return Vec::new();
     }
     let mut matches = Vec::new();
     for (row, line) in lines.iter().enumerate() {
-        if !accepts(line) {
-            continue;
-        }
         // Lowercase per character, keeping each character's byte offset, so a
         // match maps back to the original text even where lowercasing changes
         // a character's length.
@@ -108,9 +63,6 @@ impl BusUi {
         }
         self.chat_search = Some(ChatSearch {
             query: String::new(),
-            you_only: false,
-            from_you: false,
-            focus: SearchFocus::Query,
             current: 0,
             jump_to_newest: false,
         });
@@ -121,38 +73,12 @@ impl BusUi {
         self.view.search_matches.clear();
     }
 
-    /// Keys while the search panel is open. Typing edits the query, which
-    /// starts at the newest match. Enter/Space activates a focused filter.
-    /// In the query, Enter steps older and Shift+Enter newer. Up/Down step
-    /// from every control, wrapping. Esc closes at the last match.
+    /// Typing edits the query, which starts at the newest match. Enter steps
+    /// older and Shift+Enter newer; Up/Down step with wrapping.
     pub(super) fn chat_search_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match (code, modifiers) {
             (KeyCode::Esc, _) => self.close_chat_search(),
-            (KeyCode::Tab | KeyCode::BackTab, _) => {
-                if let Some(search) = &mut self.chat_search {
-                    search.focus = search.focus.advance(
-                        code == KeyCode::BackTab || modifiers.contains(KeyModifiers::SHIFT),
-                    );
-                }
-            }
-            (KeyCode::Char(' '), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                if let Some(focus) = self.chat_search.as_ref().map(|search| search.focus) {
-                    if focus == SearchFocus::Query {
-                        self.edit_chat_query(|query| query.push(' '));
-                    } else {
-                        self.activate_chat_search(focus);
-                    }
-                }
-            }
-            (KeyCode::Enter, _) => {
-                if let Some(focus) = self.chat_search.as_ref().map(|search| search.focus) {
-                    if focus == SearchFocus::Query {
-                        self.step_chat_search(modifiers.contains(KeyModifiers::SHIFT));
-                    } else {
-                        self.activate_chat_search(focus);
-                    }
-                }
-            }
+            (KeyCode::Enter, _) => self.step_chat_search(modifiers.contains(KeyModifiers::SHIFT)),
             (KeyCode::Down, _) => self.step_chat_search(true),
             (KeyCode::Up, _) => self.step_chat_search(false),
             (KeyCode::Char('f' | 'F'), KeyModifiers::CONTROL) => self.step_chat_search(false),
@@ -170,25 +96,10 @@ impl BusUi {
         }
     }
 
-    /// Shared activation for keyboard and the rendered mouse targets.
-    pub(super) fn activate_chat_search(&mut self, focus: SearchFocus) {
-        if let Some(search) = &mut self.chat_search {
-            search.focus = focus;
-            match focus {
-                SearchFocus::Query => return,
-                SearchFocus::ToYou => search.you_only = !search.you_only,
-                SearchFocus::FromYou => search.from_you = !search.from_you,
-            }
-            search.jump_to_newest = true;
-        }
-    }
-
     fn edit_chat_query(&mut self, edit: impl FnOnce(&mut String)) {
         if let Some(search) = &mut self.chat_search {
-            if search.focus == SearchFocus::Query {
-                edit(&mut search.query);
-                search.jump_to_newest = true;
-            }
+            edit(&mut search.query);
+            search.jump_to_newest = true;
         }
     }
 

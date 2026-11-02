@@ -160,10 +160,10 @@ impl BusUi {
         let width = main.width.saturating_sub(4);
         // The composer box always ends on the last row; none is reserved.
         let composer_bottom = main.bottom();
-        // Preserve the three-row room header, at least three history rows,
+        // Preserve the four-row room header, at least three history rows,
         // a three-row draft, and its four chrome rows. The logical chip
         // list still wraps without a row limit and scrolls in this viewport.
-        let bar_budget = composer_bottom.saturating_sub(13);
+        let bar_budget = composer_bottom.saturating_sub(14);
         let bar_height = if recipients.chips.is_empty() {
             1
         } else {
@@ -223,9 +223,40 @@ impl BusUi {
                 false,
             );
         }
+        if composer_y > 3 {
+            let filter_x = x + width.saturating_sub(24);
+            for (offset, label, enabled, action) in [
+                (
+                    0,
+                    "* → You",
+                    room.history_filters.to_you,
+                    Action::ToggleToYou,
+                ),
+                (
+                    13,
+                    "You → *",
+                    room.history_filters.from_you,
+                    Action::ToggleFromYou,
+                ),
+            ] {
+                let rect = Rect::new(
+                    filter_x + offset,
+                    2,
+                    11.min(width.saturating_sub(offset)),
+                    1,
+                );
+                view.row(
+                    rect,
+                    format!("[{}] {label}", if enabled { "x" } else { " " }),
+                    Some(action),
+                    false,
+                    false,
+                );
+            }
+        }
         // The expanded draft may hide the header. Every room gives the
-        // remaining rows below its name/divider to history or chat search.
-        let mut history_y = 3;
+        // remaining rows below its name, filters and divider to history or chat search.
+        let mut history_y = 4;
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);

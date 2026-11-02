@@ -8,6 +8,7 @@ mod editor;
 mod forms;
 mod help;
 mod history;
+mod history_filters;
 mod input;
 mod links;
 mod notices;
@@ -315,6 +316,9 @@ mod tests {
 
     #[path = "chat_search_test.rs"]
     mod chat_search_tests;
+
+    #[path = "room_filters_test.rs"]
+    mod room_filters_tests;
 
     #[path = "history_markdown_test.rs"]
     mod history_markdown_tests;

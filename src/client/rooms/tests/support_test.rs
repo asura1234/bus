@@ -302,6 +302,86 @@ pub(super) fn complete_requests(
     ui.receive_snapshot(Arc::new(snapshot));
 }
 
+/// Deliberately identical text in mixed routes: rendered header text must not
+/// determine whether a message is addressed to the developer.
+pub(super) fn mixed_find_history(ui: &mut BusUi, room: RoomId, agent: AgentId) {
+    use crate::messaging::model::{Author, Draft};
+    let mut snapshot = (*ui.snapshot).clone();
+    let peer = snapshot
+        .state
+        .create_agent(
+            room,
+            "peer → You",
+            Provider::ClaudeCode,
+            "/peer".into(),
+            None,
+        )
+        .unwrap();
+    let mut replies = Vec::new();
+    for (i, (author, text, reply)) in [
+        (
+            Author::Agent(agent),
+            "Needle ordinary peer traffic",
+            "ordinary peer answer",
+        ),
+        (
+            Author::Agent(agent),
+            "Needle @you choose a branch",
+            "ordinary peer answer",
+        ),
+        (
+            Author::Agent(agent),
+            "[waiting-on-you] Needle approve access",
+            "ordinary peer answer",
+        ),
+        (
+            Author::Developer,
+            "Needle @you outgoing prompt",
+            "Needle developer answer",
+        ),
+        (
+            Author::Agent(agent),
+            "Needle peer question",
+            "Needle @you reply mention",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let requests = snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: text.into(),
+                    files: Vec::new(),
+                    recipient_ids: [peer].into(),
+                },
+                author,
+                1000 + i as u64 * 1000,
+            )
+            .unwrap();
+        replies.push((requests[0], reply, 1500 + i as u64 * 1000));
+    }
+    snapshot
+        .state
+        .post_to_developer(
+            room,
+            agent,
+            "Needle direct ask\nsecond line".into(),
+            Vec::new(),
+            6000,
+        )
+        .unwrap();
+    snapshot
+        .state
+        .post_bus_notice(room, None, "Needle Bus notice".into(), 7000)
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    complete_requests(ui, replies);
+}
+
 pub(super) fn exchange_with_files(
     ui: &mut BusUi,
     room: RoomId,

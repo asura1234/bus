@@ -433,7 +433,7 @@ fn work_room_history_matches_master_layout() {
         ui.open_room(master);
         ui.compute_view(cols, rows);
         let expected = (ui.view.history, ui.view.history_text, composer_rect(&ui));
-        assert_eq!(expected.0.y, 3);
+        assert_eq!(expected.0.y, 4);
         ui.open_room(work);
         ui.compute_view(cols, rows);
         assert_eq!(
@@ -466,8 +466,8 @@ fn work_room_ctrl_f_uses_master_top_area() {
             ui.view.history,
             composer_rect(&ui),
         );
-        assert_eq!(expected.0.y, 3);
-        assert_eq!(expected.0.height, 8);
+        assert_eq!(expected.0.y, 4);
+        assert_eq!(expected.0.height, 6);
         assert_eq!(expected.2.y, expected.0.bottom());
         ui.open_room(work);
         key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);

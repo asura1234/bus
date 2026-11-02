@@ -239,6 +239,7 @@ pub(super) fn command_room(command: &BusCommand) -> Option<RoomId> {
         BusCommand::RenameRoom(room, _)
         | BusCommand::SetRoomSound(room, _)
         | BusCommand::SetRoomSoundName(room, _)
+        | BusCommand::SetRoomHistoryFilters(room, _)
         | BusCommand::DeleteRoom(room)
         | BusCommand::SelectRoom(room)
         | BusCommand::MarkRoomSeen(room)
