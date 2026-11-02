@@ -32,6 +32,7 @@ impl BusUi {
                 detail: request.submission_error.clone(),
             };
             if self.observed_request_notices.get(&request.id) != Some(&current) {
+                let _report = crate::utils::error_pipe::suppress(request.is_error_report());
                 tracing::warn!(
                     event = "bus.request.failed",
                     request_id = request.id.0,

@@ -657,3 +657,143 @@ fn tui_error_text_restart_outcomes_never_draw_a_diagnostic() {
         }
     }
 }
+
+#[test]
+fn retained_report_diagnostics_stay_logged_without_reports_about_reports() {
+    use tracing_subscriber::prelude::*;
+    let root = crate::utils::test_temp::unique_temp_path("bus-retained-report-diagnostic");
+    let mut runtime = crate::utils::error_pipe::Runtime::default();
+    runtime.configure(&root, Some("lead"));
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let state = &mut snapshot.state;
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1000)
+        .unwrap();
+    let report = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: original.failure. Logs: /logs/client.log".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            1000,
+            true,
+        )
+        .unwrap()[0];
+    state.begin_submission(report, "launch", 0).unwrap();
+    state
+        .record_submission(
+            report,
+            SubmissionOutcome::DefinitelyRejected {
+                message: "REPORT_DELIVERY_CAUSE".into(),
+            },
+        )
+        .unwrap();
+    assert!(state.request(report).unwrap().is_error_report());
+    assert!(state.request(report).unwrap().failure_reason.is_some());
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 2000)
+        .unwrap();
+    let ordinary = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "ordinary question".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            2000,
+            true,
+        )
+        .unwrap()[0];
+    state.begin_submission(ordinary, "launch", 0).unwrap();
+    state
+        .record_submission(
+            ordinary,
+            SubmissionOutcome::Uncertain {
+                message: "ORDINARY_DELIVERY_CAUSE".into(),
+            },
+        )
+        .unwrap();
+    state
+        .fail_unconfirmed_submissions(2000 + DELIVERED_STALL_MS)
+        .unwrap();
+    // Durable replay must retain identity; this is no longer the submission scope.
+    snapshot.state = serde_json::from_slice(&serde_json::to_vec(&snapshot.state).unwrap()).unwrap();
+    let path = root.join("herdr-client.log");
+    let file = std::fs::File::create(&path).unwrap();
+    let subscriber = tracing_subscriber::registry()
+        .with(crate::utils::error_pipe::CaptureLayer::new(path.clone()))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || file.try_clone().unwrap()),
+        );
+    tracing::subscriber::with_default(subscriber, || {
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
+    let logs = std::fs::read_to_string(path).unwrap();
+    assert!(logs.contains("error_report_delivery_failed"), "{logs}");
+    assert!(logs.contains("ORDINARY_DELIVERY_CAUSE"), "{logs}");
+    assert_eq!(logs.matches("bus.request.failed").count(), 2, "{logs}");
+    let records = crate::utils::error_pipe::drain(&root).unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.event == "bus.request.failed")
+            .count(),
+        1,
+        "only the ordinary request may enter capture: {records:?}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn tui_error_text_error_reports_and_their_replies_are_never_chat() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let report = snapshot
+        .state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: REPORT_EVENT_SENTINEL. Logs: /logs/client.log".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            1000,
+            true,
+        )
+        .unwrap()[0];
+    snapshot
+        .state
+        .finish_for_test(report, "REPORT_REPLY_SENTINEL", 2000);
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    assert_no_diagnostics(&mut ui, &["REPORT_EVENT_SENTINEL", "REPORT_REPLY_SENTINEL"]);
+    assert!(snapshot
+        .state
+        .archive(2000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    assert_no_diagnostics(&mut ui, &["REPORT_EVENT_SENTINEL", "REPORT_REPLY_SENTINEL"]);
+}

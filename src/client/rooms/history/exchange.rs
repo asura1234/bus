@@ -429,9 +429,10 @@ fn wrap_header(
         .collect()
 }
 
-/// Routing envelopes have neither a chat body nor a shared-reply slot.
+/// Routing and diagnostic envelopes have neither a chat body nor a shared-reply slot.
 fn visible_request(request: &Request) -> bool {
-    !request.bus_generated || !matches!(request.prompt.author, Author::Agent(_))
+    !request.is_error_report()
+        && (!request.bus_generated || !matches!(request.prompt.author, Author::Agent(_)))
 }
 
 /// The room's history entries in display order: requests grouped by prompt,
