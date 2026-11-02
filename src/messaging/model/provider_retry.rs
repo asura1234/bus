@@ -414,17 +414,34 @@ fn transient(provider: Provider, error: &str) -> Option<bool> {
         .any(|code| text.contains(code));
     let quota = text.contains("rate_limit") || text.contains("429") || codex_quota;
     let overload = text.contains("overload") || text.contains("529");
-    let connection = [
-        "connection",
-        "timeout",
-        "timed out",
-        "server_error",
-        "502",
-        "503",
-        "504",
+    let http_server = [
+        "http ",
+        "http status ",
+        "status ",
+        "status code ",
+        "api error:",
     ]
     .iter()
-    .any(|s| text.contains(s));
+    .filter_map(|&prefix| text.split_once(prefix))
+    .map(|(_, tail)| {
+        tail.trim_start()
+            .split(|ch: char| !ch.is_ascii_digit())
+            .next()
+            .unwrap_or_default()
+    })
+    .any(|code| code.len() == 3 && code.starts_with('5'));
+    let connection = http_server
+        || [
+            "connection",
+            "timeout",
+            "timed out",
+            "server_error",
+            "502",
+            "503",
+            "504",
+        ]
+        .iter()
+        .any(|s| text.contains(s));
     match provider {
         Provider::Codex | Provider::ClaudeCode if quota || overload || connection => Some(quota),
         Provider::Grok | Provider::Kimi if quota || overload || connection => Some(quota),

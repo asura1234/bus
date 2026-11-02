@@ -87,6 +87,50 @@ fn provider_flake_codex_explicit_native_quota_categories_keep_the_delivery_open(
 }
 
 #[test]
+fn provider_flake_explicit_native_http_server_errors_are_held_without_guessing_from_numbers() {
+    // Synthetic HTTP shapes cover the approved 5xx policy, not a recorded incident.
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for error in [
+            "HTTP 500 Internal Server Error",
+            "API Error: 500 api_error",
+            "HTTP status 507 service failure",
+        ] {
+            let (state, _, agent, request) = failed_turn(provider, error);
+            assert!(
+                !state.request(request).unwrap().settled(),
+                "{provider:?}: {error}"
+            );
+            assert_eq!(
+                state.agent(agent).unwrap().shown_status(),
+                RuntimeStatus::Working
+            );
+            assert!(
+                !state
+                    .agent(agent)
+                    .unwrap()
+                    .provider_retry
+                    .as_ref()
+                    .unwrap()
+                    .quota
+            );
+        }
+    }
+    for error in [
+        "Context window exceeded: 512 tokens",
+        "HTTP 600 unknown status",
+        "HTTP 500 invalid model",
+    ] {
+        let (state, _, _, request) = failed_turn(Provider::Codex, error);
+        assert!(state.request(request).unwrap().settled(), "{error}");
+    }
+}
+
+#[test]
 fn provider_flake_does_not_reclassify_permanent_or_cancelled_errors() {
     // Treating these as transient would silently retry invalid work or undo cancellation.
     for (provider, error) in [
