@@ -37,6 +37,17 @@ impl ReplyGroups {
             .flatten()
             .map(|source| format!("Answered with message {}", source.prompt.id.0))
     }
+
+    fn shared_to_developer(&self, state: &BusState, request: &Request, text: &str) -> bool {
+        if explicitly_to_you(text) {
+            return true;
+        }
+        let lead = request.reply_key();
+        std::iter::once(lead)
+            .chain(self.members.get(&lead).into_iter().flatten().copied())
+            .filter_map(|id| state.request(id))
+            .any(|member| member.prompt.author == Author::Developer)
+    }
 }
 
 #[cfg(test)]
@@ -380,8 +391,8 @@ impl History {
             } else {
                 push_body(lines, text, width, "    ", reply_anchor);
             }
-            let to_developer =
-                quote.is_some() && (prompt.author == Author::Developer || explicitly_to_you(text));
+            let to_developer = quote.is_some()
+                && request.is_some_and(|request| groups.shared_to_developer(state, request, text));
             for line in &mut lines[start..] {
                 line.to_developer = to_developer;
             }
