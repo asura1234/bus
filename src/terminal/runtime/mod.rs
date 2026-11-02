@@ -152,6 +152,9 @@ pub(crate) enum AgentDetection {
 /// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
 /// Dropping this aborts async tasks and closes the PTY. An already-running bounded
 /// compression step may finish before releasing its terminal reference.
+#[cfg(unix)]
+pub(crate) mod native_input;
+
 pub struct TerminalRuntime {
     pane_id: PaneId,
     terminal: Arc<PaneTerminal>,
@@ -373,5 +376,12 @@ impl TerminalRuntime {
         &self,
     ) -> Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>> {
         Arc::clone(&self.shared_codex)
+    }
+
+    /// Admission port over the pane runtime. Always present so a busy lock can
+    /// still move onto a worker; an empty slot reports no session.
+    #[cfg(unix)]
+    pub(crate) fn native_input(&self) -> Option<native_input::NativeInputHandle> {
+        Some(Arc::new(native_input::PaneCodex::new(self.shared_codex_handle())))
     }
 }

@@ -437,7 +437,6 @@ async fn render_without_pending_resume_does_not_derive_resume_geometry() {
 #[cfg(unix)]
 #[tokio::test]
 async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
-    use crate::agents::providers::codex::native::test_support;
     use crate::agents::{AgentKind, AgentState};
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
@@ -497,7 +496,9 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
                     "id":"session", "status":{"type":"active","activeFlags":[]},
                     "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
                 }}),
-                "thread/turns/list" => serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null}),
+                "thread/turns/list" => {
+                    serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null})
+                }
                 "turn/interrupt" => serde_json::json!({}),
                 other => panic!("unexpected interrupt operation {other}"),
             };
@@ -517,13 +518,10 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
         }
         false
     });
-    *server
-        .app
-        .lookup_runtime_sender(0, pane)
-        .unwrap()
-        .codex_native()
-        .lock()
-        .unwrap() = test_support::connected_runtime(path);
+    crate::server::terminals::native_input::test_bind(
+        server.app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let params: crate::protocol::api::schema::AgentSendKeysParams = serde_json::from_value(serde_json::json!({
         "target":info.pane_id,"keys":["esc"],
         "native_interrupt":{"expected_terminal_id":info.terminal_id,"expected_session_id":"session"}
