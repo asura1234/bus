@@ -163,14 +163,21 @@ impl Worker {
             if self.deliver_launch_prompt(&agent)? {
                 continue;
             }
-            let report = self
-                .state
-                .next_queued_request(agent.id)
-                .and_then(|id| self.state.request(id))
-                .is_some_and(super::Request::is_error_report);
-            let result = self.deliver_request(&agent, waited, steer_unbound);
-            if !report {
-                result?;
+            let report = self.state.next_queued_request(agent.id).filter(|id| {
+                self.state
+                    .request(*id)
+                    .is_some_and(super::Request::is_error_report)
+            });
+            if let Err(error) = self.deliver_request(&agent, waited, steer_unbound) {
+                let Some(request) = report else {
+                    return Err(error);
+                };
+                let _report = crate::utils::error_pipe::suppress(true);
+                tracing::warn!(event = "bus.error_pipe.delivery_failed", request_id = request.0, %error, "Error report preparation failed");
+                let mut state = self.state.clone();
+                if state.recover_idle_request(request, io::now_ms()).is_ok() {
+                    let _ = self.save(state);
+                }
             }
         }
         Ok(())

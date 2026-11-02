@@ -10,6 +10,21 @@ mod rejection;
 mod submit;
 
 impl BusState {
+    /// Keep report-origin failure evidence in logs without creating a later error projection.
+    pub(super) fn request_failure_error(
+        &self,
+        request: RequestId,
+        error: String,
+    ) -> Option<String> {
+        if self.request(request).is_some_and(Request::is_error_report) {
+            let _report = crate::utils::error_pipe::suppress(true);
+            tracing::warn!(event = "bus.error_pipe.delivery_failed", request_id = request.0, %error, "Error report failed");
+            None
+        } else {
+            Some(error)
+        }
+    }
+
     pub(crate) fn begin_submission(
         &mut self,
         request: RequestId,
@@ -107,6 +122,13 @@ impl BusState {
             && !matches!(outcome, SubmissionOutcome::Confirmed { .. })
         {
             // Reporting must not produce an actionable-error projection or retry its own failure.
+            let error = match &outcome {
+                SubmissionOutcome::DefinitelyRejected { message }
+                | SubmissionOutcome::Uncertain { message } => message.clone(),
+                SubmissionOutcome::ComposerBusy => "Report composer was busy".into(),
+                SubmissionOutcome::Confirmed { .. } => unreachable!(),
+            };
+            self.request_failure_error(request, error);
             self.close_turn_with_reason(
                 request,
                 crate::utils::time::now_ms(),
@@ -438,9 +460,8 @@ impl BusState {
                 .and_then(Request::submission_notice)
                 .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
-            if !self.request(request).is_some_and(Request::is_error_report) {
-                self.set_agent_error(agent, Some(message))?;
-            }
+            let error = self.request_failure_error(request, message);
+            self.set_agent_error(agent, error)?;
             tracing::info!(
                 event = "bus.message.recovered",
                 request_id = request.0,

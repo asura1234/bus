@@ -426,6 +426,7 @@ impl BusState {
         if bound {
             self.consumed_provider_turns.extend(turn_key);
         }
+        let message = message.and_then(|message| self.request_failure_error(request_id, message));
         if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
             agent.actionable_error = message;
         }

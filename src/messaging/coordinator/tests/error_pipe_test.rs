@@ -226,3 +226,194 @@ fn error_pipe_persistence_failure_never_enters_the_storage_pause_feedback_path()
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn error_pipe_preparation_failure_is_consumed_before_a_later_repaired_tick() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct CountSubmissions(Arc<AtomicUsize>);
+    impl Transport for CountSubmissions {
+        fn request(
+            &mut self,
+            _: Method,
+        ) -> Result<ResponseResult, crate::messaging::native::TransportError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ResponseResult::Ok {})
+        }
+    }
+    let (mut worker, _, agent, root) = reporting_worker();
+    let mut state = worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, crate::utils::time::now_ms())
+        .unwrap();
+    worker.save(state).unwrap();
+    let sends = Arc::new(AtomicUsize::new(0));
+    worker.transport = Box::new(CountSubmissions(Arc::clone(&sends)));
+    let now = crate::utils::time::now_ms();
+    emit_logged_failure(worker.error_log_dir().join("client.log"), 1);
+    worker.refresh_error_pipe_at(now);
+    worker.refresh_error_pipe_at(now + 1000);
+    let report = worker.state.requests().next().unwrap().id;
+    let callbacks = root.join("callbacks/launch");
+    crate::platform::fs::private_dir(&callbacks).unwrap();
+    std::fs::write(callbacks.join("sequence"), "invalid-sequence").unwrap();
+    let logs = crate::utils::logging::test_capture::Capture::default();
+    logs.run(|| worker.submit_ready().unwrap());
+    assert!(
+        worker.state.request(report).unwrap().settled(),
+        "failed report preparation must be consumed"
+    );
+    assert!(
+        logs.text().contains("invalid digit"),
+        "the original preparation error must remain in logs: {}",
+        logs.text()
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
+    std::fs::write(callbacks.join("sequence"), "0").unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        0,
+        "repair must not resurrect a failed report"
+    );
+    assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn error_pipe_recorded_provider_failure_keeps_the_cause_without_an_agent_error_projection() {
+    use crate::messaging::model::RecordedTurnEnd;
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(master, "lead", Provider::Kimi, "/project".into(), None)
+        .unwrap();
+    state.bind_orchestrator(agent, room).unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 100)
+        .unwrap();
+    let report = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: original.failure (x1 since last notice). Logs: /logs/server.log"
+                    .into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            100,
+            true,
+        )
+        .unwrap()[0];
+    state.begin_submission(report, "launch", 0).unwrap();
+    state
+        .record_submission(
+            report,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn".into()),
+            },
+        )
+        .unwrap();
+    let payload = state.render_request_payload(report).unwrap();
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "started".into(),
+            sequence: 1,
+            occurred_at_ms: 101,
+            agent_id: agent,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn".into()),
+            provider_prompt_id: Some("turn".into()),
+            prompt_payload: Some(payload),
+            kind: CallbackEventKind::PromptStarted
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    state
+        .observe_status(agent, RuntimeStatus::Working, 102)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 103)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(agent, 100_000, |_| Some(RecordedTurnEnd::Error(
+            "recorded provider failure".into()
+        ))),
+        Some(report)
+    );
+    assert!(state
+        .request(report)
+        .unwrap()
+        .failure_reason
+        .as_deref()
+        .unwrap()
+        .starts_with("provider_error:"));
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error,
+        None,
+        "retained report failures cannot become reportable client warnings"
+    );
+}
+
+#[test]
+fn error_pipe_expired_queued_report_does_not_create_an_agent_error_projection() {
+    let (worker, room, agent, root) = reporting_worker();
+    let mut state = worker.state.clone();
+    let now = crate::utils::time::now_ms();
+    let report = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: failure (x1 since last notice). Logs: /logs/client.log".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            now,
+            true,
+        )
+        .unwrap()[0];
+    assert!(state
+        .expire_stalled_queued_requests(now + crate::messaging::model::QUEUED_STALL_MS + 1000)
+        .unwrap()
+        .contains(&report));
+    assert!(state.request(report).unwrap().settled());
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error,
+        None,
+        "expiry of a report must not create another report"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}

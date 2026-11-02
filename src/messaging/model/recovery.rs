@@ -214,14 +214,13 @@ impl BusState {
                 .ok_or(ModelError::UnknownRequest(id))?;
             let agent_id = request.agent_id;
             request.failure_reason = Some(reason.clone());
+            let error = self.request_failure_error(id, format!("Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0));
             if let Some(agent) = self
                 .agents
                 .get_mut(&agent_id)
                 .filter(|agent| agent.current_request.is_none())
             {
-                agent.actionable_error = Some(format!(
-                    "Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0
-                ));
+                agent.actionable_error = error;
             }
             expired.push(id);
         }
