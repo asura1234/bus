@@ -2,7 +2,8 @@
 use super::schema::Method;
 use std::time::Duration;
 
-pub(crate) const SUBMIT_DELAY: Duration = Duration::from_millis(300);
+pub(crate) const SUBMIT_DELAY: Duration = Duration::ZERO;
+const CONFIRMATION_WINDOW: Duration = Duration::from_millis(300);
 const CONFIRMATION_GRACE: Duration = Duration::from_secs(2);
 /// Minimum withdrawal allowance and maximum interval without observed progress.
 pub(crate) const WITHDRAW_GRACE: Duration = Duration::from_secs(1);
@@ -29,7 +30,7 @@ pub(crate) fn submit_delay(codex: bool, prompt_bytes: usize) -> Duration {
 }
 
 pub(crate) fn confirmation_budget(delay: Duration) -> Duration {
-    delay + CONFIRMATION_GRACE
+    delay.max(CONFIRMATION_WINDOW) + CONFIRMATION_GRACE
 }
 
 /// Each logical line can require three edits. Reserve their spacing plus an
