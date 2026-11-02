@@ -22,6 +22,10 @@ fn disk_sampling_is_async_uses_the_data_directory_and_runs_once_per_sixty_second
         Ok(4 * GB)
     }));
     let now = Instant::now();
+    // Anchor interval checks to the call that starts sampling, not a later tick.
+    worker.refresh_disk_space_at(now).unwrap();
+    // A slow first tick must not shift the synthetic sixty-second boundary.
+    std::thread::sleep(Duration::from_millis(100));
     let tick_started = Instant::now();
     worker.tick().unwrap();
     assert!(
