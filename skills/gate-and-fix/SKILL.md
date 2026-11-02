@@ -95,7 +95,7 @@ LOOP:
     STOP with the artifact and blocker; do not retry an identical tree.
 
   Invoke `commit-and-push` once. It owns the only Git mutation of this round. Increment round and
-  repeat the complete profile-selected gate set plus the diff gate on the clean committed tree. For the Bus adapter, never run the live
+  repeat the runner's complete applicable gate plus the diff gate on the clean committed tree. For the Bus adapter, never run the live
   end-to-end check here. Never run only a selected subset in a later round.
 
 RETURN the final PASS artifact, its base/head, selected gate command, and all round commits.

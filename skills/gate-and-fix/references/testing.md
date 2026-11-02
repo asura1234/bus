@@ -9,12 +9,37 @@ plugin directory on PATH (usually `$HOME/.cargo/bin`).
 ```sh
 ./run test --plan                 # explain affected selection without building
 ./run test --base origin/master   # merge-base plus committed and local changes
-./run test --full                 # lint, every test, fresh coverage floor
+./run test --full                 # lint, docs, every applicable test and Rust coverage
 ```
 
-Affected selection reads NUL-delimited Git paths, includes staged, unstaged and
-untracked files, and treats both sides of renames as changes. An invalid base
-fails before any test starts. The initial ownership map is deliberately narrow:
+Both modes read NUL-delimited Git paths, include staged, unstaged and untracked
+files, and treat both sides of renames as changes. An invalid base fails before
+any test starts, including in full mode. Gate-and-fix passes its resolved
+immutable baseline as `--base`; direct invocations default to `origin/master`.
+Language eligibility lives in `scripts/suite_lanes.py` and runs before affected
+narrowing in `scripts/suite_selection.py`.
+
+The classifier distinguishes first-party Python, Rust, documentation, and shared
+inputs. Its path rules, shared-file set, and conservative fallback are executable
+policy in that module. Shared inputs enable both languages. Unknown inputs,
+unparseable source graphs, and deleted sources whose old dependency edges are
+unavailable fail closed. The plan records reasons and prints
+`SKIPPED (no Python/Rust changes vs BASE)` for ineligible lanes.
+
+Dependencies override a language skip. Python scripts consumed by Rust keep Rust
+tests; production Rust changes keep Python source readers and binary consumers.
+A Python-only selection needing Bus builds the CLI as a prerequisite without
+enabling Rust test, Clippy, instrumentation, or coverage lanes. A pure Rust test
+change skips Python when no Python test reads it. The existing binary-consumer
+detector follows source references conservatively and can select extra tests.
+
+Docs-only inputs skip both test lanes unless Rust consumes those resources.
+Lint and the documentation contracts still run. The documentation contract suite
+and static architecture checks are separate from the Python test lane. Lint keeps
+formatting, Ruff, architecture, placement, file-length and import checks; Clippy
+follows Rust eligibility. The planner supplies its skip to the lint runner.
+
+Within eligible languages, affected ownership remains deliberately narrow:
 
 | Changed paths | Selection |
 | --- | --- |
@@ -22,7 +47,7 @@ fails before any test starts. The initial ownership map is deliberately narrow:
 | Integration source/helper | Cargo test targets reachable through source module/path references |
 | Dev-tools test source/target | Dev-tools binary tests and CLI/driver integration tests |
 | Python with only references inside its owner | That owner's actual `*_test.py` files |
-| Cross-owner references, embedded Markdown/data, build inputs, production Rust, unknown paths | Every suite |
+| Cross-owner references, embedded Markdown/data, build inputs, production Rust, unknown paths | Every applicable suite |
 
 The index resolves Rust modules and `#[path]` using the existing Rust syntax
 helpers, and resolves literal includes relative to the containing file. Python
@@ -34,20 +59,21 @@ Rust runtime file literals resolve to exact repository/source paths, including
 `concat!(env!("CARGO_MANIFEST_DIR"), ...)` script arguments. Python helper imports
 are followed transitively so a script's Rust test consumers also force full fallback.
 Source test modules reached transitively from an integration target also fall back
-to every suite, covering each crate context that compiles and runs those tests.
+to every applicable suite, covering each crate context that compiles and runs those tests.
 The index also follows Python imports when selected tests need `BUS_TEST_BINARY`.
-Missing ownership and cross-owner references fall back to every suite. Embedded
+Missing ownership and cross-owner references broaden eligible suites. Embedded
 skill resources include directory symlinks, with the collector's test exclusions;
 a Cargo rebuild watch alone is not a runtime consumer. Rust is one crate, so production modules do not
 receive a guessed unit-only scope. Extending narrow selection requires reference
 evidence and a failing regression test.
-An empty diff runs no tests; use `--full` when a fresh complete verdict is needed.
+An empty diff skips both test lanes; `--full` still runs lint and doc checks.
 
-Affected runs, including conservative fallback to every suite, skip the coverage
-floor and cannot produce a final merge gate verdict. Full mode always runs lint,
-all default unit/integration tests, all first-party Python tests, and the
-dev-tools CLI/driver and binary unit tests. It enforces the unchanged production
-Rust line floor after successful tests and nonempty unit profile evidence.
+Affected runs, including conservative fallback, skip the coverage floor and
+cannot produce a final merge gate verdict. Full mode runs every test within the
+eligible lanes. When Rust is eligible it enforces the unchanged production line
+floor after successful tests and nonempty unit profile evidence. When Rust is
+skipped, neither instrumentation nor the floor runs; the report records coverage
+as SKIPPED. A skipped lane never reports PASS.
 
 Full scheduling overlaps normal-target lint with an instrumented nextest
 preflight build. That preflight deliberately selects no tests and builds the CLI
@@ -75,7 +101,8 @@ Nested execution shares the outer gate's process group ownership; standalone
 execution owns its worker groups. Cleanup follows termination of every worker.
 
 Each invocation prints timings and writes complete per-task stdout/stderr and
-the head/selection/result to `temp/run-test/run-<id>.json`. Gate-and-fix wraps the
+the head/base/selection/lane statuses to `temp/run-test/run-<id>.json`, following
+[the test run format](test-run-format.md). Gate-and-fix wraps the
 full entrypoint as `test-full`, alongside `diff-check`, and keeps its clean-tree,
 immutable-head checks and encoded artifact logs. The older `just unit-test`,
 `integration-test`, `coverage`, and `lint` recipes remain diagnostic tools;
