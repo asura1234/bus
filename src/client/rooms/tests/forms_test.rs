@@ -307,7 +307,8 @@ fn help_only_intercepts_the_whole_composer_command() {
         key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(ui.submissions.len(), 1);
         assert!(ui.form.is_none());
-        assert_eq!(ui.locals[&room].text.text, text);
+        assert_eq!(ui.locals[&room].text.text, "");
+        assert_eq!(ui.submissions[0].draft.text, text);
     }
 }
 

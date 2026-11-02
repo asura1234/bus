@@ -5,6 +5,24 @@ use crate::messaging::{
     model::{AgentRecipients, Draft, Room, RoomId},
 };
 
+fn attachment_path(input: &str) -> std::path::PathBuf {
+    let home = std::env::home_dir();
+    if let Some(home) = &home {
+        if let Ok(path) = crate::messaging::attachments::validate_attachment(input, home) {
+            return path;
+        }
+    }
+    if input == "~" {
+        return home.unwrap_or_else(|| std::path::PathBuf::from(input));
+    }
+    if let Some(remainder) = input.strip_prefix("~/") {
+        if let Some(home) = home {
+            return home.join(remainder);
+        }
+    }
+    std::path::PathBuf::from(input)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum LocalSendStatus {
     Pending,
@@ -222,6 +240,14 @@ impl BusUi {
             })
             .flat_map(|submission| submission.draft.files.iter())
             .collect::<std::collections::BTreeSet<_>>();
+        let consumed = |id: u64, path: &std::path::Path| {
+            self.submissions.iter().any(|submission| {
+                submission.room == room
+                    && submission.status == LocalSendStatus::Pending
+                    && submission.command_id > id
+                    && submission.draft.files.iter().any(|sent| sent == path)
+            })
+        };
         let mut files: Vec<std::path::PathBuf> = self
             .snapshot
             .state
@@ -235,15 +261,31 @@ impl BusUi {
                     .collect()
             })
             .unwrap_or_default();
-        files.extend(
-            self.pending
-                .iter()
-                .chain(&self.failed)
-                .filter_map(|pending| match &pending.command {
-                    BusCommand::AttachFile(id, path) if *id == room => Some(path.into()),
-                    _ => None,
-                }),
-        );
+        for pending in &self.pending {
+            match &pending.command {
+                BusCommand::AttachFile(id, raw) if *id == room => {
+                    let path = attachment_path(raw);
+                    if !consumed(pending.id, &path) && !files.contains(&path) {
+                        files.push(path);
+                    }
+                }
+                BusCommand::RemoveFile(id, raw) if *id == room => {
+                    let path = attachment_path(&raw.display().to_string());
+                    files.retain(|file| file != &path);
+                }
+                _ => {}
+            }
+        }
+        for pending in &self.failed {
+            if let BusCommand::AttachFile(id, raw) = &pending.command {
+                if *id == room {
+                    let path = attachment_path(raw);
+                    if !consumed(pending.id, &path) && !files.contains(&path) {
+                        files.push(path);
+                    }
+                }
+            }
+        }
         files
     }
 

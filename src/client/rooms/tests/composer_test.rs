@@ -702,3 +702,110 @@ fn pending_send_leaves_the_status_line_under_the_composer_empty() {
     // The send is logged; flashing a status row for it only moves the composer.
     assert_eq!(pending, idle);
 }
+
+#[test]
+fn composer_pending_attachment_is_consumed_by_one_send() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    let path = std::path::PathBuf::from("/project/context.md");
+    ui.queue(
+        BusCommand::AttachFile(room, path.display().to_string()),
+        Effect::Files(room),
+    );
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    let sent = ui.pending.iter().find_map(|pending| match &pending.command {
+        BusCommand::Submit(_, draft) => Some(draft.clone()),
+        _ => None,
+    }).expect("the attachment-only message must be queued");
+    assert_eq!(sent.files, vec![path]);
+    assert!(ui.current_draft_files(room).is_empty(),
+        "an attachment captured by Enter is no longer a current draft attachment");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(ui.pending.iter().filter(|pending| matches!(pending.command, BusCommand::Submit(..))).count(), 1,
+        "an empty second Enter must not send the pending attachment again");
+}
+
+#[test]
+fn composer_rendered_pending_history_changes_to_failed_after_rejection() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    ui.input(&RawInputEvent::Paste("recover this message".into()), false, &mut Default::default());
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    let before = room_screen(&mut ui, 100, 30);
+    assert!(before.contains("[pending]"), "{before}");
+    ui.input(&RawInputEvent::Paste("later typing".into()), false, &mut Default::default());
+    let submit = ui.pending.iter().find(|pending| matches!(pending.command, BusCommand::Submit(..))).unwrap().id;
+    let earlier = ui.pending.iter().filter(|pending| pending.id < submit).map(|pending| pending.id).collect::<Vec<_>>();
+    for command_id in earlier {
+        ui.receive_event(BusEvent::CommandFinished { command_id, result: Ok(()) });
+    }
+    ui.receive_event(BusEvent::CommandFinished { command_id: submit, result: Err("coordinator unavailable".into()) });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = submit;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert_eq!(ui.locals[&room].text.text, "recover this message\nlater typing");
+    let after = room_screen(&mut ui, 100, 30);
+    assert!(after.contains("[failed]"), "the rendered history must change from pending to failed:\n{after}");
+    assert!(!after.contains("[pending]"), "{after}");
+}
+
+#[test]
+fn composer_removed_attachment_is_excluded_from_the_next_send() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    let path = std::path::PathBuf::from("/project/context.md");
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.attach_file(room, path.clone()).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.action(render::Action::RemoveFile(path));
+    ui.input(&RawInputEvent::Paste("text without the removed file".into()), false, &mut Default::default());
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    let sent = ui.pending.iter().find_map(|pending| match &pending.command {
+        BusCommand::Submit(_, draft) => Some(draft),
+        _ => None,
+    }).expect("the message must be queued");
+    assert!(sent.files.is_empty(), "the exact payload must exclude a file the user removed: {:?}", sent.files);
+}
+
+#[test]
+fn composer_pending_attachment_uses_the_validated_canonical_path() {
+    let (ui, room, agent) = fixture();
+    let mut seed = ui.snapshot.state.clone();
+    seed.set_draft_recipients(room, [agent]).unwrap();
+    let dir = crate::utils::test_temp::unique_temp_path("bus-composer-pending-path");
+    let fixture_dir = std::env::current_dir().unwrap().join("temp").join(format!("composer-home-path-{}", std::process::id()));
+    std::fs::create_dir_all(&fixture_dir).unwrap();
+    let file = fixture_dir.join("context.md");
+    std::fs::write(&file, "attachment").unwrap();
+    let home = std::env::home_dir().unwrap();
+    let relative = file.strip_prefix(&home).expect("the owner's worktree is under its HOME");
+    let raw = std::path::PathBuf::from(format!("~/{}", relative.display()));
+    let canonical = file.canonicalize().unwrap();
+    let (handle, commands) = BusHandle::start_for_test(dir.join("data"), &seed);
+    let mut ui = BusUi::new(handle.snapshot().unwrap());
+    ui.handle = Some(handle);
+    ui.queue(BusCommand::AttachFile(room, raw.display().to_string()), Effect::Files(room));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    let started = std::time::Instant::now();
+    while !ui.pending.is_empty() && started.elapsed() < std::time::Duration::from_secs(5) {
+        ui.tick();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let actual = ui.snapshot.state.requests().map(|request| request.prompt.files.clone()).collect::<Vec<_>>();
+    let settled = ui.pending.is_empty();
+    ui.queue(BusCommand::Shutdown, Effect::None);
+    let stop = std::time::Instant::now();
+    while !ui.pending.is_empty() && stop.elapsed() < std::time::Duration::from_secs(5) {
+        ui.tick();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let stopped = ui.pending.is_empty();
+    drop(ui);
+    drop(commands);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(fixture_dir).unwrap();
+    assert!(settled && stopped, "the scratch coordinator must settle and stop");
+    assert_eq!(actual, vec![vec![canonical]], "pending files must use the same canonical path as acknowledged attachments");
+}

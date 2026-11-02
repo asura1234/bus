@@ -97,7 +97,7 @@ impl History {
         static REBUILD: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
-        self.prepare_source(state, room, revision);
+        self.prepare_source(state, room, revision, submissions);
         let key = (
             self.signature,
             room.id,
@@ -198,7 +198,13 @@ impl History {
         &self.lines
     }
 
-    fn prepare_source(&mut self, state: &BusState, room: &Room, revision: u64) {
+    fn prepare_source(
+        &mut self,
+        state: &BusState,
+        room: &Room,
+        revision: u64,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+    ) {
         self.rebuilt = 0;
         self.rendered = 0;
         self.projected = 0;
@@ -210,7 +216,7 @@ impl History {
                 let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
                 self.markdown.retain(|source, _| shown.contains(source));
             }
-            self.signature = signature(state, room);
+            self.signature = signature(state, room, submissions);
             self.source = Some((revision, room.id));
         }
     }
@@ -658,8 +664,20 @@ fn exchange_reply(request: Option<&Request>) -> (&str, Option<RequestId>) {
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
-fn signature(state: &BusState, room: &Room) -> u64 {
+fn signature(
+    state: &BusState,
+    room: &Room,
+    submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (prompt, status) in submissions {
+        prompt.0.hash(&mut hash);
+        match status {
+            super::LocalSendStatus::Pending => 0_u8,
+            super::LocalSendStatus::Failed => 1_u8,
+        }
+        .hash(&mut hash);
+    }
     for request in state.requests().filter(|r| r.room_id == room.id) {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);

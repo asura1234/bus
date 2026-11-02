@@ -124,14 +124,21 @@ impl Worker {
         &mut self,
         mut state: BusState,
         room: RoomId,
-        draft: crate::messaging::model::Draft,
+        mut draft: crate::messaging::model::Draft,
         queued: bool,
     ) -> Result<(), String> {
         let home = std::env::home_dir().ok_or("Home directory unavailable")?;
-        for path in &draft.files {
-            crate::messaging::attachments::validate_attachment(&path.display().to_string(), &home)
-                .map_err(|e| e.to_string())?;
-        }
+        draft.files = draft
+            .files
+            .iter()
+            .map(|path| {
+                crate::messaging::attachments::validate_attachment(
+                    &path.display().to_string(),
+                    &home,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, queued)
