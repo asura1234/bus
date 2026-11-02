@@ -4,7 +4,7 @@ import time
 import subprocess
 from datetime import datetime, timezone
 
-from stats_schema import read_json, record, source
+from stats_schema import read_source, record, source
 from stats_store import append, read_records, snapshot
 
 
@@ -56,7 +56,10 @@ def phase(args, store):
     )
     duration = None
     if open_:
-        old = read_json(open_["sources"][0]["path"])
+        try:
+            old = read_source(open_["sources"][0])
+        except ValueError as error:
+            raise ValueError("invalid phase clock: " + str(error)) from error
         clock["start_monotonic_ns"] = old["monotonic_ns"]
         duration = (now_ns - old["monotonic_ns"]) // 1000000
         if duration < 0:
@@ -88,6 +91,10 @@ def phase(args, store):
         ),
         clock["observed_at"],
     )
+    if args.artifact:
+        from stats_evidence import preserve
+
+        value = preserve([value], store)[0]
     return dict(
         appended=append(store, [value]),
         id=value["id"],

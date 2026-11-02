@@ -263,6 +263,60 @@ def test_sanitized_source_lane_annotations_do_not_drop_canonical_roots_or_supply
     assert report["model_leaderboard"][0]["unique_issues"] == 1
 
 
+def test_backfill_command_replays_recorded_metadata_and_is_idempotent(tmp_path):
+    import shutil
+
+    artifacts = tmp_path / "artifacts"
+    shutil.copytree(FIXTURE, artifacts / "pr-295")
+    gh = tmp_path / "gh"
+    gh.mkdir()
+    (gh / "295.json").write_text(
+        json.dumps(
+            dict(
+                number=295,
+                title="Fixture",
+                url="https://github.com/example/repo/pull/295",
+                state="MERGED",
+                headRefName="fix/codex-rollout-final-answer",
+                headRefOid="ad9dc509e1a63a8ecd99cb4136d01e54a1ce9266",
+                createdAt="2026-11-02T01:00:00Z",
+                mergedAt="2026-11-02T03:00:00Z",
+                mergeCommit={"oid": "b" * 40},
+                author={"login": "fixture"},
+                commits=[{"oid": "a" * 40}],
+                additions=10,
+                deletions=3,
+                changedFiles=2,
+            )
+        )
+    )
+    args = (
+        "backfill",
+        "--store",
+        tmp_path / "stats",
+        "--prs",
+        "295",
+        "--artifacts-root",
+        artifacts,
+        "--gh-dir",
+        gh,
+    )
+    first = call(*args)
+    assert first.returncode == 0, first.stderr
+    assert json.loads(first.stdout)["appended"] > 0
+    second = call(*args)
+    assert second.returncode == 0, second.stderr
+    assert json.loads(second.stdout)["appended"] == 0
+    rows = json.loads(call("report", "--store", tmp_path / "stats", "--json").stdout)[
+        "prs"
+    ]["pr-295"]
+    pr = [r["data"] for r in rows if r["kind"] == "pr"][0]
+    assert (pr["commit_count"], pr["additions"], pr["deletions"], pr["files"]) == (
+        1,
+        10,
+        3,
+        2,
+    )
 
 
 def test_explicit_single_claim_legacy_ledger_uses_its_one_recorded_source(tmp_path):

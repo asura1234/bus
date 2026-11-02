@@ -13,10 +13,12 @@ from stats_schema import SCHEMA, canonical, read_json, record, source
 from stats_store import append, read_records, snapshot
 
 
-def run_json(argv):
-    return json.loads(
-        subprocess.run(argv, check=True, text=True, capture_output=True).stdout
-    )
+def run_json(argv, allow_error=False):
+    result = subprocess.run(argv, text=True, capture_output=True)
+    value = json.loads(result.stdout)
+    if result.returncode and not (allow_error and value.get("ok") is False):
+        result.check_returncode()
+    return value
 
 
 def default_store():
@@ -42,20 +44,33 @@ def assignment(args):
         if pane_path:
             pane = read_json(pane_path)
         elif not args.state:
-            pane = run_json([args.bus, "agent", "read", a["id"], "--source", "visible"])
+            pane = run_json(
+                [args.bus, "agent", "read", a["id"], "--source", "visible"],
+                allow_error=True,
+            )
         else:
+            return a
+        if pane.get("ok") is False and isinstance(pane.get("error"), dict):
+            evidence.append((pane, "$.error"))
             return a
         result = identity(state, selector, envelope(pane))
         evidence.append((pane, "$.result"))
         return result
 
     actor = observed(args.agent, args.pane)
-    orch = observed(args.orchestrator, args.orchestrator_pane)
+    orch = (
+        actor
+        if str(args.orchestrator) in (actor["id"], actor["name"])
+        else observed(args.orchestrator, args.orchestrator_pane)
+    )
     a = next(x for x in state["agents"] if str(x["id"]) == actor["id"])
+    binding_room = (
+        a.get("orchestrates") if args.role == "orchestrator" else a.get("room_id")
+    )
     bound = [
         r
         for r in state["rooms"]
-        if r["id"] == a.get("room_id") and str(r.get("orchestrator")) == orch["id"]
+        if r["id"] == binding_room and str(r.get("orchestrator")) == orch["id"]
     ]
     if not bound:
         raise ValueError("invalid orchestrator: not bound to agent room")
@@ -179,6 +194,23 @@ def main():
         type=Path,
         help="replay recorded Bus status/history and git/gh evidence",
     )
+    o = sub.add_parser("observe")
+    o.add_argument("--store", type=Path)
+    o.add_argument("--bus", default="bus")
+    o.add_argument("--task")
+    o.add_argument("--state", type=Path)
+    o.add_argument("--status", type=Path, action="append", default=[])
+    b = sub.add_parser("backfill")
+    b.add_argument("--store", type=Path)
+    b.add_argument("--prs", required=True, help="comma-separated merged PR numbers")
+    b.add_argument("--artifacts-root", type=Path, required=True)
+    b.add_argument("--repo", type=Path)
+    b.add_argument("--workflow", type=Path)
+    b.add_argument(
+        "--gh-dir",
+        type=Path,
+        help="replay recorded gh PR JSON files instead of fetching",
+    )
     args = parser.parse_args()
     try:
         if args.command == "validate":
@@ -191,6 +223,14 @@ def main():
             from stats_outcomes import end_assignment
 
             result = end_assignment(args, args.store or default_store())
+        elif args.command == "observe":
+            from stats_observe import observe
+
+            result = observe(args, args.store or default_store())
+        elif args.command == "backfill":
+            from stats_backfill import backfill
+
+            result = backfill(args, args.store or default_store())
         elif args.command == "collect":
             from stats_collect import collect
 

@@ -135,3 +135,11 @@ def source(path, locator="$"):
 
 def unknown(name="unknown"):
     return dict(id="unknown", name=name, provider="unknown", model="unknown")
+
+
+def read_source(proof):
+    """Read the exact immutable JSON bytes named by a source reference."""
+    raw = Path(proof["path"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != proof["sha256"]:
+        raise ValueError("source checksum changed: " + proof["path"])
+    return loads(raw.decode("utf-8"))

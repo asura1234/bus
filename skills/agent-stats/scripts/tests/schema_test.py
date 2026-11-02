@@ -319,6 +319,104 @@ def test_recorded_kimi_footer_reports_the_observed_model_without_name_inference(
     pane = {
         "agent_id": 35540,
         "runtime": {"launch_id": "launch-k", "session_verified": True},
-        "text": " ╰──────────────────╯\n Ask When Needed plan  K3.1 Pro thinking: high  ~/work/libtv-desktop  fix/preview-event-poll…\n                                                                       context: 22% (223k/1M)\n",
+        "text": " ╰──────────────────╯\n Ask When Needed plan  K3.1 Pro thinking: high  ~/work/project  feature/example…\n                                                                       context: 22% (223k/1M)\n",
     }
     assert identity(state, "35540", pane)["model"] == "K3.1 Pro thinking: high"
+
+
+def test_orchestrator_can_log_its_own_role_in_its_bound_work_room(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "rooms": [
+                        {"id": 0, "orchestrator": None},
+                        {"id": 8, "orchestrator": 3},
+                    ],
+                    "agents": [
+                        {
+                            "id": 3,
+                            "name": "orch",
+                            "provider": "claude_code",
+                            "room_id": 0,
+                            "orchestrates": 8,
+                        }
+                    ],
+                },
+            }
+        )
+    )
+    result = call(
+        "assign",
+        "--store",
+        tmp_path / "stats",
+        "--task",
+        "coordination",
+        "--role",
+        "orchestrator",
+        "--agent",
+        "3",
+        "--orchestrator",
+        "3",
+        "--state",
+        state,
+    )
+    assert result.returncode == 0, result.stderr
+    row = json.loads((tmp_path / "stats/events.jsonl").read_text())
+    assert row["agent"] == row["orchestrator"]
+
+
+def test_unavailable_pane_logs_assignment_with_unknown_model(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "rooms": [{"id": 8, "orchestrator": 3}],
+                    "agents": [
+                        {"id": 2, "name": "worker", "provider": "kimi", "room_id": 8},
+                        {
+                            "id": 3,
+                            "name": "orch",
+                            "provider": "claude_code",
+                            "orchestrates": 8,
+                        },
+                    ],
+                },
+            }
+        )
+    )
+    pane = tmp_path / "pane.json"
+    pane.write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "result": None,
+                "error": {"code": "command_failed", "message": "terminal unavailable"},
+            }
+        )
+    )
+    r = call(
+        "assign",
+        "--store",
+        tmp_path / "stats",
+        "--task",
+        "x",
+        "--role",
+        "author",
+        "--agent",
+        "2",
+        "--orchestrator",
+        "3",
+        "--state",
+        state,
+        "--pane",
+        pane,
+    )
+    assert r.returncode == 0, r.stderr
+    row = json.loads((tmp_path / "stats/events.jsonl").read_text())
+    assert row["agent"]["provider"] == "kimi"
+    assert row["agent"]["model"] == "unknown"

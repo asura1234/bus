@@ -4,7 +4,7 @@ import subprocess
 from datetime import datetime, timezone
 
 from stats_identity import envelope
-from stats_schema import read_json, record, source
+from stats_schema import read_json, read_source, record, source
 from stats_store import append, read_records, snapshot
 
 
@@ -202,11 +202,16 @@ def end_assignment(args, store):
     if len(matches) != 1:
         raise ValueError("unknown assignment id")
     assignment = matches[0]
-    baseline = (
-        read_json(assignment["data"]["workspace_snapshot"])
-        if assignment["data"]["workspace_snapshot"]
-        else None
-    )
+    baseline = None
+    if assignment["data"]["workspace_snapshot"]:
+        proofs = [
+            s
+            for s in assignment["sources"]
+            if s["path"] == assignment["data"]["workspace_snapshot"]
+        ]
+        if len(proofs) != 1:
+            raise ValueError("missing task workspace source")
+        baseline = read_source(proofs[0])
     bundle = (
         read_json(args.evidence)
         if args.evidence
