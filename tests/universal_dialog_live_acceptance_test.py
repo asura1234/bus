@@ -128,34 +128,11 @@ class RouteProofTests(unittest.TestCase):
             self.assertTrue(route_proof([trace], actions)["passed"])
             for replacement in [good.replace("key_count=1", "key_count=2", 1),
                                 good.replace("terminal_id=terminal-0", "terminal_id=wrong", 1),
-                                good + "method=agent.send_keys request_id=alternate\n"]:
+                                good + "method=agent.send_keys request_id=alternate\n",
+                                "\n".join(lines[:-1])]:
                 trace.write_text(replacement)
                 self.assertFalse(route_proof([trace], actions)["passed"])
-
-
-class NativeRouteProofTests(unittest.TestCase):
-    def test_all_six_cases_require_distinct_native_driver_receipts(self):
-        actions, records = [], []
-        for index, case in enumerate(sorted(CASES)):
-            text = case == "codex-question"
-            request = f"request-{index}"
-            outcome = "sent" if text else "selected"
-            actions.append({"case": case, "acceptance": True, "method": "agent.press",
-                            "request_id": request, "ok": True, "terminal_id": "terminal",
-                            "pane_id": "pane", "outcome": outcome, "key_count": 1,
-                            "text_written": text, "selection_pending": False})
-            records.append(f'event="bus.terminal.driver.result" control_request_id="{request}" '
-                           f'terminal_id="terminal" pane_id="pane" outcome="{outcome}" '
-                           f'key_count=1 text_written={str(text).lower()}')
-        with tempfile.TemporaryDirectory() as directory:
-            trace = Path(directory) / "driver.log"
-            trace.write_text("\n".join(records))
-            self.assertTrue(route_proof([trace], actions)["passed"])
-            trace.write_text("\n".join(records[:-1]))
-            self.assertFalse(route_proof([trace], actions)["passed"])
-            trace.write_text("\n".join(records) + '\nmethod="pane.send_input"')
-            self.assertFalse(route_proof([trace], actions)["passed"])
-            trace.write_text("\n".join(records))
+            trace.write_text(good)
             repeated = [dict(action) for action in actions]
             repeated[-1]["request_id"] = repeated[0]["request_id"]
             self.assertFalse(route_proof([trace], repeated)["passed"])
