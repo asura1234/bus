@@ -85,6 +85,7 @@ impl crate::client::compositor::ClientShellState {
         let target = crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
             crate::messaging::coordinator::DEFAULT_SESSION.into(),
         ));
+        let dashboard_root = root.clone();
         let handle =
             match crate::messaging::coordinator::BusHandle::start(root.clone(), target.clone()) {
                 Ok(handle) => handle,
@@ -104,6 +105,7 @@ impl crate::client::compositor::ClientShellState {
         let mut bus = BusUi::new(snapshot);
         bus.history.enable_background()?;
         bus.handle = Some(handle);
+        bus.dashboard_root = Some(dashboard_root);
         bus.yolo = server_yolo();
         bus.dev_settings = crate::client::perf::overlay_available();
         // Only the client that owns the coordinator plays room sounds, so each rings once.

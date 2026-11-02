@@ -328,11 +328,9 @@ impl BusUi {
         self.settings_field = field;
         self.reveal_settings_field();
         self.dashboard_pending = self
-            .settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .filter(|root| root.is_absolute())
-            .map(std::path::Path::to_path_buf);
+            .dashboard_root
+            .clone()
+            .filter(|root| root.is_absolute());
         if self.dashboard_pending.is_none() {
             tracing::info!(
                 event = "bus.dashboard.open_failed",

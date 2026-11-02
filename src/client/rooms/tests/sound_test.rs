@@ -1136,9 +1136,8 @@ fn developer_dashboard_button_is_visible_and_emits_the_attached_session_root() {
         .iter()
         .any(|row| row.contains("Open delivery dashboard")));
     ui.dev_settings = true;
-    ui.settings_path = Some(std::path::PathBuf::from(
-        "/scratch/current-session/settings.json",
-    ));
+    ui.dashboard_root = Some(std::path::PathBuf::from("/scratch/current-session"));
+    ui.settings_path = Some(std::path::PathBuf::from("/scratch/shared/settings.json"));
     assert!(settings_rows(&mut ui, 55)
         .iter()
         .any(|row| row.contains("Open delivery dashboard")));
@@ -1151,4 +1150,62 @@ fn developer_dashboard_button_is_visible_and_emits_the_attached_session_root() {
     assert!(matches!(outcome.actions.as_slice(),
         [crate::client::compositor::ClientShellAction::OpenDeliveryDashboard(root)] if root == std::path::Path::new("/scratch/current-session")));
     assert!(ui.error.is_none());
+}
+
+#[test]
+fn developer_dashboard_button_uses_registry_session_root_instead_of_shared_settings() {
+    let _lock = crate::utils::test_env::env_lock();
+    struct RestoreEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnvironment {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let _restore = RestoreEnvironment(
+        ["HOME", "USERPROFILE", "BUS_DATA_DIR", "BUS_SESSION_ID"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+    );
+    let scratch = crate::utils::test_temp::unique_temp_path("dashboard-registry-session");
+    std::env::set_var("HOME", &scratch);
+    std::env::set_var("USERPROFILE", &scratch);
+    let registry = crate::messaging::storage::sessions::default_base_dir().unwrap();
+    let root = registry.join("sessions/0123456789abcdef");
+    std::env::set_var("BUS_DATA_DIR", &root);
+    std::env::set_var("BUS_SESSION_ID", "0123456789abcdef");
+    let (mut ui, _, _) = sound_fixture(1);
+    ui.dev_settings = true;
+    ui.settings_path = crate::messaging::prefs::settings::path();
+    assert_eq!(ui.settings_path, Some(registry.join("settings.json")));
+    assert_ne!(ui.settings_path.as_ref().unwrap().parent().unwrap(), root);
+    ui.action(render::Action::Settings);
+    ui.settings_field = ui.dashboard_field().unwrap();
+    let event = crate::protocol::keys::host::RawInputEvent::Key(
+        crate::protocol::keys::TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    let mut outcome = crate::client::compositor::ClientShellInput::default();
+    ui.input(&event, true, &mut outcome);
+    let emitted: Vec<_> = outcome
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            crate::client::compositor::ClientShellAction::OpenDeliveryDashboard(path) => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        emitted,
+        vec![&root],
+        "dashboard must target the attached session, not shared preferences"
+    );
+    assert!(
+        !scratch.exists(),
+        "opening the dashboard only emits an effect"
+    );
 }
