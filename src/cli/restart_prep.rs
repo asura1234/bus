@@ -77,6 +77,11 @@ pub(super) fn begin_handoff(
         )
     })?;
     let plan = HandoffPlan {
+        id: format!(
+            "{}:{}",
+            std::process::id(),
+            crate::messaging::storage::io::now_ns()
+        ),
         root: root.to_path_buf(),
         old_binary,
         new_binary: new_binary.to_path_buf(),
@@ -140,7 +145,7 @@ fn rollback_tui(
 
 fn publish_handoff(root: &Path, request: &RestartRequest, plan: &HandoffPlan) -> io::Result<()> {
     let new_binary = &plan.new_binary;
-    let pid = match super::spawn_helper() {
+    let pid = match super::spawn_helper(plan) {
         Ok(pid) => pid,
         Err(error) => {
             return Err(record_refused(
@@ -193,18 +198,14 @@ fn publish_handoff(root: &Path, request: &RestartRequest, plan: &HandoffPlan) ->
     Ok(())
 }
 
-/// The binary and SHA the running server recorded. Never the invoking CLI.
+/// Server identity for refusal diagnostics. Rollback uses the live TUI's backup.
 pub(super) fn serving_target(root: &Path) -> Result<(PathBuf, String), String> {
     let path = restart_record::build_path(root);
-    let binary = restart_record::read_build_binary(&path).ok_or_else(|| {
-        "cannot restart: the running server has no recorded binary to roll back to".to_owned()
-    })?;
+    let binary = restart_record::read_build_binary(&path)
+        .ok_or_else(|| "the running server has no recorded binary".to_owned())?;
     let sha = restart_record::read_build_sha(&path)
         .filter(|sha| restart_record::valid_build_sha(sha))
-        .ok_or_else(|| {
-            "cannot restart: the running server has no recorded build SHA to roll back to"
-                .to_owned()
-        })?;
+        .ok_or_else(|| "the running server has no recorded build SHA".to_owned())?;
     Ok((binary, sha))
 }
 

@@ -97,9 +97,9 @@ fn main() -> io::Result<()> {
             Ok(())
         }
         // Detached helper spawned by `bus restart` before the server is stopped.
-        Some("--restart-handoff") if raw_args.len() == 2 => {
+        Some("--restart-handoff") if raw_args.len() == 3 => {
             configure_session(&raw_args);
-            cli::restart::run_handoff_entry()
+            cli::restart::run_handoff_entry(&raw_args[2])
         }
         _ => cli::run(&raw_args[1..]),
     }?;

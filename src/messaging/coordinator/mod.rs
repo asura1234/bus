@@ -23,6 +23,7 @@ pub(crate) mod reply_delivery_support;
 #[cfg(test)]
 #[path = "tests/reply_routing_test.rs"]
 mod reply_routing_tests;
+mod restart_handoff;
 #[cfg(test)]
 #[path = "tests/retired_github_watch_test.rs"]
 mod retired_github_watch_tests;
@@ -31,6 +32,9 @@ mod retired_github_watch_tests;
 mod retired_room_digest_tests;
 mod startup;
 mod startup_diagnostics;
+pub(crate) use restart_handoff::take_restart_plan;
+#[cfg(test)]
+pub(crate) use restart_handoff::test_restart_plan;
 mod startup_recovery;
 mod storage;
 mod worker;

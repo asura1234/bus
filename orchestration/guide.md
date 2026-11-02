@@ -69,7 +69,7 @@ including the TUI/coordinator and agents' saved provider sessions. Use the binar
 path agents already call so their subsequent CLI calls use the same build.
 Read `restarts/log.jsonl` after relaunch: `restarted` proves both server and TUI
 build SHAs; `stage:handoff` proves only queuing. An unhealthy replacement rolls
-back through the same quit/resume path. Follow the recovery command in a failure
+back through the same quit/resume path. Follow the recovery guidance in a failure
 record before resuming work.
 
 Send every message to the room's agents as yourself, so the history shows who

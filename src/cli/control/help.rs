@@ -183,32 +183,32 @@ fn lifecycle_commands() -> [Command; 3] {
 
 fn restart_command() -> Command {
     Command::new("restart")
-        .about("Restart the session server onto another Bus binary")
+        .about("Save, quit and relaunch the whole Bus on another binary")
         .long_about(details::RESTART)
         .arg(
             Arg::new("dev")
                 .long("dev")
                 .action(clap::ArgAction::SetTrue)
-                .help("Required to run this command. Does not change the running server's recorded --dev mode"),
+                .help("Required to run this command. Does not change the session's recorded --dev mode"),
         )
         .arg(
             Arg::new("yolo")
                 .long("yolo")
                 .action(clap::ArgAction::SetTrue)
-                .help("Turn --yolo on for the restarted server. Omit to keep the running server's --yolo setting"),
+                .help("Turn --yolo on for the relaunched Bus. Omit to keep the running server's --yolo setting"),
         )
         .arg(
             Arg::new("binary")
                 .long("binary")
                 .required(true)
                 .value_name("PATH")
-                .help("Bus binary that replaces the running server"),
+                .help("Bus binary that relaunches the server and TUI/coordinator"),
         )
         .arg(
             Arg::new("confirm")
                 .long("confirm")
                 .action(clap::ArgAction::SetTrue)
-                .help("Confirm replacing the running server"),
+                .help("Confirm saving, quitting and relaunching the whole Bus"),
         )
         .arg(
             Arg::new("as")

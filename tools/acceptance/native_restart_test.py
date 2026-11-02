@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,7 +31,7 @@ def wait_initial_room(bus):
         time.sleep(0.05)
 
 
-def scenario(binary, root):
+def scenario(binary, root, whole_session=False, unhealthy=False):
     root.mkdir(parents=True, exist_ok=True)
     work, home, fake_bin = (root / name for name in ("work", "home", "bin"))
     for path in (work, home, fake_bin):
@@ -47,6 +48,13 @@ def scenario(binary, root):
     try:
         bus.start()
         wait_initial_room(bus)
+        if whole_session:
+            os.write(bus.master, b"restart-provider-draft")
+            deadline = time.monotonic() + 30
+            while not any(path.exists() and "restart-provider-draft" in path.read_text()
+                          for path in (bus.data / "state.json", bus.data / "state.journal.json")):
+                assert time.monotonic() < deadline, "scratch draft did not reach storage"
+                time.sleep(0.05)
         bus.cli("agent", "add", "--room", "bus", "--name", "restart-agent",
                 "--provider", "claude", "--pwd", str(work), "--consent-hooks")
         first = bus.cli("send", "--room", "bus", "--to", "restart-agent", "--text", "bootstrap")
@@ -61,11 +69,33 @@ def scenario(binary, root):
         assert original_native is not None, agent
         evidence["original_native"] = original_native
         old_pid = bus.child.pid
-        bus.stop()
-        # start() means control readiness only. No idle/provider wait is allowed
-        # before this send: it must queue safely while native restore is pending.
-        bus.start()
-        assert bus.child.pid != old_pid
+        if whole_session:
+            replacement = root / "bus-replacement"
+            shutil.copy2(binary, replacement)
+            if unhealthy:
+                replacement.write_text("#!/bin/sh\nif [ \"$1\" = --identity ]; then\n"
+                    f"echo '{{\"sha\":\"{'b' * 40}\",\"providers\":[\"claude\"]}}'\nelse exit 42; fi\n")
+            call = subprocess.run([str(binary), "--dev", "restart", "--binary", str(replacement), "--confirm"],
+                                  cwd=work, env=env, capture_output=True, text=True, timeout=30)
+            assert call.returncode == 0, (call.stdout, call.stderr)
+            assert json.loads(call.stdout)["stage"] == "handoff", call.stdout
+            log = bus.data / "restarts/log.jsonl"
+            deadline = time.monotonic() + 60
+            while not (log.exists() and log.read_text().strip()):
+                assert time.monotonic() < deadline, "whole-session outcome missing"
+                time.sleep(0.05)
+            outcome = json.loads(log.read_text().splitlines()[-1])
+            assert outcome["outcome"] == ("rolled_back" if unhealthy else "restarted"), outcome
+            tui = json.loads((bus.data / "restarts/tui.json").read_text())
+            assert tui["process"]["pid"] != old_pid
+            assert "restart-provider-draft" in (bus.data / "state.json").read_text()
+            evidence.update(outcome=outcome, replacement_tui=tui)
+        else:
+            bus.stop()
+            # start() means control readiness only. No idle/provider wait is allowed
+            # before this send: it must queue safely while native restore is pending.
+            bus.start()
+            assert bus.child.pid != old_pid
         sent = bus.cli("send", "--room", "bus", "--to", "restart-agent", "--text", "immediate-after-restart")
         evidence["send"] = sent
         after = bus.cli("wait", "--message", str(sent["message_id"]), "--timeout", "30")
@@ -99,6 +129,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--whole-session", action="store_true")
+    parser.add_argument("--unhealthy", action="store_true")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -106,10 +138,10 @@ def main():
     live = Path(os.fsdecode(entries.split(b"\0", 1)[0].removeprefix(b"worktree "))) / "target/debug/bus"
     assert not (binary == live.resolve() or (live.exists() and binary.samefile(live))), "live binary forbidden"
     if args.run_dir:
-        scenario(binary, args.run_dir.resolve())
+        scenario(binary, args.run_dir.resolve(), args.whole_session, args.unhealthy)
     else:
         with tempfile.TemporaryDirectory(prefix="bn-restart-", dir="/private/tmp") as directory:
-            scenario(binary, Path(directory))
+            scenario(binary, Path(directory), args.whole_session, args.unhealthy)
 
 
 if __name__ == "__main__":

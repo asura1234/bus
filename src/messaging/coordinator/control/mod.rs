@@ -67,6 +67,11 @@ impl Worker {
                 )
             };
         }
+        // Only a published, process-bound restart may request normal quit in
+        // a non-dev session. Ordinary `quit` retains its dev-tier contract.
+        if request.method == "bus.quit" && request.params.get("restart").is_some() {
+            return self.restart_quit_response(request, events);
+        }
         let Some(&MethodSpec {
             command,
             fields,

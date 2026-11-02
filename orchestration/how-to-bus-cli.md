@@ -234,27 +234,9 @@ grants are dropped. private/orchestrator-credentials.json is no longer read; del
 
 ## Developer restart for orchestrators
 
-`bus --dev restart --binary PATH --confirm` saves and quits the whole Bus, then
-relaunches PATH in the same terminal and session. The server, TUI and its
-coordinator all run the selected build; agents use their existing provider resume
-paths. Without `--dev` the command is refused and hidden from `bus --help`.
-Before it, every room's orchestrator asks its working agents to pause: commit and push, stop builds and tests, release slot locks, then stop.
-Wait for each confirmation, then restart. The relaunch keeps the recorded
-`--dev`, `--yolo`, session and data directory. If the replacement fails its health
-check, Bus relaunches the saved previous binary in that terminal instead.
-The initial `stage:handoff` receipt means the restart was queued. Only
-`restarts/log.jsonl` outcome `restarted` confirms that both the server and TUI
-run the requested build SHA. Package versions do not establish build identity.
-Failures identify the failed part and a command to finish manually. After checking
-the outcome notice or log, tell agents to resume work.
+`bus --dev restart --binary PATH --confirm` saves/quits the whole Bus and resumes PATH in the same terminal/session, with recorded --dev/--yolo/data-root flags and provider sessions. Before it, every room pauses its workers: commit/push, stop builds/tests, release slot locks, then confirm. Check the final outcome before telling them to resume. `stage:handoff` means queued; only `restarts/log.jsonl` outcome `restarted` proves both server and TUI/coordinator run PATH's build SHA (package versions do not identify builds).
 
-Agents retain the CLI paths in their instructions and shell environment. Use
-`--binary` with the path those agents call, such as the absolute
-`target/debug/bus` path, and put the new build there before restarting. Restart
-does not rewrite other executables, symlinks, or saved agent instructions.
-For a TUI that predates whole-session restart, quit with Ctrl+Q and run the
-new binary with `--dev resume --last` (and the original `--yolo` setting) once.
-Details: `bus --dev restart --help`.
+An unhealthy replacement relaunches the saved previous binary; a healthy rollback needs no additional TUI launch. For quit failure, inspect/save the old UI before retrying; follow the conditional recovery guidance in the log. Use the absolute CLI path agents already call (such as target/debug/bus), containing the new build; other binaries and agent instructions are not rewritten. After rollback, restore that CLI path to the old build before agents resume work. For a TUI predating this support, Ctrl+Q then run PATH with the original flags and `resume SESSION`; an explicit-root session instead uses its original absolute BUS_DATA_DIR and flags without resume. Without --dev the tool is refused/hidden. Details: `bus --dev restart --help`.
 
 ## Repository status and acceptance
 Repository status reporting belongs to the agent/harness; Bus never polls hosts

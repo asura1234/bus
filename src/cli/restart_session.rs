@@ -7,97 +7,149 @@ use std::time::{Duration, Instant};
 
 const QUIT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// This helper only requests the normal save-and-quit. It never swaps servers
-/// underneath a live TUI. The terminal process takes over after quit completes.
-pub(crate) fn run_handoff_entry() -> io::Result<()> {
-    let root = crate::utils::env::bus_data_dir()
-        .ok_or_else(|| io::Error::other("BUS_DATA_DIR is required for a restart handoff"))?;
+/// The serialized plan is immutable publication metadata, not a second read of
+/// the request file that can disappear or become unreadable during shutdown.
+pub(crate) fn run_handoff_entry(serialized: &str) -> io::Result<()> {
+    let plan: HandoffPlan = serde_json::from_str(serialized).map_err(io::Error::other)?;
+    let root = &plan.root;
     let _ = crate::utils::logging::init_file_logging_at(
         crate::utils::paths::data_dir(),
         "herdr-client.log",
         &super::super::logging_options(),
     );
-    let bytes = std::fs::read(restart_record::handoff_path(&root))?;
-    let plan: HandoffPlan = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    // The publishing CLI assigns this helper the lock before it can request quit.
     let deadline = Instant::now() + Duration::from_secs(3);
-    while restart_record::read_live_pid(&restart_record::restart_lock_path(&root))
+    while restart_record::read_live_pid(&restart_record::restart_lock_path(root))
         .is_none_or(|owner| owner.pid != std::process::id())
     {
         if Instant::now() >= deadline {
-            return Err(io::Error::other("restart helper was not assigned the lock"));
+            return cancel_handoff(&plan, "restart helper was not assigned the lock".into());
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     let request = crate::messaging::control::Request {
         id: format!("restart-quit-{}", std::process::id()),
         method: "bus.quit".into(),
-        params: serde_json::json!({}),
+        params: serde_json::json!({"restart":{"helper_pid":std::process::id(), "plan":plan}}),
     };
-    let quit = crate::messaging::control::request(&root, &request).and_then(|response| {
+    let quit = crate::messaging::control::request(root, &request).and_then(|response| {
         if response.ok {
             Ok(())
         } else {
             Err(format!("{:?}", response.error))
         }
     });
+    if let Err(error) = quit {
+        return cancel_handoff(&plan, error);
+    }
     let deadline = Instant::now() + QUIT_TIMEOUT;
-    while quit.is_ok()
-        && restart_record::handoff_path(&root).exists()
-        && crate::platform::process_still_live(plan.tui.pid, plan.tui.birth)
-        && Instant::now() < deadline
-    {
+    loop {
+        if matches_plan(&root.join("restarts/active.json"), &plan) {
+            return Ok(());
+        }
+        if !crate::platform::process_still_live(plan.tui.pid, plan.tui.birth)
+            || Instant::now() >= deadline
+        {
+            let error_path = root.join("restarts/handoff-error.json");
+            let reason = std::fs::read(&error_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .filter(|error| error["id"].as_str() == Some(plan.id.as_str()))
+                .and_then(|error| error["reason"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| {
+                    "TUI did not finish saving and claiming the relaunch; inspect herdr-client.log"
+                        .into()
+                });
+            return cancel_handoff(&plan, reason);
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // Renaming claims the request atomically, either here or in the quitting TUI.
-    // A timeout must not cancel a relaunch that already took over.
-    let cancelled = restart_record::restarts_dir(&root).join("cancelled.json");
-    if std::fs::rename(restart_record::handoff_path(&root), &cancelled).is_ok() {
-        let reason = quit
-            .err()
-            .unwrap_or_else(|| "TUI did not finish saving and quitting".into());
-        let mut effects = LiveHandoff::new(&root);
-        super::finish(&plan, &mut effects, "quit_failed", &plan.new_binary, reason);
-        let _ = std::fs::remove_file(cancelled);
-        prep::release_restart_lock(&root);
+}
+
+fn matches_plan(path: &Path, plan: &HandoffPlan) -> bool {
+    restart_record::read_handoff(path)
+        .ok()
+        .flatten()
+        .is_some_and(|seen| seen.id == plan.id)
+}
+
+fn cancel_handoff(plan: &HandoffPlan, mut reason: String) -> io::Result<()> {
+    let root = &plan.root;
+    if matches_plan(&root.join("restarts/active.json"), plan) {
+        return Ok(());
     }
+    let cancelled = root.join("restarts/cancelled.json");
+    if let Err(error) = std::fs::rename(restart_record::handoff_path(root), &cancelled) {
+        if matches_plan(&root.join("restarts/active.json"), plan) {
+            return Ok(());
+        }
+        reason.push_str(&format!("; could not claim cancelled handoff: {error}"));
+        let _ = restart_record::write_json(&cancelled, plan);
+    }
+    let outcome = if crate::platform::process_still_live(plan.tui.pid, plan.tui.birth) {
+        "quit_failed"
+    } else {
+        "relaunch_failed"
+    };
+    tracing::error!(%reason, outcome, restart_id = %plan.id, "restart handoff failed");
+    let mut effects = LiveHandoff::new(root);
+    super::finish(plan, &mut effects, outcome, &plan.old_binary, reason);
+    prep::release_restart_lock(root);
+    let _ = std::fs::remove_file(restart_record::handoff_pid_path(root));
     Ok(())
 }
 
-/// Called only after the old client, its coordinator, runtime and terminal guard
-/// have returned through the ordinary quit path. The caller stays as a passive
-/// launcher so the shell keeps waiting for its terminal job, including rollback.
+/// Normal quit has saved the UI and stopped the coordinator/server. No request
+/// is read here: the internal quit event already validated and retained it.
 pub(crate) fn resume_after_quit() -> io::Result<()> {
-    let Some(root) = crate::utils::env::bus_data_dir() else {
+    let Some(plan) = crate::messaging::coordinator::take_restart_plan() else {
         return Ok(());
     };
-    let pending = restart_record::handoff_path(&root);
-    let Ok(bytes) = std::fs::read(&pending) else {
-        return Ok(());
-    };
-    let plan: HandoffPlan = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    if plan.tui.pid != std::process::id() {
+    let root = &plan.root;
+    let cancelled = root.join("restarts/cancelled.json");
+    if matches_plan(&cancelled, &plan) {
         return Ok(());
     }
-    let active = restart_record::restarts_dir(&root).join("active.json");
-    if std::fs::rename(&pending, &active).is_err() {
-        return Ok(()); // The quit timeout already cancelled this request.
+    let active = root.join("restarts/active.json");
+    if let Err(error) = std::fs::rename(restart_record::handoff_path(root), &active) {
+        if error.kind() == io::ErrorKind::NotFound && matches_plan(&cancelled, &plan) {
+            return Ok(());
+        }
+        let reason = format!("could not claim the relaunch after quit: {error}");
+        tracing::error!(%reason, restart_id = %plan.id, "restart terminal handoff failed");
+        let _ = restart_record::write_json(
+            &root.join("restarts/handoff-error.json"),
+            &serde_json::json!({"id":plan.id,"reason":reason}),
+        );
+        return Err(io::Error::other(reason));
     }
-    prep::assign_restart_lock(&root, std::process::id()).map_err(io::Error::other)?;
-    let mut effects = LiveHandoff::new(&root);
+    let mut effects = LiveHandoff::new(root);
+    if let Err(reason) = prep::assign_restart_lock(root, std::process::id()) {
+        tracing::error!(%reason, "restart terminal lock assignment failed");
+        super::finish(
+            &plan,
+            &mut effects,
+            "relaunch_failed",
+            &plan.old_binary,
+            reason.clone(),
+        );
+        return Err(io::Error::other(reason));
+    }
     let outcome = super::execute_handoff(&plan, &mut effects);
-    prep::release_restart_lock(&root);
-    let _ = std::fs::remove_file(active);
-    let _ = std::fs::remove_file(restart_record::handoff_pid_path(&root));
-    // All Bus work now belongs to the child. This process only holds the shell's
-    // job open and reaps that child; it has no TUI, coordinator or API connection.
+    prep::release_restart_lock(root);
+    let _ = std::fs::remove_file(restart_record::handoff_pid_path(root));
+    // Keep active.json as the bounded acknowledgement of this attempt, so a
+    // delayed helper cannot mistake completed relaunch for a vanished request.
     if let Some(mut child) = effects.child.take() {
         let status = child.wait()?;
         if !status.success() {
             return Err(io::Error::other(format!("relaunched Bus exited {status}")));
         }
     }
-    if outcome.outcome == "rollback_failed" || restart_record::persist_error_path(&root).exists() {
+    if matches!(
+        outcome.outcome.as_str(),
+        "rollback_failed" | "relaunch_failed"
+    ) || restart_record::persist_error_path(root).exists()
+    {
         return Err(io::Error::other(outcome.reason));
     }
     Ok(())
@@ -146,8 +198,16 @@ impl HandoffIo for LiveHandoff {
                 .try_wait()
                 .map_err(|error| error.to_string())?
             {
+                let startup =
+                    std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
+                        .unwrap_or_default();
                 return Err(format!(
-                    "TUI process {pid} exited {status} before becoming healthy"
+                    "TUI process {pid} exited {status} before becoming healthy{}",
+                    if startup.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!("; server startup failed: {}", startup.trim())
+                    }
                 ));
             }
             let server = restart_record::read_build_stamp(&restart_record::build_path(&self.root));
@@ -222,6 +282,51 @@ fn resume_command(binary: &Path, plan: &HandoffPlan) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_quit_missing_request_returns_error_and_records_the_original_cause() {
+        let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let root = crate::utils::test_temp::unique_temp_path("restart-missing-claim");
+        std::fs::create_dir_all(root.join("restarts")).unwrap();
+        let plan = super::super::tests::plan(&root);
+        crate::messaging::coordinator::test_restart_plan(plan.clone());
+        let error = resume_after_quit().unwrap_err().to_string();
+        assert!(
+            error.contains("could not claim the relaunch after quit"),
+            "{error}"
+        );
+        let diagnostic: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("restarts/handoff-error.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(diagnostic["reason"], error);
+        cancel_handoff(&plan, error.clone()).unwrap();
+        let outcome = restart_record::read_outcome(&restart_record::outcome_path(&root))
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.outcome, "relaunch_failed");
+        assert!(outcome.reason.contains(&error));
+        assert!(outcome.reason.contains("/old/bus"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_quit_lock_error_persists_a_failed_relaunch_instead_of_success() {
+        let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+        let root = crate::utils::test_temp::unique_temp_path("restart-lock-error");
+        let plan = super::super::tests::plan(&root);
+        restart_record::write_json(&restart_record::handoff_path(&root), &plan).unwrap();
+        std::fs::create_dir(restart_record::restart_lock_path(&root)).unwrap();
+        crate::messaging::coordinator::test_restart_plan(plan);
+        let error = resume_after_quit().unwrap_err().to_string();
+        let outcome = restart_record::read_outcome(&restart_record::outcome_path(&root))
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.outcome, "relaunch_failed");
+        assert!(outcome.reason.contains(&error));
+        assert!(outcome.reason.contains("finish manually"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn resume_keeps_the_recorded_flags_and_selects_the_exact_session() {

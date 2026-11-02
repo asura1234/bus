@@ -54,7 +54,7 @@ def alternate_build(source, target, different_version=False):
 @pytest.mark.parametrize("variant,host", [
     ("different_sha", "iTerm.app"), ("different_sha", "ghostty"),
     ("same_sha", "ghostty"), ("different_version", "iTerm.app"),
-    ("unhealthy", "ghostty"),
+    ("unhealthy", "ghostty"), ("non_dev", "ghostty"), ("registry_session", "ghostty"),
 ])
 def test_restart_relaunches_whole_session(variant, host):
     source = os.environ.get("BUS_TEST_BINARY")
@@ -73,6 +73,9 @@ def run_restart(root, source, variant, host):
     data, home, project = [root / name for name in ("data", "home", "project")]
     for directory in (data, home, project):
         directory.mkdir(mode=0o700)
+    registry_home = Path(tempfile.mkdtemp(prefix="h", dir="/tmp")) if variant == "registry_session" else None
+    if registry_home:
+        home = registry_home  # Keep registry socket names below macOS's 104-byte limit.
     old, new = root / "bus-A", root / "bus-B"
     shutil.copy2(source, old)
     old_sha = json.loads(subprocess.check_output([str(old), "--identity"]))["sha"]
@@ -92,7 +95,11 @@ def run_restart(root, source, variant, host):
         env["LLVM_PROFILE_FILE"] = profile
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-    client = subprocess.Popen([str(old), "--dev", "--yolo"], cwd=project, env=env,
+    launch = [str(old), "--yolo"] if variant == "non_dev" else [str(old), "--dev", "--yolo"]
+    launch_env = dict(env)
+    if registry_home:
+        launch_env.pop("BUS_DATA_DIR")
+    client = subprocess.Popen(launch, cwd=project, env=launch_env,
                               stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
     terminal = bytearray()
@@ -110,16 +117,27 @@ def run_restart(root, source, variant, host):
     reader.start()
     detail = lambda: terminal.decode(errors="replace")[-4000:]
     try:
+        if registry_home:
+            last = registry_home / ".local/share/bus/last-session"
+            session = wait_for(lambda: last.read_text().strip() if last.exists() else None, detail)
+            data = registry_home / ".local/share/bus/sessions" / session
+            env.update(BUS_DATA_DIR=str(data), BUS_SESSION_ID=session)
         initial = wait_for(lambda: read_json(data / "restarts/build.json"), detail)
         wait_for(lambda: (data / "control.sock").exists(), detail)
+        wait_for(lambda: b"Settings" in terminal, detail)
+        draft = "restart-keeps-this-draft"
+        os.write(master, draft.encode())
+        # Differential terminal frames may split the word across cursor moves;
+        # the persisted state after quit is the draft-retention oracle below.
         call = subprocess.run([str(old), "--dev", "restart", "--binary", str(new), "--confirm"],
                               cwd=project, env=env, capture_output=True, text=True, timeout=30)
         assert call.returncode == 0, call.stderr
         expected = data / "restarts/binaries" / old_sha if variant == "unhealthy" else new
         expected_sha = old_sha if variant == "unhealthy" else new_sha
         log = data / "restarts/log.jsonl"
-        wait_for(lambda: log.exists() and any(json.loads(line)["outcome"] in ("restarted", "rolled_back")
-                                            for line in log.read_text().splitlines()), detail)
+        wait_for(lambda: log.exists() and log.read_text().strip(), detail)
+        outcome = [json.loads(line) for line in log.read_text().splitlines()][-1]
+        assert outcome["outcome"] == ("rolled_back" if variant == "unhealthy" else "restarted"), outcome
         # A server-only swap passes the outcome check above but leaves client A running.
         processes = subprocess.check_output(["ps", "-axo", "pid,ppid,command"], text=True)
         tui = [line for line in processes.splitlines() if str(expected) in line
@@ -140,8 +158,7 @@ def run_restart(root, source, variant, host):
         for key in ("dev", "yolo", "session_id", "explicit_data_dir"):
             assert replacement[key] == initial[key]
         assert (data / "control.sock").exists(), detail()
-        outcome = [json.loads(line) for line in log.read_text().splitlines()][-1]
-        assert outcome["outcome"] == ("rolled_back" if variant == "unhealthy" else "restarted")
+        assert draft in (data / "state.json").read_text(), "normal quit must persist the unsent draft"
     finally:
         done.set()
         # Only this private PTY's group and the recorded scratch server are owned.
@@ -172,3 +189,5 @@ def run_restart(root, source, variant, host):
                     pass
         os.close(master)
         reader.join(timeout=2)
+        if registry_home:
+            shutil.rmtree(registry_home)

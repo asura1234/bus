@@ -75,6 +75,32 @@ pub(crate) struct LivePid {
     pub(crate) birth: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct HandoffPlan {
+    pub(crate) id: String,
+    pub(crate) root: PathBuf,
+    pub(crate) old_binary: PathBuf,
+    pub(crate) new_binary: PathBuf,
+    pub(crate) old_sha: String,
+    pub(crate) new_sha: String,
+    pub(crate) who: String,
+    pub(crate) tui: LivePid,
+    pub(crate) session_id: Option<String>,
+    pub(crate) explicit_data_dir: bool,
+    pub(crate) dev: bool,
+    pub(crate) yolo: bool,
+}
+
+pub(crate) fn read_handoff(path: &Path) -> Result<Option<HandoffPlan>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| format!("{}: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
 /// Written only after the TUI has connected and started its coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct TuiBuild {
@@ -163,7 +189,7 @@ fn shell_quote(value: &str) -> String {
     }
 }
 
-/// Command the developer runs when this TUI cannot stay attached.
+/// Public resume command for a stopped TUI or an explicit scratch data root.
 pub(crate) fn reattach_command(marker: &RestartMarker) -> String {
     let binary = shell_quote(&marker.binary);
     let mut flags = String::new();
@@ -266,16 +292,6 @@ pub(crate) fn read_outcome(path: &Path) -> Result<Option<RestartLog>, String> {
     }
 }
 
-pub(crate) fn read_marker(path: &Path) -> Result<Option<RestartMarker>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| format!("restart marker is invalid: {error}")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
 pub(crate) fn append_log(path: &Path, record: &RestartLog) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -329,8 +345,8 @@ pub(crate) fn read_build_stamp(path: &Path) -> Option<BuildStamp> {
 
 /// Records the binary and process that are serving this data directory.
 /// A failure must not stop the server: the next restart refuses, because
-/// there is no recorded binary to roll back to. The pid is how a client tells
-/// this process from the one a same-binary restart is replacing.
+/// there is no complete server identity to health-check. Whole-session rollback
+/// uses the TUI startup backup, and replacement health checks this serving pid.
 pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
     let Some(root) = root else {
         return;

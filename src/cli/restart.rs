@@ -17,20 +17,7 @@ const CONFIRM: &str = "This command changes or removes work; add --confirm to pr
 pub(crate) const HEALTH_TIMEOUT: Duration = Duration::from_secs(45);
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct HandoffPlan {
-    pub(crate) root: PathBuf,
-    pub(crate) old_binary: PathBuf,
-    pub(crate) new_binary: PathBuf,
-    pub(crate) old_sha: String,
-    pub(crate) new_sha: String,
-    pub(crate) who: String,
-    pub(crate) tui: restart_record::LivePid,
-    pub(crate) session_id: Option<String>,
-    pub(crate) explicit_data_dir: bool,
-    pub(crate) dev: bool,
-    pub(crate) yolo: bool,
-}
+pub(crate) use restart_record::HandoffPlan;
 
 pub(crate) trait HandoffIo {
     fn stop(&mut self) -> Result<(), String>;
@@ -189,12 +176,13 @@ fn host_free_bytes(root: &Path) -> Result<u64, String> {
         .map_err(|error| format!("could not read free disk space: {error}"))
 }
 
-fn spawn_helper() -> Result<u32, String> {
+fn spawn_helper(plan: &HandoffPlan) -> Result<u32, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("could not find this bus binary: {error}"))?;
     let mut command = Command::new(exe);
     command
         .arg("--restart-handoff")
+        .arg(serde_json::to_string(plan).map_err(|error| error.to_string())?)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -268,11 +256,17 @@ fn finish(
     serving: &Path,
     mut reason: String,
 ) -> RestartLog {
-    if outcome != "restarted" {
-        reason.push_str(&format!(
-            "; finish manually: `{}`",
+    match outcome {
+        "restarted" => {}
+        "rolled_back" => reason.push_str("; the previous build is healthy; no additional TUI launch is needed"),
+        "quit_failed" => reason.push_str(&format!(
+            "; inspect and save/quit the old Bus before retrying restart; if its TUI has exited, resume the previous build with `{}`",
+            restart_record::reattach_command(&marker_for(plan, &plan.old_binary))
+        )),
+        _ => reason.push_str(&format!(
+            "; no healthy replacement TUI was confirmed; finish manually: `{}`",
             restart_record::reattach_command(&marker_for(plan, serving))
-        ));
+        )),
     }
     let _ = restart_record::write_json(
         &restart_record::marker_path(&plan.root),
@@ -415,6 +409,7 @@ mod tests {
 
     pub(super) fn plan(root: &Path) -> HandoffPlan {
         HandoffPlan {
+            id: "test-attempt".into(),
             root: root.to_path_buf(),
             old_binary: PathBuf::from("/old/bus"),
             new_binary: PathBuf::from("/new/bus"),
@@ -512,12 +507,33 @@ mod tests {
         let record = execute_handoff(&plan, &mut effects);
         assert_eq!(record.outcome, "rolled_back");
         assert!(record.reason.contains("socket timeout"));
+        assert!(record.reason.contains("previous build is healthy"));
+        assert!(!record.reason.contains("finish manually"));
         assert_eq!(effects.killed, vec![7]);
         assert_eq!(
             effects.started,
             vec![plan.new_binary.clone(), plan.old_binary.clone()]
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn quit_failure_keeps_recovery_on_the_old_build_and_requires_inspection_first() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-quit-recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan(&root);
+        let record = finish(
+            &plan,
+            &mut fake(),
+            "quit_failed",
+            &plan.new_binary,
+            "save failed".into(),
+        );
+        assert!(record.reason.contains("inspect and save/quit the old Bus"));
+        assert!(record.reason.contains("if its TUI has exited"));
+        assert!(record.reason.contains("/old/bus --dev resume abc"));
+        assert!(!record.reason.contains("/new/bus --dev resume"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
