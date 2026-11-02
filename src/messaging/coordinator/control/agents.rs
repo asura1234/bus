@@ -385,7 +385,7 @@ impl Worker {
                             agent_id = id.0,
                             key,
                             error = %error.message,
-                            "Stop key refused"
+                            "Interrupt refused"
                         );
                         row["outcome"] = json!("failed");
                         row["reason"] = json!(error.message);
@@ -397,7 +397,7 @@ impl Worker {
                             event = "bus.agent.interrupt",
                             agent_id = id.0,
                             key,
-                            "Stop key pressed"
+                            "Interrupt admission completed"
                         );
                         state.begin_interrupt(id).map_err(|e| e.to_string())?;
                         state
