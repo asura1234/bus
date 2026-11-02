@@ -197,8 +197,11 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
         );
         assert_eq!(
             room.unread_count,
-            unread + 1,
-            "one separate reply in each source room"
+            unread + 1 + u64::from(room.id == master),
+            "one source reply, plus the worker-woken decision in MASTER"
         );
     }
+    let reports: Vec<_> = fixture.worker.state.notices(master).collect();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].text, "dialog answered");
 }

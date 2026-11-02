@@ -256,7 +256,7 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
 }
 
 #[test]
-fn a_turn_that_answers_a_worker_replies_in_its_work_room_only() {
+fn a_turn_that_answers_a_worker_keeps_its_reply_and_reports_in_master() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
     let typed = bus.deliver(
@@ -271,18 +271,18 @@ fn a_turn_that_answers_a_worker_replies_in_its_work_room_only() {
         &typed,
         "builder finished; tests pass.",
     );
-    // The final is the reply to the worker's message, which shows in the work
-    // room under it; no report repeats it there or in MASTER.
+    // Keep the durable answer in the source room and publish the developer's
+    // MASTER report, without making another work-room post.
     assert_eq!(
         bus.reply(),
         Some((room, "builder finished; tests pass.".to_owned()))
     );
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
-    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+    assert_eq!(bus.reports(), ["builder finished; tests pass."]);
 }
 
 #[test]
-fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_replies_in_its_work_room_only() {
+fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_reports_its_decision_in_master() {
     // The 11:21 case: a worker's open dialog sends "Blocked, needs help to
     // continue." to the orchestrator, which approves it and ends its turn.
     let mut bus = fixture(Provider::ClaudeCode);
@@ -307,7 +307,10 @@ fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_replies_in_its_work_room_only(
         ))
     );
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
-    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
+    assert_eq!(
+        bus.reports(),
+        ["I approved formatting one test file. Nothing is waiting on you."]
+    );
 }
 
 #[test]
