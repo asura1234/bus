@@ -1,10 +1,12 @@
 //! Provider-independent terminal observation and input. Neither caller needs
 //! a dialog parser or an agent state to read and answer a terminal prompt.
+mod blocker;
 mod grid;
 pub(crate) mod input;
 mod press;
 mod selection;
 
+pub(crate) use blocker::{blocker, has_input_controls};
 pub(crate) use grid::Grid;
 pub(super) use press::DriverState;
 pub(crate) use press::{press, validate_press};

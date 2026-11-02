@@ -287,3 +287,39 @@ async fn driver_refuses_changed_or_incomplete_frame_before_enqueue() {
         assert!(writes.try_recv().is_err(), "refusal must enqueue no bytes");
     }
 }
+
+#[test]
+fn driver_blocker_uses_controls_without_provider_vocabulary() {
+    for screen in [
+        "Unfamiliar application asks a question\n❯ 1. Alpha\n  2. Beta\nEnter to select · Esc to cancel",
+        "Widget configuration\n  Type your answer\nenter submit · ctrl+] skip · shift+right main prompt",
+        "Trust arbitrary directory?\n● Continue\n  Exit\n↑↓ navigate · Enter select · Esc exit",
+        "Unfamiliar shell asks [Y/n] ",
+        "Queued questions\nshift+left to answer",
+    ] {
+        assert!(blocker(&menu(screen)).is_some(), "{screen}");
+        assert!(has_input_controls(screen), "{screen}");
+    }
+}
+
+#[test]
+fn driver_blocker_ignores_transcript_and_draft_menu_text() {
+    for screen in [
+        "❯ Please write this list:\n  1. Alpha\n  2. Beta",
+        "Old question\n❯ Alpha\n  Beta\nEnter to select · Esc to cancel\n\n> Current editable draft",
+        "A discussion of enter submit and esc cancel, without a control row",
+    ] {
+        assert!(blocker(&menu(screen)).is_none(), "{screen}");
+        assert!(!has_input_controls(screen), "{screen}");
+    }
+}
+
+#[test]
+fn driver_blocker_episode_ignores_selection_but_changes_with_question() {
+    let first = "Question one\n❯ 1. Alpha\n  2. Beta\nEnter select · Esc cancel";
+    let moved = "Question one\n  1. Alpha\n❯ 2. Beta\nEnter select · Esc cancel";
+    let other = moved.replace("Question one", "Question two");
+    let id = blocker(&menu(first)).expect("live controls");
+    assert_eq!(Some(id.clone()), blocker(&menu(moved)));
+    assert_ne!(Some(id), blocker(&menu(&other)));
+}

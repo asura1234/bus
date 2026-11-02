@@ -168,7 +168,7 @@ fn frame(screen: &str) -> Option<(Vec<String>, usize, usize)> {
             osc_progress: "",
         },
     );
-    if detection.visible_blocker || crate::agents::dialog::parse(screen).is_some() {
+    if detection.visible_blocker || crate::terminal::driver::has_input_controls(&plain) {
         return None;
     }
     let bottom = lines

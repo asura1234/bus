@@ -628,6 +628,12 @@ impl DetectionTask {
             status.pending_idle.clear();
             return;
         };
+        if !process_exited && crate::terminal::driver::has_input_controls(&content) {
+            screen_detection.state = AgentState::Blocked;
+            screen_detection.visible_blocker = true;
+            screen_detection.visible_idle = false;
+            screen_detection.visible_working = false;
+        }
         if agent == Some(AgentKind::Kimi) && !process_exited {
             let Some(adjusted) = self.kimi_command_screen(status, &content, screen_detection)
             else {
@@ -876,7 +882,6 @@ mod blocked_tests {
 
     #[tokio::test]
     async fn unknown_startup_update_is_published_blocked_before_timeout() {
-        assert!(crate::agents::dialog::parse(UPDATE).is_none());
         assert_eq!(scan(UPDATE, true).await, (AgentState::Blocked, true));
         assert_eq!(
             scan("Resume\nQuit", true).await,
@@ -885,8 +890,8 @@ mod blocked_tests {
     }
 
     #[tokio::test]
-    async fn no_request_generic_screen_stays_idle() {
-        assert_eq!(scan(UPDATE, false).await, (AgentState::Idle, false));
+    async fn visible_generic_controls_block_without_a_request() {
+        assert_eq!(scan(UPDATE, false).await, (AgentState::Blocked, true));
     }
 
     #[tokio::test]
