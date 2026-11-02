@@ -592,3 +592,22 @@ fn tui_error_text_dialog_notice_delivery_failure_keeps_only_the_question_visible
         capture.text()
     );
 }
+
+#[test]
+fn tui_error_text_latest_only_cache_cannot_restore_diagnostic_chat() {
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .post_bus_notice(room, None, "LEGACY_DIAGNOSTIC_SENTINEL".into(), 1000)
+        .unwrap();
+    let cached = snapshot.state.notices(room).next().unwrap().clone();
+    let mut saved = serde_json::to_value(&snapshot.state).unwrap();
+    saved["rooms"][room.0.to_string()]["notices"] = serde_json::json!([]);
+    saved["rooms"][room.0.to_string()]["latest_prompt"] = serde_json::to_value(cached).unwrap();
+    snapshot.state = serde_json::from_value(saved).unwrap();
+    assert!(snapshot.state.notices(room).next().is_none());
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    assert_no_diagnostics(&mut ui, &["LEGACY_DIAGNOSTIC_SENTINEL"]);
+}
