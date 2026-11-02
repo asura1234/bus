@@ -24,7 +24,7 @@ class Run:
             p=self.root/'bin'/name; p.write_text('#!/bin/sh\nexit 0\n'); p.chmod(0o700)
         self.env={'HOME':str(self.root/'home'),'TMPDIR':str(self.root/'tmp'),'PATH':f'{self.root}/bin:/usr/bin:/bin','SHELL':'/bin/zsh','ZDOTDIR':str(self.root/'zsh'),'TERM':'xterm-256color','LANG':'en_US.UTF-8','USER':'spike','LOGNAME':'spike','BUS_DATA_DIR':str(self.root/'data'),'BUS_TUI_FAKE_AGENT':'1','BUS_SPIKE_AUDIT_DIR':str(self.root/'audit')}
         if mode.startswith('after'): self.env['BUS_SPIKE_FAST_CONFIRM']='1'
-        
+
         for name in ['.zprofile','.zshrc']: (self.root/'zsh'/name).write_text('export PATH='+str(self.root/'bin')+':/usr/bin:/bin\n')
         self.rows=[]; self.term=None; self.stop=threading.Event(); self.agent_info={}
         self.save('setup',{'scratch':str(self.root),'mode':mode,'binary':str(BINARY),'version':subprocess.check_output([str(BINARY),'--version'],text=True).strip(),'binary_sha256':hashlib.sha256(BINARY.read_bytes()).hexdigest(),'payload_bytes':len(PAYLOAD.encode()),'draft':DRAFT})
