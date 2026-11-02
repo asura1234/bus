@@ -1,7 +1,8 @@
 use super::*;
 
-#[tokio::test]
-async fn codex_clipped_reply_submits_once_and_restores_existing_developer_draft() {
+pub(crate) async fn submits_once_and_restores_existing_developer_draft(
+    inspector: InspectorFactory,
+) {
     const ORIGINAL: &str = "developer draft stays local";
     let directory = crate::utils::test_temp::unique_temp_path("codex-clipped-existing-draft");
     std::fs::create_dir_all(&directory).unwrap();

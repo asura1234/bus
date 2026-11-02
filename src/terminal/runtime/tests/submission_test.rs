@@ -4,7 +4,7 @@ use super::*;
 mod draft_preservation;
 
 #[path = "codex_clipped_composer_test.rs"]
-mod codex_clipped_composer;
+pub(crate) mod codex_clipped_composer;
 
 #[tokio::test]
 async fn repeated_unowned_polls_emit_one_refusal_diagnostic_outside_the_render_lock() {

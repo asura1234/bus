@@ -1,5 +1,4 @@
 use super::*;
-use crate::agents::AgentKind;
 use crate::terminal::runtime::SubmissionInspector;
 use crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
 
@@ -8,20 +7,9 @@ const BEFORE: &str = include_str!("../../../../tests/fixtures/codex-composer/bef
 const CLIPPED: &str = include_str!("../../../../tests/fixtures/codex-composer/clipped.txt");
 
 #[path = "codex_clipped_existing_draft_test.rs"]
-mod existing_draft;
+pub(crate) mod existing_draft;
 
-fn inspector(directory: std::path::PathBuf) -> Box<dyn SubmissionInspector> {
-    Box::new(crate::server::api::preserving_observer(
-        AgentKind::Codex,
-        TEXT.into(),
-        directory,
-        vec![
-            Bytes::from_static(b"\x13"),
-            Bytes::from_static(b"\x07"),
-            Bytes::from_static(b"\x7f"),
-        ],
-    ))
-}
+type InspectorFactory = fn(std::path::PathBuf) -> Box<dyn SubmissionInspector>;
 
 fn render(runtime: &TerminalRuntime, frame: &str) {
     runtime.test_process_pty_bytes(
@@ -36,8 +24,9 @@ async fn next(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
         .unwrap()
 }
 
-#[tokio::test]
-async fn codex_clipped_review_reply_verifies_once_then_submits_and_releases_next_delivery() {
+pub(crate) async fn verifies_once_then_submits_and_releases_next_delivery(
+    inspector: InspectorFactory,
+) {
     let directory = crate::utils::test_temp::unique_temp_path("codex-clipped-review");
     std::fs::create_dir_all(&directory).unwrap();
     let native_file = directory.join("native.txt");
@@ -118,8 +107,9 @@ async fn codex_clipped_review_reply_verifies_once_then_submits_and_releases_next
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-#[tokio::test]
-async fn codex_clipped_foreign_prefix_receives_no_enter_or_destructive_cleanup() {
+pub(crate) async fn foreign_prefix_receives_no_enter_or_destructive_cleanup(
+    inspector: InspectorFactory,
+) {
     let directory = crate::utils::test_temp::unique_temp_path("codex-clipped-foreign");
     std::fs::create_dir_all(&directory).unwrap();
     let native_file = directory.join("native.txt");
@@ -160,8 +150,9 @@ async fn codex_clipped_foreign_prefix_receives_no_enter_or_destructive_cleanup()
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-#[tokio::test]
-async fn codex_verification_busy_after_paste_is_uncertain_and_never_replayed() {
+pub(crate) async fn verification_busy_after_paste_is_uncertain_and_never_replayed(
+    inspector: InspectorFactory,
+) {
     let directory = crate::utils::test_temp::unique_temp_path("codex-clipped-busy");
     let exchange = directory.join("exchange");
     let occupied =

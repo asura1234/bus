@@ -6,9 +6,6 @@ mod prompt;
 mod read;
 mod startup_snapshot;
 
-#[cfg(test)]
-pub(crate) use prompt::preserving_observer;
-
 use crate::server::api::errors::encode_error;
 
 fn agent_not_ready(id: String, target: &str) -> String {

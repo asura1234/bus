@@ -8,7 +8,7 @@ mod ownership;
 mod preservation;
 
 #[cfg(test)]
-pub(crate) fn preserving_observer(
+pub(super) fn preserving_observer(
     kind: AgentKind,
     expected: String,
     directory: std::path::PathBuf,

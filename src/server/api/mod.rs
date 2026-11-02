@@ -5,9 +5,6 @@ pub(crate) use socket::start_server_with_stop_control;
 pub use socket::ServerHandle;
 pub use streams::event_hub::EventHub;
 
-#[cfg(test)]
-pub(crate) use agents::preserving_observer;
-
 use tokio::sync::mpsc;
 
 use crate::protocol::api::schema::{Method, Request};

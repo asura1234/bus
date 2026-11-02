@@ -32,7 +32,7 @@ pub(crate) enum InputObservation {
 
 #[cfg(test)]
 #[path = "tests/submission_test.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// No Enter was sent for this delivery. Input was refused before pasting or
 /// the paste was withdrawn, so this is a definite non-delivery, safe to retry.

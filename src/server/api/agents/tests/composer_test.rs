@@ -1,5 +1,52 @@
 use super::*;
 
+fn codex_review_inspector(
+    directory: std::path::PathBuf,
+) -> Box<dyn crate::terminal::runtime::SubmissionInspector> {
+    Box::new(preserving_observer(
+        AgentKind::Codex,
+        include_str!("../../../../../tests/fixtures/codex-composer/review-reply.txt").into(),
+        directory,
+        vec![
+            bytes::Bytes::from_static(b"\x13"),
+            bytes::Bytes::from_static(b"\x07"),
+            bytes::Bytes::from_static(b"\x7f"),
+        ],
+    ))
+}
+
+#[tokio::test]
+async fn codex_clipped_review_reply_verifies_once_then_submits_and_releases_next_delivery() {
+    crate::terminal::runtime::codex_clipped_composer::verifies_once_then_submits_and_releases_next_delivery(
+        codex_review_inspector,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn codex_clipped_foreign_prefix_receives_no_enter_or_destructive_cleanup() {
+    crate::terminal::runtime::codex_clipped_composer::foreign_prefix_receives_no_enter_or_destructive_cleanup(
+        codex_review_inspector,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn codex_verification_busy_after_paste_is_uncertain_and_never_replayed() {
+    crate::terminal::runtime::codex_clipped_composer::verification_busy_after_paste_is_uncertain_and_never_replayed(
+        codex_review_inspector,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn codex_clipped_reply_submits_once_and_restores_existing_developer_draft() {
+    crate::terminal::runtime::codex_clipped_composer::existing_draft::submits_once_and_restores_existing_developer_draft(
+        codex_review_inspector,
+    )
+    .await;
+}
+
 #[test]
 fn codex_multiline_review_reply_is_owned_before_steering_enter() {
     use crate::terminal::runtime::SubmissionInspector;
