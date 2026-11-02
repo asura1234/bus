@@ -20,6 +20,15 @@ pub struct AgentReadParams {
 pub struct AgentSendKeysParams {
     pub target: String,
     pub keys: Vec<String>,
+    /// Only the bound agent interrupt operation requests native cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_interrupt: Option<NativeInterruptIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NativeInterruptIdentity {
+    pub expected_terminal_id: String,
+    pub expected_session_id: String,
 }
 
 /// Provider-independent observation, including terminals with no agent.
@@ -151,6 +160,9 @@ pub struct AgentPromptIfIdleParams {
     /// still refused.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub steer: bool,
+    /// Bind native steering to the Bus lead's turn, never a newer TUI turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_turn_id: Option<String>,
 }
 
 /// First interactive Codex turn: its SessionStart hook is deferred until input.

@@ -133,6 +133,7 @@ impl Worker {
                 expected_agent: launch::provider_kind(agent.provider).into(),
                 expected_session_id: session.clone(),
                 steer: false,
+                expected_turn_id: None,
             }),
             // Codex starts its provider session with the first turn.
             None if agent.provider == Provider::Codex => {
@@ -358,6 +359,20 @@ impl Worker {
                         .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
                             target: pane,
                             keys: vec![key.into()],
+                            native_interrupt: (agent.provider == Provider::Codex)
+                                .then(|| {
+                                    Some(schema::NativeInterruptIdentity {
+                                        expected_terminal_id: agent
+                                            .runtime_identity
+                                            .terminal_id
+                                            .clone()?,
+                                        expected_session_id: agent
+                                            .runtime_identity
+                                            .session_id
+                                            .clone()?,
+                                    })
+                                })
+                                .flatten(),
                         }));
                 match sent {
                     Err(error) if error.definitely_rejected => {

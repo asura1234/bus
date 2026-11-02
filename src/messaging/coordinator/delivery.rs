@@ -569,6 +569,10 @@ impl Worker {
                 expected_agent: launch::provider_kind(agent.provider).into(),
                 expected_session_id: session.clone(),
                 steer: true,
+                expected_turn_id: self
+                    .state
+                    .request(lead)
+                    .and_then(|request| request.provider_turn_id.clone()),
             },
         )) {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
@@ -619,6 +623,7 @@ fn submission_method(
             expected_agent: launch::provider_kind(agent.provider).into(),
             expected_session_id: session.clone(),
             steer,
+            expected_turn_id: None,
         })
     } else {
         Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
