@@ -346,7 +346,9 @@ def markdown(value):
                 detail = f"{d['kind']} {d['result']} @{d['head'][:8]}; elapsed: {str(d['duration_ms']) + 'ms' if d['duration_ms'] is not None else 'unknown'}; cause: {d['failure_cause'] or 'unknown'}"
             elif kind == "root_cause":
                 attribution = ", ".join(d["reviewers"]) or (
-                    "runner only" if d["run_ids"] else "reviewer attribution unavailable"
+                    "runner only"
+                    if d["run_ids"]
+                    else "reviewer attribution unavailable"
                 )
                 detail = f"root {d['claim_id']} {d['outcome']}: {attribution}"
             elif kind == "workflow":
