@@ -321,6 +321,7 @@ impl BusState {
                 request.trusted_start_bound = true;
                 request.phase = RequestPhase::Active;
                 request.uncertain_outcome = false;
+                request.submission_error = None;
                 request.pending_final = None;
                 request.turn_ended_at_ms = None;
                 request.awaiting_background = false;

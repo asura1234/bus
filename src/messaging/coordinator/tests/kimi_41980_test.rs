@@ -206,6 +206,7 @@ fn kimi_41980_uncertain_steering_is_never_replayed_by_a_provider_retry() {
         assert_eq!(f.request(member).phase, RequestPhase::Submitting);
         assert!(!f.request(member).trusted_start_bound);
         assert!(f.request(member).uncertain_outcome);
+        assert!(f.request(member).submission_error.is_some());
         assert!(f.reply(member).is_none());
         assert_eq!(f.request(waiting).phase, RequestPhase::Queued);
         assert_eq!(
@@ -379,6 +380,7 @@ fn kimi_failure_does_not_promote_a_member_from_a_foreign_started_callback() {
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
         assert_eq!(f.request(next).phase, RequestPhase::Submitting);
         assert!(!f.request(next).trusted_start_bound);
+        assert!(f.request(next).submission_error.is_some());
         assert!(f.reply(next).is_none());
         assert_ne!(
             f.worker.state.agent(f.agent).unwrap().current_request,
@@ -483,6 +485,12 @@ fn provider_flake_legacy_kimi_inputs_keep_their_turns_before_and_after_hold() {
             f.worker.state.agent(f.agent).unwrap().current_request,
             Some(second)
         );
+        for id in [first, second] {
+            assert!(
+                f.request(id).submission_error.is_none(),
+                "a native Started receipt must clear the old submission failure"
+            );
+        }
         assert_eq!(f.typed().len(), 3, "neither legacy input was replayed");
         if restart {
             super::kimi_steering_tests::reopen(&mut f);

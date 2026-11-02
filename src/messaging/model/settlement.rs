@@ -309,6 +309,7 @@ impl BusState {
         member.provider_prompt_id = callback.provider_prompt_id.clone();
         member.trusted_start_bound = true;
         member.uncertain_outcome = false;
+        member.submission_error = None;
         member.progress_at_ms = Some(callback.occurred_at_ms);
         let agent = self
             .agents
