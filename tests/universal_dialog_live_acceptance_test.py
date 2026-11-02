@@ -356,7 +356,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 blocked(case, agent)
                 tests = {"claude": lambda label: bool(re.fullmatch(
                              r"Yes, (?:I )?trust this folder[.!]?", label)),
-                         "codex": lambda label: label == "Yes, continue",
+                         "codex": lambda label: label in {"Yes, continue", "Trust and continue"},
                          "kimi": lambda label: label == "Trust and continue"}
                 label = unique_label(screen, tests[provider])
                 press(case, agent, screen, "--select", label, acceptance=True)
