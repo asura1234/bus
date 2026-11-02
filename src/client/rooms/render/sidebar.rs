@@ -126,8 +126,8 @@ fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
     }
 }
 
-/// Rows taken by the MASTER room entry and the gap before ROOMS.
-const MASTER_SECTION_ROWS: usize = 2;
+/// Rows taken by the MASTER room entry, its agent count and the gap before ROOMS.
+const MASTER_SECTION_ROWS: usize = 3;
 
 /// Rows of a MASTER agent: name, provider, orchestrated room and a gap.
 const MASTER_AGENT_ROWS: usize = 4;
@@ -139,6 +139,19 @@ fn sidebar_rooms_header(state: &BusState, _selected: Option<RoomId>) -> usize {
     } else {
         1
     }
+}
+
+/// ACTIVE follows the displayed agent status; Unavailable agents remain in TOTAL.
+fn sidebar_agent_counts(state: &BusState, room: RoomId) -> (usize, usize) {
+    state
+        .agents()
+        .filter(|agent| agent.room_id == room)
+        .fold((0, 0), |(active, total), agent| {
+            (
+                active + usize::from(matches!(agent_status(state, agent), "Working" | "Blocked")),
+                total + 1,
+            )
+        })
 }
 
 /// The logical sidebar row of a room: MASTER is the first entry, alone above
@@ -156,7 +169,7 @@ pub(in crate::client::rooms) fn sidebar_room_row(
         .rooms()
         .filter(|candidate| candidate.kind == RoomKind::Work)
         .position(|candidate| candidate.id == room)
-        .map(|index| first + index)
+        .map(|index| first + index * 2)
 }
 
 /// A room's sidebar label, its name truncated to fit in `width` cells.
@@ -301,16 +314,13 @@ impl BusUi {
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
         let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
-        let master_header_rows = if self.snapshot.state.master_room().is_some() {
-            MASTER_SECTION_ROWS - 1
-        } else {
-            0
-        };
+        // Both MASTER rows are already included in rooms.len() * 2.
+        let master_gap_rows = usize::from(self.snapshot.state.master_room().is_some());
         // Leading gap, ROOMS header, gap, divider, `# room` agents header,
         // gap: six fixed rows around the room and agent entries.
         let content_height = 6
-            + master_header_rows
-            + rooms.len()
+            + master_gap_rows
+            + rooms.len() * 2
             + agents.iter().map(|entry| entry.height).sum::<usize>();
         let notices = u16::from(self.quitting.is_some());
         // The footer stays pinned below any exit notices.
@@ -336,7 +346,7 @@ impl BusUi {
             .iter()
             .filter(|room| room.kind == RoomKind::Work)
             .count();
-        let divider_row = rooms_header + 2 + work_rooms;
+        let divider_row = rooms_header + 2 + work_rooms * 2;
         let agents_header = divider_row + 1;
         self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
         view.sidebar_divider = viewport.at(1, divider_row, sw);
@@ -418,55 +428,72 @@ impl BusUi {
             };
             let name_width = name_width.max(u16::from(room.unseen_to_developer)).min(sw);
             let rect = viewport.at(1, row, name_width);
-            if rect.height == 0 {
-                continue;
-            }
-            let label = sidebar_room_label(room, name_width);
-            if let Some(rename) = self
-                .rename
-                .as_ref()
-                .filter(|r| r.target == RenameTarget::Room(room.id))
-            {
-                view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
-            } else {
-                view.row(
-                    rect,
-                    &label,
-                    Some(Action::Room(room.id)),
-                    Some(room.id) == self.room && self.terminal.is_none(),
-                    false,
-                );
-                if room.unseen_to_developer && !label.is_empty() {
-                    let dot = Rect::new(rect.x + cells(&label) as u16 - 1, rect.y, 1, 1);
-                    view.row(dot, "●", Some(Action::Room(room.id)), false, false);
-                    view.color_last_row(dot, ACCENT);
+            if rect.height > 0 {
+                let label = sidebar_room_label(room, name_width);
+                if let Some(rename) = self
+                    .rename
+                    .as_ref()
+                    .filter(|r| r.target == RenameTarget::Room(room.id))
+                {
+                    view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
+                } else {
+                    view.row(
+                        rect,
+                        &label,
+                        Some(Action::Room(room.id)),
+                        Some(room.id) == self.room && self.terminal.is_none(),
+                        false,
+                    );
+                    if room.unseen_to_developer && !label.is_empty() {
+                        let dot = Rect::new(rect.x + cells(&label) as u16 - 1, rect.y, 1, 1);
+                        view.row(dot, "●", Some(Action::Room(room.id)), false, false);
+                        view.color_last_row(dot, ACCENT);
+                    }
+                }
+                if !right.is_empty() {
+                    let status_start = status_end.saturating_sub(right.len() as u16).max(
+                        if room.unseen_to_developer {
+                            1 + name_width
+                        } else {
+                            0
+                        },
+                    );
+                    let status_rect =
+                        viewport.at(status_start, row, status_end.saturating_sub(status_start));
+                    view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
+                    if let Some(colors) = animated_status_colors(right, self.status_animation_phase)
+                    {
+                        view.color_last_row_characters(status_rect, colors);
+                    }
+                }
+                // MASTER is permanent, so it never offers a delete button.
+                if Some(room.id) == self.room && room.kind == RoomKind::Work {
+                    view.row(
+                        viewport.at(viewport.sidebar.width.saturating_sub(3), row, 1),
+                        "×",
+                        Some(Action::Delete(DeleteTarget::Room(room.id))),
+                        false,
+                        true,
+                    );
                 }
             }
-            if !right.is_empty() {
-                let status_start = status_end.saturating_sub(right.len() as u16).max(
-                    if room.unseen_to_developer {
-                        1 + name_width
-                    } else {
-                        0
-                    },
-                );
-                let status_rect =
-                    viewport.at(status_start, row, status_end.saturating_sub(status_start));
-                view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
-                if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
-                    view.color_last_row_characters(status_rect, colors);
-                }
-            }
-            // MASTER is permanent, so it never offers a delete button.
-            if Some(room.id) == self.room && room.kind == RoomKind::Work {
-                view.row(
-                    viewport.at(viewport.sidebar.width.saturating_sub(3), row, 1),
-                    "×",
-                    Some(Action::Delete(DeleteTarget::Room(room.id))),
-                    false,
-                    true,
-                );
-            }
+            let (active, total) = sidebar_agent_counts(&self.snapshot.state, room.id);
+            let count = format!("{active}/{total}");
+            let count_width = count.len() as u16;
+            view.row(
+                viewport.at(1, row + 1, sw.saturating_sub(count_width + 1)),
+                "Agents",
+                Some(Action::Room(room.id)),
+                false,
+                true,
+            );
+            view.row(
+                viewport.at(1 + sw.saturating_sub(count_width), row + 1, count_width),
+                count,
+                Some(Action::Room(room.id)),
+                false,
+                true,
+            );
         }
     }
 

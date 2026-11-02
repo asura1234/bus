@@ -446,10 +446,11 @@ impl BusUi {
             .filter(|_| self.view.sidebar_body.height > 0)
         {
             let capacity = usize::from(self.view.sidebar_body.height.max(1));
+            let end = row + capacity.min(2);
             if row < self.sidebar_scroll {
                 self.sidebar_scroll = row;
-            } else if row >= self.sidebar_scroll + capacity {
-                self.sidebar_scroll = row + 1 - capacity;
+            } else if end > self.sidebar_scroll + capacity {
+                self.sidebar_scroll = end - capacity;
             }
         }
         self.file_scroll = 0;
