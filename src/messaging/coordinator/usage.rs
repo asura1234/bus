@@ -60,6 +60,7 @@ pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
     cursor: Option<CursorUsageSnapshot>,
+    cursor_errors: BTreeMap<AgentId, CursorUsageSnapshot>,
     started_at_ms: u64,
     claude_reads: BTreeMap<AgentId, Instant>,
 }
@@ -70,6 +71,7 @@ impl Default for Usage {
             codex: None,
             claude: None,
             cursor: None,
+            cursor_errors: BTreeMap::new(),
             started_at_ms: bus_io::now_ms(),
             claude_reads: BTreeMap::new(),
         }
@@ -170,19 +172,26 @@ impl Usage {
         request: Option<RequestId>,
     ) {
         if let (Some(error), Some(resets_at)) = (error, resets_at) {
-            self.cursor = Some(CursorUsageSnapshot {
+            let snapshot = CursorUsageSnapshot {
                 error: error.to_owned(),
                 resets_at,
                 read_at_ms,
                 observed_by_agent: agent,
                 request,
-            });
-        } else if self
-            .cursor
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.observed_by_agent == agent)
-        {
-            self.cursor = None;
+            };
+            if request.is_some() {
+                self.cursor_errors.insert(agent, snapshot.clone());
+            }
+            self.cursor = Some(snapshot);
+        } else {
+            if self
+                .cursor
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.observed_by_agent == agent)
+            {
+                self.cursor = None;
+            }
+            self.cursor_errors.remove(&agent);
         }
     }
 
@@ -193,7 +202,7 @@ impl Usage {
         session: &str,
         turn: &str,
     ) -> Option<String> {
-        let snapshot = self.cursor.as_ref()?;
+        let snapshot = self.cursor_errors.get(&agent)?;
         let request_id = state.agent(agent)?.current_request?;
         let request = state.request(request_id)?;
         (snapshot.observed_by_agent == agent
