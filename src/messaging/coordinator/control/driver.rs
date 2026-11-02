@@ -12,13 +12,74 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 const SELECTION_BUDGET: Duration = Duration::from_secs(8);
 
 impl Worker {
+    /// Managed ownership is required even while the provider has not bound a session.
+    pub(in crate::messaging::coordinator) fn terminal_identity(
+        &self,
+        id: super::AgentId,
+    ) -> Result<(String, String, Option<String>), String> {
+        let agent = self.state.agent(id).ok_or("Unknown agent")?;
+        let identity = &agent.runtime_identity;
+        let (Some(_), Some(terminal), Some(pane)) = (
+            &identity.launch_id,
+            &identity.terminal_id,
+            &identity.pane_id,
+        ) else {
+            return Err("Agent has no terminal yet".into());
+        };
+        Ok((terminal.clone(), pane.clone(), identity.session_id.clone()))
+    }
+
+    /// Read one coherent driver frame, then verify the native identity and status.
+    /// Generic Blocked state covers a screen whose controls are not yet recognizable;
+    /// a matching non-Blocked native status plus a clear frame retires stale list data.
+    pub(in crate::messaging::coordinator) fn native_blocker(
+        &mut self,
+        id: super::AgentId,
+    ) -> Result<Option<String>, String> {
+        let (terminal, pane, session) = self.terminal_identity(id)?;
+        let observation = native_observe(&pane, Some(&terminal), None, &mut |method| {
+            self.transport.request(method)
+        })
+        .map_err(|error| error.message)?;
+        if observation.pane_id != pane {
+            return Err("Agent pane identity changed; observe it again".into());
+        }
+        let ResponseResult::AgentInfo { agent } = self
+            .transport
+            .request(Method::AgentGet(schema::AgentTarget {
+                target: pane.clone(),
+            }))
+            .map_err(|error| error.message)?
+        else {
+            return Err("Unexpected native agent identity response".into());
+        };
+        if agent.pane_id != pane
+            || agent.terminal_id != terminal
+            || session.as_deref().is_some_and(|session| {
+                agent
+                    .agent_session
+                    .as_ref()
+                    .map(|current| current.value.as_str())
+                    != Some(session)
+            })
+        {
+            return Err("Agent terminal or session changed; observe it again".into());
+        }
+        Ok(
+            crate::terminal::driver::blocker(&observation.grid).or_else(|| {
+                (agent.agent_status == schema::AgentStatus::Blocked)
+                    .then(|| super::super::dialogs::BLOCKED.to_owned())
+            }),
+        )
+    }
+
     pub(super) fn execute_driver(&mut self, method: &str, p: &Value) -> Result<Value, String> {
         let pane = optional_bool(p, "pane")?;
         let (target, managed_terminal) = if pane {
             (required(p, "agent")?.to_owned(), None)
         } else {
             let agent = self.control_agent(p)?;
-            let (_, _, terminal, pane, _) = self.dialog_identity(agent)?;
+            let (terminal, pane, _) = self.terminal_identity(agent)?;
             (pane, Some(terminal))
         };
         if method == "agent.observe" {

@@ -1,6 +1,5 @@
 mod basic;
 mod detection_context;
-mod dialog;
 mod driver;
 mod prompt;
 mod read;
@@ -26,9 +25,7 @@ fn agent_not_found(id: String, target: &str) -> String {
 
 #[cfg(test)]
 use crate::protocol::api::schema::{
-    AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogChooseResult, AgentDialogKind,
-    AgentDialogObservation, AgentPromptParams, AgentRenameParams, AgentSendKeysParams, AgentTarget,
-    ResponseResult,
+    AgentPromptParams, AgentRenameParams, AgentSendKeysParams, AgentTarget, ResponseResult,
 };
 #[cfg(test)]
 use crate::server::app::App;

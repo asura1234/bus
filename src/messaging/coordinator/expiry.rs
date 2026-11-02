@@ -34,18 +34,12 @@ impl Worker {
             .fail_unconfirmed_submissions(now_ms)
             .map_err(|e| e.to_string())?;
         for (worker, notice, delivery_deadline) in state.dialog_notice_fallback_candidates(now_ms) {
-            let observation =
-                self.dialog_identity(worker)
-                    .and_then(|(_, _, terminal, pane, session)| {
-                        self.native_dialog(&pane, &terminal, session.as_deref(), false)
-                    });
+            let observation = self.native_blocker(worker);
             // The notification marker is debounced history, not proof of a
             // still-open screen. A readable close always wins; an unreadable
             // snapshot can defer attention only until its fixed second bound.
             let reason = match observation {
-                Ok(current) if current.dialog.is_some() || current.pending_question => {
-                    Some("dialog_notice_submission_unconfirmed")
-                }
+                Ok(Some(_)) => Some("dialog_notice_submission_unconfirmed"),
                 Err(_)
                     if now_ms >= delivery_deadline.saturating_add(DIALOG_OBSERVATION_GRACE_MS) =>
                 {

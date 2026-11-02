@@ -34,11 +34,14 @@ fn blocked_behind_other_room(
     }
     f.room = if master_turn { work } else { master };
     let head = f.send("ordinary cross-room message", false);
-    // Collapsed free-text questions have this stable native id. Their expanded
-    // panel and its empty options do not affect notification scheduling.
+    // Generic blocked metadata schedules the notice; native observation
+    // verifies that the same worker still owns an open screen.
     for _ in 0..2 {
         f.worker
-            .notify_dialogs(vec![(codex, Some("codex:pending_question".into()))])
+            .notify_dialogs(vec![(
+                codex,
+                Some(crate::messaging::coordinator::dialogs::BLOCKED.into()),
+            )])
             .unwrap();
     }
     let Some(DialogNoticeTo::Orchestrator(notice)) =

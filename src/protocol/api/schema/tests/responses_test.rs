@@ -122,44 +122,6 @@ fn subscription_event_envelope_round_trips() {
 }
 
 #[test]
-fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
-    for dialog in [
-        None,
-        Some(AgentDialog {
-            kind: AgentDialogKind::Choice,
-            text: "Do you want to proceed?".into(),
-            options: vec![AgentDialogOption {
-                number: 1,
-                label: "Yes".into(),
-                selected: true,
-                free_text: false,
-            }],
-            hint: None,
-            id: "id".into(),
-            digest: "digest".into(),
-            free_text: None,
-            tabs: Vec::new(),
-        }),
-    ] {
-        let result = ResponseResult::AgentDialog {
-            observation: AgentDialogObservation {
-                pending_question: false,
-                terminal_id: "terminal-1".into(),
-                pane_id: "w1:p2".into(),
-                session_id: Some("session-1".into()),
-                content_revision: 10,
-                dialog,
-            },
-        };
-        assert_eq!(
-            serde_json::from_str::<ResponseResult>(&serde_json::to_string(&result).unwrap())
-                .unwrap(),
-            result
-        );
-    }
-}
-
-#[test]
 fn scroll_changed_subscription_event_round_trips() {
     let event = SubscriptionEventEnvelope {
         event: SubscriptionEventKind::ScrollChanged,

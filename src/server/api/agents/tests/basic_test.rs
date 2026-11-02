@@ -146,73 +146,8 @@ fn app_with_dialog_sized(
     (app, writes)
 }
 
-fn observe_dialog(app: &mut App) -> AgentDialogObservation {
-    let observed = app.handle_agent_dialog_observe(
-        "observe".into(),
-        crate::protocol::api::schema::AgentDialogObserveParams {
-            target: "reviewer".into(),
-            open_pending_question: false,
-        },
-    );
-    let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
-    let ResponseResult::AgentDialog { observation } = success.result else {
-        panic!("unexpected observation response");
-    };
-    observation
-}
-
-fn choose(
-    app: &mut App,
-    observation: &AgentDialogObservation,
-    session: Option<&str>,
-    digest: &str,
-    option: u32,
-) -> String {
-    app.handle_agent_dialog_choose(
-        "choose".into(),
-        AgentDialogChooseParams {
-            target: "reviewer".into(),
-            expected_terminal_id: observation.terminal_id.clone(),
-            expected_pane_id: observation.pane_id.clone(),
-            expected_session_id: session.map(str::to_owned),
-            expected_dialog_digest: digest.into(),
-            option,
-            action: Default::default(),
-        },
-    )
-}
-
-fn chosen(response: &str) -> AgentDialogChooseResult {
-    let success: SuccessResponse = serde_json::from_str(response).unwrap();
-    let ResponseResult::AgentDialogChosen { choice } = success.result else {
-        panic!("unexpected choice response: {response}");
-    };
-    choice
-}
-
-const CODEX_TEXT_DIALOG: &[u8] = "• Queued follow-up inputs\r\n\r\nWhat token should Bus use?\r\n\r\nType your answer\r\n\r\nenter submit   ctrl+] skip   shift+→ main prompt\r\n".as_bytes();
-
-fn answer_params(
-    observation: &AgentDialogObservation,
-    text: Option<&str>,
-    skip: bool,
-) -> AgentDialogAnswerParams {
-    AgentDialogAnswerParams {
-        target: "reviewer".into(),
-        expected_terminal_id: observation.terminal_id.clone(),
-        expected_pane_id: observation.pane_id.clone(),
-        expected_session_id: observation.session_id.clone(),
-        expected_dialog_digest: observation.dialog.as_ref().unwrap().digest.clone(),
-        text: text.map(str::to_owned),
-        skip,
-    }
-}
-
 #[path = "prompt_test.rs"]
 mod prompt;
-
-#[path = "dialog_test.rs"]
-mod dialog;
 
 #[path = "detection_context_test.rs"]
 mod detection_context;
@@ -318,12 +253,6 @@ fn agent_rename_does_not_replace_the_pane_label() {
         );
     }
 }
-
-#[path = "fingerprint_test.rs"]
-mod fingerprint_tests;
-
-#[path = "auto_ui_test.rs"]
-mod automatic_ui;
 
 impl App {
     pub(crate) fn test_prompt_clock(
