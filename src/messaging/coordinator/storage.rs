@@ -89,6 +89,18 @@ impl Worker {
     /// durable content is pure cost. Inside a batch the write waits for
     /// [`Self::finish_batch`].
     pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
+        self.save_with_reply_timestamps(state, true)
+    }
+
+    pub(super) fn save_without_reply_timestamps(&mut self, state: BusState) -> Result<(), String> {
+        self.save_with_reply_timestamps(state, false)
+    }
+
+    fn save_with_reply_timestamps(
+        &mut self,
+        state: BusState,
+        stamp_new_replies: bool,
+    ) -> Result<(), String> {
         if !self.store.has_unfolded_journal()
             && !state.durable_poll_change_from(&self.durable_state)
         {
@@ -106,13 +118,23 @@ impl Worker {
             self.revision += 1;
             return Ok(());
         }
-        self.write(state)?;
+        self.write_with_reply_timestamps(state, stamp_new_replies)?;
         self.revision += 1;
         Ok(())
     }
 
-    pub(super) fn write(&mut self, mut state: BusState) -> Result<(), String> {
-        state.mark_new_replies_delivered(&self.durable_state, io::now_ms());
+    pub(super) fn write(&mut self, state: BusState) -> Result<(), String> {
+        self.write_with_reply_timestamps(state, true)
+    }
+
+    fn write_with_reply_timestamps(
+        &mut self,
+        mut state: BusState,
+        stamp_new_replies: bool,
+    ) -> Result<(), String> {
+        if stamp_new_replies {
+            state.mark_new_replies_delivered(&self.durable_state, io::now_ms());
+        }
         if let Err(error) = self.store.save(&state) {
             if crate::utils::error_pipe::is_suppressed() {
                 tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
