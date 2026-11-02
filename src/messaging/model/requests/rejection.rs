@@ -26,7 +26,7 @@ impl BusState {
         for id in std::iter::once(id).chain(members) {
             if let Some(request) = self.requests.get_mut(&id) {
                 request.queued_rejection.get_or_insert_with(|| {
-                    crate::messaging::model::types::QueuedRejection {
+                    crate::messaging::model::QueuedRejection {
                         at_ms,
                         reason: rejection_reason(message).into(),
                     }

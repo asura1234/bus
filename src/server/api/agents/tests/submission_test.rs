@@ -745,6 +745,7 @@ async fn api_timeout_revokes_future_observed_scope_keys() {
             Duration::ZERO,
             None,
             &scope,
+            true,
         )
         .unwrap();
     let mut draft = [0; 5];
@@ -772,6 +773,7 @@ async fn api_timeout_revokes_future_observed_scope_keys() {
             Duration::ZERO,
             None,
             &scope,
+            false,
         )
         .unwrap();
     let error = late_key

@@ -4,6 +4,8 @@ use super::{
     PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase,
 };
 
+#[path = "callback_latency.rs"]
+mod callback_latency;
 mod kimi;
 
 impl BusState {
@@ -15,53 +17,6 @@ impl BusState {
 
     pub(crate) fn record_reported_final(&mut self, key: String, launch: String) {
         std::sync::Arc::make_mut(&mut self.consumed_callbacks).insert(key, Some(launch));
-    }
-
-    pub(crate) fn accept_callback(
-        &mut self,
-        mut callback: ProviderCallback,
-    ) -> CallbackDisposition {
-        self.match_owned_claude_paste(&mut callback);
-        let agent = callback.agent_id;
-        let occurred_at_ms = callback.occurred_at_ms;
-        let current = self.agents.get(&agent).and_then(|a| a.current_request);
-        let final_event =
-            matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
-        let reply_event = final_event.is_some();
-        let started_event = matches!(callback.kind, CallbackEventKind::PromptStarted);
-        let disposition = self.accept_callback_unrecorded(callback);
-        if let Some(callback) = final_event {
-            self.record_worker_final(&callback, &disposition);
-        }
-        if !matches!(disposition, CallbackDisposition::Rejected(_)) {
-            if let Some(request) = current {
-                if started_event {
-                    self.record_provider_started(request, occurred_at_ms);
-                }
-                if reply_event {
-                    self.record_reply_captured(request, occurred_at_ms);
-                }
-            }
-            if let Some(request) = current.and_then(|id| self.requests.get_mut(&id)) {
-                let progress = request.progress_at_ms.get_or_insert(occurred_at_ms);
-                *progress = (*progress).max(occurred_at_ms);
-            }
-        }
-        // A provider turn event on a Bus request proves the agent was busy
-        // with it, even when the turn started and ended between two status
-        // polls that only ever saw Idle. Recording the edge here lets
-        // `turn_ended` (and so `send --async`) finish on the next Idle poll.
-        if matches!(
-            disposition,
-            CallbackDisposition::AcceptedBinding
-                | CallbackDisposition::AcceptedContinuation
-                | CallbackDisposition::AcceptedSteering
-                | CallbackDisposition::AcceptedProgress
-                | CallbackDisposition::AcceptedPendingSettlement
-        ) {
-            self.record_busy_edge(agent);
-        }
-        disposition
     }
 
     fn match_owned_claude_paste(&self, callback: &mut ProviderCallback) {
@@ -417,6 +372,7 @@ impl BusState {
             callback.prompt_payload.as_deref(),
             request.trusted_start_bound,
         ) {
+            let request_turn_id = request.provider_turn_id.clone();
             let steered = self.group_members(request_id).into_iter().find(|member| {
                 self.requests.get(member).is_some_and(|m| {
                     m.steered
@@ -426,8 +382,14 @@ impl BusState {
                 })
             });
             if let Some(member) = steered {
+                if let Some(member_state) = self.requests.get_mut(&member) {
+                    member_state
+                        .latency
+                        .provider_started_at_ms
+                        .get_or_insert(callback.occurred_at_ms);
+                }
                 if callback.provider_turn_id.is_some()
-                    && callback.provider_turn_id != request.provider_turn_id
+                    && callback.provider_turn_id != request_turn_id
                     && self
                         .split_answered_turn(request_id, member, callback)
                         .unwrap_or(false)
@@ -526,6 +488,7 @@ impl BusState {
         let Some(pending) = request.pending_final.clone() else {
             return Ok(false);
         };
+
         let members = self.group_members(request_id);
         let (members, unresolved): (Vec<_>, Vec<_>) = members.into_iter().partition(|member| {
             self.requests
@@ -545,11 +508,7 @@ impl BusState {
                     .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
             })
             .unwrap_or(request_id);
-        let turn_key = provider_turn_key(
-            request.expected_launch_id.as_deref().unwrap_or_default(),
-            pending.provider_session_id.as_deref(),
-            pending.provider_turn_id.as_deref(),
-        );
+        let turn_key = pending_turn_key(request, &pending);
         for member in &unresolved {
             if let Some(member) = self.requests.get_mut(member) {
                 member.phase = RequestPhase::Submitting;
@@ -680,6 +639,14 @@ impl BusState {
         }
         Ok(())
     }
+}
+
+fn pending_turn_key(request: &Request, pending: &PendingFinal) -> Option<String> {
+    provider_turn_key(
+        request.expected_launch_id.as_deref().unwrap_or_default(),
+        pending.provider_session_id.as_deref(),
+        pending.provider_turn_id.as_deref(),
+    )
 }
 
 fn bound_callback_turn(request: &Request, callback: &ProviderCallback) -> bool {

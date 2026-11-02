@@ -3,11 +3,10 @@ use super::storage::remove_spooled;
 use super::{
     control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
-    RequestId, RuntimeStatus, StoragePause, Transport,
+    RequestId, RequestPhase, RuntimeStatus, StoragePause, Transport,
 };
 use crate::agents::providers::spool;
 use crate::messaging::perf;
-use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
 mod callback_spool;
@@ -80,7 +79,7 @@ pub(super) struct Worker {
     /// Folders listed for system sounds; None reads the operating system's.
     pub(super) sound_dirs: Option<Vec<PathBuf>>,
     /// Saves deferred to one write, while a tick applies spooled callbacks.
-    batch: Option<SaveBatch>,
+    pub(super) batch: Option<SaveBatch>,
     /// When the last archive pass ran; it runs at most once per [`ARCHIVE_EVERY`].
     archived_at: Option<std::time::Instant>,
     #[cfg(test)]
@@ -90,10 +89,10 @@ pub(super) struct Worker {
 /// State changes waiting for one `state.json` write, and the spool files
 /// that may be deleted only once that write is durable.
 #[derive(Default)]
-struct SaveBatch {
+pub(super) struct SaveBatch {
     /// The in-memory state before the first deferred change; restored when
     /// the write fails, as a failed immediate save leaves the state unchanged.
-    before: Option<(BusState, u64)>,
+    pub(super) before: Option<(BusState, u64)>,
     acknowledgements: Vec<(PathBuf, Vec<PathBuf>)>,
     rejections: Vec<(AgentId, PathBuf, PathBuf)>,
 }
@@ -223,107 +222,6 @@ impl Worker {
             std::thread::sleep(Duration::from_millis(delay));
         }
     }
-
-    /// Commits `state` and makes it durable. A state that differs from the
-    /// last write only in status-only observations writes nothing: those are
-    /// never persisted on their own (see `apply_poll`), so rewriting the same
-    /// durable content is pure cost. Inside a batch the write waits for
-    pub(super) fn note_requests_queued(&mut self, ids: &[RequestId]) -> Result<(), String> {
-        let at_ms = io::now_ms();
-        for id in ids {
-            let mut state = self.state.clone();
-            state.record_queued(*id, at_ms).map_err(|e| e.to_string())?;
-            let room = state.request(*id).ok_or("Missing queued request")?.room_id;
-            self.journal(
-                state,
-                JournalOp::DeliveryTimestamps {
-                    room,
-                    request_id: *id,
-                    queued_at_ms: Some(at_ms),
-                    native_requested_at_ms: None,
-                },
-            )?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn note_native_requested(
-        &mut self,
-        id: RequestId,
-        at_ms: u64,
-    ) -> Result<(), String> {
-        let mut state = self.state.clone();
-        state
-            .record_native_requested(id, at_ms)
-            .map_err(|e| e.to_string())?;
-        let room = state
-            .request(id)
-            .ok_or("Missing submitting request")?
-            .room_id;
-        self.journal(
-            state,
-            JournalOp::DeliveryTimestamps {
-                room,
-                request_id: id,
-                queued_at_ms: None,
-                native_requested_at_ms: Some(at_ms),
-            },
-        )
-    }
-
-    /// [`Self::finish_batch`].
-    pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
-        if !self.store.has_unfolded_journal()
-            && !state.durable_poll_change_from(&self.durable_state)
-        {
-            if state != self.state {
-                self.state = state;
-                self.revision += 1;
-            }
-            return Ok(());
-        }
-        if let Some(batch) = self.batch.as_mut() {
-            if batch.before.is_none() {
-                batch.before = Some((self.state.clone(), self.revision));
-            }
-            self.state = state;
-            self.revision += 1;
-            return Ok(());
-        }
-        self.write(state)?;
-        self.revision += 1;
-        Ok(())
-    }
-
-    fn write(&mut self, mut state: BusState) -> Result<(), String> {
-        state.mark_new_replies_delivered(&self.durable_state, io::now_ms());
-        if let Err(error) = self.store.save(&state) {
-            if crate::utils::error_pipe::is_suppressed() {
-                tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
-                return Err(error.to_string());
-            }
-            self.pause_storage(&error);
-            return Err(self.storage_notice().into());
-        }
-        diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
-        diagnostics::recoveries(&self.durable_state, &state);
-        diagnostics::provider_resets(&self.durable_state, &state);
-        for agent in state.agents() {
-            if self
-                .durable_state
-                .agent(agent.id)
-                .is_some_and(|old| old.status != agent.status)
-            {
-                tracing::debug!(event = "bus.agent.status", agent_id = agent.id.0,
-                    room_id = agent.room_id.0, request_id = ?agent.current_request.map(|id| id.0),
-                    status = ?agent.status, "Bus status changed");
-            }
-        }
-        self.durable_state = state.clone();
-        self.state = state;
-        Ok(())
-    }
-
     /// Runs the archive pass at most once per [`ARCHIVE_EVERY`].
     fn archive_when_due(&mut self) -> Result<(), String> {
         let now = std::time::Instant::now();
@@ -390,18 +288,6 @@ impl Worker {
             spool::retain_rejected(&dir, &path, spool::RoutingKey(id.0))
                 .map_err(|e| e.to_string())?;
         }
-        Ok(())
-    }
-
-    /// Commits a composer draft edit or send through the store's journal:
-    /// durable before it is acknowledged, without a full `state.json` save.
-    pub(super) fn journal(&mut self, state: BusState, op: JournalOp) -> Result<(), String> {
-        if let Err(error) = self.store.journal(op) {
-            self.pause_storage(&error);
-            return Err(self.storage_notice().into());
-        }
-        self.state = state;
-        self.revision += 1;
         Ok(())
     }
 
@@ -687,8 +573,8 @@ impl Worker {
         let mut state = self.state.clone();
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
+        let mut settled_groups = Vec::new();
         for (agent, observed_at_ms) in agents {
-            changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
             let rollout = self.codex_rollouts.get(&agent);
             let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
                 .unwrap_or_else(|error| {
@@ -706,12 +592,51 @@ impl Worker {
                 }
             };
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
-            changed |= state
-                .settle_ended_request(agent, observed_at_ms, recorded_end)
-                .is_some();
+            if let Some(lead) = state.settle_ended_request(agent, observed_at_ms, recorded_end) {
+                changed = true;
+                // Use the previous group: transcript recovery can detach an
+                // unproven follower while completing the rest of the group.
+                let mut members = self.state.group_members(lead);
+                members.push(lead);
+                members.retain(|id| {
+                    self.state.request(*id).is_some_and(|request| {
+                        !matches!(
+                            request.phase,
+                            RequestPhase::Completed | RequestPhase::Abandoned
+                        )
+                    })
+                });
+                settled_groups.push((lead, members));
+            }
         }
         if changed {
             self.save(state)?;
+            // Only a successful durable save is evidence of abandonment.
+            for (lead, members) in settled_groups {
+                let _group = tracing::info_span!("bus.settlement", lead_id = lead.0).entered();
+                for id in members {
+                    let reason = self.state.request(id).and_then(|request| {
+                        match request.failure_reason.as_deref() {
+                            Some(reason @ ("reply_not_captured" | "agent_unavailable")) => {
+                                Some(reason)
+                            }
+                            Some(reason) if reason.starts_with("provider_error:") => {
+                                Some("provider_error")
+                            }
+                            _ => None,
+                        }
+                    });
+                    if let Some(reason) = reason {
+                        diagnostics::request_with_lead(
+                            &self.state,
+                            id,
+                            "bus.message.recovered",
+                            reason,
+                            lead.0,
+                        );
+                    }
+                }
+            }
         }
         Ok(())
     }

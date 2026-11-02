@@ -854,3 +854,34 @@ fn delivery_timestamps_round_trip_and_legacy_requests_default_to_empty() {
         serde_json::from_value(serde_json::to_value(&restored).unwrap()).unwrap();
     assert_eq!(round_trip, restored);
 }
+
+#[test]
+fn coalesced_recipients_share_native_and_provider_delivery_timestamps() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state
+        .coalesce_queue(first)
+        .expect("coalesce queued messages");
+    state.record_picked(first, 20, false).unwrap();
+    state.record_native_requested(first, 30).unwrap();
+    state
+        .record_native_timestamps(
+            first,
+            crate::protocol::api::schema::NativeSubmissionTimestamps {
+                text_written_at_ms: Some(40),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.record_provider_started(first, 50);
+    state.record_reply_captured(first, 60);
+    for id in [first, second] {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.latency.picked_at_ms, Some(20));
+        assert_eq!(request.latency.native_requested_at_ms, Some(30));
+        assert_eq!(request.latency.native.text_written_at_ms, Some(40));
+        assert_eq!(request.latency.provider_started_at_ms, Some(50));
+        assert_eq!(request.latency.reply_captured_at_ms, Some(60));
+    }
+}
