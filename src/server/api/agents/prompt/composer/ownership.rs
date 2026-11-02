@@ -23,24 +23,6 @@ fn normalize(text: &str) -> String {
 }
 
 impl OwnedComposer {
-    pub(super) fn verified_input(&self, screen: &str, text: &str) -> bool {
-        if text != self.expected.replace("\r\n", "\n").replace('\r', "\n") {
-            return false;
-        }
-        let Some(body) = input(self.kind, screen).filter(|body| !body.is_empty()) else {
-            return false;
-        };
-        let Ok(mut owned) = self.state.lock() else {
-            return false;
-        };
-        if owned.lost || owned.body.is_some() {
-            return false;
-        }
-        owned.body = Some(body);
-        owned.progress = owned.progress.wrapping_add(1);
-        true
-    }
-
     pub(super) fn diagnose_with_policy(
         &self,
         screen: &str,
