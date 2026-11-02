@@ -673,6 +673,12 @@ impl BusUi {
         }
     }
 
+    pub(crate) fn snapshot_wake(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        self.handle
+            .as_ref()
+            .map(|handle| handle.snapshot_wake.clone())
+    }
+
     /// How soon the client loop should tick again. A command waiting on the
     /// coordinator (a draft save, a send) settles only on a tick, so a 100 ms
     /// cadence would add up to that much to every step of Enter's round trip.

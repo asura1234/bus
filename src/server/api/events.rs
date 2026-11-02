@@ -259,6 +259,11 @@ impl App {
             .unwrap_or_else(|| pane_agent_status(update.state, update.seen));
 
         if previous_agent_status != agent_status {
+            if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+                || std::env::var_os("BUS_SPIKE_COORDINATOR_WAKE").is_some()
+            {
+                self.emit_pane_updated(update.ws_idx, update.pane_id);
+            }
             self.emit_event(crate::protocol::api::schema::EventEnvelope {
                 event: crate::protocol::api::schema::EventKind::PaneAgentStatusChanged,
                 data: crate::protocol::api::schema::EventData::PaneAgentStatusChanged {

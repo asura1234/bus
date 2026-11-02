@@ -253,6 +253,7 @@ impl TerminalRuntime {
         std::thread::spawn(move || {
             tracing::dispatcher::with_default(&dispatch, || {
                 let _entered = span.enter();
+                submission.diagnostics.identify(&text);
                 submission.diagnostics.begin(
                     submission.clock.now(),
                     submission.deadline.get(),

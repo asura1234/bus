@@ -746,6 +746,7 @@ impl TerminalRuntime {
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let detection_notify = Arc::new(Notify::new());
         spawn_child_watcher(
             pane_id,
             spawned.child,
@@ -764,6 +765,7 @@ impl TerminalRuntime {
                 content_seq: content_seq.clone(),
                 content_write_lock: content_write_lock.clone(),
                 detection_content_seq: detection_content_seq.clone(),
+                detection_notify: detection_notify.clone(),
                 child_pid: child_pid.clone(),
                 events: events.clone(),
                 reported_cwd: reported_cwd.clone(),
@@ -791,6 +793,7 @@ impl TerminalRuntime {
             terminal.clone(),
             events.clone(),
             detection_content_seq.clone(),
+            detection_notify,
             render_notify.clone(),
             render_dirty.clone(),
             kimi_code_home.clone(),

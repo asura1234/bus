@@ -127,6 +127,7 @@ pub(crate) enum BusCommand {
         directories_only: bool,
     },
     Control(control::ControlCall),
+    NativeWake,
     Shutdown,
 }
 
@@ -238,6 +239,7 @@ pub(crate) struct BusHandle {
     _control: Option<control::Server>,
     commands: mpsc::SyncSender<(u64, BusCommand)>,
     snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
+    snapshot_wake: Arc<tokio::sync::Notify>,
     events: mpsc::Receiver<BusEvent>,
 }
 
@@ -262,6 +264,7 @@ impl BusHandle {
                 _control: None,
                 commands,
                 snapshots: Arc::new(Mutex::new(snapshot)),
+                snapshot_wake: Arc::new(tokio::sync::Notify::new()),
                 events,
             },
             receiver,
@@ -304,6 +307,7 @@ impl BusHandle {
             .save(seed)
             .unwrap();
         let mut worker = Worker::open(data_dir, Box::new(NoAgents)).unwrap();
+        let snapshot_wake = worker.snapshot_wake.clone();
         worker.dev_enabled = true;
         let (save_tx, save_rx) = mpsc::channel();
         worker.test_save_observations = Some(save_tx);
@@ -317,6 +321,7 @@ impl BusHandle {
                 _control: None,
                 commands: commands.clone(),
                 snapshots,
+                snapshot_wake,
                 events,
             },
             commands,
@@ -325,7 +330,10 @@ impl BusHandle {
     }
 
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
-        let mut worker = Worker::open(data_dir.clone(), Box::new(BusTransport::new(target)))?;
+        let mut worker = Worker::open(
+            data_dir.clone(),
+            Box::new(BusTransport::new(target.clone())),
+        )?;
         worker.dev_enabled = diagnostics::dev_enabled();
         worker.settings_path = settings::path();
         worker.refresh_error_pipe_at(io::now_ms());
@@ -333,8 +341,14 @@ impl BusHandle {
             tracing::warn!(%error, "global Bus settings not applied");
             worker.error = Some(error);
         }
+        let snapshot_wake = worker.snapshot_wake.clone();
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+        if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+            || std::env::var_os("BUS_SPIKE_COORDINATOR_WAKE").is_some()
+        {
+            crate::messaging::native::spawn_event_wakes(target, commands.clone());
+        }
         // Every session runs the control socket; `dev_enabled` only gates
         // the dev-tier methods.
         let control = control::start(&data_dir, commands.clone())?;
@@ -348,6 +362,7 @@ impl BusHandle {
             _control: Some(control),
             commands,
             snapshots,
+            snapshot_wake,
             events,
         })
     }

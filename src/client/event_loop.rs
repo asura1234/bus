@@ -98,6 +98,11 @@ pub(super) async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        let snapshot_wake = driver
+            .state
+            .shell
+            .as_ref()
+            .and_then(|shell| shell.bus_snapshot_wake());
         let event = {
             #[cfg(windows)]
             {
@@ -118,6 +123,13 @@ pub(super) async fn run_client_loop(
                 tokio::select! {
                     biased;
                     _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
+                    _ = async {
+                        if let Some(wake) = snapshot_wake {
+                            wake.notified().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => ClientLoopEvent::Timer,
                     ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
                 }
             }

@@ -17,11 +17,19 @@ pub(super) struct Diagnostics {
     enter_attempts: Cell<usize>,
     enter_flushed: Cell<usize>,
     cleanup: Cell<&'static str>,
+    delivery: Cell<u64>,
 }
 
 impl Diagnostics {
     pub(super) fn claim_refusal(&self) -> bool {
         !self.refusal_recorded.replace(true)
+    }
+
+    pub(super) fn identify(&self, text: &bytes::Bytes) {
+        let hash = text.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+        self.delivery.set(hash);
     }
 
     pub(super) fn begin(&self, now: Instant, confirmation: Instant, hard: Instant) {
@@ -66,7 +74,7 @@ impl Diagnostics {
         if result.is_ok() {
             self.paste_at.set(Some(now));
         }
-        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.paste_flushed", flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
+        tracing::info!(target: "bus::terminal::submission", event = "bus.terminal.submission.paste_flushed", delivery = self.delivery.get(), flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
     }
 
     pub(super) fn enter(&self, bytes: &bytes::Bytes, now: Instant) {
@@ -77,7 +85,7 @@ impl Diagnostics {
     pub(super) fn entered(&self, result: &io::Result<()>, now: Instant) {
         self.enter_flushed
             .set(self.enter_flushed.get() + usize::from(result.is_ok()));
-        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter_flushed", attempt = self.enter_attempts.get(), flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
+        tracing::info!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter_flushed", delivery = self.delivery.get(), attempt = self.enter_attempts.get(), flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
     }
 
     pub(super) fn cleared(&self, result: &io::Result<ClearOutcome>, now: Instant) {

@@ -66,6 +66,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::CompleteHookSetup(_) => "complete_hook_setup",
         C::Suggestions { .. } => "suggestions",
         C::Control(_) => "control",
+        C::NativeWake => "native_wake",
         C::Shutdown => "shutdown",
     }
 }

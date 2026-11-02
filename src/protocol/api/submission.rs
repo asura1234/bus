@@ -19,6 +19,11 @@ pub(crate) const RESPONSE_GRACE: Duration =
     Duration::from_millis(RPC_MARGIN.as_millis() as u64 / 10);
 
 pub(crate) fn submit_delay(codex: bool, prompt_bytes: usize) -> Duration {
+    if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+        || std::env::var_os("BUS_SPIKE_ZERO_PASTE").is_some()
+    {
+        return Duration::ZERO;
+    }
     #[cfg(windows)]
     if codex {
         // ConPTY paste consumption plus Codex's Enter suppression window.

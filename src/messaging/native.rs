@@ -3,7 +3,50 @@ use crate::protocol::api::{
     client::{ApiClient, ApiClientError, ConnectionTarget},
     schema::{Method, Request, ResponseResult},
 };
+use std::io::{BufRead, BufReader, Write};
 use std::time::{Duration, Instant};
+
+pub(crate) fn spawn_event_wakes(
+    target: ConnectionTarget,
+    commands: std::sync::mpsc::SyncSender<(u64, super::coordinator::BusCommand)>,
+) {
+    std::thread::spawn(move || {
+        let client = ApiClient::for_target(target);
+        let mut stream = match crate::platform::ipc::connect_local_stream(&client.socket_path()) {
+            Ok(stream) => stream,
+            Err(_) => return,
+        };
+        let request = Request {
+            id: format!("bus-events:{}", std::process::id()),
+            method: Method::EventsSubscribe(crate::protocol::api::schema::EventsSubscribeParams {
+                subscriptions: vec![crate::protocol::api::schema::Subscription::PaneUpdated {}],
+            }),
+        };
+        if stream
+            .write_all(serde_json::to_string(&request).unwrap().as_bytes())
+            .and_then(|()| stream.write_all(b"\n"))
+            .and_then(|()| stream.flush())
+            .is_err()
+        {
+            return;
+        }
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            return;
+        }
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0
+                || commands
+                    .try_send((0, super::coordinator::BusCommand::NativeWake))
+                    .is_err()
+            {
+                return;
+            }
+        }
+    });
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct TransportError {

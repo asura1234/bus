@@ -34,6 +34,7 @@ pub(super) struct Worker {
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
     pub(super) transport: Box<dyn Transport>,
+    pub(super) snapshot_wake: Arc<tokio::sync::Notify>,
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
     pub(super) error: Option<String>,
@@ -149,6 +150,7 @@ impl Worker {
             data_dir,
             _lease: lease,
             transport,
+            snapshot_wake: Arc::new(tokio::sync::Notify::new()),
             revision: 0,
             last_command_id: 0,
             error: None,
@@ -422,9 +424,17 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
+                    if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+                        || std::env::var_os("BUS_SPIKE_COORDINATOR_WAKE").is_some()
+                    {
+                        next_poll = std::time::Instant::now();
+                    }
                     if self.serve_control_without_refresh(call, &events, &snapshots, next_poll) {
                         continue;
                     }
+                }
+                Ok((_id, BusCommand::NativeWake)) => {
+                    next_poll = std::time::Instant::now();
                 }
                 Ok((id, command)) => {
                     let submitting =
@@ -462,6 +472,11 @@ impl Worker {
                     // it; do not make that wait for this loop's poll tick.
                     busy.stage("snapshot");
                     self.publish_snapshot(&snapshots);
+                    if submitting && std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+                        || std::env::var_os("BUS_SPIKE_COORDINATOR_WAKE").is_some()
+                    {
+                        next_poll = std::time::Instant::now();
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -512,6 +527,11 @@ impl Worker {
         let snapshot = self.timed_snapshot();
         if let Ok(mut shared) = snapshots.lock() {
             *shared = snapshot;
+        }
+        if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+            || std::env::var_os("BUS_SPIKE_ROOM_PUSH").is_some()
+        {
+            self.snapshot_wake.notify_one();
         }
     }
 

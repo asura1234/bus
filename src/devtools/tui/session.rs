@@ -72,6 +72,11 @@ const INHERITED_VARS: &[&str] = &[
     "LLVM_PROFILE_FILE",
     "ProgramFiles",
     "ProgramFiles(x86)",
+    "BUS_SPIKE_EVENT_DELIVERY",
+    "BUS_SPIKE_COORDINATOR_WAKE",
+    "BUS_SPIKE_DETECTION_WAKE",
+    "BUS_SPIKE_ZERO_PASTE",
+    "BUS_SPIKE_ROOM_PUSH",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

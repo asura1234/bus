@@ -554,6 +554,7 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         events,
         Arc::new(AtomicU64::new(0)),
         Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
         Arc::new(RenderSignal::new()),
         Arc::new(Mutex::new(None)),
     );

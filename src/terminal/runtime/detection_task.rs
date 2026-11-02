@@ -156,6 +156,7 @@ pub(super) fn spawn_detection_task(
     terminal: Arc<PaneTerminal>,
     events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    detection_notify: Arc<Notify>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
@@ -177,6 +178,7 @@ pub(super) fn spawn_detection_task(
         terminal,
         state_events: events,
         detection_content_seq,
+        detection_notify,
         managed_launch_pending: managed_launch_pending.clone(),
         render_notify,
         render_dirty,
@@ -201,6 +203,7 @@ struct DetectionTask {
     terminal: Arc<PaneTerminal>,
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    detection_notify: Arc<Notify>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
     render_notify: Arc<Notify>,
@@ -271,9 +274,20 @@ impl DetectionState {
 impl DetectionTask {
     async fn run(self, initial_agent: Option<AgentKind>) {
         let mut status = DetectionState::new(initial_agent);
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_none() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         loop {
-            tokio::time::sleep(self.tick_delay(&status)).await;
+            if std::env::var_os("BUS_SPIKE_EVENT_DELIVERY").is_some()
+                || std::env::var_os("BUS_SPIKE_DETECTION_WAKE").is_some()
+            {
+                tokio::select! {
+                    _ = self.detection_notify.notified() => {}
+                    _ = tokio::time::sleep(self.tick_delay(&status)) => {}
+                }
+            } else {
+                tokio::time::sleep(self.tick_delay(&status)).await;
+            }
             let now = Instant::now();
             let pid = self.child_pid.load(Ordering::Acquire);
             let mut agent = status.agent_presence.current_agent();
@@ -846,6 +860,7 @@ mod blocked_tests {
                 terminal: self.terminal.clone(),
                 state_events: events,
                 detection_content_seq: self.detection_content_seq.clone(),
+                detection_notify: Arc::new(Notify::new()),
                 managed_launch_pending: self.managed_launch_pending.clone(),
                 detection_context: self.detection_context.clone(),
                 render_notify: Arc::new(Notify::new()),
@@ -933,6 +948,7 @@ mod blocked_tests {
             terminal: runtime.terminal.clone(),
             state_events: events,
             detection_content_seq: runtime.detection_content_seq.clone(),
+            detection_notify: Arc::new(Notify::new()),
             managed_launch_pending: runtime.managed_launch_pending.clone(),
             detection_context: runtime.detection_context.clone(),
             render_notify: Arc::new(Notify::new()),
