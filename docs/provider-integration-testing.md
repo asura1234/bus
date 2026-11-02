@@ -986,3 +986,11 @@ idle then deliver, and an approval card without `--yolo`.
   Bash watch loop using `sleep 30`, an idle prompt with the loop alive, queued
   delivery in order, a real foreground command, loop completion and cold
   resume. This supersedes the earlier lesson treating task inventory as work.
+
+- **2026-11-03 — Kimi empty-composer foreground evidence:** Removing the
+  background task-count Working rule must preserve an open native main turn.
+  Read that witness before accepting an empty composer as Idle, including a
+  native steer queue with no command header or spinner tip. Test open turns
+  with and without background tasks, plus fresh/settled idle turns. Keep
+  background-only settled turns deliverable, and retain the existing blocker,
+  viewer and strong-spinner precedence.

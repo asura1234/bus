@@ -2,10 +2,10 @@
 use crate::agents::manifest::{self, KimiTurnMarker};
 use crate::agents::providers::kimi::activity;
 use crate::agents::providers::kimi::wire::{MainTurn, MainTurnCache};
-use crate::agents::AgentDetection;
+use crate::agents::{AgentDetection, AgentState};
 use crate::terminal::emulator::PaneTerminal;
 
-/// Resolve ambiguous command/tip markers against native main-turn evidence.
+/// Resolve command/tip markers and an empty composer against the native main turn.
 /// `None` means the remaining screen is a viewer.
 pub(super) fn classify_command_screen(
     terminal: &PaneTerminal,
@@ -14,10 +14,19 @@ pub(super) fn classify_command_screen(
     content: &str,
     screen_detection: AgentDetection,
 ) -> Option<AgentDetection> {
-    let Some(marker) = manifest::kimi_turn_marker(content) else {
+    let marker = manifest::kimi_turn_marker(content);
+    if marker.is_none() && !screen_detection.visible_idle {
         return Some(screen_detection);
-    };
+    }
     let turn = activity::refresh_running_command_turn(home, cache);
+    let Some(marker) = marker else {
+        let mut detection = screen_detection;
+        if turn == Some(MainTurn::Open) {
+            detection.state = AgentState::Working;
+            detection.visible_idle = false;
+        }
+        return Some(detection);
+    };
     let live = match marker {
         KimiTurnMarker::Tip => turn != Some(MainTurn::Settled),
         KimiTurnMarker::Command => {

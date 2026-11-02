@@ -294,3 +294,98 @@ async fn kimi_background_autonomous_turn_settles_without_prompt_completed() {
         AgentState::Idle
     );
 }
+
+#[tokio::test]
+async fn kimi_open_turn_with_task_count_and_empty_composer_stays_working() {
+    let wire = BackgroundWire::new();
+    wire.write(false, true);
+    let screen = BACKGROUND_IDLE
+        .replace("  🌒 · Tip: ! to run a shell command\n", "")
+        .replace("Ask When Needed", "[1 task running] Ask When Needed");
+    let runtime = background_runtime(&screen, Some(&wire.home));
+    assert_eq!(
+        runtime.test_kimi_command_detection().unwrap().state,
+        AgentState::Working,
+        "an open native main turn must outrank background task inventory"
+    );
+}
+
+#[tokio::test]
+async fn kimi_open_turn_without_background_task_stays_working() {
+    let wire = BackgroundWire::new();
+    wire.write(false, false);
+    let screen = BACKGROUND_IDLE.replace("  🌒 · Tip: ! to run a shell command\n", "");
+    let runtime = background_runtime(&screen, Some(&wire.home));
+    let result = runtime.test_kimi_command_detection().unwrap();
+    assert_eq!(result.state, AgentState::Working);
+    assert!(!result.visible_idle);
+    assert_eq!(
+        runtime
+            .test_scan_detection_context(AgentKind::Kimi, AgentState::Idle)
+            .await
+            .0,
+        AgentState::Working,
+        "the published state must retain the open foreground turn"
+    );
+}
+
+#[tokio::test]
+async fn kimi_empty_composer_without_open_turn_stays_idle() {
+    let wire = BackgroundWire::new();
+    let screen = BACKGROUND_IDLE.replace("  🌒 · Tip: ! to run a shell command\n", "");
+    for settled in [false, true] {
+        if settled {
+            wire.write(true, false);
+        } else {
+            std::fs::write(&wire.wire, "").unwrap();
+        }
+        let runtime = background_runtime(&screen, Some(&wire.home));
+        let result = runtime.test_kimi_command_detection().unwrap();
+        assert_eq!(result.state, AgentState::Idle, "settled={settled}");
+        assert!(result.visible_idle);
+        assert!(!result.visible_working);
+        assert_eq!(
+            runtime
+                .test_scan_detection_context(AgentKind::Kimi, AgentState::Working)
+                .await
+                .0,
+            AgentState::Idle,
+            "a genuine idle composer must release the previous Working state"
+        );
+    }
+}
+
+#[tokio::test]
+async fn kimi_open_turn_with_native_steer_queue_stays_working() {
+    let captured = include_str!("../../../../tests/fixtures/kimi-background/foreground-queued.txt");
+    let controls = captured
+        .lines()
+        .filter(|line| line.contains("❯ [") || line.contains("↑ to edit"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(controls.contains("ctrl-s to steer"));
+    let wire = BackgroundWire::new();
+    for background in [false, true] {
+        wire.write(false, background);
+        let screen = BACKGROUND_IDLE.replace("  🌒 · Tip: ! to run a shell command\n", "");
+        let screen = if background {
+            screen.replace("Ask When Needed", "[1 task running] Ask When Needed")
+        } else {
+            screen
+        };
+        let runtime = background_runtime(&format!("{controls}\n{screen}"), Some(&wire.home));
+        assert_eq!(
+            runtime.test_kimi_command_detection().unwrap().state,
+            AgentState::Working,
+            "queued native guidance cannot make an open turn Idle; background={background}"
+        );
+        assert_eq!(
+            runtime
+                .test_scan_detection_context(AgentKind::Kimi, AgentState::Idle)
+                .await
+                .0,
+            AgentState::Working,
+            "the native steer queue must remain behind foreground work"
+        );
+    }
+}
