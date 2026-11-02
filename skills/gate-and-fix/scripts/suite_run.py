@@ -137,7 +137,7 @@ def batch(gates: list[Gate], *, nested: bool = False) -> list[GateResult]:
     results = run_gates(gates, cwd=quality.ROOT, private_groups=not nested)
     results = [replace(result, exit_code=0, stdout=result.stdout +
                        "\npytest exit 5: empty selection, nothing to run\n")
-               if result.name == "python" and result.exit_code == 5 else result for result in results]
+               if result.name in {"python", "doc-consumers"} and result.exit_code == 5 else result for result in results]
     for result in results:
         print(f"{result.name}: {'PASS' if result.passed else 'FAIL'} ({result.duration_ms / 1000:.3f}s)", flush=True)
         if not result.passed:

@@ -162,6 +162,25 @@ def test_shipped_guide_keeps_the_installed_bundle_link_contract(full):
     assert "tools/tests/installed_skills_recovery_test.py" in plan.doc_tests
 
 
+@pytest.mark.parametrize("body,expected", [
+    ("", 0),
+    ("def test_failure(): assert False\n", 1),
+    ("raise RuntimeError('collection failure')\n", 1),
+])
+def test_document_consumers_preserve_pytest_exit_semantics(tmp_path, body, expected):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "tools/doc_test.py", 'from pathlib import Path\n'
+        'DOC=Path(__file__).resolve().parents[1]/"docs/help.md"\n'+body)
+    plan = select(["docs/help.md"], full=True, root=tmp_path)
+    assert plan.doc_tests == ("tools/doc_test.py",)
+    with patch.object(runner.quality, "ROOT", tmp_path):
+        _, tests = runner.commands(plan)
+        consumer = next(gate for gate in tests if gate.name == "doc-consumers")
+        with (patch.object(runner, "commands", return_value=([], [consumer])),
+              patch.object(runner.quality, "head", return_value="head")):
+            assert runner.execute(plan) == expected
+
+
 def test_plan_and_report_describe_skips_and_do_not_evaluate_coverage(tmp_path, capsys):
     put(tmp_path, "docs/testing.md", "Docs\n")
     with (patch.object(runner.quality, "ROOT", tmp_path),
