@@ -1,0 +1,128 @@
+{
+  "tracking_started_at_ms": 1793581200000,
+  "attempts": {
+    "1": {
+      "id": 1,
+      "name": "ready-claude-1",
+      "provider": "claude_code",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": 11,
+      "launch_id": "launch-1",
+      "terminal_id": "terminal-1",
+      "started_at_ms": 1793581200000,
+      "deadline_at_ms": 1793581230000,
+      "settled_at_ms": 1793581201000,
+      "outcome": "usable",
+      "cause": null
+    },
+    "2": {
+      "id": 2,
+      "name": "ready-claude-2",
+      "provider": "claude_code",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": 12,
+      "launch_id": "launch-2",
+      "terminal_id": "terminal-2",
+      "started_at_ms": 1793581800000,
+      "deadline_at_ms": 1793581830000,
+      "settled_at_ms": 1793581801000,
+      "outcome": "usable",
+      "cause": null
+    },
+    "3": {
+      "id": 3,
+      "name": "ready-codex",
+      "provider": "codex",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": 13,
+      "launch_id": "launch-3",
+      "terminal_id": "terminal-3",
+      "started_at_ms": 1793584799000,
+      "deadline_at_ms": 1793584829000,
+      "settled_at_ms": 1793584800000,
+      "outcome": "usable",
+      "cause": null
+    },
+    "4": {
+      "id": 4,
+      "name": "missing-kimi",
+      "provider": "kimi",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": null,
+      "launch_id": null,
+      "terminal_id": null,
+      "started_at_ms": 1793583000000,
+      "deadline_at_ms": 1793583030000,
+      "settled_at_ms": 1793583001000,
+      "outcome": "failed",
+      "cause": "missing_executable"
+    },
+    "5": {
+      "id": 5,
+      "name": "failed-grok",
+      "provider": "grok",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": 14,
+      "launch_id": "launch-5",
+      "terminal_id": "terminal-5",
+      "started_at_ms": 1793584800000,
+      "deadline_at_ms": 1793584830000,
+      "settled_at_ms": 1793584801000,
+      "outcome": "failed",
+      "cause": "command_failed"
+    },
+    "6": {
+      "id": 6,
+      "name": "waiting-cursor",
+      "provider": "cursor",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": 15,
+      "launch_id": "launch-6",
+      "terminal_id": "terminal-6",
+      "started_at_ms": 1793586600000,
+      "deadline_at_ms": 1793586630000,
+      "settled_at_ms": null,
+      "outcome": "pending",
+      "cause": null
+    },
+    "7": {
+      "id": 7,
+      "name": "cancelled-codex",
+      "provider": "codex",
+      "room_id": 2,
+      "kind": "create",
+      "agent_id": 16,
+      "launch_id": "launch-7",
+      "terminal_id": "terminal-7",
+      "started_at_ms": 1793588399000,
+      "deadline_at_ms": 1793588429000,
+      "settled_at_ms": 1793588400000,
+      "outcome": "cancelled",
+      "cause": "agent_deleted"
+    }
+  },
+  "expected": {
+    "attempts": 7,
+    "usable": 3,
+    "failed": 2,
+    "pending": 1,
+    "cancelled": 1,
+    "success_numerator": 3,
+    "success_denominator": 5,
+    "success_percent": 60.0,
+    "hour_numerators": [
+      3,
+      0
+    ],
+    "hour_denominators": [
+      4,
+      1
+    ]
+  }
+}
