@@ -162,6 +162,91 @@ def test_shipped_guide_keeps_the_installed_bundle_link_contract(full):
     assert "tools/tests/installed_skills_recovery_test.py" in plan.doc_tests
 
 
+@pytest.mark.parametrize("full", [False, True])
+def test_metadata_declared_document_retains_transitive_reader(tmp_path, full):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "package/project.json", '{"notices":[{"source":"docs/help.md"}]}')
+    put(tmp_path, "unrelated.json", "not valid JSON")
+    put(tmp_path, "tools/package.py", 'from pathlib import Path\n'
+        'META=Path(__file__).parents[1]/"package/project.json"\n')
+    put(tmp_path, "tools/package_test.py", "from .package import META\n")
+    put(tmp_path, "tools/unrelated_test.py", "def test_unrelated(): pass\n")
+    plan = select(["docs/help.md"], full=full, root=tmp_path)
+    assert not plan.python and plan.rust_filter == "none()"
+    assert plan.doc_tests == ("tools/package_test.py",)
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_unparseable_reached_metadata_fails_closed(tmp_path, full):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "package/project.json", "not valid JSON")
+    put(tmp_path, "tools/package.py", 'from pathlib import Path\n'
+        'META=Path(__file__).parents[1]/"package/project.json"\n')
+    plan = select(["docs/help.md"], full=full, root=tmp_path)
+    assert plan.python and plan.rust_filter is None and plan.dev_tools
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_conpty_notice_keeps_its_real_package_hash_consumer(full):
+    root = Path(__file__).resolve().parents[4]
+    plan = select(["packaging/windows/licenses/Microsoft.Windows.Console.ConPTY-NOTICE.md"],
+                  full=full, root=root)
+    assert "packaging/windows/tests/package_conpty_test.py" in plan.doc_tests
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_imported_root_keeps_the_real_conpty_rust_source_reader(full):
+    root = Path(__file__).resolve().parents[4]
+    plan = select(["vendor/portable-pty/src/win/psuedocon.rs"], full=full, root=root)
+    assert "packaging/windows/tests/package_conpty_test.py" in plan.python
+
+
+@pytest.mark.parametrize("statement,root_name", [
+    ("import layout as package", "package.ROOT"),
+    ("from . import layout as package", "package.ROOT"),
+    ("from .layout import ROOT", "ROOT"),
+])
+def test_imported_path_constants_keep_readers_without_parameter_false_edges(tmp_path, statement, root_name):
+    put(tmp_path, "src/main.rs", "fn main() {}")
+    put(tmp_path, "tools/layout.py", 'from pathlib import Path\nROOT=Path(__file__).parents[1]\n')
+    put(tmp_path, "tools/source_test.py", statement+f'\nSOURCE={root_name}/"src/main.rs"\n')
+    put(tmp_path, "tools/unrelated_test.py", 'import layout as package\n'
+        'def test_fixture(package):\n    source=package.ROOT/"src/main.rs"\n')
+    plan = select(["src/main.rs"], full=True, root=tmp_path)
+    assert plan.python == ("tools/source_test.py",)
+
+
+def test_ambiguous_imported_root_fails_closed(tmp_path):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "layout.py", 'from pathlib import Path\nROOT=Path(__file__).parent\n')
+    put(tmp_path, "tools/layout.py", 'from pathlib import Path\nROOT=Path(__file__).parent\n')
+    put(tmp_path, "tools/source_test.py", 'import layout\nDOC=layout.ROOT/"docs/help.md"\n')
+    plan = select(["docs/help.md"], full=True, root=tmp_path)
+    assert plan.python and plan.rust_filter is None and plan.dev_tools
+
+
+def test_unused_import_path_ambiguity_does_not_widen_document_changes(tmp_path):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "layout.py", 'from pathlib import Path\nROOT=Path(__file__).parent\n')
+    put(tmp_path, "tools/layout.py", 'from pathlib import Path\nROOT=Path(__file__).parent\n')
+    put(tmp_path, "tools/unrelated_test.py", 'import layout\ndef test_unrelated(): pass\n')
+    plan = select(["docs/help.md"], full=True, root=tmp_path)
+    assert not plan.python and plan.rust_filter == "none()" and not plan.doc_tests
+
+
+@pytest.mark.parametrize("root_name", ["settings.a.ROOT", "settings.ROOT"])
+def test_dotted_imports_retain_sibling_and_package_path_constants(tmp_path, root_name):
+    put(tmp_path, "src/main.rs", "fn main() {}")
+    for name in ("__init__", "a"):
+        put(tmp_path, f"tools/settings/{name}.py", 'from pathlib import Path\n'
+            'ROOT=Path(__file__).parents[2]\n')
+    put(tmp_path, "tools/settings/b.py", "VALUE=1\n")
+    put(tmp_path, "tools/source_test.py", 'import settings.a\nimport settings.b\n'
+        f'SOURCE={root_name}/"src/main.rs"\n')
+    plan = select(["src/main.rs"], full=True, root=tmp_path)
+    assert plan.python == ("tools/source_test.py",)
+
+
 @pytest.mark.parametrize("body,expected", [
     ("", 0),
     ("def test_failure(): assert False\n", 1),

@@ -45,6 +45,9 @@ checks, separate from the Python test lane. Binary-dependent doc checks get the
 same explicit CLI prerequisite. Directory enumeration retains tests that scan a
 changed document's directory, including installed-bundle link checks. Deleted or renamed
 inputs fail closed to both languages because their old edges are unavailable.
+Imported path constants and reached JSON metadata retain document and source
+readers, including packaging NOTICE hash checks; unreadable or invalid reached
+metadata fails closed.
 Static architecture checks also remain. Lint keeps
 formatting, Ruff, architecture, placement, file-length and import checks; Clippy
 follows Rust eligibility. The planner supplies its skip to the lint runner.
