@@ -37,6 +37,9 @@ impl SubmissionInspector for Preserver {
             }
         })
     }
+    fn native_stash_visible(&self, screen: &str) -> bool {
+        self.native && screen.contains("EMPTY")
+    }
     fn native_draft_restored(&self, screen: &str) -> bool {
         self.native && screen.contains(RICH_DRAFT)
     }
