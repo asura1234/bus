@@ -1,6 +1,7 @@
 //! The single Bus coordinator. UI commands/snapshots contain data only.
 pub(crate) mod agents;
 pub(crate) mod attention;
+mod automatic_input;
 mod delivery;
 mod disk_space;
 mod error_pipe;

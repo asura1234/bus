@@ -66,7 +66,11 @@ impl Worker {
         }))
     }
 
-    pub(super) fn execute_driver(&mut self, method: &str, p: &Value) -> Result<Value, String> {
+    pub(in crate::messaging::coordinator) fn execute_driver(
+        &mut self,
+        method: &str,
+        p: &Value,
+    ) -> Result<Value, String> {
         let pane = optional_bool(p, "pane")?;
         let (target, managed_terminal) = if pane {
             (required(p, "agent")?.to_owned(), None)

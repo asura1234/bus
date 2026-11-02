@@ -19,6 +19,17 @@ struct Screen {
     wrong_terminal: bool,
     wrong_pane: bool,
     session: Option<String>,
+    episode_override: Option<String>,
+    native_provider: Option<String>,
+    allow_driver_input: bool,
+    press_uncertain: bool,
+    press_stalled: bool,
+    clear_on_confirm: bool,
+    selected_option: usize,
+    driver_presses: Vec<schema::AgentPressParams>,
+    driver_observations: u32,
+    native_gets: u32,
+    durable_reservation: Option<(PathBuf, AgentId)>,
 }
 
 struct FakeServer(Arc<Mutex<Screen>>);
@@ -28,10 +39,12 @@ impl Screen {
     // semantic episode metadata independently of the terminal implementation.
     fn current_dialog(&self) -> Option<String> {
         (self.dialog || self.pending_question).then(|| {
-            format!(
-                "{:?}:{:?}:{:?}:{:?}",
-                self.question, self.pending_question, self.text, self.raw_screen
-            )
+            self.episode_override.clone().unwrap_or_else(|| {
+                format!(
+                    "{:?}:{:?}:{:?}:{:?}",
+                    self.question, self.pending_question, self.text, self.raw_screen
+                )
+            })
         })
     }
 
@@ -39,7 +52,7 @@ impl Screen {
         serde_json::from_value(json!({
             "terminal_id": if self.wrong_terminal { "replacement" } else { "terminal" },
             "pane_id": if self.wrong_pane { "replacement" } else { pane },
-            "name": "bus-r1-a2", "agent": "claude", "workspace_id": "w", "tab_id": "t",
+            "name": "bus-r1-a2", "agent": self.native_provider.as_deref().unwrap_or("claude"), "workspace_id": "w", "tab_id": "t",
             "focused": false, "interactive_ready": true, "revision": 1,
             "agent_status": if self.dialog || self.blocked || self.pending_question { "blocked" } else { "idle" },
             "dialog_id": self.current_dialog(),
@@ -56,6 +69,7 @@ impl Transport for FakeServer {
         let mut screen = self.0.lock().unwrap();
         Ok(match method {
             Method::AgentGet(params) => {
+                screen.native_gets += 1;
                 let agent = screen.info(&params.target);
                 screen.unavailable_reads = screen.unavailable_reads.saturating_sub(1);
                 ResponseResult::AgentInfo { agent }
@@ -66,11 +80,22 @@ impl Transport for FakeServer {
                 }
             }
             Method::AgentObserve(_) => {
-                panic!("blocker verification must consume one coherent native projection")
+                assert!(
+                    screen.allow_driver_input,
+                    "blocker verification must consume one coherent native projection"
+                );
+                screen.driver_observations += 1;
+                ResponseResult::TerminalObserved {
+                    observation: automatic_observation(&screen),
+                }
             }
-            Method::AgentPress(_) => {
+            Method::AgentPress(params) => {
                 screen.inputs += 1;
-                panic!("observing and notifying must never answer a native prompt")
+                assert!(
+                    screen.allow_driver_input,
+                    "ordinary blocked prompts must never receive automatic input"
+                );
+                automatic_press(&mut screen, params)?
             }
             _ => ResponseResult::Ok {},
         })
@@ -80,6 +105,20 @@ impl Transport for FakeServer {
 /// A launching Claude agent in a work room, optionally orchestrated from MASTER.
 fn worker(
     orchestrated: bool,
+) -> (
+    Worker,
+    AgentId,
+    RoomId,
+    Option<AgentId>,
+    Arc<Mutex<Screen>>,
+    PathBuf,
+) {
+    worker_with_provider(orchestrated, Provider::ClaudeCode)
+}
+
+fn worker_with_provider(
+    orchestrated: bool,
+    provider: Provider,
 ) -> (
     Worker,
     AgentId,
@@ -102,7 +141,7 @@ fn worker(
     let mut state = worker.state.clone();
     let room = state.create_room("work").unwrap();
     let agent = state
-        .create_agent(room, "builder", Provider::ClaudeCode, dir.clone(), None)
+        .create_agent(room, "builder", provider, dir.clone(), None)
         .unwrap();
     state
         .set_agent_runtime_identity(
@@ -1536,7 +1575,7 @@ fn a_changed_native_session_cannot_retire_the_previous_sessions_help() {
 }
 
 #[test]
-fn a_formerly_automatic_latency_notice_uses_ordinary_orchestrator_help_without_input() {
+fn a_latency_replay_with_unallowlisted_native_identity_uses_ordinary_help_without_input() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     {
         let mut current = screen.lock().unwrap();
@@ -1557,3 +1596,5 @@ fn a_formerly_automatic_latency_notice_uses_ordinary_orchestrator_help_without_i
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+include!("automatic_input_test.rs");

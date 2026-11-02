@@ -66,12 +66,13 @@ impl Worker {
                 continue;
             }
             let notice = agent.dialog_notice.clone();
-            if wait.is_none() && notice.is_none() {
+            if wait.is_none() && notice.is_none() && agent.automatic_dialog_answer.is_none() {
                 continue;
             }
             // List metadata may outlive an answered screen. Verify through the
             // same read-only driver used by orchestrators, with native identity
-            // and status checks. Never open a question panel or send input here.
+            // and status checks. Only the closed coordinator policy may answer
+            // an evidenced menu through the existing shared press route.
             if self.terminal_identity(id).is_ok() {
                 let Ok(current) = self.native_blocker(id) else {
                     continue;
@@ -88,6 +89,9 @@ impl Worker {
                     && wait.as_deref() != Some(current.as_str())
                 {
                     self.dialog_seen.insert(id, (Some(current), 1));
+                    continue;
+                }
+                if self.answer_known_latency(id, &current)? {
                     continue;
                 }
             }
