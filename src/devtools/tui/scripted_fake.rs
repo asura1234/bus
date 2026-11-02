@@ -1,4 +1,5 @@
 //! A scriptable Bus-native stand-in used only by private dev sessions.
+mod screens;
 mod script;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -66,13 +67,20 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
         write!(io::stdout(), "\r\nfake agent working\r\n").map_err(|e| e.to_string())?;
         io::stdout().flush().map_err(|e| e.to_string())?;
         let mut choice = String::new();
+        let mut cleared = 0;
         for action in scenario.actions(&prompt)? {
             match action {
                 Action::Sleep { ms } => std::thread::sleep(Duration::from_millis(ms)),
                 Action::Dialog { title, options } => choice = dialog(&title, &options)?,
+                Action::Screen { id, screen, input } => {
+                    choice = screens::run(&id, &screen, input, &spool)?;
+                    cleared += 1;
+                }
                 Action::Send { room, to, text } => send(&agent, &room, &to, &text)?,
                 Action::Reply { text } => {
-                    let text = text.replace("{{choice}}", &choice);
+                    let text = text
+                        .replace("{{choice}}", &choice)
+                        .replace("{{dialogs}}", &cleared.to_string());
                     clear_working_line()?;
                     callback(
                         json!({"event":"final", "session":session, "turn":turn_id, "text":text}),
@@ -88,6 +96,10 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/scripted_dialogs_test.rs"]
+mod screen_tests;
 
 fn clear_working_line() -> Result<(), String> {
     write!(io::stdout(), "\x1b[1A\r\x1b[2K").map_err(|e| e.to_string())?;

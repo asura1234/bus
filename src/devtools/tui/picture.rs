@@ -102,10 +102,10 @@ pub(super) fn write_png(grid: &Grid, path: &Path) -> Result<(usize, usize), Stri
                     }
                 }
             }
-            if cell.attrs.contains(&"underline") || cell.link.is_some() {
+            if cell.attrs.contains(&"underline".to_owned()) || cell.link.is_some() {
                 canvas.fill(x, y + CELL_H - 3, CELL_W * span, 1, fg);
             }
-            if cell.attrs.contains(&"strike") {
+            if cell.attrs.contains(&"strike".to_owned()) {
                 canvas.fill(x, y + CELL_H / 2, CELL_W * span, 1, fg);
             }
             col += span;
@@ -127,8 +127,12 @@ fn draw_glyph(
     let top = baseline - metrics.height as i32 - metrics.ymin;
     // A second pass one pixel right stands in for a bold face, and a slant
     // about the baseline for an italic one.
-    let passes = if cell.attrs.contains(&"bold") { 2 } else { 1 };
-    let italic = cell.attrs.contains(&"italic");
+    let passes = if cell.attrs.contains(&"bold".to_owned()) {
+        2
+    } else {
+        1
+    };
+    let italic = cell.attrs.contains(&"italic".to_owned());
     for pass in 0..passes {
         for gy in 0..metrics.height {
             let py = top + gy as i32;
@@ -217,15 +221,15 @@ fn box_arms(ch: char) -> Option<(bool, bool, bool, bool, bool)> {
 fn cell_colors(cell: &Cell) -> ([u8; 3], [u8; 3]) {
     let fg = parse_color(&cell.fg).unwrap_or(DEFAULT_FG);
     let bg = parse_color(&cell.bg).unwrap_or(DEFAULT_BG);
-    let (mut fg, bg) = if cell.attrs.contains(&"inverse") {
+    let (mut fg, bg) = if cell.attrs.contains(&"inverse".to_owned()) {
         (bg, fg)
     } else {
         (fg, bg)
     };
-    if cell.attrs.contains(&"dim") {
+    if cell.attrs.contains(&"dim".to_owned()) {
         fg = fg.map(|c| ((u16::from(c) + u16::from(DEFAULT_BG[0])) / 2) as u8);
     }
-    if cell.attrs.contains(&"hidden") {
+    if cell.attrs.contains(&"hidden".to_owned()) {
         fg = bg;
     }
     (fg, bg)

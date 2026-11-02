@@ -3,10 +3,6 @@
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::utils::ids::PaneId;
 use bytes::Bytes;
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier};
 use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
 
@@ -36,33 +32,7 @@ pub(super) struct Feed {
     pub frames: u64,
 }
 
-/// One rendered cell. Wide characters occupy their first cell; the cell after
-/// them has an empty symbol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct Cell {
-    pub symbol: String,
-    pub fg: String,
-    pub bg: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub attrs: Vec<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub link: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct Cursor {
-    pub row: u16,
-    pub col: u16,
-    pub visible: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct Grid {
-    pub cols: u16,
-    pub rows: u16,
-    pub cells: Vec<Vec<Cell>>,
-    pub cursor: Option<Cursor>,
-}
+pub(super) use crate::protocol::api::schema::driver::{Cell, Grid};
 
 impl Screen {
     pub fn new(cols: u16, rows: u16) -> std::io::Result<Self> {
@@ -154,29 +124,10 @@ impl Screen {
     }
 
     fn render(&self) -> Grid {
-        let area = Rect::new(0, 0, self.cols, self.rows);
-        let Ok(mut terminal) = ratatui::Terminal::new(TestBackend::new(self.cols, self.rows));
-        let drawn = terminal.draw(|frame| self.pane.render(frame, area, false));
-        if drawn.is_err() {
+        let Ok(core) = self.pane.core.lock() else {
             return Grid::blank(self.cols, self.rows);
-        }
-        let links = self.pane.visible_hyperlinks(area);
-        let mut grid = Grid::from_buffer(terminal.backend().buffer());
-        for ((x, y), _, uri) in links {
-            if let Some(cell) = grid
-                .cells
-                .get_mut(usize::from(y))
-                .and_then(|row| row.get_mut(usize::from(x)))
-            {
-                cell.link = Some(uri);
-            }
-        }
-        grid.cursor = self.pane.cursor_state().map(|cursor| Cursor {
-            row: cursor.y,
-            col: cursor.x,
-            visible: cursor.visible,
-        });
-        grid
+        };
+        Grid::from_terminal(&core.terminal).unwrap_or_else(|_| Grid::blank(self.cols, self.rows))
     }
 }
 
@@ -203,90 +154,6 @@ pub(super) fn count_frame_ends(tail: &mut Vec<u8>, bytes: &[u8]) -> u64 {
     let keep = (FRAME_END.len() - 1).min(joined.len());
     *tail = joined[joined.len() - keep..].to_vec();
     count
-}
-
-impl Grid {
-    pub fn blank(cols: u16, rows: u16) -> Self {
-        let cell = Cell {
-            symbol: " ".into(),
-            fg: "default".into(),
-            bg: "default".into(),
-            attrs: Vec::new(),
-            link: None,
-        };
-        Self {
-            cols,
-            rows,
-            cells: vec![vec![cell; usize::from(cols)]; usize::from(rows)],
-            cursor: None,
-        }
-    }
-
-    pub fn from_buffer(buffer: &Buffer) -> Self {
-        let area = buffer.area;
-        let cells = (0..area.height)
-            .map(|y| {
-                (0..area.width)
-                    .map(|x| {
-                        let cell = &buffer[(x, y)];
-                        Cell {
-                            symbol: cell.symbol().to_owned(),
-                            fg: color_name(cell.fg),
-                            bg: color_name(cell.bg),
-                            attrs: attrs(cell.modifier),
-                            link: None,
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-        Self {
-            cols: area.width,
-            rows: area.height,
-            cells,
-            cursor: None,
-        }
-    }
-
-    /// Row text with trailing blanks trimmed. Wide tails contribute nothing.
-    pub fn row_text(&self, row: usize) -> String {
-        self.row_with_columns(row).0.trim_end().to_owned()
-    }
-
-    pub fn rows_text(&self) -> Vec<String> {
-        (0..self.cells.len())
-            .map(|row| self.row_text(row))
-            .collect()
-    }
-
-    /// Row text plus the cell column where each byte of it starts.
-    pub fn row_with_columns(&self, row: usize) -> (String, Vec<u16>) {
-        let mut text = String::new();
-        let mut columns = Vec::new();
-        if let Some(cells) = self.cells.get(row) {
-            let mut covered = 0;
-            for (x, cell) in cells.iter().enumerate() {
-                // The cells under a wide character's second half hold no text.
-                if covered > 0 {
-                    covered -= 1;
-                    continue;
-                }
-                if cell.symbol.is_empty() {
-                    continue;
-                }
-                covered = cell.symbol.width().saturating_sub(1);
-                for _ in 0..cell.symbol.len() {
-                    columns.push(x as u16);
-                }
-                text.push_str(&cell.symbol);
-            }
-        }
-        (text, columns)
-    }
-
-    pub fn text(&self) -> String {
-        self.rows_text().join("\n")
-    }
 }
 
 /// Where a match sits on screen, in cells.
@@ -338,32 +205,6 @@ pub(super) fn find(grid: &Grid, needle: &Needle<'_>, rows: Option<(u16, u16)>) -
         }
     }
     matches
-}
-
-fn color_name(color: Color) -> String {
-    match color {
-        Color::Reset => "default".into(),
-        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        Color::Indexed(index) => format!("idx:{index}"),
-        other => format!("{other:?}").to_lowercase(),
-    }
-}
-
-fn attrs(modifier: Modifier) -> Vec<&'static str> {
-    [
-        (Modifier::BOLD, "bold"),
-        (Modifier::DIM, "dim"),
-        (Modifier::ITALIC, "italic"),
-        (Modifier::UNDERLINED, "underline"),
-        (Modifier::REVERSED, "inverse"),
-        (Modifier::CROSSED_OUT, "strike"),
-        (Modifier::SLOW_BLINK, "blink"),
-        (Modifier::HIDDEN, "hidden"),
-    ]
-    .into_iter()
-    .filter(|(flag, _)| modifier.contains(*flag))
-    .map(|(_, name)| name)
-    .collect()
 }
 
 #[cfg(test)]

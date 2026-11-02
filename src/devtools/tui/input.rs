@@ -1,57 +1,25 @@
 //! Bytes the driver writes to the Bus client's PTY: Bus's own key encoder for
 //! chords, and SGR 1006 mouse reports, the format the client enables.
-use crate::protocol::keys::{encode_terminal_key, KeyboardProtocol, TerminalKey};
+pub(super) use crate::terminal::driver::input::paste;
 
-/// Encodes one chord such as `ctrl+shift+r`, `enter`, `esc` or `f6` for the
-/// keyboard protocol the client negotiated. With the kitty flags Bus pushes,
-/// Esc becomes `CSI 27 u`, so it never waits out the lone-Esc timeout.
-pub(super) fn encode_key(name: &str, protocol: KeyboardProtocol) -> Result<Vec<u8>, String> {
-    let normalized = match name.trim() {
-        "+" => "plus",
-        other => other,
-    };
-    let (code, modifiers) = parse_chord(normalized)
-        .ok_or_else(|| format!("unknown key {name:?}; examples: enter, esc, ctrl+n, alt+up, f6"))?;
-    // A lone ESC byte waits out Bus's escape timeout (up to 150 ms while mouse
-    // capture is on); `CSI 27 u` is unambiguous once kitty keys are on.
-    if code == crossterm::event::KeyCode::Esc
-        && modifiers.is_empty()
-        && matches!(protocol, KeyboardProtocol::Kitty { .. })
-    {
-        return Ok(b"\x1b[27u".to_vec());
-    }
-    let bytes = encode_terminal_key(TerminalKey::new(code, modifiers), protocol);
-    if bytes.is_empty() {
-        return Err(format!(
-            "key {name:?} encodes to nothing in this keyboard mode"
-        ));
-    }
-    Ok(bytes)
-}
-
-/// Bus's key-combo syntax, plus the navigation keys Bus binds but its
-/// config syntax has no names for.
-fn parse_chord(chord: &str) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
-    use crossterm::event::KeyCode;
-    let (mods, key) = match chord.rsplit_once('+') {
-        Some((mods, key)) if !key.is_empty() => (Some(mods), key),
-        _ => (None, chord),
-    };
-    let code = match key.trim().to_ascii_lowercase().as_str() {
-        "pageup" | "pgup" => KeyCode::PageUp,
-        "pagedown" | "pgdn" => KeyCode::PageDown,
-        "home" => KeyCode::Home,
-        "end" => KeyCode::End,
-        "delete" | "del" => KeyCode::Delete,
-        "insert" | "ins" => KeyCode::Insert,
-        _ => return crate::utils::config::parse_key_combo(chord),
-    };
-    let modifiers = match mods {
-        // Reuse Bus's modifier parsing on a stand-in key.
-        Some(mods) => crate::utils::config::parse_key_combo(&format!("{mods}+a"))?.1,
-        None => crossterm::event::KeyModifiers::empty(),
-    };
-    Some((code, modifiers))
+/// The UI's Kitty mode accepts unambiguous Esc; pane input keeps its live encoder.
+pub(super) fn encode_key(
+    name: &str,
+    protocol: crate::protocol::keys::KeyboardProtocol,
+) -> Result<Vec<u8>, String> {
+    crate::terminal::driver::input::encode_key_with(name, |key| {
+        if key.code == crossterm::event::KeyCode::Esc
+            && key.modifiers.is_empty()
+            && matches!(
+                protocol,
+                crate::protocol::keys::KeyboardProtocol::Kitty { .. }
+            )
+        {
+            b"\x1b[27u".to_vec()
+        } else {
+            crate::protocol::keys::encode_terminal_key(key, protocol)
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,15 +122,6 @@ pub(super) fn scroll(row: u16, col: u16, up: bool, notches: u16, mods: Mods) -> 
     (0..notches)
         .flat_map(|_| sgr(code, row, col, true))
         .collect()
-}
-
-/// Wraps text in bracketed paste when the client enabled it.
-pub(super) fn paste(text: &str, bracketed: bool) -> Vec<u8> {
-    if bracketed {
-        format!("\x1b[200~{text}\x1b[201~").into_bytes()
-    } else {
-        text.as_bytes().to_vec()
-    }
 }
 
 #[cfg(test)]

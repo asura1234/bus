@@ -4,7 +4,7 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) use crate::protocol::api::schema::driver::{Cell, Cursor, Grid};
 
 impl Grid {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "dev-tools"))]
     pub fn blank(cols: u16, rows: u16) -> Self {
         let cell = Cell {
             symbol: " ".into(),
@@ -23,7 +23,7 @@ impl Grid {
 
     /// Read original VT cells; presentation color transforms and dirty acknowledgement
     /// belong to the renderer, not to observation.
-    pub(super) fn from_terminal(
+    pub(crate) fn from_terminal(
         terminal: &crate::terminal::vt::Terminal,
     ) -> Result<Self, crate::terminal::vt::Error> {
         use crate::terminal::vt::{CellColor, CellWide, KITTY_UNICODE_PLACEHOLDER};
