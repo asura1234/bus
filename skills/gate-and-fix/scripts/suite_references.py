@@ -44,7 +44,9 @@ class References:
             self.paths = {path.relative_to(root).as_posix() for path in root.rglob('*') if path.is_file() or path.is_symlink()}
         self.edges: dict[str, set[str]] = defaultdict(set)
         self.prefixes: list[tuple[str, str]] = []
+        self.directories: list[tuple[str, str]] = []
         self.sources: dict[str, str] = {}
+        self.python_constants: dict[Path, dict] = {}
         self.uncertain = False
         engine = root if (root / 'tools/quality/placement.py').is_file() else Path(__file__).resolve().parents[3]
         added = str(engine) not in sys.path
@@ -69,6 +71,7 @@ class References:
             else:
                 self.python(name, source)
         self.bundle_aliases()
+        self.metadata()
         manifest = root / 'Cargo.toml'
         data = tomllib.loads(manifest.read_text()) if manifest.exists() else {}
         self.targets = {target['name']: target['path'] for target in data.get('test', []) if 'path' in target}
@@ -129,11 +132,45 @@ class References:
                 continue
 
     def python(self, name: str, source: str):
-        targets = python_edges(self.root, name, source, self.paths)
+        targets = python_edges(self.root, name, source, self.paths, module_cache=self.python_constants)
         if targets is None:
             self.uncertain = True
         else:
-            self.edges[name].update(targets)
+            edges, directories = targets
+            self.edges[name].update(edges)
+            self.directories.extend((name, directory) for directory in directories)
+
+    def metadata(self):
+        """Retain declared file inputs of JSON reached by source references."""
+        pending = [name for name in self.paths if name.endswith('.json') and self.incoming(name)]
+        seen = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            try:
+                values = [json.loads((self.root / name).read_text(encoding='utf-8'))]
+            except (OSError, ValueError):
+                self.uncertain = True
+                continue
+            while values:
+                value = values.pop()
+                if isinstance(value, dict):
+                    values.extend([*value.keys(), *value.values()])
+                elif isinstance(value, list):
+                    values.extend(value)
+                elif isinstance(value, str):
+                    for base in (self.root, (self.root / name).parent):
+                        try:
+                            path = base / value
+                            target = self.relative(path)
+                            if target in self.paths and path.is_file():
+                                self.edges[name].add(target)
+                                if target.endswith('.json'):
+                                    pending.append(target)
+                        except (OSError, ValueError):
+                            continue
 
     @staticmethod
     def resource_input(name: str, prefix: str) -> bool:
@@ -164,6 +201,9 @@ class References:
     def incoming(self, name: str) -> set[str]:
         return {source for source, targets in self.edges.items() if name in targets} | {
             source for source, prefix in self.prefixes if self.resource_input(name, prefix)
+        } | {
+            source for source, directory in self.directories
+            if directory == '.' or name == directory or name.startswith(directory + '/')
         }
 
     def cross_owner(self, name: str) -> bool:

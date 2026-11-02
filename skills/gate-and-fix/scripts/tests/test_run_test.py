@@ -17,9 +17,9 @@ from suite_selection import Selection, select  # noqa: E402
 
 
 def test_full_build_phases_keep_normal_and_instrumented_builds_independent():
-    build, tests = runner.commands(select([], full=True))
+    build, tests = runner.commands(select(["run"], full=True))
     assert {gate.name for gate in build} == {"lint", "instrumented-build"}
-    assert {gate.name for gate in tests} == {"unit", "integration", "python", "dev-tools", "cli-smoke"}
+    assert {gate.name for gate in tests} == {"unit", "integration", "python", "dev-tools", "cli-smoke", "docs"}
     assert "none()" in next(g.argv for g in build if g.name == "instrumented-build")
     unit = next(g for g in tests if g.name == "unit")
     integration = next(g for g in tests if g.name == "integration")
@@ -83,7 +83,7 @@ def test_affected_cli_keeps_default_binary_separate_from_dev_tools_build():
 
 def test_explicit_shared_normal_and_coverage_target_serializes_binary_consumers(tmp_path):
     with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(tmp_path), "CARGO_LLVM_COV_TARGET_DIR": str(tmp_path)}):
-        build, tests = runner.commands(select([], full=True))
+        build, tests = runner.commands(select(["run"], full=True))
     assert build[0].resources.intersection(build[1].resources)
     dev = next(gate for gate in tests if gate.name == "dev-tools")
     for gate in tests:
@@ -99,7 +99,7 @@ def test_partial_run_never_enforces_or_publishes_full_coverage(tmp_path):
 def test_failed_test_cannot_reuse_successful_coverage():
     failure = runner.GateResult("unit", ("fake",), 1, 1, "", "failed")
     with patch.object(runner, "batch", side_effect=[[], [failure]]), patch.object(runner.quality, "coverage") as coverage:
-        assert runner.execute(select([], full=True)) == 1
+        assert runner.execute(select(["run"], full=True)) == 1
     coverage.assert_not_called()
 
 
@@ -116,7 +116,7 @@ def test_launcher_full_plan_is_auditable_without_any_cargo_process():
 
 def test_lane_environment_drops_live_session_but_keeps_explicit_test_binary():
     with patch.dict(os.environ, {"BUS_DATA_DIR": "/live", "HERDR_SESSION_ID": "live"}):
-        _, tests = runner.commands(select([], full=True))
+        _, tests = runner.commands(select(["run"], full=True))
     for gate in tests:
         assert "BUS_DATA_DIR" not in gate.env
         assert "HERDR_SESSION_ID" not in gate.env
@@ -176,6 +176,8 @@ def test_interrupt_parallel_entrypoint_stops_child_before_deleting_profiles(tmp_
         f"import sys;sys.path.insert(0,{str(scripts)!r});import suite_run as r;"
         "from pathlib import Path;import os;"
         f"r.quality.ROOT=Path({str(tmp_path)!r});r.quality.OUTPUT=r.quality.ROOT/'reports';"
+        "r.changed_paths=lambda *_:['run'];"
+        "r.bootstrap=lambda *a,**kw:None;"
         f"r.commands=lambda _s:([r.Gate('build',(sys.executable,'-c',{child!r}),env=dict(os.environ))],[]);"
         "sys.exit(r.main(['--full']))"
     )

@@ -61,7 +61,7 @@ def select_gates(
 ) -> list[Gate]:
     """Every committed diff gets the shared full entrypoint, never affected mode."""
     _validate_paths(changed_files)
-    gates = [Gate("test-full", (python, TEST_SCRIPT, "--full"))]
+    gates = [Gate("test-full", (python, TEST_SCRIPT, "--full", "--base", base))]
     gates.append(Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")))
     return gates
 
@@ -284,7 +284,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 Gate("repository-gate", command_argv(command), requires_exclusive_execution=True, scrub_session_env=True),
                 Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD"), scrub_session_env=True),
             ]
-        coverage = Run(repo, repo / "temp/gate-and-fix/coverage", "gate") if is_bus else nullcontext()
+        if is_bus:
+            from suite_selection import select
+            rust_coverage = select(changed_files, full=True, root=repo).coverage_floor
+        else:
+            rust_coverage = False
+        coverage = Run(repo, repo / "temp/gate-and-fix/coverage", "gate") if rust_coverage else nullcontext()
         with interrupt_signals(), coverage:
             results = run_gates(gates, cwd=repo)
         if (

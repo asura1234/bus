@@ -254,6 +254,8 @@ class BusQualityTest(unittest.TestCase):
                     "-m",
                     "pytest",
                     "-q",
+                    "-n",
+                    "0",
                     "tools/tests/ui_hot_path_test.py",
                     "tools/tests/import_boundaries_test.py",
                     "tools/tests/scopes_test.py",
@@ -529,7 +531,7 @@ class BusQualityTest(unittest.TestCase):
                 self.assertNotIn("--no-clean", run.call_args.args)
                 if not nextest:
                     self.assertEqual(
-                        run.call_args.args[-3:], ("--", "--skip", "server::tests::")
+                        run.call_args.args[-5:], ("--", "--test-threads", "4", "--skip", "server::tests::")
                     )
 
     def test_server_prefix_changes_apply_to_nextest_and_libtest_in_both_lanes(self):
@@ -556,9 +558,10 @@ class BusQualityTest(unittest.TestCase):
                             args[-2:], ("-E", expected if selection else f"not {expected}")
                         )
                     elif selection:
-                        self.assertEqual(args[-1], prefix)
+                        self.assertEqual(args[args.index("--") - 1], prefix)
+                        self.assertEqual(args[-3:], ("--", "--test-threads", "4"))
                     else:
-                        self.assertEqual(args[-3:], ("--", "--skip", prefix))
+                        self.assertEqual(args[-5:], ("--", "--test-threads", "4", "--skip", prefix))
 
 
 if __name__ == "__main__":

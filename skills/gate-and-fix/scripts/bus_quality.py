@@ -17,6 +17,8 @@ from pathlib import Path
 from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
 from gate_process import Children, Interrupted, interrupt_signals
 from profile_report import merged_profile
+from suite_environment import bootstrap
+from suite_parallelism import python_workers, rust_workers
 
 ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
 OUTPUT = ROOT / "temp/gate-and-fix/coverage"
@@ -77,16 +79,9 @@ def child_env(**overrides: str) -> dict:
 
 def python_test_command(files: list[str]) -> tuple[str, ...]:
     """Bound Python concurrency; PYTEST_WORKERS=0 reproduces the serial lane."""
-    try:
-        workers = int(os.environ.get("PYTEST_WORKERS", "4"))
-    except ValueError as error:
-        raise ValueError("PYTEST_WORKERS must be a nonnegative integer") from error
-    if workers < 0:
-        raise ValueError("PYTEST_WORKERS must be a nonnegative integer")
+    workers = python_workers(len(files))
     if importlib.util.find_spec("xdist") is None:
         raise ValueError("missing pytest-xdist; install scripts/requirements.txt from this skill")
-    if files:
-        workers = min(workers, len(files)) if len(files) > 1 else 0
     parallel = ("-n", str(workers), "--dist", "loadfile", "--max-worker-restart=0")
     return (sys.executable, "-m", "pytest", "-q", "-o", "python_files=*_test.py",
             *parallel, "--durations=20", *files)
@@ -194,6 +189,7 @@ def rust_test(
     *targets: str, fresh: bool = False, in_process_server: bool | None = None
 ) -> int:
     stage = "unit" if fresh else "integration"
+    threads = str(rust_workers())
     env = child_env(LLVM_PROFILE_FILE_NAME=profile_file_name(stage))
     # --no-report already preserves profiles and rejects --no-clean. Reset just the raw
     # profiles once per round, keeping the instrumented build cache warm.
@@ -219,17 +215,20 @@ def rust_test(
             "final",
             "--success-output",
             "never",
+            "--test-threads",
+            threads,
         ]
         if in_process_server is not None:
             test_filter = f"test(/^{re.escape(IN_PROCESS_SERVER_TESTS)}/)"
             argv += ["-E", test_filter if in_process_server else f"not {test_filter}"]
     else:
         argv += ["--no-fail-fast", "--quiet"]
-        if in_process_server is False:
-            argv += ["--", "--skip", IN_PROCESS_SERVER_TESTS]
-        elif in_process_server is True:
+        if in_process_server is True:
             # cargo-llvm-cov test accepts a libtest substring before the `--` delimiter.
             argv.append(IN_PROCESS_SERVER_TESTS)
+        argv += ["--", "--test-threads", threads]
+        if in_process_server is False:
+            argv += ["--skip", IN_PROCESS_SERVER_TESTS]
     return run(*argv, env=env)
 
 
@@ -271,15 +270,15 @@ def file_lengths() -> int:
     return int(bool(failures))
 
 
-def lint() -> int:
+def lint(*, skip_clippy: bool = False) -> int:
     roots = python_roots()
     if not roots:
         raise ValueError("no Python source roots found")
     policy = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
     results = [
         run("cargo", "fmt", "--check"),
-        *(run(*argv) for argv in clippy_commands(policy)),
-        *(run(*argv) for argv in clippy_commands(policy, features=DEV_TOOLS_FEATURES)),
+        *(run(*argv) for argv in clippy_commands(policy) if not skip_clippy),
+        *(run(*argv) for argv in clippy_commands(policy, features=DEV_TOOLS_FEATURES) if not skip_clippy),
         run(
             sys.executable,
             "-m",
@@ -290,7 +289,7 @@ def lint() -> int:
             "E9,F",
             *roots,
         ),
-        run(sys.executable, "-m", "pytest", "-q", *ARCHITECTURE_TESTS),
+        run(sys.executable, "-m", "pytest", "-q", "-n", "0", *ARCHITECTURE_TESTS),
         run(sys.executable, "-m", "tools.quality.placement", "--enforce"),
         file_lengths(),
         run(sys.executable, "-m", IMPORT_BOUNDARIES, "--enforce"),
@@ -395,10 +394,12 @@ def dev_tools_test() -> int:
     """Run the dev variant's test tooling: the CLI and driver targets, then the
     driver's unit tests. Coverage measures only the release variant."""
     targets = [arg for target in DEV_TOOLS_TEST_TARGETS for arg in ("--test", target)]
+    threads = str(rust_workers())
     if shutil.which("cargo-nextest"):
         common = (
             "--no-fail-fast", "--status-level", "fail", "--final-status-level", "fail",
             "--failure-output", "final", "--success-output", "never",
+            "--test-threads", threads,
         )
         results = [
             run("cargo", "nextest", "run", "--locked", *DEV_TOOLS_FEATURES, *targets, *common),
@@ -409,10 +410,10 @@ def dev_tools_test() -> int:
         ]
     else:
         results = [
-            run("cargo", "test", "--locked", *DEV_TOOLS_FEATURES, *targets, "--no-fail-fast", "--quiet"),
+            run("cargo", "test", "--locked", *DEV_TOOLS_FEATURES, *targets, "--no-fail-fast", "--quiet", "--", "--test-threads", threads),
             run(
                 "cargo", "test", "--locked", *DEV_TOOLS_FEATURES, "--bin", "bus",
-                "--no-fail-fast", "--quiet", DEV_TOOLS_UNIT_PREFIX,
+                "--no-fail-fast", "--quiet", DEV_TOOLS_UNIT_PREFIX, "--", "--test-threads", threads,
             ),
         ]
     return int(any(results))
@@ -563,7 +564,7 @@ def coverage() -> int:
     return int(not summary["rust"]["pass"])
 
 
-def run_lane(lane: str) -> int:
+def run_lane(lane: str, *, skip_clippy: bool = False) -> int:
     if lane in ("unit", "ci"):
         python_test_command([])  # Reject missing tools/settings before any Rust build.
     required = ("ruff", "pytest") if lane == "lint" else ("pytest",)
@@ -575,17 +576,24 @@ def run_lane(lane: str) -> int:
         "lint": lint, "unit": unit, "integration": integration,
         "coverage": coverage, "windows-lint": windows_lint,
     }
+    if lane == "lint":
+        return lint(skip_clippy=skip_clippy)
     return int(any([checks[name]() for name in LANES])) if lane == "ci" else checks[lane]()
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lane", choices=(*LANES, "ci", "windows-lint"))
-    args = parser.parse_args(argv)
+    parser.add_argument("--skip-clippy", action="store_true", help="planner found no Rust inputs")
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(arguments)
+    if args.skip_clippy and args.lane != "lint":
+        parser.error("--skip-clippy is only valid for lint")
     try:
         with interrupt_signals():
+            bootstrap(ROOT, arguments, script=Path(__file__))
             if args.lane not in ("unit", "integration", "coverage", "ci"):
-                return run_lane(args.lane)
+                return run_lane(args.lane, skip_clippy=args.skip_clippy)
             with Run(ROOT, OUTPUT, args.lane) as profiles:
                 result = run_lane(args.lane)
                 profiles.finish(result)

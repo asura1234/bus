@@ -83,6 +83,7 @@ class ProfileLifecycleTest(unittest.TestCase):
             output = root / "reports"
             with (
                 patch.object(quality, "ROOT", root),
+                patch.object(quality, "bootstrap", return_value=None),
                 patch.object(quality, "OUTPUT", output),
                 patch.object(quality.importlib.util, "find_spec", return_value=object()),
                 patch.object(quality.shutil, "which", return_value="/tool"),
@@ -296,6 +297,7 @@ class ProfileLifecycleTest(unittest.TestCase):
                 f"import sys;sys.path.insert(0,{str(Path(quality.__file__).parent)!r});"
                 "import bus_quality as q;from pathlib import Path;"
                 f"q.ROOT=Path({str(root)!r});q.OUTPUT=q.ROOT/'reports';"
+                "q.bootstrap=lambda *a,**kw:None;"
                 f"q.unit=lambda:q.run(sys.executable,'-c',{child!r},env=q.child_env(LLVM_PROFILE_FILE=str(q.profile_directory(q.llvm_cov_target(q.os.environ)))));"
                 "sys.exit(q.main(['unit']))"
             )

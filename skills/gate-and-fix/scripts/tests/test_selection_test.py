@@ -16,7 +16,6 @@ def put(root, name, text):
 
 
 @pytest.mark.parametrize("path", [
-    "src/main.rs", "src/protocol/types.rs", "src/client/rooms/ui.rs",
     "Cargo.toml", "Cargo.lock", "build.rs", "build_identity.rs", "run",
     ".cargo/config.toml", "rust-toolchain.toml", "vendor/new.rs",
     "skills/gate-and-fix/scripts/bus_quality.py", "unrecognized.file",
@@ -63,15 +62,16 @@ def test_dev_tool_test_changes_do_not_skip_the_feature_variant(tmp_path):
     assert not plan.full
 
 
-def test_embedded_python_skill_requires_all_suites():
+def test_missing_python_skill_fails_closed():
     plan = selection.select(["skills/best-of-n/scripts/ledger.py"])
-    assert plan.full and plan.dev_tools and "tools" in plan.python
+    assert plan.full and "tools" in plan.python
+    assert plan.rust_filter is None and plan.dev_tools
 
 
-def test_full_flag_cannot_be_narrowed_by_document_only_changes():
+def test_full_flag_keeps_checks_but_skips_languages_for_document_only_changes():
     plan = selection.select(["README.md"], full=True)
-    assert plan.full and plan.rust_filter is None and plan.dev_tools
-    assert plan.coverage_floor
+    assert plan.full and plan.rust_filter == "none()" and not plan.dev_tools
+    assert not plan.python and not plan.coverage_floor
 
 
 def test_affected_full_fallback_does_not_enable_a_coverage_verdict():

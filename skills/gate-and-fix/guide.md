@@ -39,8 +39,10 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
   the cost plainly: problems that only those layers expose are no longer caught by this local round;
   when they did not run, report that truthfully, and never stretch this round's PASS into a claim
   that those layers passed.
-- Every round runs all four checks plus `git diff --check <base>...HEAD`, regardless of which
-  files changed. No changed-file filter can remove a category or a skill test.
+- Every round runs the complete applicable gate plus `git diff --check <base>...HEAD`.
+  The runner owns language eligibility and cross-language dependencies; use its plan and
+  explicit SKIPPED reasons as evidence. Full mode controls breadth within eligible lanes.
+  See [the test entrypoint](references/testing.md) for the classifier and report contracts.
   - **Lint**: Cargo fmt, all-target Clippy with warnings denied (for the default build and again
     for the `dev-tools` variant that `./run dev` builds), Ruff `E9,F` over all first-party
     Python, and the static hot-path architecture contract. The lint lane runs the hot-path and
@@ -59,7 +61,7 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
     `bus_quality.py`, followed by every `test_*.py` / `*_test.py` in its existing `PYTHON_ROOTS`
     (`scripts/`, `skills/`, `cli_extensions/`, `tools/`, `packaging/`) with pytest. They must pass;
     their coverage is not measured.
-    This includes all maintenance suites and all skill suites, on every round.
+    The applicable Python lane includes maintenance and skill suites.
     The instrumented CLI is built before Python tests; its explicit `BUS_TEST_BINARY` and profile
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
   - **Environment**: every lane's children run without inherited `BUS_*`/`HERDR_*` variables, so a
@@ -78,9 +80,10 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
     coverage-only tests. Below-floor, missing/empty
     reports, unsuccessful preceding tests, or a different HEAD all fail. Unit starts a new profile
     set, so an old report cannot make a new round pass.
-- The runner invokes the same `suite_run.py --full` implementation as `./run test --full`
-  and `just ci`, recorded as `test-full` alongside `diff-check`. It requires nextest and
-  cannot narrow the final gate through affected selection. Complete task logs and timings
+- The runner invokes the same `suite_run.py --full --base <baseline>` implementation as
+  `./run test --full` and `just ci`, recorded as `test-full` alongside `diff-check`.
+  It passes its immutable baseline to the planner and cannot narrow the final gate through
+  affected selection. Complete task logs and timings
   are retained under `temp/run-test/`; failures also appear in the gate artifact.
   See [the test entrypoint](references/testing.md) for modes and scheduling.
 - Coverage reports live in ignored `temp/gate-and-fix/coverage/`. Only the bounded raw-profile
@@ -138,20 +141,23 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
 
 ## Developer tools
 
-No Cargo.toml dependency is added. Python 3.11+ is required. Install developer tools once:
+No Cargo.toml dependency is added. Python 3.11+ is required. The runner prepares
+its private Python environment from the checked-in requirements before starting
+any lane; plan mode stays read-only. Setup failures stop before scheduling and
+identify `temp/gate-tools/python-setup.log`. Python setup mechanics live in
+`scripts/suite_environment.py`, including migration of older environments that
+inherited global site packages. Only the Rust developer tools need manual setup:
 
 ```sh
 cargo install cargo-llvm-cov --locked
 rustup component add llvm-tools-preview
-python3 -m venv --system-site-packages temp/gate-tools/python
-temp/gate-tools/python/bin/python -m pip install -r skills/gate-and-fix/scripts/requirements.txt
 # Optional wrappers/faster Rust execution: install just and cargo-nextest.
 ```
 
 On Windows, use `python` in place of `python3` and invoke the runner with the venv's
 `Scripts/python.exe` (or pass that interpreter with `just --set python <path> ci`).
 The runner and just use the local venv if present; otherwise they use the current/default Python,
-which must have the requirements installed. Missing mandatory tools fail with setup guidance.
+which bootstraps the private requirements environment. Missing Rust tools fail with setup guidance.
 `just unit-test` starts and records a private run, `just integration-test` continues it, and
 `just coverage` consumes its profiles and removes it. A failed lane or interrupted command
 removes that run as well; restart from unit after such a failure. Starting unit again discards
@@ -173,9 +179,10 @@ reported gap leaves the gate failed.
 
 - The full entrypoint overlaps normal-target lint with the instrumented preflight build.
   Default-target unit/integration builders and CLI/Python consumers then serialize because
-  Cargo may rebuild despite preflight. Dev-tools can overlap on its separate normal target;
-  explicitly co-located outputs serialize every binary consumer. Normal-target lint
-  completes before dev-tools uses that target. Coverage consumes fresh profiles after all
+  Cargo may rebuild despite preflight. A shared worker budget also serializes test lanes
+  across separate targets; see [the test entrypoint](references/testing.md) for the numeric
+  bounds. Explicitly co-located outputs still serialize every binary consumer. Normal-target
+  lint completes before dev-tools uses that target. Coverage consumes fresh profiles after all
   tasks succeed; the existing nonempty unit-profile checkpoint remains mandatory.
   The independent diff check can run concurrently. All independent failures are collected.
 - A FAIL round must first collect every gate result and group them by writable owner (not by the

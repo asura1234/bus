@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from suite_references import References
+from suite_lanes import PYTHON, SHARED_SKILLS, classify, kind
 
-PYTHON = ("scripts", "skills", "cli_extensions", "tools", "packaging")
-SHARED_SKILLS = {"_bus", "gate-and-fix", "worktree-new", "rebase-origin-main"}
 RUST_OWNERS = {"agents", "cli", "client", "messaging", "platform", "protocol",
                "server", "terminal", "utils", "devtools"}
 
@@ -22,6 +21,9 @@ class Selection:
     reason: str
     coverage_floor: bool = False
     binary: bool = False
+    python_reason: str = ""
+    rust_reason: str = ""
+    doc_tests: tuple[str, ...] = ()
 
 
 def select(paths: list[str], *, full: bool = False, root: Path | None = None) -> Selection:
@@ -32,6 +34,22 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
     for name in paths:
         if not name or PurePosixPath(name).is_absolute() or any(p in {"", ".", ".."} for p in name.split("/")):
             raise ValueError("paths must be normalized repository-relative paths")
+    if any(kind(name) == "shared" or not (root / name).is_file() for name in paths):
+        return Selection(True, None, PYTHON, True, "shared/unknown input", coverage_floor,
+                         True, "shared/unknown input", "shared/unknown input")
+    references = References(root)
+    lanes = classify(paths, references)
+
+    def finish(broad, rust_filter, python, dev_tools, reason):
+        python = tuple(python) if lanes.python else lanes.dependent_python
+        tests = [name for name in references.sources if name.endswith('_test.py') and any(
+            name == prefix or name.startswith(prefix + '/') for prefix in python
+        )]
+        docs = tuple(name for name in lanes.doc_tests if name not in tests)
+        return Selection(broad, rust_filter if lanes.rust else "none()", python,
+                         dev_tools and lanes.rust, reason, coverage_floor and lanes.rust,
+                         references.needs_binary([*tests, *docs]),
+                         lanes.python_reason, lanes.rust_reason, docs)
     def can_narrow(name):
         path = PurePosixPath(name)
         parts = path.parts
@@ -41,8 +59,7 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
             len(parts) > 2 and parts[0] == 'src' and parts[1] in RUST_OWNERS and
             ('tests' in parts[2:-1] or path.name.endswith('_test.rs'))))
     if full or any(not can_narrow(name) for name in paths):
-        return Selection(True, None, PYTHON, True, "explicit full mode or shared/unknown input", coverage_floor, True)
-    references = References(root) if paths and not full else None
+        return finish(True, None, PYTHON, True, "explicit full mode or shared/unknown input")
     full |= bool(references and references.uncertain)
     for name in sorted(set(paths)):
         path = PurePosixPath(name)
@@ -79,12 +96,9 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
         else:
             full = True
     if full:
-        return Selection(True, None, PYTHON, True, "explicit full mode or cross-owner/shared/unknown input", coverage_floor, True)
-    tests = [name for name in references.sources if name.endswith('_test.py') and any(
-        name.startswith(prefix + '/') for prefix in python
-    )] if references else []
-    return Selection(False, " | ".join(sorted(rust)) or "none()", tuple(sorted(python)),
-                     dev_tools, "source-reference owners; coverage floor skipped", binary=bool(references and references.needs_binary(tests)))
+        return finish(True, None, PYTHON, True, "cross-owner/shared/unknown input")
+    return finish(False, " | ".join(sorted(rust)) or "none()", sorted(python),
+                  dev_tools, "source-reference owners; coverage floor skipped")
 
 
 def changed_paths(root: Path, base: str) -> list[str]:
