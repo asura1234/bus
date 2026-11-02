@@ -206,20 +206,24 @@ fn manual_group_recovery_preserves_replied_and_failed_members_and_closes_only_op
                 .state
                 .record_steering(
                     id,
-                    if text == "open input" {
-                        SubmissionOutcome::Confirmed {
-                            provider_session_id: Some("session".into()),
-                            provider_turn_id: Some("1".into()),
-                        }
-                    } else {
-                        SubmissionOutcome::Uncertain {
-                            message: NATIVE_ERROR.into(),
-                        }
+                    SubmissionOutcome::Confirmed {
+                        provider_session_id: Some("session".into()),
+                        provider_turn_id: Some("1".into()),
                     },
                 )
                 .unwrap();
             members.push(id);
         }
+        // Restore a pre-fix group with several uncertain writes. Current
+        // admission holds the queue after the first one; recovery must still
+        // handle the already persisted legacy group without replaying it.
+        let mut snapshot = serde_json::to_value(&worker.state).unwrap();
+        for id in &members[..3] {
+            let member = &mut snapshot["requests"][id.0.to_string()];
+            member["uncertain_outcome"] = json!(true);
+            member["submission_error"] = json!(NATIVE_ERROR);
+        }
+        worker.state = serde_json::from_value(snapshot).unwrap();
         let message = worker.state.request(members[0]).unwrap().prompt.id;
         worker
             .state
