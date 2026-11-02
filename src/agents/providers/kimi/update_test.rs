@@ -2,17 +2,20 @@
 use super::*;
 use std::{ffi::OsString, os::unix::fs::PermissionsExt, sync::MutexGuard};
 
-struct Fixture {
-    root: PathBuf,
+#[path = "resume_home_test.rs"]
+pub(crate) mod resume_home_test;
+
+pub(crate) struct Fixture {
+    pub(crate) root: PathBuf,
     source: PathBuf,
     executable: PathBuf,
-    hooks: HookContext,
+    pub(crate) hooks: HookContext,
     previous: Vec<(&'static str, Option<OsString>)>,
     _lock: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let lock = crate::utils::config::test_config_env_lock()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -48,7 +51,7 @@ impl Fixture {
         }
     }
 
-    fn prepare(&self) -> PreparedLaunch {
+    pub(crate) fn prepare(&self) -> PreparedLaunch {
         prepare(
             &LaunchSpec {
                 provider: ProviderKind::Kimi,
