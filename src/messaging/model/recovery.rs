@@ -23,6 +23,9 @@ impl BusState {
             .chain(self.group_members(request))
             .filter_map(|id| self.requests.get(&id).cloned())
             .collect();
+        let shared_uncertainty = previous
+            .iter()
+            .any(|source| source.id == request && source.uncertain_outcome);
         self.recover_idle_request(request, recovery.at_ms)?;
         for previous in previous {
             if previous.settled() {
@@ -38,6 +41,11 @@ impl BusState {
                     .failure_reason
                     .get_or_insert_with(|| "manual_recovery".into());
                 closed.manual_recovery = Some(recovery.clone());
+                // A coalesced payload has one submit receipt; steering writes
+                // keep their independent outcomes instead of borrowing it.
+                if shared_uncertainty && previous.group == Some(request) && !previous.steered {
+                    closed.uncertain_outcome = true;
+                }
             }
         }
         Ok(())

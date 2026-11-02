@@ -206,8 +206,15 @@ fn manual_group_recovery_preserves_replied_and_failed_members_and_closes_only_op
                 .state
                 .record_steering(
                     id,
-                    SubmissionOutcome::Uncertain {
-                        message: NATIVE_ERROR.into(),
+                    if text == "open input" {
+                        SubmissionOutcome::Confirmed {
+                            provider_session_id: Some("session".into()),
+                            provider_turn_id: Some("1".into()),
+                        }
+                    } else {
+                        SubmissionOutcome::Uncertain {
+                            message: NATIVE_ERROR.into(),
+                        }
                     },
                 )
                 .unwrap();
@@ -274,9 +281,10 @@ fn manual_group_recovery_preserves_replied_and_failed_members_and_closes_only_op
                 json!({"actor":"human","at_ms":at})
             );
         }
-        for id in &members[2..] {
-            assert_eq!(status(&reopened, *id)["detail"], NATIVE_ERROR);
-        }
+        assert_eq!(status(&reopened, members[2])["detail"], NATIVE_ERROR);
+        assert_eq!(status(&reopened, members[2])["uncertain_outcome"], true);
+        assert!(status(&reopened, members[3])["detail"].is_null());
+        assert_eq!(status(&reopened, members[3])["uncertain_outcome"], false);
         assert_eq!(reopened.state.agent(agent).unwrap().current_request, None);
         reopened.submit_ready().unwrap();
         drop(reopened);
@@ -316,4 +324,38 @@ fn manual_recovery_remains_a_bus_caused_delivery_failure() {
     assert_eq!(class, crate::messaging::model::RequestFailureClass::Bus);
     assert!(!class.is_deliberate());
     assert!(!class.is_external());
+}
+
+#[test]
+fn manual_recovery_preserves_coalesced_submission_uncertainty() {
+    let (mut worker, room, agent, dir) = fixture();
+    bind(&mut worker, agent);
+    let lead = enqueue(&mut worker, room, agent, "first queued input");
+    let member = enqueue(&mut worker, room, agent, "second queued input");
+    assert!(worker.state.coalesce_queue(lead).is_some());
+    worker.state.begin_submission(lead, "launch", 102).unwrap();
+    worker
+        .state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Uncertain {
+                message: NATIVE_ERROR.into(),
+            },
+        )
+        .unwrap();
+    assert!(recover(&mut worker, lead, None).ok);
+    drop(worker);
+    let mut reopened = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
+    for id in [lead, member] {
+        let receipt = status(&reopened, id);
+        assert_eq!(receipt["reason"], "manual_recovery", "{id:?}");
+        assert_eq!(receipt["detail"], NATIVE_ERROR, "{id:?}");
+        assert_eq!(
+            receipt["uncertain_outcome"], true,
+            "shared input for {id:?}"
+        );
+    }
+    reopened.submit_ready().unwrap();
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
 }
