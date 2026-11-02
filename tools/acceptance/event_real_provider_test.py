@@ -13,7 +13,6 @@ from tools.acceptance.harness_test import Bus
 from tools.acceptance.event_delivery_test import Scratch
 
 REPO = Path(__file__).resolve().parents[2]
-EVIDENCE = REPO.parent / 'bus' / 'temp' / 'event-delivery'
 
 
 class RealBus(Bus):
@@ -47,7 +46,8 @@ def send(bus, agent, text):
     before = time.monotonic()
     receipt = bus.cli('send', '--room', 'bus', '--to', agent, '--text', text)
     accepted = time.monotonic()
-    record = {'scenario': 'real', 'agent': agent, 'id': str(receipt['message_id']), 'marker': text.split()[-1],
+    marker = next(word for word in text.split() if word.startswith('EVENT_'))
+    record = {'scenario': 'real', 'agent': agent, 'id': str(receipt['message_id']), 'marker': marker,
               'accepted_call_ms': (accepted - before) * 1000, 'accepted_mono': accepted,
               'accepted_unix': time.time(), 'started_ms': None, 'correct': False, 'draft_exact': None}
     deadline = accepted + 120
