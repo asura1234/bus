@@ -57,7 +57,7 @@ and join its group; `--queue` gets an independent idle turn. A cross-room messag
 turn. Explicit correlated replies complete individual requests without ending the turn; an eventual
 final answers only the group's still-outstanding requests.
 
-Replies land in the message's room for developer and agent senders alike. A turn no message started
+A reply lands in the message's room, equally for developer and agent senders. A turn no message started
 posts in the orchestrator's work room. A captured Stop answer ends matching requests immediately,
 even if background shells keep Working; later background results are follow-ups, never replacements.
 
