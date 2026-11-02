@@ -75,14 +75,31 @@ pub(super) fn observe_since_launch(
             osc_progress: "",
         },
     );
-    // Choosers use the same prompt marker as the composer. Inspect live
-    // controls before reading input, including collapsed async questions.
+    let normalize = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let body = input_since_launch(kind, screen, cursor, pristine);
+    let owned = body.as_deref().is_some_and(|body| {
+        !body.is_empty()
+            && (normalize(body) == normalize(expected)
+                || collapsed_paste(kind, body, expected)
+                || kind == AgentKind::Claude && lifted_images(body, expected, normalize)
+                || kind == AgentKind::Codex && codex_image_attachment(body, expected))
+    });
+    // A proven current composer retains ownership of its literal message text.
+    if owned && composer_frame(kind, &plain) {
+        return InputObservation::Pending;
+    }
+    // Choosers can reuse prompt markers. Reject unowned live controls,
+    // including collapsed questions, before accepting an empty composer.
     if (!composer_frame(kind, &plain) && detection.visible_blocker)
         || crate::terminal::driver::has_input_controls(&plain)
     {
         return InputObservation::Unavailable;
     }
-    let Some(body) = input_since_launch(kind, screen, cursor, pristine) else {
+    let Some(body) = body else {
         return if detection.visible_working {
             InputObservation::Accepted
         } else {
@@ -92,16 +109,7 @@ pub(super) fn observe_since_launch(
     if body.is_empty() {
         return InputObservation::Empty;
     }
-    let normalize = |text: &str| {
-        text.chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-    };
-    if normalize(&body) == normalize(expected)
-        || collapsed_paste(kind, &body, expected)
-        || kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
-        || kind == AgentKind::Codex && codex_image_attachment(&body, expected)
-    {
+    if owned {
         InputObservation::Pending
     } else {
         InputObservation::Other

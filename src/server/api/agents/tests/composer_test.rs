@@ -1996,3 +1996,26 @@ fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
         );
     }
 }
+
+#[test]
+fn claude_composer_keeps_literal_yes_no_hint_as_owned_input() {
+    let rule = "─".repeat(20);
+    let text = "Please print [y/n]";
+    let screen = format!("● done\n\n{rule}\n❯\u{a0}{text}\n{rule}\n  ? for shortcuts");
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, text),
+        InputObservation::Pending,
+        "a literal yes/no hint in the owned composer is message text: {screen}"
+    );
+}
+
+#[test]
+fn codex_composer_keeps_literal_yes_no_hint_as_owned_input() {
+    let text = "Please print [y/n]";
+    let screen = format!("history\n› {text}\n\n  gpt-5.6-sol · /repo\n  ? for shortcuts");
+    assert_eq!(
+        observe(AgentKind::Codex, &screen, text),
+        InputObservation::Pending,
+        "a literal yes/no hint in the owned composer is message text: {screen}"
+    );
+}
