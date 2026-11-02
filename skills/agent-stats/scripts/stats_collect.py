@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from stats_artifacts import review, runner, triage, unfenced
+from stats_artifacts import review, runner, triage, unfenced, markdown_run
 from stats_schema import digest, read_json, record, source, unknown
 
 
@@ -119,6 +119,12 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
     lanes = {r[0] for r in parsed}
     for _, text in texts:
         lanes.update(re.findall(r"\blane=(?:external:)?([\w-]+)\s*\|", text))
+    seen_markdown_runs = set()
+    for path, text in texts:
+        data = markdown_run(text)
+        if data and digest(text) not in seen_markdown_runs:
+            seen_markdown_runs.add(digest(text))
+            emit("run", "tester", data, path, locator="runner metadata")
     seen_runs = set()
     for path in paths:
         if path.suffix != ".json":
@@ -138,7 +144,14 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
     }
     seen_triage = set()
     for path, text in texts:
-        if "triage" not in path.name or "**模式**" not in text:
+        if (
+            "triage" not in path.name
+            or "**模式**" not in text
+            or any(
+                part in ("evidence", "source-reviews", "reviews")
+                for part in path.relative_to(root).parts
+            )
+        ):
             continue
         token = digest(text)
         if token in seen_triage:

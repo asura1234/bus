@@ -122,3 +122,76 @@ def test_unknown_structured_source_lane_fails_closed(tmp_path):
     )
     assert result.returncode == 1
     assert not (tmp_path / "stats/events.jsonl").exists()
+
+
+def test_archived_triage_copy_with_extra_validation_does_not_double_root_credit(
+    tmp_path,
+):
+    import shutil
+
+    root = tmp_path / "artifacts"
+    shutil.copytree(FIXTURE, root)
+    copy = root / "evidence/author-triage.md"
+    copy.parent.mkdir()
+    copy.write_text(
+        (root / "author/triage.md").read_text()
+        + "\n## Later validation\n\nAll probes pass.\n"
+    )
+    r = call(
+        "collect",
+        "--store",
+        tmp_path / "stats",
+        "--task",
+        "pr-295",
+        "--artifacts",
+        root,
+    )
+    assert r.returncode == 0, r.stderr
+    rows = [
+        json.loads(x)
+        for x in (tmp_path / "stats/events.jsonl").read_text().splitlines()
+    ]
+    assert len([r for r in rows if r["kind"] == "root_cause"]) == 2
+
+
+def test_archived_gate_and_e2e_formats_preserve_results_without_inventing_elapsed(
+    tmp_path,
+):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "gate.md").write_text(
+        "# Gate-and-Fix Round\n\n- Schema: `2`\n- Round: `2`\n- Base: `306b177332aaefd3addfbbb6c6f1cafb1b3b8a7c`\n- Head: `ad9dc509e1a63a8ecd99cb4136d01e54a1ce9266`\n- Outcome: `PASS`\n\n## Gate results\n\n### lint — PASS\n\n- Exit code: `0`\n- Duration: `124992ms`\n"
+    )
+    (root / "e2e.md").write_text(
+        "# E2E TUI Run\n\n- Commit: `8af9163bdadc22341a998869b30e41f6be82beb1`\n\n## Summary\n\nERRPIPE-01 PASS\nVerdict: GREEN\n"
+    )
+    (root / "live.json").write_text(
+        json.dumps(
+            {
+                "result": "PASS",
+                "head": "ad9dc509e1a63a8ecd99cb4136d01e54a1ce9266",
+                "provider": "codex",
+                "recovered_request": {"stage": "replied"},
+            }
+        )
+    )
+    r = call(
+        "collect",
+        "--store",
+        tmp_path / "stats",
+        "--task",
+        "pr-295",
+        "--artifacts",
+        root,
+    )
+    assert r.returncode == 0, r.stderr
+    rows = [
+        json.loads(x)
+        for x in (tmp_path / "stats/events.jsonl").read_text().splitlines()
+    ]
+    runs = {r["data"]["kind"]: r["data"] for r in rows if r["kind"] == "run"}
+    assert set(runs) == {"gate", "e2e", "live"}
+    assert runs["gate"]["lanes"] == [
+        {"name": "lint", "result": "PASS", "duration_ms": 124992}
+    ]
+    assert all(x["duration_ms"] is None for x in runs.values())

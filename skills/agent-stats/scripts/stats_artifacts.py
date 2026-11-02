@@ -200,19 +200,11 @@ def runner(value):
         value.get("kind") in ("gate", "e2e", "live")
         and {"head", "result", "started_at", "finished_at"} <= value.keys()
     ):
-        return dict(
-            kind=value["kind"],
-            head=value["head"],
-            result=value["result"],
-            duration_ms=value.get("duration_ms"),
-            failure_cause=value.get("failure_cause"),
-            full=value.get("full"),
-            lanes=value.get("lanes", []),
-            started_at=value["started_at"],
-            finished_at=value["finished_at"],
-            slot_wait_ms=value.get("slot_wait_ms"),
-            failing_test_ids=value.get("failing_test_ids", []),
-        )
+        data = run_defaults(value["kind"], value["head"], value["result"])
+        for key in data:
+            if key in value:
+                data[key] = value[key]
+        return data
     if {"head", "duration_ms", "exit_code", "results"} <= value.keys():
         if (
             type(value["exit_code"]) is not int
@@ -220,26 +212,95 @@ def runner(value):
             or value["duration_ms"] < 0
         ):
             raise ValueError("invalid runner result/duration")
-        lanes = []
-        for entry in value["results"]:
-            lanes.append(
-                dict(
-                    name=entry["name"],
-                    result="PASS" if entry["exit_code"] == 0 else "FAIL",
-                    duration_ms=entry["duration_ms"],
-                )
-            )
-        return dict(
-            kind="gate",
-            head=value["head"],
-            result="PASS" if value["exit_code"] == 0 else "FAIL",
+        data = run_defaults(
+            "gate", value["head"], "PASS" if value["exit_code"] == 0 else "FAIL"
+        )
+        data.update(
             duration_ms=value["duration_ms"],
             failure_cause=value.get("failure_cause"),
             full=value.get("selection", {}).get("full"),
-            lanes=lanes,
+            lanes=[
+                dict(
+                    name=e["name"],
+                    result="PASS" if e["exit_code"] == 0 else "FAIL",
+                    duration_ms=e["duration_ms"],
+                )
+                for e in value["results"]
+            ],
             started_at=value.get("started_at"),
             finished_at=value.get("finished_at"),
             slot_wait_ms=value.get("slot_wait_ms"),
             failing_test_ids=value.get("failing_test_ids", []),
+        )
+        return data
+    if isinstance(value.get("head"), str):
+        if value.get("result") in ("PASS", "FAIL") and (
+            "real_provider" in value or "recovered_request" in value
+        ):
+            return run_defaults("live", value["head"], value["result"])
+        if value.get("outcome") in ("PASS", "FAIL") and "native_receipt_exact" in value:
+            return run_defaults("live", value["head"], value["outcome"])
+        if type(value.get("pass")) is bool and "providers" in value:
+            return run_defaults(
+                "live", value["head"], "PASS" if value["pass"] else "FAIL"
+            )
+    return None
+
+
+def run_defaults(kind, head, result, **fields):
+    return dict(
+        kind=kind,
+        head=head,
+        result=result,
+        duration_ms=None,
+        failure_cause=None,
+        full=None,
+        lanes=[],
+        started_at=None,
+        finished_at=None,
+        slot_wait_ms=None,
+        failing_test_ids=[],
+        **fields,
+    )
+
+
+def markdown_run(text):
+    plain = unfenced(text)
+    if plain.startswith("# Gate-and-Fix Round\n"):
+
+        def scalar(name):
+            matches = re.findall(
+                r"^- " + re.escape(name) + r": `([^`]+)`$", plain, re.M
+            )
+            if len(matches) != 1:
+                raise ValueError("invalid gate metadata: " + name)
+            return matches[0]
+
+        if scalar("Schema") not in ("2", "3"):
+            raise ValueError("invalid gate schema")
+        data = run_defaults("gate", scalar("Head"), scalar("Outcome"))
+        for name, result, body in re.findall(
+            r"^### (.+?) — (PASS|FAIL)\n(.*?)(?=^### |\Z)", plain, re.M | re.S
+        ):
+            duration = re.search(r"^- Duration: `(\d+)ms`$", body, re.M)
+            data["lanes"].append(
+                dict(
+                    name=name,
+                    result=result,
+                    duration_ms=int(duration.group(1)) if duration else None,
+                )
+            )
+        if not data["lanes"]:
+            raise ValueError("invalid gate: no runner lanes")
+        return data
+    if plain.startswith("# E2E TUI Run\n"):
+        head = re.search(r"^- Commit: `([0-9a-f]{7,64})`$", plain, re.M)
+        verdict = re.findall(r"^Verdict: (GREEN|RED|BLOCKED)\s*$", plain, re.M)
+        if not head or len(verdict) != 1:
+            raise ValueError("invalid E2E runner metadata")
+        return run_defaults(
+            "e2e",
+            head.group(1),
+            {"GREEN": "PASS", "RED": "FAIL", "BLOCKED": "INTERRUPTED"}[verdict[0]],
         )
     return None
