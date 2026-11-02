@@ -154,10 +154,10 @@ class Scratch:
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
             self.ok(['wait', '--text', 'fake draft bytes:', '--timeout', '20s'])
-            history = self.bus(['history', '--room', 'bus', '--limit', '100'])
-            replies = [s for s in self.strings(history) if 'fake draft bytes: ' in s]
+            transcript = self.bus(['agent', 'read', 'a1', '--source', 'recent-unwrapped'])
+            replies = [s for s in self.strings(transcript) if 'fake draft bytes: ' in s]
             if not replies:
-                raise RuntimeError(('draft reply missing', history))
+                raise RuntimeError(('draft reply missing', transcript))
             restored = json.loads(replies[-1].split('fake draft bytes: ', 1)[1])
             if restored != draft + '-END':
                 raise RuntimeError(('draft mismatch', repr(restored), repr(draft + '-END')))
