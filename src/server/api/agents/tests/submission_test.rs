@@ -665,45 +665,54 @@ async fn api_waits_for_committed_enter_within_its_delay_allowance() {
     let text_len = 4 * 1024 * 1024;
     let started = Instant::now();
     let deadline = started + Duration::from_secs(1);
-    let delay = crate::protocol::api::submission::SUBMIT_DELAY;
+    // Exercise a nonzero allowance independently of the provider's default
+    // pacing, including providers whose normal submit delay is zero.
+    let delay = Duration::from_millis(300);
     let completion = actor
         .queue_user_input_submission(
             Bytes::from(vec![b'x'; text_len]),
             Bytes::from_static(b"\r"),
             delay,
-            Some(deadline),
+            // The API timeline below is virtual. Actor deadline enforcement
+            // is covered in input_deadline_test; host scheduling must not
+            // consume this fixture's synthetic response budget.
+            None,
         )
         .unwrap();
     let mut first = [0; 1];
     peer.read_exact(&mut first).unwrap();
     assert_eq!(first, [b'x']);
-    let reader = std::thread::spawn(move || {
-        // Text starts in time, but pressure lifts after its admission reserve.
-        // Enter then lands after the old API response bound, within the allowance.
-        std::thread::sleep((deadline - delay / 2).saturating_duration_since(Instant::now()));
-        let mut received = vec![0; text_len + 1];
-        received[0] = first[0];
-        let read = peer.read_exact(&mut received[1..]);
-        (read, received)
-    });
+    actor
+        .try_write_user_input(Bytes::from_static(b"after"))
+        .unwrap();
+    let mut received = vec![0; text_len + 1 + 5];
+    received[0] = first[0];
     let response = crate::server::api::agents::prompt::complete_agent_prompt_submission(
         "committed_enter".into(),
         agent,
         deadline,
         started,
-        Instant::now(),
+        deadline + Duration::from_millis(150),
         completion,
-        std::convert::identity,
+        |timeout| {
+            // 150 ms of the 300 ms Enter allowance remains, plus the
+            // existing 100 ms response grace. Without the allowance this
+            // late API waiter would immediately cancel the committed input.
+            assert_eq!(timeout, Duration::from_millis(250));
+            // Release real backpressure only once the API is waiting. Reading
+            // the following marker proves the actor published its receipt;
+            // no scheduler race remains between that receipt and recv_timeout.
+            peer.read_exact(&mut received[1..]).unwrap();
+            timeout
+        },
     );
     actor.shutdown();
-    let (read, received) = reader.join().unwrap();
     assert!(
         response.contains("agent_prompted"),
         "normal committed delivery timed out: {response}"
     );
-    read.unwrap();
     assert!(received[..text_len].iter().all(|byte| *byte == b'x'));
-    assert_eq!(received[text_len], b'\r');
+    assert_eq!(&received[text_len..], b"\rafter");
 }
 
 #[cfg(unix)]
