@@ -104,6 +104,16 @@ def parse_provenance(text):
     return _validate(result, text)
 
 
+def provenance_scope(text):
+    """Public accessor for the existing scoped-adjudication header."""
+    values = re.findall(r"^\*\*范围哈希\*\*[：:]\s*(.+)$", _plain(text), re.M)
+    if not values:
+        return None
+    if len(values) != 1 or not re.fullmatch(r"[0-9a-f]{64}", values[0].strip()):
+        raise ValueError("invalid adjudication scope header")
+    return values[0].strip()
+
+
 def render_provenance(claims, triage):
     """Project main's already-deduplicated decisions without making new ones."""
     _validate(claims, _plain(triage))

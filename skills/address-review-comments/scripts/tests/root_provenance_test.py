@@ -65,3 +65,12 @@ def test_owned_schema_rejects_wrong_columns_and_claim_prefix_matches():
             [dict(claim_id="C1", outcome="APPLY", sources=[])],
             TRIAGE.replace("- C1 —", "- C1-other —"),
         )
+
+
+def test_scope_accessor_preserves_the_existing_machine_namespace():
+    assert MODULE.provenance_scope(TRIAGE) is None
+    assert (
+        MODULE.provenance_scope("**范围哈希**：" + "a" * 64 + "\n" + TRIAGE) == "a" * 64
+    )
+    with pytest.raises(ValueError):
+        MODULE.provenance_scope("**范围哈希**：invalid\n" + TRIAGE)
