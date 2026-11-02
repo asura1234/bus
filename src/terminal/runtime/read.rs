@@ -178,6 +178,13 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
 }
 
 impl TerminalRuntime {
+    /// Serialize a driver decision and enqueue with terminal content updates.
+    pub(in crate::terminal) fn lock_content(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.content_write_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Immutable emulator access; does not update or acknowledge render state.
     pub(in crate::terminal) fn with_terminal<T>(
         &self,
