@@ -1,5 +1,9 @@
 //! Executed in the initialized pane shell, then replaced by the native TUI.
 use super::{remote_argv, rpc::Rpc, runtime};
+use crate::platform::owned_process::{
+    acquire_writer_lock, ensure_owner_alive, inherit_writer_lock, supervised_command,
+    terminate_group,
+};
 use std::{
     fs, io,
     os::{
@@ -20,7 +24,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     }
     let control = UnixStream::connect(Path::new(directory).join("l"))?;
     let lock = writer_lock(Path::new(capture))?;
-    runtime::ensure_owner_alive(&control)?;
+    ensure_owner_alive(&control)?;
     let socket = Path::new(directory).join("s");
     let endpoint = format!("unix://{}", socket.display());
     let mut server = Server::start(
@@ -37,7 +41,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         // Startup never sent input. Retire the attempted backend before the
         // configured standalone TUI is allowed to become its writer.
         server.stop()?;
-        runtime::ensure_owner_alive(&control)?;
+        ensure_owner_alive(&control)?;
         argv.to_vec()
     };
     fs::write(
@@ -51,7 +55,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     let mut command = Command::new(&tui[0]);
     command.args(&tui[1..]);
     if !attached {
-        runtime::inherit_writer_lock(&mut command, &lock);
+        inherit_writer_lock(&mut command, &lock);
     }
     // Both backend and TUI inherit this verified shell's cwd and environment.
     Err(command.exec())
@@ -60,7 +64,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
 fn writer_lock(capture: &Path) -> io::Result<fs::File> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match runtime::acquire_launch_lock(&capture.join("codex-native-writer.lock")) {
+        match acquire_writer_lock(&capture.join("codex-native-writer.lock")) {
             Ok(lock) => return Ok(lock),
             Err(error)
                 if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
@@ -95,7 +99,7 @@ impl Server {
             .append(true)
             .mode(0o600)
             .open(capture.join("codex-native.log"))?;
-        let mut command = runtime::owned_command(&runtime::server_argv(argv, endpoint), lock);
+        let mut command = supervised_command(&runtime::server_argv(argv, endpoint), lock);
         let child = command
             .stdin(Stdio::from(OwnedFd::from(control)))
             .stdout(Stdio::null())
@@ -126,7 +130,7 @@ impl Server {
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        runtime::terminate_group(&mut self.child, Duration::from_secs(3))
+        terminate_group(&mut self.child, Duration::from_secs(3))
     }
 }
 

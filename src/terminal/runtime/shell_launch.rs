@@ -208,7 +208,7 @@ impl TerminalRuntime {
         let probe = integration.editor_probe(self.child_pid());
         let argv = argv.to_vec();
         #[cfg(unix)]
-        let codex_native = self.codex_native.clone();
+        let native_input = self.native_input();
         *self
             .launch_input_error
             .lock()
@@ -238,10 +238,10 @@ impl TerminalRuntime {
                 })
                 .and_then(|lease| {
                     #[cfg(unix)]
-                    let argv = codex_native
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .launch(&argv)?;
+                    let argv = match &native_input {
+                        Some(input) => input.launch(&argv)?,
+                        None => argv,
+                    };
                     let command = crate::platform::interactive_shell_command(&argv, &probe.shell)
                         .ok_or_else(|| io::Error::other("Invalid shell command"))?;
                     let result = writer
