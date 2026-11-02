@@ -426,3 +426,23 @@ fn an_uncertain_write_is_kept_while_the_agent_works_on_it() {
     );
     assert_eq!(state.agent(agent).unwrap().current_request, Some(typed));
 }
+
+#[test]
+fn missing_launch_directory_preserves_busy_queue() {
+    for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "waiting on work");
+        state.observe_status(agent, status, 1).unwrap();
+        state
+            .observe_working_directory_error(agent, Some("launch directory was removed".into()))
+            .unwrap();
+        assert_eq!(
+            state.agent(agent).unwrap().shown_status(),
+            RuntimeStatus::Unavailable
+        );
+        assert!(state.expire_stalled_queued_requests(10 + QUEUED_STALL_MS).unwrap().is_empty(),
+            "{status:?}: presentation availability cannot expire work queued behind native activity");
+        assert_eq!(state.queued_requests(agent), &[request]);
+        assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
+    }
+}

@@ -175,6 +175,8 @@ fn failed_agent_add_logs_its_worker_projected_cause_once() {
 #[test]
 fn directory_error_alias_has_one_contextual_client_warning() {
     let (mut ui, _, agent) = fixture();
+    set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Idle);
+    assert!(room_screen(&mut ui, 100, 40).contains("Idle"));
     let error = "Working directory is unavailable: /gone-log-projection";
     let mut snapshot = (*ui.snapshot).clone();
     snapshot
@@ -188,6 +190,9 @@ fn directory_error_alias_has_one_contextual_client_warning() {
         ui.compute_view(100, 40);
         ui.compute_view(100, 40);
     });
+    let screen = room_screen(&mut ui, 100, 40);
+    assert!(screen.contains("Unavailable"), "{screen}");
+    assert!(!screen.contains(error), "{screen}");
     let logs = capture.text();
     eprintln!("directory alias logs:\n{logs}");
     assert!(

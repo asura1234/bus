@@ -310,3 +310,181 @@ fn rollout_prompt_search_says_why_it_attributes_nothing() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+const FINAL_0164: &str = include_str!("fixtures/final-answer-0.164.0.jsonl");
+
+#[test]
+fn rollout_0164_recovers_the_actual_four_lost_finals() {
+    let dir = rollout_dir("0164-lost-finals");
+    let path = dir.join("rollout-recorded.jsonl");
+    std::fs::write(&path, FINAL_0164).unwrap();
+    for turn in [
+        "01a19a4c-21df-7ba1-93ea-4e073e8af0e0",
+        "01a19a5b-fdfc-7682-955d-bb17d87142ff",
+        "01a19a71-3f41-7a62-aba0-76c60d69c99c",
+        "01a19a73-1b61-7ca1-83c3-106c97f20b45",
+    ] {
+        assert_eq!(
+            read_codex_turn_end(&path, turn).unwrap(),
+            Some(CodexTurnEnd::Final("".into())),
+            "{turn}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn final_0164_records() -> Vec<Value> {
+    FINAL_0164
+        .lines()
+        .take(4)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn rollout_0164_reads_completed_message_items_and_preserves_text_parts() {
+    let dir = rollout_dir("0164-items");
+    let path = dir.join("rollout-recorded.jsonl");
+    let turn = "01a19a4c-21df-7ba1-93ea-4e073e8af0e0";
+    for response in [false, true] {
+        let mut lines = final_0164_records();
+        lines[1]["payload"]["item"]["content"] = json!([
+            {"type":"Text","text":"exact "}, {"type":"Text","text":"answer"}]);
+        lines[2]["payload"]["content"] = json!([
+            {"type":"output_text","text":"exact "}, {"type":"output_text","text":"answer"}]);
+        lines.remove(if response { 1 } else { 2 });
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_codex_turn_end(&path, turn).unwrap(),
+            Some(CodexTurnEnd::Final("exact answer".into()))
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_0164_requires_a_completed_final_for_the_same_turn_before_its_end() {
+    let dir = rollout_dir("0164-boundaries");
+    let path = dir.join("rollout-recorded.jsonl");
+    let turn = "01a19a4c-21df-7ba1-93ea-4e073e8af0e0";
+    for case in [
+        "running",
+        "foreign",
+        "commentary",
+        "unfinished",
+        "no-text",
+        "after-end",
+        "user",
+    ] {
+        let mut lines = final_0164_records();
+        match case {
+            "running" => {
+                lines.pop();
+            }
+            "foreign" => {
+                lines[1]["payload"]["turn_id"] = json!("other");
+                lines[2]["payload"]["internal_chat_message_metadata_passthrough"]["turn_id"] =
+                    json!("other");
+                lines[2]["metadata"]["retained_source"]["id"]["turn_id"] = json!("other");
+            }
+            "commentary" => {
+                lines[1]["payload"]["item"]["phase"] = json!("commentary");
+                lines[2]["payload"]["phase"] = json!("commentary");
+            }
+            "unfinished" => {
+                lines[1]["payload"]["type"] = json!("item_started");
+                lines[2]["payload"]["status"] = json!("in_progress");
+            }
+            "no-text" => {
+                lines[1]["payload"]["item"]["content"] = json!([]);
+                lines[2]["payload"]["content"] = json!([]);
+            }
+            "after-end" => {
+                let end = lines.pop().unwrap();
+                lines.insert(1, end);
+            }
+            "user" => {
+                lines[1]["payload"]["item"]["type"] = json!("UserMessage");
+                lines[2]["payload"]["role"] = json!("user");
+            }
+            _ => unreachable!(),
+        }
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(read_codex_turn_end(&path, turn).unwrap(), None, "{case}");
+    }
+    let mut lines = final_0164_records();
+    lines[3]["payload"]["error"] = json!({"message":"failed", "codex_error_info":"provider_error"});
+    std::fs::write(
+        &path,
+        lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        read_codex_turn_end(&path, turn).unwrap(),
+        Some(CodexTurnEnd::Error("failed (provider_error)".into()))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_0164_matches_the_recorded_stop_reply_without_citation_metadata() {
+    let dir = rollout_dir("0164-hook-parity");
+    let path = dir.join("rollout-recorded.jsonl");
+    std::fs::write(&path, include_str!("fixtures/hook-captured-0.164.0.jsonl")).unwrap();
+    let turn = "01a19a28-e395-7f02-a277-81cd025bb7b9";
+    // The same launch's working Stop settled request 36975 with empty text.
+    let hook = super::super::hooks::parse(&json!({
+        "hook_event_name":"Stop", "session_id":"01a19a28-ce89-7311-8b3f-79b16616ac7f",
+        "turn_id":turn, "transcript_path":path, "last_assistant_message":null
+    }))
+    .unwrap();
+    let crate::agents::providers::spool::Parsed::Final { text, .. } = hook else {
+        panic!("recorded Stop must decode as a final");
+    };
+    assert_eq!(text, "");
+    assert_eq!(
+        read_codex_turn_end(&path, turn).unwrap(),
+        Some(CodexTurnEnd::Final(text))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_0164_does_not_forward_citation_only_response_metadata() {
+    let dir = rollout_dir("0164-response-metadata");
+    let path = dir.join("rollout-recorded.jsonl");
+    let records = include_str!("fixtures/hook-captured-0.164.0.jsonl");
+    let lines: Vec<_> = records
+        .lines()
+        .filter(|line| {
+            let event: Value = serde_json::from_str(line).unwrap();
+            event["payload"]["type"] != "item_completed"
+        })
+        .collect();
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    assert_eq!(
+        read_codex_turn_end(&path, "01a19a28-e395-7f02-a277-81cd025bb7b9").unwrap(),
+        Some(CodexTurnEnd::Final("".into()))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

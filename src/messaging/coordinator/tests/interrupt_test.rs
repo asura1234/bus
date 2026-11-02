@@ -437,3 +437,73 @@ fn interrupting_with_another_conversation_room_records_the_notice_where_the_turn
         "notice went to the --room conversation instead ({in_side} there)"
     );
 }
+
+#[test]
+fn missing_launch_directory_preserves_explicit_interrupt() {
+    for status in [RuntimeStatus::Working, RuntimeStatus::Idle] {
+        let mut f = Fixture::new(Provider::Codex);
+        let lead = running(&mut f, "run a foreground command", "cwd-open-turn");
+        f.status(status);
+        f.worker
+            .state
+            .observe_working_directory_error(f.agent, Some("launch directory was removed".into()))
+            .unwrap();
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().shown_status(),
+            RuntimeStatus::Unavailable
+        );
+        assert!(f.request(lead).trusted_start_bound);
+        let response = interrupt(&mut f, json!({"agent":"builder"}));
+        assert!(response.ok, "{response:?}");
+        assert_eq!(
+            response.result["agents"][0]["outcome"], "interrupting",
+            "{status:?}: {response:?}"
+        );
+        assert_eq!(keys(&f), [("pane".to_owned(), vec!["esc".to_owned()])]);
+        assert!(
+            !f.request(lead).settled(),
+            "sending a stop key is not completion"
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().shown_status(),
+            RuntimeStatus::Unavailable
+        );
+    }
+}
+
+#[test]
+fn missing_launch_directory_preserves_room_interrupt() {
+    for status in [RuntimeStatus::Working, RuntimeStatus::Idle] {
+        let mut f = Fixture::new(Provider::Codex);
+        let lead = running(&mut f, "run a foreground command", "cwd-open-turn");
+        f.status(status);
+        f.worker
+            .state
+            .observe_working_directory_error(f.agent, Some("launch directory was removed".into()))
+            .unwrap();
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().shown_status(),
+            RuntimeStatus::Unavailable
+        );
+        assert!(f.request(lead).trusted_start_bound);
+        let room = f.room.0.to_string();
+        let response = interrupt(&mut f, json!({"room":room}));
+        assert!(response.ok, "{response:?}");
+        assert_eq!(
+            response.result["agents"],
+            json!([{
+                "agent_id":f.agent,"name":"builder","outcome":"interrupting","key":"esc"
+            }]),
+            "{status:?}: {response:?}"
+        );
+        assert_eq!(keys(&f), [("pane".to_owned(), vec!["esc".to_owned()])]);
+        assert!(
+            !f.request(lead).settled(),
+            "sending a stop key is not completion"
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().shown_status(),
+            RuntimeStatus::Unavailable
+        );
+    }
+}

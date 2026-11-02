@@ -265,6 +265,7 @@ fn agent_json(
     value["queue_depth"] = json!(depth);
     value["oldest_queued_age_ms"] = json!(age);
     value["status"] = json!(agent.shown_status());
+    value["activity_status"] = json!(agent.activity_status());
     value["wait_reason"] = json!(crate::messaging::diagnostics::wait_reason(agent));
     value
 }

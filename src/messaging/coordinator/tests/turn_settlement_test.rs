@@ -1172,3 +1172,92 @@ fn reply_capture_recovered_log_is_not_written_for_an_unsaved_settlement() {
         .count();
     assert_eq!(rows, 1, "{log}");
 }
+
+#[test]
+fn unbound_codex_0164_final_is_captured_despite_a_missing_directory_warning() {
+    for answer in ["Recovered exact final.", ""] {
+        let mut fixture = Fixture::new(Provider::Codex);
+        let rollout = fixture.dir.join("rollout-0164.jsonl");
+        fixture.record(
+            json!({"hook_event_name":"SessionStart","session_id":"session",
+            "source":"startup","transcript_path":rollout}),
+        );
+        fixture.consume();
+        let lead = fixture.send("finish after hook loss", false);
+        fixture.deliver();
+        let typed = fixture.typed().last().unwrap().0.clone();
+        assert!(!fixture.request(lead).trusted_start_bound);
+        let at = rollout_at(&fixture, 1);
+        append(&rollout, &codex_turn(&at, "turn-0164", &typed, None));
+        // Preserve the recorded 0.164.0 envelope; replace only identity and text.
+        let recorded = include_str!(
+            "../../../agents/providers/codex/tests/fixtures/final-answer-0.164.0.jsonl"
+        );
+        for line in recorded.lines().skip(1).take(3) {
+            let mut event: Value = serde_json::from_str(line).unwrap();
+            let payload = &mut event["payload"];
+            if payload["type"] == "message" {
+                payload["internal_chat_message_metadata_passthrough"]["turn_id"] =
+                    json!("turn-0164");
+                payload["content"][0]["text"] = json!(answer);
+                event["metadata"]["retained_source"]["id"]["turn_id"] = json!("turn-0164");
+            } else {
+                payload["turn_id"] = json!("turn-0164");
+                if payload["type"] == "item_completed" {
+                    payload["item"]["content"][0]["text"] = json!(answer);
+                }
+            }
+            append(&rollout, &format!("{event}\n"));
+        }
+        fixture
+            .worker
+            .state
+            .observe_working_directory_error(fixture.agent, Some("Launch directory removed".into()))
+            .unwrap();
+        end_without_stop(&mut fixture);
+        assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+        assert_eq!(fixture.reply(lead).as_deref(), Some(answer));
+        assert_eq!(
+            fixture
+                .request(lead)
+                .reply()
+                .unwrap()
+                .provider_turn_id
+                .as_deref(),
+            Some("turn-0164")
+        );
+        assert!(fixture.request(lead).failure_reason.is_none());
+        let recovered = fixture.request(lead).reply().unwrap().clone();
+        let published = fixture
+            .worker
+            .state
+            .room(fixture.room)
+            .unwrap()
+            .latest_replies
+            .clone();
+        fixture.stopped(
+            "turn-0164",
+            "late duplicate must not replace the recovered final",
+        );
+        fixture.consume();
+        assert_eq!(fixture.request(lead).reply(), Some(&recovered));
+        assert_eq!(
+            fixture
+                .worker
+                .state
+                .room(fixture.room)
+                .unwrap()
+                .latest_replies,
+            published
+        );
+        assert_eq!(
+            fixture
+                .worker
+                .state
+                .requests()
+                .filter(|r| r.reply().is_some())
+                .count(),
+            1
+        );
+    }
+}
