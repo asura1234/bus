@@ -24,9 +24,16 @@ pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
         .map(|arg| arg.get_id().as_str().to_owned())
         .collect();
     let command = args.into_iter().fold(command, |cmd, id| {
-        cmd.mut_arg(&id, |arg| match details::default_value(path, &id, &arg) {
-            Some(default) => arg.help(format!("{} [{default}]", argument_help(&id))),
-            None => arg.help(argument_help(&id)),
+        cmd.mut_arg(&id, |arg| {
+            let arg = if id == "error-orchestrator" {
+                arg.hide(!dev)
+            } else {
+                arg
+            };
+            match details::default_value(path, &id, &arg) {
+                Some(default) => arg.help(format!("{} [{default}]", argument_help(&id))),
+                None => arg.help(argument_help(&id)),
+            }
         })
     });
     command.mut_subcommands(|child| {
@@ -80,6 +87,7 @@ fn argument_help(id: &str) -> &'static str {
         "confirm" => "Explicitly approve this setup, recovery, or destructive operation",
         "on" => "Enable the setting",
         "off" => "Disable the setting (Feishu developer notifications are always on)",
+        "error-orchestrator" => "Dev-only: current MASTER orchestrator name, or off",
         "sound" => "Sound name (use sounds to list installed choices)",
         _ => "Command argument",
     }

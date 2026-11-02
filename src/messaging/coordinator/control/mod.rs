@@ -239,6 +239,7 @@ impl Worker {
             | "sounds"
             | "settings.color_blind"
             | "settings"
+            | "settings.error_orchestrator"
             | "settings.room_sound"
             | "settings.feishu_notifications"
             | "bus.quit"
@@ -571,6 +572,13 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "settings.room_sound",
         "settings room-sound",
         &["on", "sound"],
+        true,
+        Tier::Dev,
+    ),
+    spec(
+        "settings.error_orchestrator",
+        "settings --error-orchestrator",
+        &["name"],
         true,
         Tier::Dev,
     ),

@@ -292,6 +292,8 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "disk_warning_gb": 20,
             "disk_critical_gb": 5,
             "sidebar_width": 28,
+            "error_orchestrator": null,
+            "error_orchestrators": [],
             "master_sound": {"enabled": false, "name": "Blow"},
             "room_sound": {"enabled": true, "name": null},
         })

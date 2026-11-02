@@ -8,7 +8,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use tracing_subscriber::fmt::writer::MakeWriter;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 pub(crate) const DEFAULT_MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 pub(crate) const DEFAULT_RETAINED_LOG_FILES: usize = 0;
@@ -129,7 +129,7 @@ pub(crate) fn init_file_logging_at(
     options: &LoggingOptions,
 ) -> LoggingOptions {
     let mut options = options.clone();
-    let Ok(make_writer) = RotatingFileMakeWriter::new(dir, file_name, &options) else {
+    let Ok(make_writer) = RotatingFileMakeWriter::new(dir.clone(), file_name, &options) else {
         return options;
     };
 
@@ -138,11 +138,19 @@ pub(crate) fn init_file_logging_at(
         .lock()
         .ok()
         .map(|s| (s.max_bytes, s.retention));
-    let initialized = tracing_subscriber::fmt()
-        .with_env_filter(options.filter.clone())
-        .with_writer(make_writer)
-        .with_ansi(false)
-        .with_target(true)
+    let initialized = tracing_subscriber::registry()
+        .with(options.filter.clone())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(make_writer)
+                .with_ansi(false)
+                .with_target(true),
+        )
+        .with(
+            options
+                .dev
+                .then(|| super::error_pipe::CaptureLayer::new(dir.join(file_name))),
+        )
         .try_init();
     if initialized.is_ok() {
         if let Some((max_bytes, retention)) = policy {

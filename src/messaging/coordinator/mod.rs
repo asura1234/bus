@@ -4,6 +4,10 @@ pub(crate) mod attention;
 mod auto_dialogs;
 mod delivery;
 mod disk_space;
+mod error_pipe;
+#[cfg(test)]
+#[path = "tests/error_pipe_test.rs"]
+mod error_pipe_tests;
 mod exit_snapshot;
 mod expiry;
 mod first_message;
@@ -89,6 +93,7 @@ pub(crate) enum BusCommand {
     SetDiskCriticalGb(u32),
     /// The room sidebar's width in cells, clamped to the settings range.
     SetSidebarWidth(u16),
+    SetErrorOrchestrator(Option<String>),
     SetFeishuRecipient(String),
     SetFeishuCliPath(Option<String>),
     SetFeishuNotifications(bool),
@@ -323,6 +328,7 @@ impl BusHandle {
         let mut worker = Worker::open(data_dir.clone(), Box::new(BusTransport::new(target)))?;
         worker.dev_enabled = diagnostics::dev_enabled();
         worker.settings_path = settings::path();
+        worker.refresh_error_pipe_at(io::now_ms());
         if let Err(error) = worker.apply_global_settings() {
             tracing::warn!(%error, "global Bus settings not applied");
             worker.error = Some(error);

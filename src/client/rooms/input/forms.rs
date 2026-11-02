@@ -90,6 +90,10 @@ impl BusUi {
             self.action(Action::Cancel);
             return;
         }
+        if matches!(self.form, Some(Form::ErrorOrchestrator { .. })) {
+            self.error_orchestrator_key(code);
+            return;
+        }
         if matches!(self.form, Some(Form::Settings)) {
             self.settings_form_key(code);
             return;
@@ -199,6 +203,9 @@ impl BusUi {
                 field if field == self.feishu_field() => self.toggle_feishu_notifications(),
                 field if field == self.developer_sound_field() => {
                     self.toggle_sound(super::super::render::SoundTarget::Developer)
+                }
+                field if Some(field) == self.error_orchestrator_field() => {
+                    self.open_error_orchestrator()
                 }
                 field if Some(field) == self.perf_overlay_field() => self.toggle_perf_overlay(),
                 field => {
@@ -487,7 +494,7 @@ impl BusUi {
             return;
         };
         match form {
-            Form::Help { .. } | Form::Settings => {}
+            Form::Help { .. } | Form::Settings | Form::ErrorOrchestrator { .. } => {}
             Form::FeishuSetting { cli, editor } => {
                 let command = if cli {
                     BusCommand::SetFeishuCliPath(

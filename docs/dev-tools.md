@@ -6,6 +6,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   agent details AGENT (--on | --off)
   settings color-blind (--on | --off)
   settings room-sound (--on | --off) [--sound NAME]
+  settings --error-orchestrator NAME|off
   sounds
   quit
   diagnostics
@@ -48,3 +49,23 @@ and waits for each to confirm. After the outcome notice, tell them to resume.
 See `bus --dev restart --help`.
 diagnostics shows Bus's internals: version, storage pause, coordinator error, data and log
 paths, and each agent's status, wait reason, detail, runtime identity and current request.
+
+Error reporting defaults to Off. In Settings > Developer, Bus errors opens a
+dropdown containing Off and current MASTER orchestrator names. The CLI option
+above saves the same `error_orchestrator` setting; dev settings output includes
+its value and `error_orchestrators` choices. A missing/deleting recipient is inactive.
+
+The shared file-logging hook captures every ERROR and every WARN except delay-only
+perf/load/stall/slow-operation/recovery events, `api.wait.timeout`, host-key escape
+timeouts, expected form/MASTER-rename/MASTER-delete/image-attachment/control-capacity/
+callback refusals, and normal existing-server/forced-quit/process-exit/kept-terminal/
+expired-paste-recovery notices. The exact excluded event names live in
+`utils::error_pipe::broken_warning`. Warnings such as failed persistence, clipboard,
+API response, provider launch, callback capture and unavailable instrumentation count.
+
+Reports contain only `Bus error: EVENT (xN since last notice). Logs: PATH`.
+Event plus source callsite plus log path is the dedupe key. The first burst waits
+one second; new repeats are counted and summarized at most once per minute.
+Off clears pending counts and old inbox records. Report failures stay in the logs
+without being captured again. No error toast, inline error, sidebar or footer text
+is added; the short targeted message uses ordinary Bus conversation history.

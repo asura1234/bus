@@ -65,3 +65,45 @@ fn each_fixture_kind_takes_only_its_own_flags() {
         "docs/tui-driver.md fixture line"
     );
 }
+
+#[test]
+fn error_pipe_fixture_queues_real_errors_instead_of_creating_a_message() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-error-pipe-fixture");
+    let paths = super::super::session::SessionPaths::new(&root, "s1");
+    std::fs::create_dir_all(paths.data_dir()).unwrap();
+    let response = create(&paths, "error", None, Some("bus.dev.test".into()), None).unwrap();
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        std::fs::read_to_string(paths.data_dir().join("error-pipe-fixture")).unwrap(),
+        "bus.dev.test\n"
+    );
+    assert!(
+        !paths.data_dir().join("state.json").exists(),
+        "only the real logger/coordinator may create a report"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn error_pipe_fixture_emits_each_queued_error_once_through_the_real_subscriber() {
+    use tracing_subscriber::prelude::*;
+    let root = crate::utils::test_temp::unique_temp_path("bus-error-pipe-emission");
+    crate::platform::fs::private_dir(&root).unwrap();
+    std::fs::write(
+        root.join("error-pipe-fixture"),
+        "bus.dev.test\nbus.dev.test\n",
+    )
+    .unwrap();
+    let log = root.join("logs");
+    let mut runtime = crate::utils::error_pipe::Runtime::default();
+    runtime.configure(&log, Some("lead"));
+    let subscriber = tracing_subscriber::registry().with(
+        crate::utils::error_pipe::CaptureLayer::new(log.join("server.log")),
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        crate::utils::error_pipe::fixture::emit(&root);
+        crate::utils::error_pipe::fixture::emit(&root);
+    });
+    assert_eq!(crate::utils::error_pipe::drain(&log).unwrap().len(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}

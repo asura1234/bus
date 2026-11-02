@@ -40,6 +40,8 @@ pub(crate) const DEFAULT_FEISHU_RECIPIENT: &str = "ou_ca1b530d792419a044e281f998
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
+    /// Dev-only target, resolved against current MASTER orchestrator names.
+    pub(crate) error_orchestrator: Option<String>,
     // Read the legacy toggle for compatibility; developer alerts are mandatory.
     #[serde(
         rename = "feishu_waiting_notifications",
@@ -84,6 +86,7 @@ impl Default for BusSettings {
     fn default() -> Self {
         Self {
             color_blind_mode: false,
+            error_orchestrator: None,
             feishu_notifications: true,
             feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
             feishu_cli_path: None,

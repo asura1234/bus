@@ -665,7 +665,10 @@ impl BusUi {
             Rect::new(1, rows.saturating_sub(1), settings_width, 1),
             "Settings",
             Some(Action::Settings),
-            matches!(self.form, Some(Form::Settings)),
+            matches!(
+                self.form,
+                Some(Form::Settings | Form::ErrorOrchestrator { .. })
+            ),
             false,
         );
         // A plain label at the row's right edge, wherever the sidebar ends;

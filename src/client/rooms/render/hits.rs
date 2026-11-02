@@ -97,6 +97,11 @@ impl BusUi {
             Action::Settings => "settings".into(),
             Action::ToggleColorBlindMode => "color-blind".into(),
             Action::TogglePerfOverlay => "perf-overlay".into(),
+            Action::OpenErrorOrchestrator => "error-orchestrator".into(),
+            Action::ChooseErrorOrchestrator(id) => format!(
+                "error-orchestrator-choice:{}",
+                id.map_or_else(|| "Off".into(), |id| self.agent_name(id))
+            ),
             Action::EditFeishuRecipient => "feishu-recipient".into(),
             Action::EditFeishuCli => "feishu-cli-path".into(),
             Action::ToggleFeishuNotifications => "feishu-notifications".into(),

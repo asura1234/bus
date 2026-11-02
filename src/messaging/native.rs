@@ -48,7 +48,16 @@ impl BusTransport {
     ) -> Result<ResponseResult, TransportError> {
         self.next_id += 1;
         let request = Request {
-            id: format!("bus:{}:{}", std::process::id(), self.next_id),
+            id: format!(
+                "{}{}:{}",
+                if crate::utils::error_pipe::is_suppressed() {
+                    crate::utils::error_pipe::RPC_PREFIX
+                } else {
+                    "bus:"
+                },
+                std::process::id(),
+                self.next_id
+            ),
             method,
         };
         let started = Instant::now();

@@ -383,7 +383,12 @@ count to `disk-free-bytes` in the scratch data directory (`status` prints it).
 An absent file means healthy capacity. Samples still run every 60 seconds;
 see [disk space alerts](disk-space-alerts.md).
 
-`fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]`
+`fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P] | error [--text EVENT]`
+
+`fixture error --text EVENT` queues a real ERROR event for the scratch coordinator's
+logger. Its private context/message stay in the client process log; the error pipe
+can send only the event name, repeat count and log path. It never creates a Bus
+message itself.
 
 Writes a file for the session to send and prints its path: `image` is a
 160x100 PNG easy to recognise in a screenshot, by `--pattern`: `quadrants`

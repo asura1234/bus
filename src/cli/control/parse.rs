@@ -41,6 +41,8 @@ pub(super) fn cli() -> Command {
         .subcommand(subcommand("quit"))
         .subcommand(
             subcommand("settings")
+                .args_conflicts_with_subcommands(true)
+                .arg(value_arg("error-orchestrator").long("error-orchestrator"))
                 .subcommand(toggle("feishu-notifications"))
                 .subcommand(toggle("color-blind"))
                 .subcommand(toggle("room-sound").arg(value_arg("sound").long("sound"))),
@@ -175,7 +177,10 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         "state" => ("state", json!({})),
         "quit" => ("bus.quit", json!({})),
         "settings" => match args.subcommand() {
-            None => ("settings", json!({})),
+            None => match args.get_one::<String>("error-orchestrator") {
+                Some(name) => ("settings.error_orchestrator", json!({"name":name})),
+                None => ("settings", json!({})),
+            },
             Some(("feishu-notifications", args)) => (
                 "settings.feishu_notifications",
                 json!({"on": on_off(args, "settings feishu-notifications")?}),

@@ -3,14 +3,14 @@
 //! text file, and the image the clipboard stand-in hands to Bus's Ctrl+V.
 use super::session::SessionPaths;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 /// Red, blue, yellow and cyan quadrants, clockwise from the top left.
 const QUADRANTS: [[u8; 3]; 4] = [[220, 40, 40], [40, 90, 220], [230, 210, 40], [40, 200, 220]];
 const IMAGE_W: u32 = 160;
 const IMAGE_H: u32 = 100;
 
-pub(super) const USAGE: &str = "usage: fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]";
+pub(super) const USAGE: &str = "usage: fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P] | error [--text EVENT]";
 
 pub(super) fn create(
     paths: &SessionPaths,
@@ -23,6 +23,7 @@ pub(super) fn create(
     let (takes_file, takes_text, takes_pattern) = match kind {
         "image" => (true, false, true),
         "file" => (true, true, false),
+        "error" => (false, true, false),
         "clipboard-image" => (false, false, true),
         _ => (true, true, true),
     };
@@ -43,6 +44,21 @@ pub(super) fn create(
         return Err("--file must be a plain file name".into());
     }
     let (path, size) = match kind {
+        "error" => {
+            let path = paths.data_dir().join("error-pipe-fixture");
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).read(true).append(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&path).map_err(|error| error.to_string())?;
+            file.lock().map_err(|error| error.to_string())?;
+            let event = text.unwrap_or_else(|| "bus.dev.error_fixture".into());
+            writeln!(file, "{event}").map_err(|error| error.to_string())?;
+            (path, event.len() as u64 + 1)
+        }
         "image" => {
             let path = paths
                 .work_dir()
@@ -63,7 +79,7 @@ pub(super) fn create(
         }
         _ => {
             return Err(format!(
-                "unknown fixture {kind:?}; use image, file or clipboard-image"
+                "unknown fixture {kind:?}; use image, file, clipboard-image or error"
             ))
         }
     };

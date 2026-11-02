@@ -626,6 +626,8 @@ impl BusUi {
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::TogglePerfOverlay => self.toggle_perf_overlay(),
+            Action::OpenErrorOrchestrator => self.open_error_orchestrator(),
+            Action::ChooseErrorOrchestrator(id) => self.choose_error_orchestrator(id),
             Action::EditFeishuRecipient => self.open_feishu_setting(false),
             Action::EditFeishuCli => self.open_feishu_setting(true),
             Action::ToggleFeishuNotifications => self.toggle_feishu_notifications(),
@@ -635,6 +637,10 @@ impl BusUi {
             Action::AdjustDiskCriticalGb(up) => self.adjust_disk_threshold(false, up),
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),
             Action::Cancel => {
+                if matches!(self.form, Some(Form::ErrorOrchestrator { .. })) {
+                    self.form = Some(Form::Settings);
+                    return;
+                }
                 if let Some(room) = self.room {
                     self.open_room(room);
                 } else {

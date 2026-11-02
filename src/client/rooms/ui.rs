@@ -303,8 +303,12 @@ impl BusUi {
     }
 
     /// The overlay row's Settings focus index, after notification settings.
-    pub(super) fn perf_overlay_field(&self) -> Option<usize> {
+    pub(super) fn error_orchestrator_field(&self) -> Option<usize> {
         self.dev_settings.then(|| self.feishu_field() + 3)
+    }
+
+    pub(super) fn perf_overlay_field(&self) -> Option<usize> {
+        self.dev_settings.then(|| self.feishu_field() + 4)
     }
 
     pub(super) fn developer_sound_field(&self) -> usize {
