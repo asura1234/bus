@@ -53,6 +53,7 @@ class Lanes:
     dependent_python: tuple[str, ...]
     python_reason: str
     rust_reason: str
+    doc_tests: tuple[str, ...]
 
 
 def classify(paths: list[str], references: References) -> Lanes:
@@ -80,4 +81,5 @@ def classify(paths: list[str], references: References) -> Lanes:
         "Python tests depend on changed Rust inputs" if dependent else "no Python changes",
         "shared/unknown input" if shared else "Rust changes" if "rust" in kinds else
         "Rust consumers of changed resources/scripts" if rust else "no Rust changes",
+        tuple(sorted(tests.intersection(consumers(references, [name for name in paths if kind(name) == "docs"])))),
     )

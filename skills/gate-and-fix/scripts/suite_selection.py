@@ -23,6 +23,7 @@ class Selection:
     binary: bool = False
     python_reason: str = ""
     rust_reason: str = ""
+    doc_tests: tuple[str, ...] = ()
 
 
 def select(paths: list[str], *, full: bool = False, root: Path | None = None) -> Selection:
@@ -44,10 +45,11 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
         tests = [name for name in references.sources if name.endswith('_test.py') and any(
             name == prefix or name.startswith(prefix + '/') for prefix in python
         )]
+        docs = tuple(name for name in lanes.doc_tests if name not in tests)
         return Selection(broad, rust_filter if lanes.rust else "none()", python,
                          dev_tools and lanes.rust, reason, coverage_floor and lanes.rust,
-                         bool(python and references.needs_binary(tests)),
-                         lanes.python_reason, lanes.rust_reason)
+                         references.needs_binary([*tests, *docs]),
+                         lanes.python_reason, lanes.rust_reason, docs)
     def can_narrow(name):
         path = PurePosixPath(name)
         parts = path.parts

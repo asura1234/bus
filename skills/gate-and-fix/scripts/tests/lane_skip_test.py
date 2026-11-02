@@ -117,6 +117,18 @@ def test_deleted_python_input_fails_closed_for_lost_dependency_edges(tmp_path):
     assert plan.python and plan.rust_filter is None
 
 
+def test_docs_keep_transitive_document_contract_consumers_outside_python_lane(tmp_path):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "tools/doc_helper.py", 'from pathlib import Path\nDOC=Path(__file__).parents[1]/"docs/help.md"\n')
+    put(tmp_path, "tools/doc_test.py", "from .doc_helper import DOC\n")
+    plan = select(["docs/help.md"], full=True, root=tmp_path)
+    assert not plan.python and plan.rust_filter == "none()"
+    assert plan.doc_tests == ("tools/doc_test.py",)
+    gates = names(plan, tmp_path)
+    assert "tools/doc_test.py" in gates["doc-consumers"].argv
+    assert "python" not in gates
+
+
 def test_plan_and_report_describe_skips_and_do_not_evaluate_coverage(tmp_path, capsys):
     put(tmp_path, "docs/testing.md", "Docs\n")
     with (patch.object(runner.quality, "ROOT", tmp_path),

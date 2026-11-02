@@ -10,7 +10,7 @@ A completed report contains:
 | --- | --- |
 | `head` | Git commit SHA tested |
 | `base` | Comparison ref; gate-and-fix supplies its resolved SHA |
-| `selection` | Planner dataclass: full breadth, Rust filter, Python roots/files, dev-tools, binary prerequisite, reasons, coverage eligibility |
+| `selection` | Planner dataclass: full breadth, Rust filter, Python roots/files, doc consumer tests, dev-tools, binary prerequisite, reasons, coverage eligibility |
 | `lanes` | Exactly `python` and `rust`, each with `status` and `reason` |
 | `coverage` | `status` and `reason` for the Rust floor |
 | `exit_code` | Integer process outcome |

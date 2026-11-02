@@ -94,6 +94,13 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
             if instrumented:
                 python_env["LLVM_PROFILE_FILE"] = str(target / quality.profile_file_name("cli"))
             tests.append(Gate("python", quality.python_test_command(files), env=python_env))
+    if selection.doc_tests:
+        doc_env = quality.child_env()
+        if rust or selection.binary:
+            doc_env["BUS_TEST_BINARY"] = str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus"))
+        if instrumented:
+            doc_env["LLVM_PROFILE_FILE"] = str(target / quality.profile_file_name("cli"))
+        tests.append(Gate("doc-consumers", quality.python_test_command(list(selection.doc_tests)), env=doc_env))
     if selection.dev_tools:
         tests.append(Gate("dev-tools", nextest("--features", "dev-tools", "--bin", "bus",
                           "--test", "cli", "--test", "tui-driver",

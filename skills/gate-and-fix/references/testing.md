@@ -35,7 +35,9 @@ detector follows source references conservatively and can select extra tests.
 
 Docs-only inputs skip both test lanes unless Rust consumes those resources.
 Lint and the documentation contracts still run. The documentation contract suite
-and static architecture checks are separate from the Python test lane. Lint keeps
+and transitive Python tests that read changed documents run as documentation
+checks, separate from the Python test lane. Binary-dependent doc checks get the
+same explicit CLI prerequisite. Static architecture checks also remain. Lint keeps
 formatting, Ruff, architecture, placement, file-length and import checks; Clippy
 follows Rust eligibility. The planner supplies its skip to the lint runner.
 
