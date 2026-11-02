@@ -151,6 +151,19 @@ fn provider_flake_does_not_reclassify_permanent_or_cancelled_errors() {
 }
 
 #[test]
+fn provider_flake_cursor_monthly_quota_keeps_its_terminal_contract() {
+    // Synthetic structured native error; monthly Cursor limits are outside this hold policy.
+    let (state, _, agent, request) =
+        failed_turn(Provider::Cursor, "Monthly usage limit reached (rate_limit)");
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert!(state.request(request).unwrap().failure_reason.is_some());
+    assert!(state.agent(agent).unwrap().provider_retry.is_none());
+}
+
+#[test]
 fn provider_flake_explicit_overload_and_429_are_held_for_grok_and_kimi() {
     for provider in [Provider::Grok, Provider::Kimi] {
         for error in [
