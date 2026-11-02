@@ -328,7 +328,10 @@ Result: {request_id,agent_id,stage:"abandoned"}. Preserve other queued work.
 Errors: command_failed for unknown/non-lead/currently working typed request;
 inspect message status and current identity/revision facts, then recover the lead
 only when safe. Replace an invalidated agent before resending. Recovery does not
-undo task effects. --confirm is required."#;
+undo task effects. --confirm is required. Newly closed requests retain reason
+manual_recovery (unless a prior cause exists) and manual_recovery:{actor,at_ms}.
+--as NAME_OR_ID records an agent actor; omitted records the developer. Native
+failure detail and earlier completed replies remain unchanged."#;
 
 const HISTORY: &str = r#"Read durable room history, including deleted agents/rooms and context clears.
 Default is the full history. --limit N takes newest N in chronological order;

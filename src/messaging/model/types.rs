@@ -579,6 +579,9 @@ pub(crate) struct Request {
     /// A queued request closed before typing, retained for status and restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) failure_reason: Option<String>,
+    /// Explicit control recovery audit, separate from any native failure detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) manual_recovery: Option<super::ManualRecovery>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) queued_rejection: Option<QueuedRejection>,
     pub(crate) expected_launch_id: Option<String>,

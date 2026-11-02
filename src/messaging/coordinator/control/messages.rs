@@ -38,14 +38,19 @@ impl Worker {
                     .parse::<u64>()
                     .map_err(|_| "Request must be a numeric ID")?;
                 let request = RequestId(id);
-                let agent = self
-                    .state
-                    .request(request)
-                    .ok_or("Unknown request ID")?
-                    .agent_id;
+                let source = self.state.request(request).ok_or("Unknown request ID")?;
+                let agent = source.agent_id;
+                let actor = optional_text(p, "as")?
+                    .map(|selector| self.control_author(source.room_id, selector))
+                    .transpose()?
+                    .map_or(Author::Developer, Author::Agent);
+                let recovery = crate::messaging::model::ManualRecovery {
+                    actor,
+                    at_ms: crate::messaging::storage::io::now_ms(),
+                };
                 let mut state = self.state.clone();
                 state
-                    .recover_idle_request(request, crate::messaging::storage::io::now_ms())
+                    .manually_recover_idle_request(request, recovery)
                     .map_err(|error| match error {
                         ModelError::AgentNotIdle => {
                             "Typed request recovery requires an idle agent or an unavailable agent with an invalidated session".into()
@@ -475,8 +480,11 @@ impl Worker {
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             let submission = if r.submission_notice().is_some() { r } else { r.group.and_then(|lead| self.state.request(lead)).unwrap_or(r) };
             let failure_detail = self.state.steered_turn_failure(r);
-            let detail = failure_detail.as_ref().or_else(|| submission.submission_notice().and(submission.submission_error.as_ref()));
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"status":agent.map(|a|a.status),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
+            let detail = failure_detail.as_ref()
+                .or_else(|| r.manual_recovery.as_ref().and(r.submission_error.as_ref()))
+                .or_else(|| submission.manual_recovery.as_ref().and(submission.submission_error.as_ref()))
+                .or_else(|| submission.submission_notice().and(submission.submission_error.as_ref()));
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"manual_recovery":r.manual_recovery,"status":agent.map(|a|a.status),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
         }).collect::<Vec<_>>()}),
         )
     }

@@ -4,7 +4,45 @@ use super::{
     RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
 };
 
+/// Administrative closure provenance; native submission evidence stays on the request.
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ManualRecovery {
+    pub(crate) actor: Author,
+    pub(crate) at_ms: u64,
+}
+
 impl BusState {
+    /// Only request.recover uses this boundary. Automatic callers keep their
+    /// own causes and never acquire an operator's manual recovery provenance.
+    pub(crate) fn manually_recover_idle_request(
+        &mut self,
+        request: RequestId,
+        recovery: ManualRecovery,
+    ) -> Result<(), ModelError> {
+        let previous: Vec<_> = std::iter::once(request)
+            .chain(self.group_members(request))
+            .filter_map(|id| self.requests.get(&id).cloned())
+            .collect();
+        self.recover_idle_request(request, recovery.at_ms)?;
+        for previous in previous {
+            if previous.settled() {
+                // The shared ownership cleanup also touches a replied anchor.
+                // Its earlier outcome is immutable at this manual boundary.
+                self.requests.insert(previous.id, previous);
+            } else if let Some(closed) = self
+                .requests
+                .get_mut(&previous.id)
+                .filter(|closed| closed.phase == RequestPhase::Abandoned)
+            {
+                closed
+                    .failure_reason
+                    .get_or_insert_with(|| "manual_recovery".into());
+                closed.manual_recovery = Some(recovery.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// Close only never-submitted notices emitted by the retired GitHub watch.
     /// Ordinary agent/developer messages and already typed work are retained.
     pub(crate) fn retire_queued_github_notices(&mut self, now_ms: u64) -> Result<(), ModelError> {

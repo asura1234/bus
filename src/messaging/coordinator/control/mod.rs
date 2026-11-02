@@ -508,7 +508,7 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "request.recover",
         "request recover",
-        &["request", "confirm"],
+        &["request", "confirm", "as"],
         true,
         Tier::Agent,
     ),

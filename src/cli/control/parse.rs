@@ -101,6 +101,7 @@ pub(super) fn cli() -> Command {
                 .subcommand(
                     subcommand("recover")
                         .arg(value_arg("request").required(true))
+                        .arg(value_arg("as").long("as"))
                         .arg(flag("confirm")),
                 ),
         )
@@ -214,10 +215,14 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         }
         "message" => parse_message(args)?,
         "request" => match args.subcommand() {
-            Some(("recover", args)) => (
-                "request.recover",
-                json!({"request": required(args, "request")?, "confirm": confirmed(args)?}),
-            ),
+            Some(("recover", args)) => {
+                let mut params =
+                    json!({"request": required(args, "request")?, "confirm": confirmed(args)?});
+                if let Some(author) = args.get_one::<String>("as") {
+                    params["as"] = author.clone().into();
+                }
+                ("request.recover", params)
+            }
             _ => return Err("unknown request command".into()),
         },
         "wait" => {
