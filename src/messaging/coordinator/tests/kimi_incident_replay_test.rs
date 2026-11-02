@@ -147,17 +147,14 @@ fn replay_prior_active(late_stop: bool) {
     assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("2"));
     assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
     // Unrelated manual Started callbacks also start a monotonic own-turn
-    // grace. Advance that fixture clock by the recorded gap before 36143;
-    // changing only wall timestamps would legitimately keep delivery queued.
+    // grace. Expire that fixture-owned guard using the recorded gap before
+    // 36143, keeping the replay independent of the host monotonic epoch.
     let last_manual_start = turns.last().unwrap()["rows"][0]["time"].as_u64().unwrap();
     let elapsed = incident["later"]["submitted_at_ms"].as_u64().unwrap() - last_manual_start;
-    let own_turn = f
-        .worker
-        .own_turns
-        .get_mut(&f.agent)
-        .expect("manual turn grace");
-    *own_turn -= Duration::from_millis(elapsed);
-    assert!(own_turn.elapsed() >= super::super::super::OWN_TURN_GRACE);
+    assert!(Duration::from_millis(elapsed) >= super::super::super::OWN_TURN_GRACE);
+    // That recorded time jump expires this test-owned guard. Do not subtract
+    // 85 minutes from a host Instant: its representable epoch is platform-bound.
+    assert!(f.worker.own_turns.remove(&f.agent).is_some());
     let later = send_recorded(&mut f, &incident["later"], &clock);
     assert_eq!(later, RequestId(36143));
     f.deliver();

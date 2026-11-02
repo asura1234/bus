@@ -17,10 +17,11 @@
   "turn_id": 0,
   "reply": "Completed [PR #229](https://github.com/asura1234/bus/pull/229).\n\n- **Head:** `e64a52103b2ed91dc15e63df5eed49e89f988c40`, pushed and PR body refreshed.\n- **Rebase:** replayed 11 commits onto `origin/master` without conflicts or shared-infrastructure changes. Divergence check found no foreign commits; force-push replaced only my 11 pre-rebase versions.\n- **Fix:** added `e64a5210` to repair two broken installed-documentation links. The earlier parallel-install `WouldBlock` did not reproduce.\n- **Clean-first `just ci`: green** on the exact head:\n  - 4,301 Rust unit tests passed; 142 skipped, one leaky\n  - 1,262 Python tests and 255 subtests passed\n  - 474 integration/dev tests passed\n  - Rust coverage 89.11%, above the 80% minimum\n- **Scratch-HOME e2e: green.** Verified the exact-head binary, installed sitrep for Claude and Codex, read a real scratch Bus room, rendered the required report using installed scripts, saved the marker, and stopped the session.\n- **Reported:** Bus message `32632`, `ok:true`.\n\nAfter `just ci` finished green, the outer wrapper returned 1 only because another process had already removed its slot directory (`rmdir` ENOENT). The worktree is clean and no builds remain running.",
   "completed_at_ms": 1793457696392,
-  "native_error": "Submit outcome unknown; no automatic retry: Composer changed during editor transfer",
+  "native_error": "Composer changed during editor transfer",
   "uncertain_log": {
     "source": "herdr-client.log.20261031T150545.761137000Z.gz",
-    "line": 33176
+    "line": 33176,
+    "bundle": "selected-live-log-lines.jsonl:1483"
   },
   "settlement_log": {
     "source": "herdr-client.log.20261031T150545.761137000Z.gz",
