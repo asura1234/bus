@@ -144,14 +144,7 @@ async fn frozen_visible_read_keeps_range_metadata_during_partial_redraw() {
     app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
     // A private listener satisfies the headless harness without starting a live server.
-    let socket_dir = std::env::temp_dir().join(format!(
-        "bus-fr-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ));
+    let socket_dir = crate::utils::test_temp::unique_temp_path("bus-fr");
     std::fs::create_dir(&socket_dir).unwrap();
     let socket_path = socket_dir.join("client.sock");
     let listener = crate::platform::ipc::bind_local_listener(&socket_path).unwrap();

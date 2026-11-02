@@ -566,14 +566,7 @@ fn clipboard_image_staging_rejects_symlink_directory() {
         return;
     }
 
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "bus-clipboard-staging-symlink-test-{}-{unique}",
-        std::process::id()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path("bus-clipboard-staging-symlink-test");
     let shared_temp = root.join("shared-temp");
     let victim = root.join("victim");
     std::fs::create_dir_all(&shared_temp).unwrap();
