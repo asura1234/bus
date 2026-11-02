@@ -79,9 +79,7 @@ class SkillMigrationContractTest(unittest.TestCase):
 
     def test_agent_registries_do_not_shadow_user_installs(self) -> None:
         for registry in (REPO / ".agents" / "skills", REPO / ".claude" / "skills"):
-            self.assertFalse(
-                registry.exists(), f"repo skills shadow user copies: {registry}"
-            )
+            self.assertFalse(registry.exists(), f"repo skills shadow user copies: {registry}")
 
     def test_shared_workflow_sources_exist(self) -> None:
         required = (
@@ -120,20 +118,9 @@ class SkillMigrationContractTest(unittest.TestCase):
             plan.write_text("## 目标\n\nPortable goal\n\n## 非目标\n\nNone\n")
             script = installed / "pr/scripts/pr_goal_context.py"
             done = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "--branch",
-                    "feat/portable",
-                    "--plan",
-                    str(plan),
-                    "--output",
-                    str(repo / "context.md"),
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
+                [sys.executable, str(script), "--branch", "feat/portable", "--plan", str(plan),
+                 "--output", str(repo / "context.md")],
+                cwd=repo, env=env, text=True, capture_output=True,
             )
             self.assertEqual(done.returncode, 0, done.stderr)
             lock = repo / "temp/review-pr/feat-portable/.locked-goal"
@@ -141,16 +128,8 @@ class SkillMigrationContractTest(unittest.TestCase):
             self.assertEqual(lock.read_text(), "Portable goal\n")
             self.assertFalse((installed / "temp").exists())
             host = subprocess.run(
-                [
-                    sys.executable,
-                    "-I",
-                    str(installed / "_bus/cli_extensions/pr_host.py"),
-                    "--help",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
+                [sys.executable, "-I", str(installed / "_bus/cli_extensions/pr_host.py"), "--help"],
+                cwd=repo, env=env, text=True, capture_output=True,
             )
             self.assertEqual(host.returncode, 0, host.stderr)
             for name in ("pr", "merge-pr", "address-review-comments"):
@@ -162,15 +141,11 @@ class SkillMigrationContractTest(unittest.TestCase):
         merge = (SKILLS / "merge-pr/SKILL.md").read_text()
         for text in (pr, merge):
             self.assertIn("rebase-origin-main --base origin/<base_branch>", text)
-        self.assertIn(
-            'gate-and-fix --base <merge-base> --command "<policy.gate_command>"', merge
-        )
+        self.assertIn('gate-and-fix --base <merge-base> --command "<policy.gate_command>"', merge)
 
     def test_codeup_ci_is_record_only_through_the_merge_workflow(self) -> None:
         merge = (SKILLS / "merge-pr/SKILL.md").read_text()
-        ci = merge.split(
-            "========== 3. Wait for CI to converge (wait last) ==========", 1
-        )[1]
+        ci = merge.split("========== 3. Wait for CI to converge (wait last) ==========", 1)[1]
         ci = ci.split("========== 5. Fix IN-SCOPE red checks ==========", 1)[0]
         self.assertIn("IF host == codeup:", ci)
 
@@ -184,9 +159,7 @@ class SkillMigrationContractTest(unittest.TestCase):
         metrics = (SKILLS / "merge-pr/scripts/review_metrics.py").read_text()
         self.assertNotIn('subprocess.run(["gh"', metrics)
 
-    def test_merge_guide_does_not_reintroduce_legacy_host_or_base_commands(
-        self,
-    ) -> None:
+    def test_merge_guide_does_not_reintroduce_legacy_host_or_base_commands(self) -> None:
         guide = (SKILLS / "merge-pr/guide.md").read_text()
         self.assertNotRegex(guide, r"`gh (?:pr|run) ")
         self.assertNotIn("merge `origin/master`", guide)
@@ -199,9 +172,7 @@ class SkillMigrationContractTest(unittest.TestCase):
     def test_codeup_merge_verifies_commit_landed_on_the_target_branch(self) -> None:
         merge = (SKILLS / "merge-pr/SKILL.md").read_text()
         final = merge.split("========== 6. Merge ==========", 1)[1]
-        self.assertIn(
-            "git merge-base --is-ancestor <mergeCommit> origin/<base_branch>", final
-        )
+        self.assertIn("git merge-base --is-ancestor <mergeCommit> origin/<base_branch>", final)
 
     def test_review_verdicts_are_the_canonical_closed_sets(self) -> None:
         verdicts = _review_types_module().LEGAL_VERDICTS
@@ -222,12 +193,7 @@ class SkillMigrationContractTest(unittest.TestCase):
         self.assertEqual(set(verdicts), {"plan", "pr"})
         markdown = "\n".join(
             path.read_text(encoding="utf-8")
-            for root in (
-                SKILLS,
-                REPO / "docs",
-                REPO / "orchestration",
-                REPO / "workflows",
-            )
+            for root in (SKILLS, REPO / "docs", REPO / "orchestration", REPO / "workflows")
             for path in root.rglob("*.md")
         )
         self.assertNotIn("Not Ready", markdown)
