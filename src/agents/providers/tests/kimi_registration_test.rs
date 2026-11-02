@@ -102,7 +102,7 @@ fn assistant_text_after_turn_end_cannot_replace_the_final() {
 }
 
 #[test]
-fn resume_rejects_saved_auto_with_bus_yolo() {
+fn kimi_yolo_normalizes_resume_argv_and_replays_saved_options_normally() {
     struct Restore(Option<std::ffi::OsString>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -114,15 +114,61 @@ fn resume_rejects_saved_auto_with_bus_yolo() {
     }
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let restore = Restore(std::env::var_os("BUS_YOLO"));
-    std::env::set_var("BUS_YOLO", "1");
-    let saved = vec!["--auto".to_owned()];
-    let mut args = super::kimi::launch::resumable_options(&saved);
-    launch::apply_run_permissions(ProviderKind::Kimi, &mut args);
-    assert!(
-        super::kimi::launch::validate_run_permissions(&args).is_err(),
-        "resume constructed Kimi's rejected permission combination: {args:?}"
-    );
+    for (saved, yolo, normal) in [
+        (vec![], vec!["--auto"], vec![]),
+        (vec!["--auto"], vec!["--auto"], vec!["--auto"]),
+        (vec!["--yolo"], vec!["--auto"], vec!["--yolo"]),
+        (vec!["-y"], vec!["--auto"], vec!["-y"]),
+        (
+            vec!["--model", "--yolo", "--output-format", "-y"],
+            vec!["--auto", "--model", "--yolo", "--output-format", "-y"],
+            vec!["--model", "--yolo", "--output-format", "-y"],
+        ),
+        (
+            vec!["--auto", "--yolo"],
+            vec!["--auto"],
+            vec!["--auto", "--yolo"],
+        ),
+    ] {
+        for (enabled, expected) in [(true, yolo), (false, normal)] {
+            if enabled {
+                std::env::set_var("BUS_YOLO", "1");
+            } else {
+                std::env::remove_var("BUS_YOLO");
+            }
+            let saved: Vec<String> = saved.iter().map(|arg| (*arg).to_owned()).collect();
+            let mut args = super::kimi::launch::resumable_options(&saved);
+            launch::apply_run_permissions(ProviderKind::Kimi, &mut args);
+            let validated = super::kimi::launch::validate_run_permissions(&args);
+            if !enabled && saved == ["--auto", "--yolo"] {
+                assert!(
+                    validated.is_err(),
+                    "native mixed modes reached Kimi: {args:?}"
+                );
+            } else {
+                validated.unwrap();
+            }
+            assert_eq!(args, expected, "saved={saved:?}, yolo={enabled}");
+        }
+    }
     drop(restore);
+}
+
+#[test]
+fn kimi_mixed_mode_guard_checks_only_option_positions() {
+    let values = vec![
+        "--model".into(),
+        "--auto".into(),
+        "--output-format".into(),
+        "--yolo".into(),
+        "--".into(),
+        "-y".into(),
+    ];
+    super::kimi::launch::validate_run_permissions(&values).unwrap();
+    for args in [vec!["--auto", "--yolo"], vec!["-y", "--auto"]] {
+        let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+        assert!(super::kimi::launch::validate_run_permissions(&args).is_err());
+    }
 }
 
 #[test]
