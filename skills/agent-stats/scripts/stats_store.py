@@ -7,6 +7,23 @@ from pathlib import Path
 from stats_schema import canonical, loads, validate
 
 
+def brief_key(row):
+    if (
+        row["kind"] not in ("assignment", "handover")
+        or row["data"]["message_id"] is None
+    ):
+        return None
+    return (
+        row["kind"],
+        row["task"],
+        row["role"],
+        row["agent"]["id"],
+        row["orchestrator"]["id"],
+        row["data"]["room_id"],
+        row["data"]["message_id"],
+    )
+
+
 def read_records(path):
     path = Path(path)
     if not path.exists():
@@ -36,11 +53,15 @@ def append(store, records):
             raise ValueError("invalid store: symlink events")
         existing = read_records(path)
         ids = {x["id"] for x in existing}
+        briefs = {brief_key(x) for x in existing if brief_key(x) is not None}
         fresh = []
         for item in records:
-            if item["id"] not in ids:
+            key = brief_key(item)
+            if item["id"] not in ids and (key is None or key not in briefs):
                 fresh.append(item)
                 ids.add(item["id"])
+                if key is not None:
+                    briefs.add(key)
         from stats_phases import validate_phases
 
         validate_phases(existing + fresh)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from stats_identity import envelope, identity
 from stats_schema import SCHEMA, canonical, read_json, record, source
-from stats_store import append, read_records, snapshot
+from stats_store import append, brief_key, read_records, snapshot
 
 
 def run_json(argv, allow_error=False):
@@ -119,7 +119,14 @@ def assignment(args):
         data,
         at,
     )
-    return {"appended": append(store, [value]), "id": value["id"], "store": str(store)}
+    added = append(store, [value])
+    if brief_key(value) is not None:
+        value = next(
+            r
+            for r in read_records(store / "events.jsonl")
+            if brief_key(r) == brief_key(value)
+        )
+    return {"appended": added, "id": value["id"], "store": str(store)}
 
 
 def main():

@@ -86,7 +86,10 @@ def test_assignment_captures_identity_model_and_is_idempotent(tmp_path):
     )
     first = call(*args)
     assert first.returncode == 0, first.stderr
-    assert call(*args).returncode == 0
+    repeated = call(*args[:-1], "2026-11-02T01:00:01Z")
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["appended"] == 0
+    assert json.loads(repeated.stdout)["id"] == json.loads(first.stdout)["id"]
     records = [
         json.loads(x)
         for x in (tmp_path / "stats/events.jsonl").read_text().splitlines()
@@ -175,8 +178,14 @@ def test_valid_record_schema_mutations_and_concurrent_append(tmp_path):
         "--at",
         "2026-11-02T01:00:00Z",
     )
-    results = list(ThreadPoolExecutor(8).map(lambda _: call(*args), range(8)))
+    results = list(
+        ThreadPoolExecutor(8).map(
+            lambda n: call(*args[:-1], f"2026-11-02T01:00:0{n}Z"), range(8)
+        )
+    )
     assert all(r.returncode == 0 for r in results)
+    assert sum(json.loads(r.stdout)["appended"] for r in results) == 1
+    assert len({json.loads(r.stdout)["id"] for r in results}) == 1
     path = tmp_path / "stats/events.jsonl"
     assert len(path.read_text().splitlines()) == 1
     record = json.loads(path.read_text())

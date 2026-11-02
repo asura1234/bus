@@ -18,7 +18,10 @@ with only a calendar date keeps that date separately. Empty sets use `[]`.
 
 Assignments record observed identity at append time. A handover names the old
 agent and the orchestrator's reason. A message ID is optional; it links delivery
-observations to the assignment. Machine snapshots keep their original content.
+observations to the assignment. Retrying the same brief/task/role/agent keeps
+the first assignment and returns its original ID, even across clock changes or
+concurrent calls. A new nudge message remains a new assignment. Machine snapshots
+keep their original content.
 
 Root causes come from address-review-comments canonical items only. Existing
 prose source lists can be imported only when explicit and unambiguous. A
