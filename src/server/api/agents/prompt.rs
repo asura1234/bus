@@ -242,6 +242,21 @@ impl App {
         respond_to: std::sync::mpsc::Sender<String>,
         started: std::time::Instant,
     ) -> bool {
+        if let crate::protocol::api::schema::Method::AgentSendKeys(params) = &request.method {
+            if params.native_interrupt.is_some() {
+                match self.prepare_agent_send_keys(request.id, params.clone()) {
+                    Ok(job) => {
+                        std::thread::spawn(move || {
+                            let _ = respond_to.send(job());
+                        });
+                    }
+                    Err(response) => {
+                        let _ = respond_to.send(response);
+                    }
+                }
+                return true;
+            }
+        }
         let Some(budget) = crate::protocol::api::submission::method_budget(&request.method) else {
             return false;
         };
@@ -483,36 +498,86 @@ impl App {
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
-        let _entered = span.enter();
-        #[cfg(unix)]
-        if let Some(completion) = super::codex_native::queue(
+        queue_prompt_submission(
             runtime,
-            &agent,
-            &params.text,
-            steer,
-            expected_turn_id,
-            &id,
-            hard_deadline,
-            native_only,
-        )? {
-            return Ok((id, agent, completion));
-        }
-        #[cfg(not(unix))]
-        let _ = (expected_turn_id, native_only);
-        let completion = queue_prompt_input(
-            runtime,
+            agent,
             expected_agent,
-            params.text,
+            params,
             observe,
             submit_delay,
             submit_deadline,
-            Some(crate::platform::draft_editor::directory(&agent.pane_id)),
             steer,
+            expected_turn_id,
+            hard_deadline,
+            native_only,
+            id,
         )
-        .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
-        Ok((id, agent, completion))
     }
+}
+
+fn queue_prompt_submission(
+    runtime: &crate::terminal::TerminalRuntime,
+    agent: crate::protocol::api::schema::AgentInfo,
+    expected_agent: crate::agents::AgentKind,
+    params: AgentPromptParams,
+    observe: bool,
+    submit_delay: Duration,
+    submit_deadline: Option<std::time::Instant>,
+    steer: bool,
+    expected_turn_id: Option<String>,
+    hard_deadline: std::time::Instant,
+    native_only: bool,
+    id: String,
+) -> Result<
+    (
+        String,
+        crate::protocol::api::schema::AgentInfo,
+        InputCompletion,
+    ),
+    String,
+> {
+    let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
+    let _entered = span.enter();
+    #[cfg(unix)]
+    if let Some(completion) = super::codex_native::queue(
+        runtime,
+        &agent,
+        &params.text,
+        steer,
+        expected_turn_id,
+        &id,
+        hard_deadline,
+        native_only,
+        || {
+            prepare_prompt_input(
+                runtime,
+                expected_agent,
+                params.text.clone(),
+                observe,
+                submit_delay,
+                submit_deadline,
+                Some(crate::platform::draft_editor::directory(&agent.pane_id)),
+                steer,
+            )
+        },
+        submit_delay,
+    )? {
+        return Ok((id, agent, completion));
+    }
+    #[cfg(not(unix))]
+    let _ = (expected_turn_id, native_only);
+    let completion = queue_prompt_input(
+        runtime,
+        expected_agent,
+        params.text,
+        observe,
+        submit_delay,
+        submit_deadline,
+        Some(crate::platform::draft_editor::directory(&agent.pane_id)),
+        steer,
+    )
+    .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
+    Ok((id, agent, completion))
 }
 
 fn queue_prompt_input(
@@ -525,6 +590,30 @@ fn queue_prompt_input(
     draft_directory: Option<std::path::PathBuf>,
     steer: bool,
 ) -> std::io::Result<InputCompletion> {
+    prepare_prompt_input(
+        runtime,
+        kind,
+        text,
+        observe,
+        delay,
+        deadline,
+        draft_directory,
+        steer,
+    )?()
+}
+
+type PreparedPrompt = Box<dyn FnOnce() -> std::io::Result<InputCompletion> + Send>;
+
+fn prepare_prompt_input(
+    runtime: &crate::terminal::TerminalRuntime,
+    kind: crate::agents::AgentKind,
+    text: String,
+    observe: bool,
+    delay: Duration,
+    deadline: Option<std::time::Instant>,
+    draft_directory: Option<std::path::PathBuf>,
+    steer: bool,
+) -> std::io::Result<PreparedPrompt> {
     use crate::agents::AgentKind;
     let (mut encoded, enter) =
         crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
@@ -545,13 +634,17 @@ fn queue_prompt_input(
             }
         }
     }
-    if !observe || !observes_composer(kind) {
-        return runtime.queue_user_input_submission(
-            Bytes::from(encoded),
-            Bytes::from(enter),
-            delay,
-            deadline,
-        );
+    let observed = observe && observes_composer(kind);
+    let submission = runtime.submission_handle(!observed);
+    if !observed {
+        return Ok(Box::new(move || {
+            submission.queue_user_input_submission(
+                Bytes::from(encoded),
+                Bytes::from(enter),
+                delay,
+                deadline,
+            )
+        }));
     }
     let clear = crate::server::api::input_encoding::encode_api_keys(
         runtime,
@@ -575,14 +668,16 @@ fn queue_prompt_input(
         } else {
             Box::new(composer::observer(kind, text))
         };
-    runtime.queue_observed_input_with_inspector(
-        Bytes::from(encoded),
-        Bytes::from(enter),
-        clear.into_iter().map(Bytes::from).collect(),
-        delay,
-        deadline,
-        inspector,
-    )
+    Ok(Box::new(move || {
+        submission.queue_observed_input_with_inspector(
+            Bytes::from(encoded),
+            Bytes::from(enter),
+            clear.into_iter().map(Bytes::from).collect(),
+            delay,
+            deadline,
+            inspector,
+        )
+    }))
 }
 
 /// Keep cancellation owned until the response has been formatted, including

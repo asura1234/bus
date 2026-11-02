@@ -135,11 +135,8 @@ impl Runtime {
         Some(result)
     }
 
-    pub(crate) fn available(&mut self, deadline: Instant) -> bool {
-        self.session
-            .as_mut()
-            .and_then(|session| session.connection(deadline))
-            .is_some()
+    pub(crate) fn has_session(&self) -> bool {
+        self.session.is_some()
     }
 
     pub(crate) fn interrupt(&mut self, thread: &str, deadline: Instant) -> Option<io::Result<()>> {
