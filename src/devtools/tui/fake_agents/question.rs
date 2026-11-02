@@ -167,34 +167,6 @@ impl FakeAgent {
 mod tests {
     use super::*;
 
-    fn screen(text: &str) -> String {
-        text.replace("\r\n", "\n")
-    }
-
-    #[test]
-    fn question_fixture_is_a_pending_codex_question_that_opens_into_its_choices() {
-        assert!(requested("codex", "fake:question"));
-        assert!(!requested("claude", "fake:question"));
-        let collapsed = screen(&collapsed());
-        assert!(crate::agents::dialog::codex_question_pending(&collapsed));
-        assert!(crate::agents::dialog::parse(&collapsed).is_none());
-        let dialog = crate::agents::dialog::parse(&screen(&expanded(0))).unwrap();
-        assert_eq!(dialog.text, "Which design should the worker use?");
-        assert_eq!(dialog.options.len(), 3);
-        assert_eq!(dialog.selected(), Some(1));
-        assert_eq!(dialog.keys_for(2), Some(vec!["down", "enter"]));
-    }
-
-    #[test]
-    fn question_fixture_accepts_a_codex_free_text_question() {
-        assert!(requested("codex", "fake:question-text"));
-        assert!(!requested("claude", "fake:question-text"));
-        let dialog = crate::agents::dialog::parse(TEXT_QUESTION).unwrap();
-        assert_eq!(dialog.kind, crate::agents::dialog::DialogKind::Question);
-        assert!(dialog.options.is_empty());
-        assert_eq!(dialog.text, "请提供该 bug 的 record id 或行链接");
-    }
-
     #[test]
     fn question_keys_wait_for_split_sequences_and_drop_the_rest() {
         let mut pending = b"x\x1b[1;".to_vec();

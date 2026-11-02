@@ -77,12 +77,6 @@ mod shutdown;
 #[path = "spawn_test.rs"]
 mod spawn;
 
-#[derive(Default)]
-pub(super) struct DialogWaitTest {
-    timeout: Option<std::time::Duration>,
-    observed: Option<std::sync::mpsc::Sender<()>>,
-}
-
 #[cfg(test)]
 impl TerminalRuntime {
     pub(crate) fn test_kimi_command_detection(&self) -> Option<crate::agents::AgentDetection> {
@@ -96,38 +90,6 @@ impl TerminalRuntime {
             &content,
             screen,
         )
-    }
-
-    /// Arm a one-shot signal for the first unfinished frame the guard sees.
-    /// Only this runtime's tests receive the generous completion budget.
-    pub(crate) fn test_observe_dialog_redraw(
-        &self,
-        timeout: std::time::Duration,
-    ) -> std::sync::mpsc::Receiver<()> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        *self.dialog_wait_test.lock().unwrap() = DialogWaitTest {
-            timeout: Some(timeout),
-            observed: Some(sender),
-        };
-        receiver
-    }
-
-    pub(super) fn test_dialog_wait_timeout(
-        &self,
-        default: std::time::Duration,
-    ) -> std::time::Duration {
-        self.dialog_wait_test
-            .lock()
-            .unwrap()
-            .timeout
-            .unwrap_or(default)
-    }
-
-    pub(super) fn test_signal_dialog_redraw(&self) {
-        let sender = self.dialog_wait_test.lock().unwrap().observed.take();
-        if let Some(sender) = sender {
-            let _ = sender.send(());
-        }
     }
 
     pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
@@ -237,7 +199,6 @@ impl TerminalRuntime {
                 content_write_lock: Arc::new(Mutex::new(())),
                 draft_input,
                 driver_state: Default::default(),
-                dialog_wait_test: Mutex::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
                 detection_context: Default::default(),
