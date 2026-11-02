@@ -173,6 +173,9 @@ impl BusUi {
             .map(|r| (r.id, LocalRoom::from(r)))
             .collect();
         let seed_first_room = snapshot.state.is_pristine();
+        // Existing outcomes were observed before this client attached. Only a new
+        // request or a changed cause should create another diagnostic event.
+        let observed_request_notices = super::notices::RequestNotices::seed(&snapshot.state);
         let mut ui = Self {
             handle: None,
             clipboard_image_reader,
@@ -188,7 +191,7 @@ impl BusUi {
             error: None,
             observed_agent_notices: BTreeMap::new(),
             observed_snapshot_error: None,
-            observed_request_notices: BTreeMap::new(),
+            observed_request_notices,
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -243,7 +246,6 @@ impl BusUi {
             outer_focused: None,
         };
         ui.sync_snapshot_error();
-        ui.sync_request_notices();
         ui
     }
     /// Applies immediately; a failed save keeps the choice for this run only.

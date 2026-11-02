@@ -1,7 +1,7 @@
 use super::{BusUi, Pending};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, RoomId},
+    model::{AgentId, BusState, Request, RequestId, RoomId},
 };
 use std::collections::BTreeMap;
 
@@ -19,29 +19,70 @@ pub(super) struct RequestNotices {
     detail: Option<String>,
 }
 
+impl RequestNotices {
+    fn from_request(request: &Request) -> Option<Self> {
+        (request.failure_reason.is_some() || request.submission_error.is_some()).then(|| Self {
+            reason: request.failure_reason.clone(),
+            detail: request.submission_error.clone(),
+        })
+    }
+
+    pub(super) fn seed(state: &BusState) -> BTreeMap<RequestId, Self> {
+        state
+            .requests()
+            .filter_map(|request| Self::from_request(request).map(|notice| (request.id, notice)))
+            .collect()
+    }
+
+    fn deliberate(&self) -> bool {
+        matches!(
+            self.reason.as_deref(),
+            Some(
+                "interrupted"
+                    | "agent_deleted"
+                    | "room_deleted"
+                    | "github_watch_retired"
+                    | "room_digest_retired"
+                    | "messaging_onboarding_retired"
+                    | "operational_notice_retired"
+                    | "background_wait_superseded"
+            )
+        )
+    }
+}
+
 impl BusUi {
     /// Durable request diagnostics must not borrow the agent's latest error:
     /// an intervening failure or an archived request still owns its cause.
     pub(super) fn sync_request_notices(&mut self) {
         let mut observed = BTreeMap::new();
-        for request in self.snapshot.state.requests().filter(|request| {
-            request.failure_reason.is_some() || request.submission_error.is_some()
-        }) {
-            let current = RequestNotices {
-                reason: request.failure_reason.clone(),
-                detail: request.submission_error.clone(),
+        for request in self.snapshot.state.requests() {
+            let Some(current) = RequestNotices::from_request(request) else {
+                continue;
             };
             if self.observed_request_notices.get(&request.id) != Some(&current) {
                 let _report = crate::utils::error_pipe::suppress(request.is_error_report());
-                tracing::warn!(
-                    event = "bus.request.failed",
-                    request_id = request.id.0,
-                    message_id = request.prompt.id.0,
-                    agent_id = request.agent_id.0,
-                    room_id = request.room_id.0,
-                    reason = current.reason.as_deref().unwrap_or(""),
-                    detail = current.detail.as_deref().unwrap_or(""),
-                );
+                if current.deliberate() {
+                    tracing::info!(
+                        event = "bus.request.closed",
+                        request_id = request.id.0,
+                        message_id = request.prompt.id.0,
+                        agent_id = request.agent_id.0,
+                        room_id = request.room_id.0,
+                        reason = current.reason.as_deref().unwrap_or(""),
+                        detail = current.detail.as_deref().unwrap_or(""),
+                    );
+                } else {
+                    tracing::warn!(
+                        event = "bus.request.failed",
+                        request_id = request.id.0,
+                        message_id = request.prompt.id.0,
+                        agent_id = request.agent_id.0,
+                        room_id = request.room_id.0,
+                        reason = current.reason.as_deref().unwrap_or(""),
+                        detail = current.detail.as_deref().unwrap_or(""),
+                    );
+                }
             }
             observed.insert(request.id, current);
         }

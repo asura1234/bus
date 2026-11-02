@@ -797,3 +797,124 @@ fn tui_error_text_error_reports_and_their_replies_are_never_chat() {
     ui.receive_snapshot(Arc::new(snapshot));
     assert_no_diagnostics(&mut ui, &["REPORT_EVENT_SENTINEL", "REPORT_REPLY_SENTINEL"]);
 }
+
+fn snapshot_with_terminal_reason(reason: &str) -> (BusUi, BusSnapshot, RequestId) {
+    let (ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let request = snapshot
+        .state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "retained outcome".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            1000,
+            true,
+        )
+        .unwrap()[0];
+    snapshot.state.close_interrupted(agent, 2000).unwrap();
+    // Exercise the saved terminal reason consumed by the UI, including retirement
+    // records from earlier versions. The request identity survives the round trip.
+    let mut saved = serde_json::to_value(&snapshot.state).unwrap();
+    saved["requests"][request.0.to_string()]["failure_reason"] = reason.into();
+    snapshot.state = serde_json::from_value(saved).unwrap();
+    (ui, snapshot, request)
+}
+
+#[test]
+fn deliberate_request_outcomes_log_at_info_without_error_pipe_reports() {
+    use tracing_subscriber::prelude::*;
+    for reason in [
+        "interrupted",
+        "agent_deleted",
+        "room_deleted",
+        "github_watch_retired",
+        "room_digest_retired",
+        "messaging_onboarding_retired",
+        "operational_notice_retired",
+        "background_wait_superseded",
+    ] {
+        let root = crate::utils::test_temp::unique_temp_path("bus-deliberate-request-outcome");
+        let mut runtime = crate::utils::error_pipe::Runtime::default();
+        runtime.configure(&root, Some("lead"));
+        let (mut ui, mut snapshot, request) = snapshot_with_terminal_reason(reason);
+        let path = root.join("client.log");
+        let file = std::fs::File::create(&path).unwrap();
+        let subscriber = tracing_subscriber::registry()
+            .with(crate::utils::error_pipe::CaptureLayer::new(path.clone()))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .without_time()
+                    .with_writer(move || file.try_clone().unwrap()),
+            );
+        tracing::subscriber::with_default(subscriber, || {
+            snapshot.revision += 1;
+            ui.receive_snapshot(Arc::new(snapshot));
+        });
+        let log = std::fs::read_to_string(path).unwrap();
+        let records = crate::utils::error_pipe::drain(&root).unwrap();
+        assert!(
+            records.is_empty(),
+            "deliberate {reason} was reported as an error: {records:?}"
+        );
+        assert!(
+            log.contains("INFO")
+                && log.contains(reason)
+                && log.contains(&format!("request_id={}", request.0)),
+            "{log}"
+        );
+        assert!(!log.contains("bus.request.failed"), "{log}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn opening_retained_request_failures_seeds_observation_but_new_causes_still_warn() {
+    use tracing_subscriber::prelude::*;
+    let root = crate::utils::test_temp::unique_temp_path("bus-retained-request-reopen");
+    let mut runtime = crate::utils::error_pipe::Runtime::default();
+    runtime.configure(&root, Some("lead"));
+    let (_, mut snapshot, request) = snapshot_with_terminal_reason("provider_error: OLD_CAUSE");
+    let path = root.join("client.log");
+    let file = std::fs::File::create(&path).unwrap();
+    let subscriber = tracing_subscriber::registry()
+        .with(crate::utils::error_pipe::CaptureLayer::new(path.clone()))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || file.try_clone().unwrap()),
+        );
+    tracing::subscriber::with_default(subscriber, || {
+        let mut ui = BusUi::new(Arc::new(snapshot.clone()));
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+        assert!(
+            crate::utils::error_pipe::drain(&root).unwrap().is_empty(),
+            "opening and receiving the same retained failure must not report it again"
+        );
+        let mut saved = serde_json::to_value(&snapshot.state).unwrap();
+        saved["requests"][request.0.to_string()]["failure_reason"] =
+            "provider_error: NEW_CAUSE".into();
+        snapshot.state = serde_json::from_value(saved).unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
+    let records = crate::utils::error_pipe::drain(&root).unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "new cause must be reported once: {records:?}"
+    );
+    assert_eq!(records[0].event, "bus.request.failed");
+    let log = std::fs::read_to_string(path).unwrap();
+    assert!(!log.contains("OLD_CAUSE"), "{log}");
+    assert_eq!(log.matches("NEW_CAUSE").count(), 1, "{log}");
+    std::fs::remove_dir_all(root).unwrap();
+}
