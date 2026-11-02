@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 #[path = "../../src/utils/launch_guard/paths.rs"]
 mod fixture_paths;
@@ -467,11 +467,7 @@ fn process_exists(pid: libc::pid_t) -> bool {
 }
 
 pub fn unique_test_dir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    PathBuf::from(format!("/tmp/hapi-{}-{nanos}", std::process::id()))
+    crate::fixture_dirs::unique_test_dir("hapi")
 }
 
 pub fn test_lock() -> MutexGuard<'static, ()> {
@@ -520,14 +516,7 @@ mod tests {
     }
 
     fn unique_missing_runtime_dir(label: &str) -> PathBuf {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "bus-watchdog-scoping-{label}-{}-{unique}",
-            std::process::id()
-        ))
+        crate::fixture_dirs::unique_test_dir(&format!("bus-watchdog-scoping-{label}"))
     }
 
     #[test]

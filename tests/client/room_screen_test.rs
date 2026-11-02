@@ -1,6 +1,9 @@
 //! Built-binary room screen regression, including the Windows host-VT case.
 #![cfg(any(unix, windows))]
 
+#[path = "../support/fixture_dir_test.rs"]
+mod fixture_dirs;
+
 #[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;
 #[path = "screen_support_test.rs"]
@@ -9,6 +12,59 @@ mod room_host_screen;
 mod room_screen_client;
 #[path = "../support/stop_test.rs"]
 mod stop_support;
+
+/// Fixtures allocated during the same clock tick must keep independent sessions.
+#[test]
+fn same_clock_fixture_sessions_survive_sibling_startup_and_teardown() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    fn panic_text(error: Box<dyn std::any::Any + Send>) -> String {
+        error
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| error.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+            .unwrap_or_else(|| "non-string panic".to_owned())
+    }
+
+    let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+    let first_base = room_screen_client::unique_test_dir_at(timestamp);
+    let second_base = room_screen_client::unique_test_dir_at(timestamp);
+    let first = room_screen_client::RoomClient::spawn_without_dev(first_base.clone());
+    let second = catch_unwind(AssertUnwindSafe(|| {
+        room_screen_client::RoomClient::spawn_without_dev(second_base.clone())
+    }))
+    .map_err(panic_text);
+    let create_room = |client: &room_screen_client::RoomClient, name| {
+        catch_unwind(AssertUnwindSafe(|| {
+            let output = client.cli(&["room", "create", name]);
+            assert!(output.status.success(), "room.create {name:?}: {output:?}");
+            let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(response["ok"], true, "room.create {name:?}: {output:?}");
+        }))
+        .map_err(panic_text)
+    };
+
+    // A failed sibling startup drops its partial fixture before this probe.
+    let first_control = create_room(&first, "first-after-sibling-start");
+    let second_control = second
+        .as_ref()
+        .ok()
+        .map(|client| create_room(client, "second-independent"));
+    let second_start = second.as_ref().map(|_| ()).map_err(Clone::clone);
+    drop(second);
+    let first_after_drop = create_room(&first, "first-after-sibling-drop");
+
+    assert!(
+        second_start.is_ok()
+            && first_control.is_ok()
+            && second_control.as_ref().is_some_and(Result::is_ok)
+            && first_after_drop.is_ok()
+            && first_base != second_base,
+        "same-clock fixtures: first={first_base:?}, second={second_base:?}; \
+         second startup={second_start:?}; first control={first_control:?}; \
+         second control={second_control:?}; first after drop={first_after_drop:?}"
+    );
+}
 
 /// Observe the actual client's ANSI in a real host VT, outside the client component.
 #[test]

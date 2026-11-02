@@ -9,21 +9,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 pub(super) fn unique_test_dir() -> PathBuf {
-    #[cfg(unix)]
-    let root = PathBuf::from("/tmp"); // Keep private socket paths below sockaddr_un limits.
-    #[cfg(windows)]
-    let root = std::env::temp_dir();
-    root.join(format!(
-        "bus-room-screen-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
+    crate::fixture_dirs::unique_test_dir("bus-room-screen")
+}
+
+pub(super) fn unique_test_dir_at(timestamp: SystemTime) -> PathBuf {
+    crate::fixture_dirs::unique_test_dir_at("bus-room-screen", timestamp)
 }
 
 fn control_stream(root: &Path) -> std::io::Result<Stream> {

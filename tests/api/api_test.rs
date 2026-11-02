@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "../support/fixture_dir_test.rs"]
+mod fixture_dirs;
+
 #[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;
 #[path = "../support/process_test.rs"]

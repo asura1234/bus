@@ -2,6 +2,9 @@
 
 #![cfg(unix)]
 
+#[path = "../support/fixture_dir_test.rs"]
+mod fixture_dirs;
+
 // Separate instances retain each original suite's cleanup registry and support test identities.
 #[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
@@ -26,7 +29,7 @@ mod detach_reattach {
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
 
     use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
     use serde_json::Value;
@@ -49,14 +52,7 @@ pane_scrollbars = false
 "#;
 
     fn unique_test_dir() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        PathBuf::from(format!(
-            "/tmp/bus-detach-test-{}-{nanos}",
-            std::process::id()
-        ))
+        crate::fixture_dirs::unique_test_dir("bus-detach-test")
     }
 
     struct SpawnedBus {

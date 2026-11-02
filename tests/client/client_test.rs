@@ -2,6 +2,9 @@
 
 #![cfg(unix)]
 
+#[path = "../support/fixture_dir_test.rs"]
+mod fixture_dirs;
+
 // Separate instances retain the original suite's cleanup registry and support test identities.
 #[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
@@ -18,7 +21,7 @@ mod client_mode {
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
 
     use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
     use serde_json::Value;
@@ -32,14 +35,7 @@ mod client_mode {
     };
 
     fn unique_test_dir() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        PathBuf::from(format!(
-            "/tmp/bus-client-test-{}-{nanos}",
-            std::process::id()
-        ))
+        crate::fixture_dirs::unique_test_dir("bus-client-test")
     }
 
     struct SpawnedBus {
@@ -240,7 +236,7 @@ mod cross_area {
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
 
     use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
     use serde_json::{json, Value};
@@ -252,14 +248,7 @@ mod cross_area {
     };
 
     fn unique_test_dir() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        PathBuf::from(format!(
-            "/tmp/bus-cross-area-test-{}-{nanos}",
-            std::process::id()
-        ))
+        crate::fixture_dirs::unique_test_dir("bus-cross-area-test")
     }
 
     struct SpawnedBus {
