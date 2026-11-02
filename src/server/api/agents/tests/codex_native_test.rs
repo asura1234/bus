@@ -24,7 +24,7 @@ async fn codex_native_admission_keeps_the_developer_draft_and_writes_no_terminal
         before
     );
     let calls = server.join().unwrap();
-    assert_eq!(calls.last().unwrap()["method"], "thread/queue/add");
+    assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn codex_native_idle_admits_despite_a_transient_working_projection() {
     let calls = server.join().unwrap();
     assert!(response.contains("agent_prompted"), "{response}");
     assert!(writes.try_recv().is_err());
-    assert_eq!(calls.last().unwrap()["method"], "thread/queue/add");
+    assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
 }
 
 #[tokio::test]
@@ -223,7 +223,12 @@ async fn codex_native_handshake_cannot_hold_the_app_dispatcher() {
                 "thread/read" => serde_json::json!({"thread":{
                     "id":"session", "status":{"type":"idle"}, "turns":[]
                 }}),
-                "thread/queue/add" => serde_json::json!({}),
+                "thread/queue/add" => {
+                    serde_json::json!({"queuedSubmission":{"id":"handshake-queue","clientUserMessageId":value["params"]["clientUserMessageId"]}})
+                }
+                "thread/queue/start" => {
+                    serde_json::json!({"turn":{"id":"handshake-turn","status":"inProgress"}})
+                }
                 other => panic!("unexpected native operation {other}"),
             };
             if ws
@@ -236,7 +241,7 @@ async fn codex_native_handshake_cannot_hold_the_app_dispatcher() {
             {
                 return false;
             }
-            if method == "thread/queue/add" {
+            if method == "thread/queue/start" {
                 return true;
             }
         }
