@@ -148,6 +148,32 @@ fn reply_seen_send_async_preserves_the_author_and_prints_the_reply() {
 }
 
 #[test]
+fn sender_identity_async_uses_inferred_author_for_waiter_and_reply_ack() {
+    let args = [
+        "send", "--room", "work", "--to", "builder", "--async", "--text", "build",
+    ]
+    .map(str::to_owned);
+    let mut methods = Vec::new();
+    run_with_pause(&args, &mut Vec::new(), &mut |request, _| {
+        methods.push(request.method.clone());
+        let result = match request.method.as_str() {
+            "message.send" => json!({"message_id":19,"request_ids":[20],"stage":"queued","author_id":7}),
+            "message.status" => {
+                assert_eq!(request.params["as"], "7");
+                json!({"message_id":19,"complete":true,"requests":[{"request_id":20,"reply_ack":true,"stage":"replied","reply":{"text":"built"}}]})
+            }
+            "message.seen" => {
+                assert_eq!(request.params["as"], "7");
+                json!({"request_id":20,"seen":true})
+            }
+            method => panic!("unexpected {method}"),
+        };
+        Ok(Response::success(&request.id, result))
+    }, |_| panic!("completed request needs no pause")).unwrap();
+    assert_eq!(methods, ["message.send", "message.status", "message.seen"]);
+}
+
+#[test]
 fn printed_reply_with_outcomes_explicitly_acknowledges_both() {
     let mut output = Vec::new();
     let mut ack = None;

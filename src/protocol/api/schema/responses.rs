@@ -170,4 +170,7 @@ pub enum ResponseResult {
         projection_revision: u64,
     },
     Ok {},
+    CallerLocation {
+        location: super::panes::CallerLocation,
+    },
 }

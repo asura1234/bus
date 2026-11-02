@@ -3880,6 +3880,22 @@
         {
           "properties": {
             "method": {
+              "const": "pane.locate_process",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ReportingProcess"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.focus",
               "type": "string"
             },
@@ -4664,6 +4680,28 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "CallerLocation": {
+          "description": "Native ownership of a live caller. A null pane proves it is outside Bus's\ncurrent pane processes; unreadable or stale callers return an error instead.",
+          "properties": {
+            "agent_owned": {
+              "type": "boolean"
+            },
+            "pane": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PaneInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "agent_owned"
+          ],
+          "type": "object"
         },
         "Cell": {
           "description": "One rendered cell. Wide characters occupy their first cell; the cell after\nthem has an empty symbol.",
@@ -6712,6 +6750,22 @@
               },
               "required": [
                 "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "location": {
+                  "$ref": "#/schemas/success_response/$defs/CallerLocation"
+                },
+                "type": {
+                  "const": "caller_location",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "location"
               ],
               "type": "object"
             }

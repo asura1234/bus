@@ -25,6 +25,8 @@ mod recovery_tests;
 mod rooms_tests;
 #[path = "selector_label_roundtrip_test.rs"]
 mod selector_label_roundtrip_tests;
+#[path = "sender_identity_test.rs"]
+mod sender_identity_tests;
 #[path = "unread_dot_test.rs"]
 mod unread_dot_tests;
 

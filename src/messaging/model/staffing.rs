@@ -1,4 +1,4 @@
-//! Routing identities survive roster changes; queue metrics remain inspectable.
+//! Historical identities survive roster changes; queue metrics remain inspectable.
 use super::{AgentId, BusState, Provider, RoomId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -20,55 +20,16 @@ impl BusState {
         self.retired_agents.get(&id)
     }
 
-    /// Only recipient resolution uses tombstones. Authors and administrative
-    /// commands must always name a currently existing agent.
-    pub(crate) fn retired_recipient(
-        &self,
-        selector: &str,
-        conversation: RoomId,
-        home: RoomId,
-    ) -> Result<Option<AgentId>, String> {
-        let retired = if let Ok(id) = selector.parse::<u64>() {
-            self.retired_agents.get(&AgentId(id))
-        } else {
-            [conversation, home].into_iter().find_map(|room| {
-                self.retired_agents.values().rev().find(|a| {
-                    (a.room == room || a.orchestrates == Some(room)) && a.name == selector
-                })
-            })
-        };
-        let Some(retired) = retired else {
-            return Ok(None);
-        };
-        let original_room = retired.room;
-        let mut replacements = self.agents().filter(|a| {
-            a.room_id == original_room
-                && a.name == retired.name
-                && !a.deletion_pending
-                && retired
-                    .orchestrates
-                    .is_none_or(|room| a.orchestrates == Some(room))
-        });
-        let first = replacements.next();
-        if replacements.next().is_some() {
-            return Err(format!(
-                "Ambiguous replacement for {:?} in room {}; use a current ID",
-                retired.name,
-                retired.orchestrates.unwrap_or(original_room).0
-            ));
-        }
-        let recipient = first.map(|a| a.id).or_else(|| {
-            self.orchestrator_of(retired.orchestrates.unwrap_or(original_room))
-                .filter(|a| !a.deletion_pending)
-                .map(|a| a.id)
-        });
-        recipient.map(Some).ok_or_else(|| {
-            format!(
-                "Removed agent {:?} has no replacement or orchestrator in room {}",
-                retired.name,
-                retired.orchestrates.unwrap_or(original_room).0
-            )
-        })
+    /// A numeric historical identity cannot be rebound to a replacement.
+    pub(crate) fn is_retired_selector(&self, selector: &str) -> bool {
+        selector
+            .parse::<u64>()
+            .ok()
+            .is_some_and(|id| self.retired_agents.contains_key(&AgentId(id)))
+            || self
+                .retired_agents
+                .values()
+                .any(|agent| agent.name == selector)
     }
 
     pub(crate) fn agent_queue_metrics(&self, agent: AgentId, now: u64) -> (usize, Option<u64>) {

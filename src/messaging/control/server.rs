@@ -454,7 +454,7 @@ impl Client {
         next_id: &mut u64,
         poll_budget: Option<&Arc<()>>,
     ) -> bool {
-        let request: Request = match serde_json::from_slice(bytes) {
+        let mut request: Request = match serde_json::from_slice(bytes) {
             Ok(request) => request,
             Err(_) => {
                 return self.respond(Response::failure(
@@ -470,6 +470,13 @@ impl Client {
                 "invalid_request",
                 "id and method must be nonempty",
             ));
+        }
+        // Legacy or raw clients must not turn an unidentifiable caller into
+        // the developer. In-process TUI submissions have their own domain path.
+        if request.method == "message.send" && request.params.get("as").is_none() {
+            if let Some(params) = request.params.as_object_mut() {
+                params.entry("caller").or_insert(serde_json::Value::Null);
+            }
         }
         if (request.method == "message.status") != poll_budget.is_some() {
             return self.respond(Response::failure(

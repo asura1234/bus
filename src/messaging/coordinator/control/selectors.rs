@@ -4,7 +4,7 @@ use serde_json::Value;
 
 impl Worker {
     /// Exact IDs and unique names are global. Conversation/home rooms matter
-    /// only for the reserved recipient alias and removed-recipient forwarding.
+    /// only for the reserved recipient alias.
     pub(super) fn resolve_agent(
         &self,
         room: Option<RoomId>,
@@ -14,6 +14,13 @@ impl Worker {
     ) -> Result<AgentId, String> {
         if let Some(id) = self.exact_agent(selector) {
             return Ok(id);
+        }
+        if selector
+            .parse::<u64>()
+            .ok()
+            .is_some_and(|id| self.state.retired_agent(AgentId(id)).is_some())
+        {
+            return Err(format!("No agent matches {selector:?}; it was deleted"));
         }
         // Normal names are globally unique. Retain the ambiguity guard for
         // legacy state read directly through the storage/recovery boundary.
@@ -48,12 +55,8 @@ impl Worker {
         if let Some(agent) = named {
             return Ok(agent.id);
         }
-        if recipient_alias {
-            if let (Some(room), Some(home)) = (room, sender_room) {
-                if let Some(id) = self.state.retired_recipient(selector, room, home)? {
-                    return Ok(id);
-                }
-            }
+        if self.state.is_retired_selector(selector) {
+            return Err(format!("No agent matches {selector:?}; it was deleted"));
         }
         Err(format!("No agent matches {selector:?}"))
     }

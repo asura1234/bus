@@ -136,6 +136,14 @@ pub struct ReportingProcess {
     pub birth: u64,
 }
 
+/// Native ownership of a live caller. A null pane proves it is outside Bus's
+/// current pane processes; unreadable or stale callers return an error instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CallerLocation {
+    pub pane: Option<PaneInfo>,
+    pub agent_owned: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneInfo {
     /// Explicit native process-exit evidence, excluding automatic self-update restarts.

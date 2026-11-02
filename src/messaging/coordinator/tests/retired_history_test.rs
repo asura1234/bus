@@ -1,4 +1,4 @@
-//! Canonical retired identities retain old-format defaults and routing.
+//! Canonical retired identities retain old-format defaults and deletion history.
 use super::*;
 
 #[test]
@@ -50,11 +50,11 @@ fn retired_formats_one_and_two_default_rendering_metadata_and_keep_numeric_room(
             .unwrap()
             .unwrap();
         assert_eq!(reloaded.retired_agent(agent).unwrap().provider, None);
+        assert!(reloaded.is_retired_selector(&agent.0.to_string()));
+        assert!(!reloaded.is_retired_selector(&replacement.0.to_string()));
         assert_eq!(
-            reloaded
-                .retired_recipient(&agent.0.to_string(), room, room)
-                .unwrap(),
-            Some(replacement)
+            reloaded.agent(replacement).unwrap().name,
+            "canonical identity"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
