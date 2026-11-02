@@ -7,7 +7,7 @@ aliases = ["qwen-code", "qwen code"]
 # Qwen Code keeps its composer visible while responding, so the prompt box is
 # not idle evidence by itself. Its status-prefixed terminal titles are the
 # primary locale-independent signals when ui.showStatusInTitle is enabled.
-# Exact screen fallbacks cover built-in locales and narrow terminals. OSC 9;4
+# Working screen fallbacks cover active cancel hints and narrow terminals. OSC 9;4
 # is supplemental because Qwen emits it only while a tool is executing and
 # only in terminals that advertise progress support.
 
@@ -26,59 +26,6 @@ priority = 1100
 region = "osc_title"
 visible_working = true
 regex = ['^\x{25D0}\x{FE0E}? ']
-
-[[rules]]
-id = "waiting_for_confirmation"
-state = "blocked"
-priority = 1000
-region = "bottom_non_empty_lines(20)"
-visible_blocker = true
-line_regex = ['^\s*⠏\s+.*\.\.\.\s*$']
-any = [
-  { contains = ["Waiting for user confirmation..."] },
-  { contains = ["等待用户确认..."] },
-  { contains = ["等待用戶確認..."] },
-  { contains = ["Warten auf Benutzerbestätigung..."] },
-  { contains = ["En attente de la confirmation de l'utilisateur..."] },
-  { contains = ["ユーザーの確認を待っています..."] },
-  { contains = ["Aguardando confirmação do usuário..."] },
-  { contains = ["Ожидание подтверждения от пользователя..."] },
-  { contains = ["Esperant la confirmació de l'usuari..."] },
-]
-
-[[rules]]
-id = "tool_confirmation"
-state = "blocked"
-priority = 990
-region = "bottom_non_empty_lines(20)"
-visible_blocker = true
-contains = ["yes, allow once"]
-any = [
-  { contains = ["apply this change?"] },
-  { contains = ["allow execution of:"] },
-  { contains = ["allow execution of mcp tool"] },
-  { contains = ["do you want to proceed?"] },
-  { contains = ["shell command execution"] },
-]
-
-[[rules]]
-id = "question_dialog"
-state = "blocked"
-priority = 980
-region = "bottom_non_empty_lines(20)"
-visible_blocker = true
-line_regex = [
-  '^\s*[❯›]\s*(?:\[(?: |✓)\]\s*)?\d+\.\s+',
-  '^\s*↑/↓\s*:.*(?:Enter|Return)\s*:',
-]
-
-[[rules]]
-id = "folder_trust_dialog"
-state = "blocked"
-priority = 970
-region = "bottom_non_empty_lines(20)"
-visible_blocker = true
-contains = ["do you trust this folder?", "trust folder (", "don't trust (esc)"]
 
 [[rules]]
 id = "cancel_hint_working"

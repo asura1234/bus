@@ -81,17 +81,11 @@ pub enum ResponseResult {
     AgentList {
         agents: Vec<AgentInfo>,
     },
-    AgentDialog {
-        observation: super::agents::AgentDialogObservation,
-    },
     TerminalObserved {
         observation: super::agents::TerminalObservation,
     },
     TerminalPressed {
         press: super::agents::TerminalPressResult,
-    },
-    AgentDialogChosen {
-        choice: super::agents::AgentDialogChooseResult,
     },
     PaneInfo {
         pane: PaneInfo,

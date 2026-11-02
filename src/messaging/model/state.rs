@@ -204,16 +204,6 @@ impl BusState {
         }
     }
 
-    /// Whether the fingerprint with this digest already answered a dialog.
-    pub(crate) fn dialog_answer_spent(&self, digest: &str) -> bool {
-        self.spent_dialog_answers.contains_key(digest)
-    }
-
-    /// Spends a fingerprint, observed at `observed_at_ms`, on one answer.
-    pub(crate) fn spend_dialog_answer(&mut self, digest: String, observed_at_ms: u64) {
-        self.spent_dialog_answers.insert(digest, observed_at_ms);
-    }
-
     pub(super) fn allocate_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -329,7 +319,7 @@ impl<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> Itera
 }
 
 /// The digest a dialog fingerprint ends with; it names the fingerprint once spent.
-pub(crate) fn fingerprint_digest(fingerprint: &str) -> &str {
+fn fingerprint_digest(fingerprint: &str) -> &str {
     fingerprint.rsplit('.').next().unwrap_or(fingerprint)
 }
 

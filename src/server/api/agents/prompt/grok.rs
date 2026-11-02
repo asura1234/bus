@@ -8,7 +8,9 @@ pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
         // accepts a prompt submitted mid-turn ("▾ Queued N" under Tasks).
         // That is acceptance. A dialog that happens to mention the queue
         // is not, and a still-readable draft stays owned by the caller.
-        return if provider_queued(screen) && crate::agents::dialog::parse(screen).is_none() {
+        return if provider_queued(screen)
+            && !crate::terminal::driver::has_input_controls(&super::plain_screen(screen))
+        {
             InputObservation::Accepted
         } else {
             InputObservation::Unavailable

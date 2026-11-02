@@ -249,7 +249,10 @@ fn a_late_same_turn_cross_room_member_publishes_only_in_its_new_room() {
     // Two coherent observations establish the blocked-dialog episode.
     for _ in 0..2 {
         f.worker
-            .notify_dialogs(vec![(blocked, Some("codex:pending_question".into()))])
+            .notify_dialogs(vec![(
+                blocked,
+                Some(crate::messaging::coordinator::dialogs::BLOCKED.into()),
+            )])
             .unwrap();
     }
     f.deliver();

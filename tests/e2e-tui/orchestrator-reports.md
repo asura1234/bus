@@ -22,31 +22,25 @@ then the orchestrator `qa-orch` with APP-04's UI recipe (Claude Code, scratch PW
 `Orchestrates room` = `qa-work`). Wait until both fake terminals are ready and
 `bus state` shows both agents idle.
 
-Step 1 stages a permission dialog on the worker's screen. It pastes a Claude Bash
-permission prompt into the worker's own terminal and does not press Enter, so the
-text stays in the fake Claude's prompt box, and Bus's dialog detection reads it as
-a blocked worker (`bash_permission_prompt` in
-`src/agents/manifest/bundled/claude.toml`). Do not send the text as a room message:
-Bus pastes it and presses Enter, and whether its dialog poll sees the text before
-the Enter is a race. The orchestrator's reply to that Blocked message stands in for a
-routine dialog approval. Step 8's progress report is an agent-authored post through
-the scratch CLI, as the fixture rule allows: it is what `send --to human` does
-when an orchestrator follows its prompt.
+Step 1 opens an inert approval fixture on the worker's screen using the fake
+agent's `fake:dialog-settle redraw` command. This renders native menu controls and
+waits for input; the displayed shell command is never executed. The generic driver
+reports the controls as blocked. The fake orchestrator replies to Bus's Blocked
+notice, exercising reply routing without answering the approval. Step 8's progress
+report is an agent-authored post through the scratch CLI, as the fixture rule
+allows: it is what `send --to human` does when an orchestrator follows its prompt.
 
 1. Click `# qa-work`, click the `qa-worker` agent (its fake terminal opens) and
-   paste this text into it, without pressing Enter:
+   type this fixture command and press Enter:
    ```
-   ORCH01 stage Bash(echo hi)
-   Do you want to proceed?
-   ❯ 1. Yes
-     2. No
-   Esc to cancel
+   fake:dialog-settle redraw
    ```
-   Wait until `bus state` shows `qa-worker` blocked, then press F6 → `qa-worker`
-   shows `Blocked` in the sidebar, and the qa-work history shows a
-   `qa-worker → qa-orch` message `qa-worker (agent N). Blocked, needs help to continue.`
+   Verify the worker shows `Would you like to run the following command?` and
+   numbered Yes/No options. Wait until `bus state` shows `qa-worker` blocked, then
+   press F6 → `qa-worker` shows `Blocked` in the sidebar, and the qa-work history
+   shows Bus's notice to `qa-orch`: `qa-worker. Blocked, needs help to continue.`
 2. Wait until `bus state` shows `qa-orch` idle → in qa-work, `qa-orch`'s reply
-   `fake reply: qa-worker (agent N). Blocked, needs help to continue. …` shows
+   `fake reply: qa-worker. Blocked, needs help to continue. …` shows
    under the Blocked message, and qa-work has no `qa-orch → You` message.
 3. Click `# MASTER` → MASTER history shows no `Blocked, needs help to continue.`
    text and no message from `qa-orch`.
@@ -71,6 +65,6 @@ when an orchestrator follows its prompt.
 a cells screenshot of each room's history, `bus state` agent status, and
 `bus history --room master` for the step-6 reply, and the step-8 send receipt.
 
-**Pass criteria:** the worker-woken reply (a routine approval) and the unprompted
+**Pass criteria:** the reply to the worker's Blocked notice and the unprompted
 status show only in the work room; the reply to the developer's MASTER message and
 the orchestrator's `send --to human` progress report show only in MASTER.

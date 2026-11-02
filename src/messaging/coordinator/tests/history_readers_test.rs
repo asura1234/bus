@@ -40,9 +40,10 @@ fn a_version_one_state_keeps_its_spent_dialog_fingerprints() {
     let document = as_version_one(&dir, &[], &["d1.payload.spentdigest"]);
     drop(worker);
     let (worker, upgraded) = open_saved_document(document);
+    let migrated = serde_json::to_value(&worker.state).unwrap();
     assert!(
-        worker.state.dialog_answer_spent("spentdigest"),
-        "a fingerprint spent before the upgrade answers a dialog again after it"
+        migrated["spent_dialog_answers"]["spentdigest"].is_u64(),
+        "the version-one fingerprint must survive in the persisted migration shape"
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

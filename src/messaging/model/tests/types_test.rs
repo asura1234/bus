@@ -688,7 +688,7 @@ fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
     let orchestrator = master_agent(&mut state, "orch");
     state.bind_orchestrator(orchestrator, room).unwrap();
     for text in [
-        "builder. Blocked, needs help to continue.\nInspect: bus agent dialog 'builder'",
+        "builder. Blocked, needs help to continue.\nInspect: bus agent observe 'builder'",
         "No reply (abandoned: reply_not_captured)",
         "2 agents in room 1 are idle (limit 0): reviewer. Give them parallel work \
          or delete the ones you no longer need (bus agent delete NAME --confirm).",

@@ -380,7 +380,7 @@ pub(crate) struct RoomAgent {
     /// idle, without relying on reply capture.
     #[serde(default)]
     pub(crate) busy_revision: u64,
-    /// A numbered choice dialog is visible; answer it with `agent choose`.
+    /// A blocked screen is visible; inspect with `agent observe`, act with `agent press`.
     #[serde(default)]
     pub(crate) dialog: bool,
     /// What Bus last reported this agent waiting on: a dialog `id`, or

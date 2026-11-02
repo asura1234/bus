@@ -76,126 +76,60 @@ impl Palette {
 
     /// Apply custom color overrides on top of this palette.
     pub fn with_overrides(mut self, custom: &crate::utils::config::CustomThemeColors) -> Self {
-        use crate::utils::config::parse_color;
-        if let Some(c) = &custom.accent {
-            self.accent = parse_color(c);
-        }
-        if let Some(c) = &custom.panel_bg {
-            self.panel_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.sidebar_bg {
-            self.sidebar_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.active_row_bg {
-            self.active_row_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.selection_bg {
-            self.selection_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.surface0 {
-            self.surface0 = parse_color(c);
-        }
-        if let Some(c) = &custom.surface1 {
-            self.surface1 = parse_color(c);
-        }
-        if let Some(c) = &custom.surface_dim {
-            self.surface_dim = parse_color(c);
-        }
-        if let Some(c) = &custom.overlay0 {
-            self.overlay0 = parse_color(c);
-        }
-        if let Some(c) = &custom.overlay1 {
-            self.overlay1 = parse_color(c);
-        }
-        if let Some(c) = &custom.text {
-            self.text = parse_color(c);
-        }
-        if let Some(c) = &custom.subtext0 {
-            self.subtext0 = parse_color(c);
-        }
-        if let Some(c) = &custom.mauve {
-            self.mauve = parse_color(c);
-        }
-        if let Some(c) = &custom.green {
-            self.green = parse_color(c);
-        }
-        if let Some(c) = &custom.yellow {
-            self.yellow = parse_color(c);
-        }
-        if let Some(c) = &custom.red {
-            self.red = parse_color(c);
-        }
-        if let Some(c) = &custom.blue {
-            self.blue = parse_color(c);
-        }
-        if let Some(c) = &custom.teal {
-            self.teal = parse_color(c);
-        }
-        if let Some(c) = &custom.peach {
-            self.peach = parse_color(c);
-        }
+        apply_color_overrides([
+            (&mut self.accent, custom.accent.as_deref()),
+            (&mut self.panel_bg, custom.panel_bg.as_deref()),
+            (&mut self.sidebar_bg, custom.sidebar_bg.as_deref()),
+            (&mut self.active_row_bg, custom.active_row_bg.as_deref()),
+            (&mut self.selection_bg, custom.selection_bg.as_deref()),
+            (&mut self.surface0, custom.surface0.as_deref()),
+            (&mut self.surface1, custom.surface1.as_deref()),
+            (&mut self.surface_dim, custom.surface_dim.as_deref()),
+            (&mut self.overlay0, custom.overlay0.as_deref()),
+            (&mut self.overlay1, custom.overlay1.as_deref()),
+            (&mut self.text, custom.text.as_deref()),
+            (&mut self.subtext0, custom.subtext0.as_deref()),
+            (&mut self.mauve, custom.mauve.as_deref()),
+            (&mut self.green, custom.green.as_deref()),
+            (&mut self.yellow, custom.yellow.as_deref()),
+            (&mut self.red, custom.red.as_deref()),
+            (&mut self.blue, custom.blue.as_deref()),
+            (&mut self.teal, custom.teal.as_deref()),
+            (&mut self.peach, custom.peach.as_deref()),
+        ]);
         self
     }
 
     pub fn with_mode_overrides(mut self, custom: &crate::utils::config::ModeThemeColors) -> Self {
-        use crate::utils::config::parse_color;
-        if let Some(c) = &custom.accent {
-            self.accent = parse_color(c);
-        }
-        if let Some(c) = &custom.panel_bg {
-            self.panel_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.sidebar_bg {
-            self.sidebar_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.active_row_bg {
-            self.active_row_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.selection_bg {
-            self.selection_bg = parse_color(c);
-        }
-        if let Some(c) = &custom.surface0 {
-            self.surface0 = parse_color(c);
-        }
-        if let Some(c) = &custom.surface1 {
-            self.surface1 = parse_color(c);
-        }
-        if let Some(c) = &custom.surface_dim {
-            self.surface_dim = parse_color(c);
-        }
-        if let Some(c) = &custom.overlay0 {
-            self.overlay0 = parse_color(c);
-        }
-        if let Some(c) = &custom.overlay1 {
-            self.overlay1 = parse_color(c);
-        }
-        if let Some(c) = &custom.text {
-            self.text = parse_color(c);
-        }
-        if let Some(c) = &custom.subtext0 {
-            self.subtext0 = parse_color(c);
-        }
-        if let Some(c) = &custom.mauve {
-            self.mauve = parse_color(c);
-        }
-        if let Some(c) = &custom.green {
-            self.green = parse_color(c);
-        }
-        if let Some(c) = &custom.yellow {
-            self.yellow = parse_color(c);
-        }
-        if let Some(c) = &custom.red {
-            self.red = parse_color(c);
-        }
-        if let Some(c) = &custom.blue {
-            self.blue = parse_color(c);
-        }
-        if let Some(c) = &custom.teal {
-            self.teal = parse_color(c);
-        }
-        if let Some(c) = &custom.peach {
-            self.peach = parse_color(c);
-        }
+        apply_color_overrides([
+            (&mut self.accent, custom.accent.as_deref()),
+            (&mut self.panel_bg, custom.panel_bg.as_deref()),
+            (&mut self.sidebar_bg, custom.sidebar_bg.as_deref()),
+            (&mut self.active_row_bg, custom.active_row_bg.as_deref()),
+            (&mut self.selection_bg, custom.selection_bg.as_deref()),
+            (&mut self.surface0, custom.surface0.as_deref()),
+            (&mut self.surface1, custom.surface1.as_deref()),
+            (&mut self.surface_dim, custom.surface_dim.as_deref()),
+            (&mut self.overlay0, custom.overlay0.as_deref()),
+            (&mut self.overlay1, custom.overlay1.as_deref()),
+            (&mut self.text, custom.text.as_deref()),
+            (&mut self.subtext0, custom.subtext0.as_deref()),
+            (&mut self.mauve, custom.mauve.as_deref()),
+            (&mut self.green, custom.green.as_deref()),
+            (&mut self.yellow, custom.yellow.as_deref()),
+            (&mut self.red, custom.red.as_deref()),
+            (&mut self.blue, custom.blue.as_deref()),
+            (&mut self.teal, custom.teal.as_deref()),
+            (&mut self.peach, custom.peach.as_deref()),
+        ]);
         self
+    }
+}
+
+fn apply_color_overrides<const N: usize>(fields: [(&mut Color, Option<&str>); N]) {
+    for (target, value) in fields {
+        if let Some(value) = value {
+            *target = crate::utils::config::parse_color(value);
+        }
     }
 }

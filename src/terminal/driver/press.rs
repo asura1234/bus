@@ -29,6 +29,18 @@ pub(crate) fn press(
     params: AgentPressParams,
     observation: TerminalObservation,
 ) -> Result<TerminalPressResult, (&'static str, String)> {
+    // A coherent read alone is not a write guard: the PTY can repaint between
+    // observing and enqueueing. Hold the reader's content lock through enqueue.
+    let _content = runtime.lock_content();
+    if runtime.synchronized_output_active()
+        || !runtime.content_seq().is_multiple_of(2)
+        || runtime.content_seq() != observation.content_revision
+    {
+        return Err((
+            "terminal_observation_changed",
+            "Terminal changed; observe it again".into(),
+        ));
+    }
     let mut pending = runtime
         .driver_state()
         .pending

@@ -21,22 +21,6 @@ visible_working = true
 regex = ['^[\x{2800}-\x{28FF}] ']
 
 [[rules]]
-id = "approval_footer"
-state = "blocked"
-priority = 300
-region = "whole_recent"
-visible_blocker = true
-any = [
-  { contains = ["waiting for approval"] },
-  { contains = ["invoke tool"] },
-  { contains = ["run this command?"] },
-  { contains = ["allow editing file:"] },
-  { contains = ["allow creating file:"] },
-  { contains = ["confirm tool call"] },
-  { contains = ["approve"], any = [{ contains = ["allow all for this session"] }, { contains = ["allow all for every session"] }, { contains = ["allow file for every session"] }, { contains = ["deny with feedback"] }] },
-]
-
-[[rules]]
 id = "status_footer_working"
 state = "working"
 priority = 200

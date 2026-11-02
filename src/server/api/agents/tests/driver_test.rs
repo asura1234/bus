@@ -372,3 +372,66 @@ async fn universal_driver_description_redraw_cannot_repeat_pending_navigation() 
         "description text is not a new focused option"
     );
 }
+
+#[tokio::test]
+async fn driver_agent_metadata_marks_an_incomplete_frame_unreadable() {
+    let (mut app, _, mut writes) = shell(b"A coherent screen");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(
+            Some(crate::agents::AgentKind::Claude),
+            crate::agents::AgentState::Idle,
+        );
+    assert!(!app.agent_info(0, pane).unwrap().screen_detection_skipped);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2026hpartial redraw");
+    assert!(
+        app.agent_info(0, pane).unwrap().screen_detection_skipped,
+        "an incomplete driver read cannot attest that a blocker closed"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn driver_agent_metadata_keeps_pending_questions_out_of_working_episodes() {
+    use crate::agents::{AgentKind, AgentState};
+    let pending = concat!(
+        "• Working (12s • esc to interrupt)\r\n",
+        "• Queued follow-up inputs\r\n",
+        "  ? 1 question\r\n",
+        "    shift+left to answer\r\n\r\n",
+        "› Ask Codex to do anything\r\n",
+    );
+    let foreground = concat!(
+        "• Working (12s • esc to interrupt)\r\n",
+        "What token should Bus use?\r\n",
+        "Type your answer\r\n",
+        "enter submit   ctrl+] skip   shift+→ main prompt\r\n",
+    );
+    for (state, screen, has_episode) in [
+        (AgentState::Working, pending, false),
+        (AgentState::Idle, pending, true),
+        (AgentState::Working, foreground, true),
+    ] {
+        let (mut app, _, mut writes) = shell(screen.as_bytes());
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        app.state
+            .terminals
+            .get_mut(&id)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Codex), state);
+        let info = app.agent_info(0, pane).unwrap();
+        assert!(!info.screen_detection_skipped);
+        assert_eq!(info.dialog_id.is_some(), has_episode, "{state:?}: {screen}");
+        assert!(
+            writes.try_recv().is_err(),
+            "metadata observation is read-only"
+        );
+    }
+}

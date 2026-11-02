@@ -5,18 +5,6 @@ updated_at = "2026-06-24T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
 
 [[rules]]
-id = "permission_prompt"
-state = "blocked"
-priority = 300
-region = "whole_recent"
-visible_blocker = true
-contains = ["requesting permission for:"]
-any = [
-  { contains = ["do you want to proceed?"] },
-  { contains = ["tab amend", "edit command"] },
-]
-
-[[rules]]
 id = "spinner_working"
 state = "working"
 priority = 100

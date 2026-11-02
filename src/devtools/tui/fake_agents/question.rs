@@ -106,16 +106,9 @@ impl FakeAgent {
     fn hold_text_question(&mut self) -> Result<(), i32> {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(600) {
-            let bytes = match self
-                .input
-                .as_ref()
-                .map(|rx| rx.recv_timeout(Duration::from_millis(100)))
-            {
-                Some(Ok(bytes)) => bytes,
-                Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => continue,
-                _ => return Err(0),
-            };
-            self.pending.extend(bytes);
+            if !self.receive_pending()? {
+                continue;
+            }
             for input in drain_input(&mut self.pending) {
                 match input {
                     Input::Enter => return Ok(()),
@@ -135,16 +128,9 @@ impl FakeAgent {
         let started = Instant::now();
         let mut selected: Option<usize> = None;
         while started.elapsed() < Duration::from_secs(600) {
-            let bytes = match self
-                .input
-                .as_ref()
-                .map(|rx| rx.recv_timeout(Duration::from_millis(100)))
-            {
-                Some(Ok(bytes)) => bytes,
-                Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => continue,
-                _ => return Err(0),
-            };
-            self.pending.extend(bytes);
+            if !self.receive_pending()? {
+                continue;
+            }
             for key in keys(&mut self.pending) {
                 match (key, selected) {
                     (Key::Interrupt, _) => return Err(0),
@@ -166,34 +152,6 @@ impl FakeAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn screen(text: &str) -> String {
-        text.replace("\r\n", "\n")
-    }
-
-    #[test]
-    fn question_fixture_is_a_pending_codex_question_that_opens_into_its_choices() {
-        assert!(requested("codex", "fake:question"));
-        assert!(!requested("claude", "fake:question"));
-        let collapsed = screen(&collapsed());
-        assert!(crate::agents::dialog::codex_question_pending(&collapsed));
-        assert!(crate::agents::dialog::parse(&collapsed).is_none());
-        let dialog = crate::agents::dialog::parse(&screen(&expanded(0))).unwrap();
-        assert_eq!(dialog.text, "Which design should the worker use?");
-        assert_eq!(dialog.options.len(), 3);
-        assert_eq!(dialog.selected(), Some(1));
-        assert_eq!(dialog.keys_for(2), Some(vec!["down", "enter"]));
-    }
-
-    #[test]
-    fn question_fixture_accepts_a_codex_free_text_question() {
-        assert!(requested("codex", "fake:question-text"));
-        assert!(!requested("claude", "fake:question-text"));
-        let dialog = crate::agents::dialog::parse(TEXT_QUESTION).unwrap();
-        assert_eq!(dialog.kind, crate::agents::dialog::DialogKind::Question);
-        assert!(dialog.options.is_empty());
-        assert_eq!(dialog.text, "请提供该 bug 的 record id 或行链接");
-    }
 
     #[test]
     fn question_keys_wait_for_split_sequences_and_drop_the_rest() {

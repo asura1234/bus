@@ -518,29 +518,27 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn set_automatic_dialog_answer(
+    /// Reserve one identity-bound native UI episode before attempting input.
+    pub(crate) fn reserve_automatic_dialog_answer(
         &mut self,
         agent: AgentId,
-        episode: Option<String>,
+        reservation: String,
     ) -> Result<(), ModelError> {
         self.agents
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?
-            .automatic_dialog_answer = episode;
+            .automatic_dialog_answer = Some(reservation);
         Ok(())
     }
 
-    pub(crate) fn mark_dialog_answered(
+    pub(crate) fn clear_automatic_dialog_answer(
         &mut self,
         agent: AgentId,
-        option: u32,
     ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
+        self.agents
             .get_mut(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?;
-        agent.dialog_answered = true;
-        agent.dialog_answer = Some(option);
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .automatic_dialog_answer = None;
         Ok(())
     }
 

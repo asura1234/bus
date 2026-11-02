@@ -277,16 +277,7 @@ impl<'a> RowCellIter<'a> {
 
     pub fn wide(&self) -> Result<CellWide, Error> {
         let raw = self.raw_cell()?;
-        let mut wide = ffi::GhosttyCellWide_GHOSTTY_CELL_WIDE_NARROW;
-        unsafe {
-            ffi::ghostty_cell_get(
-                raw,
-                ffi::GhosttyCellData_GHOSTTY_CELL_DATA_WIDE,
-                (&mut wide as *mut ffi::GhosttyCellWide).cast(),
-            )
-            .into_result()?;
-        }
-        Ok(CellWide::from_raw(wide))
+        super::raw_cell_wide(raw)
     }
 
     pub fn has_hyperlink(&self) -> Result<bool, Error> {

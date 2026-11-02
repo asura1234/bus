@@ -34,7 +34,9 @@ pub(crate) fn encode_keys_with(
 
 /// Bus's key-combo syntax, plus the navigation keys Bus binds but its
 /// config syntax has no names for.
-fn parse_chord(chord: &str) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
+pub(super) fn parse_chord(
+    chord: &str,
+) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
     use crossterm::event::KeyCode;
     let (mods, key) = match chord.rsplit_once('+') {
         Some((mods, key)) if !key.is_empty() => (Some(mods), key),

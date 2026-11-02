@@ -346,13 +346,28 @@ the wrapper remains held.
   only: the orchestrator never resets its own context and is never replaced
   for compactions. *Why:* you carry the context, carry-over and situational
   awareness for the whole effort.
+
+<a id="unavailable-agents"></a>
+
+- **Replace an Unavailable agent.** A room with an Unavailable agent shows
+  Blocked; that is intended. Remove the agent with
+  `bus agent delete NAME --confirm`. If its work is still open, re-add a fresh
+  agent in an existing folder and brief it from the old agent's handover or
+  resume note.
+
 - **On "Blocked, needs help to continue.", look at the worker's terminal.** A
-  worker blocked on a dialog, question, trust prompt or any other screen gets
-  you exactly that Bus notice, once, with no details; `bus wait` also stops with
-  `agent_waiting_on_dialog`. Inspect it with `bus agent dialog AGENT` (or `bus
-  agent read AGENT --source visible`) and handle it with `bus agent choose` or
-  `bus agent answer`; ask the developer for destructive or outward-facing actions
-  only when existing authorization does not cover them. The notice is signed
+  worker blocked on a dialog, question, trust prompt, shell prompt, pager or any
+  other screen gets you exactly that Bus notice, once, with no details;
+  `bus wait` also stops with
+  `agent_waiting_on_dialog`. Inspect it with `bus agent observe AGENT` (`--cells`
+  includes styled cells) and handle it with `bus agent press AGENT --select
+  "LABEL"`, `--key KEY`, or `--text "..." --submit`, according to the visible
+  screen. Select uses a complete visible option label; text alone does not
+  submit, and `--key` can be repeated. Use the terminal or pane ID with `--pane`
+  for shells and pagers, and `--terminal-id ID` from the observation to bind
+  input. Inspect pending or uncertain results before another action and observe
+  the resulting screen to verify it. Ask the developer for destructive or
+  outward-facing actions only when existing authorization does not cover them. The notice is signed
   `bus`; a blocked orchestrator instead gets a Bus developer-attention notice in
   MASTER. *Why:* the
   blocked terminal is the source of truth.

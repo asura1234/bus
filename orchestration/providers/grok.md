@@ -53,23 +53,28 @@ and deduplication; do not create another queue or daemon. If submission is
 uncertain, do not resend uncertain work. Check the existing request first and
 surface unresolved ownership or delivery rather than silently duplicating it.
 
-## Worker dialogs
+## Worker blocked screens
 
-Use the same fingerprinted Bus commands for every worker provider:
+Use the production terminal driver for every worker provider and shell:
 
 ```sh
-bus agent dialog WORKER
-bus agent read WORKER --source visible
-bus agent choose WORKER --option N --fingerprint F
-bus agent answer WORKER --text "..." --fingerprint F
-bus agent answer WORKER --skip --fingerprint F
+bus agent observe WORKER
+bus agent observe WORKER --cells
+bus agent press WORKER --select "Complete visible option label"
+bus agent press WORKER --key tab
+bus agent press WORKER --text "A typed answer" --submit
+bus agent observe w1:p2 --pane
+bus agent press w1:p2 --pane --key n
 ```
 
-Inspect the current card and use its fresh fingerprint F. Choose or answer only
-within the workflow's authority, check the reported outcome, and observe again
-if the fingerprint is stale. Skip only when the observed question supports it.
-If no actionable card is available, do not invent an approval or type guessed
-keys. Ask the developer before approving anything destructive or outward-facing.
+Inspect the current screen before every action. Use `--select` alone, or combine
+`--text`, repeated `--key` and `--submit`; text alone does not submit. Bind input
+with `--terminal-id ID` from the observation. Use explicit keys for visible
+shortcuts, checkbox forms, tabs, pagers and shell prompts. Act within the
+workflow's authority, inspect pending or uncertain results before another
+action, and observe the resulting screen to verify what happened. Ask the
+developer about destructive or outward-facing actions only when existing
+authorization does not cover them; do not invent an approval.
 A blocked orchestrator needs developer attention in MASTER.
 
 ## MASTER and work-room reports

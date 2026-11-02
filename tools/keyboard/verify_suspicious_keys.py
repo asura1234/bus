@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive verifier for suspicious terminal key captures.
 
-Self-contained Python 3 script.
+Python 3 script using the adjacent rawtty.py helpers.
 Prompts a short list of suspicious keys, captures each multiple times,
 and writes a TSV file for easy comparison.
 
@@ -11,18 +11,15 @@ Usage:
 
 from __future__ import annotations
 
-import re
-import select
 import sys
 import time
 from pathlib import Path
 
 if __package__:
-    from .rawtty import RawMode
+    from .rawtty import RawMode, to_hex, escaped, sanitize, read_sequence
 else:
-    from rawtty import RawMode
+    from rawtty import RawMode, to_hex, escaped, sanitize, read_sequence
 
-IDLE_TIMEOUT_S = 0.025
 ABORT_CAPTURE = b"\x07"  # Ctrl+G
 REPETITIONS = 2
 
@@ -35,54 +32,6 @@ SUSPICIOUS_KEYS: list[tuple[str, str]] = [
     ("alt+left", "Press Alt+Left Arrow"),
     ("alt+right", "Press Alt+Right Arrow"),
 ]
-
-
-def to_hex(data: bytes) -> str:
-    return data.hex()
-
-
-def escaped(data: bytes) -> str:
-    parts: list[str] = []
-    for byte in data:
-        if byte == 0x1B:
-            parts.append("\\x1b")
-        elif byte == 0x7F:
-            parts.append("\\x7f")
-        elif byte == 0x0D:
-            parts.append("\\r")
-        elif byte == 0x0A:
-            parts.append("\\n")
-        elif byte == 0x09:
-            parts.append("\\t")
-        elif 0x20 <= byte <= 0x7E:
-            parts.append(chr(byte))
-        else:
-            parts.append(f"\\x{byte:02x}")
-    return "".join(parts)
-
-
-def sanitize(value: str) -> str:
-    value = value.strip().lower()
-    value = re.sub(r"[^a-z0-9._-]+", "-", value)
-    value = re.sub(r"-+", "-", value).strip("-._")
-    return value or "terminal"
-
-
-def read_sequence() -> bytes:
-    first = sys.stdin.buffer.read1(1)
-    if not first:
-        return b""
-
-    chunks = [first]
-    while True:
-        ready, _, _ = select.select([sys.stdin], [], [], IDLE_TIMEOUT_S)
-        if not ready:
-            break
-        chunk = sys.stdin.buffer.read1(1024)
-        if not chunk:
-            break
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def prompt(text: str, default: str | None = None) -> str:

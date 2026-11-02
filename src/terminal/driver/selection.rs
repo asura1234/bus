@@ -192,9 +192,9 @@ pub(crate) fn selection_identity(
     Ok(SelectionIdentity { label, occurrence })
 }
 
-fn option_body(row: &str) -> (&str, bool) {
-    let row = row.trim().trim_matches(['│', '┃']).trim();
-    let selected = row.starts_with(['❯', '›', '>', '●', '◉', '▶', '→']);
+pub(super) fn option_body(row: &str) -> (&str, bool) {
+    let row = row.trim().trim_matches(['│', '┃', '║']).trim();
+    let selected = row.starts_with(['❯', '❭', '›', '>', '●', '◉', '▶', '→']);
     let row = if selected {
         row.chars()
             .next()
@@ -203,17 +203,25 @@ fn option_body(row: &str) -> (&str, bool) {
     } else {
         row
     };
+    let row = if !selected {
+        row.strip_prefix('·')
+            .map(str::trim_start)
+            .filter(|row| row.starts_with(|ch: char| ch.is_ascii_digit()))
+            .unwrap_or(row)
+    } else {
+        row
+    };
     (row, selected)
 }
 
-fn option_label(row: &str) -> (&str, bool) {
+pub(super) fn option_label(row: &str) -> (&str, bool) {
     let (row, selected) = option_body(row);
     let digits = row.bytes().take_while(u8::is_ascii_digit).count();
     let row = if digits > 0
         && row
             .as_bytes()
             .get(digits)
-            .is_some_and(|c| matches!(c, b'.' | b')' | b':'))
+            .is_some_and(|c| matches!(c, b'.' | b')' | b':') || c.is_ascii_whitespace())
     {
         row[digits + 1..].trim_start()
     } else {

@@ -94,17 +94,6 @@ impl PaneRuntimeIo {
         }
     }
 
-    pub(super) fn queue_user_input_submission(
-        &self,
-        text: Bytes,
-        enter: Bytes,
-        delay: std::time::Duration,
-        deadline: Option<std::time::Instant>,
-    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
-        self.queue_input_write(text, enter, delay, deadline)
-            .map(InputCompletion::into_receiver)
-    }
-
     pub(super) fn input_scope(&self) -> InputScope {
         match self {
             #[cfg(unix)]

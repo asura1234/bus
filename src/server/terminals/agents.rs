@@ -373,19 +373,7 @@ impl App {
                 code: "agent_name_taken".into(),
                 message: format!(
                     "agent name {name} is already used; candidates: {}",
-                    candidates
-                        .into_iter()
-                        .map(|candidate| format!(
-                            "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                            candidate.terminal_id,
-                            candidate.pane_id,
-                            candidate.workspace_id,
-                            candidate.tab_id,
-                            candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                            candidate.agent_status,
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                    format_agent_candidates(candidates)
                 ),
             },
         }
@@ -436,19 +424,7 @@ impl App {
                     code: "agent_target_ambiguous".into(),
                     message: format!(
                         "agent target {target} is ambiguous; candidates: {}",
-                        candidates
-                            .into_iter()
-                            .map(|candidate| format!(
-                                "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                                candidate.terminal_id,
-                                candidate.pane_id,
-                                candidate.workspace_id,
-                                candidate.tab_id,
-                                candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                                candidate.agent_status,
-                            ))
-                            .collect::<Vec<_>>()
-                            .join("; ")
+                        format_agent_candidates(candidates)
                     ),
                 }
             }
@@ -473,25 +449,15 @@ impl App {
                 code: "agent_launch_pending".into(),
                 message: "agent name cannot change while startup is pending".into(),
             },
-            AgentRenameError::DuplicateName { name, candidates } => crate::protocol::api::schema::ErrorBody {
-                code: "agent_name_taken".into(),
-                message: format!(
-                    "agent name {name} is already used; candidates: {}",
-                    candidates
-                        .into_iter()
-                        .map(|candidate| format!(
-                            "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                            candidate.terminal_id,
-                            candidate.pane_id,
-                            candidate.workspace_id,
-                            candidate.tab_id,
-                            candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                            candidate.agent_status,
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            },
+            AgentRenameError::DuplicateName { name, candidates } => {
+                crate::protocol::api::schema::ErrorBody {
+                    code: "agent_name_taken".into(),
+                    message: format!(
+                        "agent name {name} is already used; candidates: {}",
+                        format_agent_candidates(candidates)
+                    ),
+                }
+            }
         }
     }
 
@@ -507,23 +473,16 @@ impl App {
             return None;
         }
         let pane = self.pane_info(ws_idx, pane_id)?;
-        let dialog = self
+        let observed = self
             .lookup_runtime_sender(ws_idx, pane_id)
-            .and_then(|runtime| runtime.visible_ansi_snapshot_with_seq())
-            .and_then(|(screen, _)| {
-                crate::agents::dialog::parse(&screen)
-                    .map(|dialog| (dialog.id(), true))
-                    .or_else(|| {
-                        (terminal.effective_known_agent() == Some(crate::agents::AgentKind::Codex)
-                            && crate::agents::dialog::codex_question_pending(&screen))
-                        .then(|| {
-                            (
-                                crate::agents::dialog::CODEX_PENDING_QUESTION_ID.to_owned(),
-                                false,
-                            )
-                        })
-                    })
-            });
+            .and_then(|runtime| crate::terminal::driver::observe(runtime).ok());
+        let screen_detection_skipped = observed.is_none();
+        let dialog = observed.and_then(|(grid, _)| {
+            crate::terminal::driver::blocker(
+                &grid,
+                pane.agent_status == crate::protocol::api::schema::AgentStatus::Working,
+            )
+        });
         Some(crate::protocol::api::schema::AgentInfo {
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)
@@ -548,8 +507,8 @@ impl App {
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
             agent_status: pane.agent_status,
-            screen_detection_skipped: false,
-            dialog_id: dialog.map(|(id, _)| id),
+            screen_detection_skipped,
+            dialog_id: dialog,
             update_error: None,
             state_labels: pane.state_labels,
             tokens: pane.tokens,
@@ -595,6 +554,7 @@ pub(in crate::server) fn available_shell_name(
     if runtime.waiting_for_shell_prompt() {
         return None;
     }
+
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());
@@ -667,6 +627,29 @@ pub(in crate::server) enum AgentRenameError {
         name: String,
         candidates: Vec<crate::protocol::api::schema::AgentInfo>,
     },
+}
+
+fn format_agent_candidates(
+    candidates: impl IntoIterator<
+        Item = impl Into<crate::server::workspaces::ids::TerminalTargetCandidate>,
+    >,
+) -> String {
+    candidates
+        .into_iter()
+        .map(Into::into)
+        .map(|candidate| {
+            format!(
+                "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
+                candidate.terminal_id,
+                candidate.pane_id,
+                candidate.workspace_id,
+                candidate.tab_id,
+                candidate.cwd.unwrap_or_else(|| "unknown".into()),
+                candidate.agent_status,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]

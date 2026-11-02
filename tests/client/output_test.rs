@@ -280,9 +280,8 @@ fn client_receives_notify_on_agent_state_change() {
 
 #[test]
 fn client_receives_notify_when_detected_agent_becomes_blocked() {
-    // pane.report_agent 已删除，阻塞通知只能靠屏幕检测。amp 把
-    // “waiting for approval” 判成 blocked，空屏是 idle，这样才能走出
-    // idle→blocked 并发出 needs-attention 通知。
+    // Constructed native controls drive Idle→Blocked through the shared driver.
+    // Keep the actual state transition and semantic needs-attention notification.
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -298,7 +297,7 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
         &bin_dir,
         "amp",
         &format!(
-            "printf 'fake-amp-ready\\n'\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'waiting for approval\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\n",
+            "printf 'fake-amp-ready\\n'\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'Choose an action\\n> 1. Continue once\\n  2. Cancel\\nEnter to select · Esc to cancel\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\n",
             go = go_file.display(),
             stop = stop_file.display()
         ),

@@ -178,6 +178,13 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
 }
 
 impl TerminalRuntime {
+    /// Serialize a driver decision and enqueue with terminal content updates.
+    pub(in crate::terminal) fn lock_content(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.content_write_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Immutable emulator access; does not update or acknowledge render state.
     pub(in crate::terminal) fn with_terminal<T>(
         &self,
@@ -317,24 +324,6 @@ impl TerminalRuntime {
         self.terminal.visible_text()
     }
 
-    /// A coherent ANSI dialog screen outside an unfinished synchronized update.
-    /// Preserve logical lines: soft wraps must not split options or key hints.
-    pub(crate) fn visible_ansi_snapshot_with_seq(&self) -> Option<(String, u64)> {
-        for _ in 0..3 {
-            let before = self.content_seq.load(Ordering::Acquire);
-            if !before.is_multiple_of(2) || self.synchronized_output_active() {
-                continue;
-            }
-            let text = self.terminal.visible_ansi_unwrapped();
-            let synchronized = self.synchronized_output_active();
-            let after = self.content_seq.load(Ordering::Acquire);
-            if before == after && !synchronized {
-                return Some((text, after));
-            }
-        }
-        None
-    }
-
     pub(crate) fn visible_text_snapshot_with_dimensions(&self) -> Option<(String, u16, u16, u64)> {
         for _ in 0..3 {
             let before = self.content_seq.load(Ordering::Acquire);
@@ -459,11 +448,7 @@ impl TerminalRuntime {
     pub(super) fn paste_payload(&self, text: String) -> Bytes {
         let text = crate::platform::prepare_paste_text_for_pty(text);
         let bracketed = self.bracketed_paste_enabled();
-        let payload = if bracketed {
-            format!("\x1b[200~{text}\x1b[201~")
-        } else {
-            text
-        };
+        let payload = crate::terminal::driver::input::paste(&text, bracketed);
         Bytes::from(payload)
     }
 

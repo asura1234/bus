@@ -195,22 +195,7 @@ fn process_group_pids(process_group_id: u32) -> Vec<u32> {
 /// Read `e_tpgid` (foreground process group of the controlling terminal)
 /// for the given PID.
 pub fn foreground_process_group_id(pid: u32) -> Option<u32> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-
-    let ret = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-
-    if ret != size {
-        return None;
-    }
+    let info = process_bsdinfo(pid)?;
 
     let fg = info.e_tpgid;
     if fg > 0 {

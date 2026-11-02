@@ -3,16 +3,7 @@ use super::styled_chars;
 use crate::terminal::runtime::InputObservation;
 
 pub(super) fn working(screen: &str) -> bool {
-    let plain = screen
-        .lines()
-        .map(|line| {
-            styled_chars(line)
-                .iter()
-                .map(|c| c.character)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = super::plain_screen(screen);
     let detected = crate::agents::manifest::detect_with_osc(
         crate::agents::AgentKind::Kimi,
         crate::agents::manifest::DetectionInput {
@@ -168,7 +159,7 @@ fn frame(screen: &str) -> Option<(Vec<String>, usize, usize)> {
             osc_progress: "",
         },
     );
-    if detection.visible_blocker || crate::agents::dialog::parse(screen).is_some() {
+    if detection.visible_blocker || crate::terminal::driver::has_input_controls(&plain) {
         return None;
     }
     let bottom = lines

@@ -12,6 +12,24 @@ pub(super) const STABLE_VISIBLE_SIGNAL_REFRESH: std::time::Duration =
 pub(super) const AGENT_STARTUP_GRACE_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(3);
 
+/// Current foreground controls override lifecycle signals; pending shortcuts
+/// coexist with positive activity. Exited processes keep their exit decision.
+pub(super) fn apply_driver_controls(
+    content: &str,
+    mut detection: AgentDetection,
+    process_exited: bool,
+) -> AgentDetection {
+    if !process_exited
+        && crate::terminal::driver::has_blocking_input_controls(content, detection.visible_working)
+    {
+        detection.state = AgentState::Blocked;
+        detection.visible_blocker = true;
+        detection.visible_idle = false;
+        detection.visible_working = false;
+    }
+    detection
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DetectionPublishState {
     pub(super) state: AgentState,
