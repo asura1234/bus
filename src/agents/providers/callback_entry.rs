@@ -9,6 +9,9 @@ use std::{
 /// The Bus server's pid, set on every pane. Its child is the pane shell, so a hook
 /// can tell the pane's own agent from a provider that agent started.
 pub(crate) const BUS_SERVER_PID_ENV_VAR: &str = "HERDR_SERVER_PID";
+/// The exact foreground helper incarnation that execs a paired remote TUI.
+/// Only the supervised backend receives it; nested tools still count normally.
+pub(crate) const NATIVE_FRONTEND_INSTANCE_ENV: &str = "BUS_NATIVE_FRONTEND_INSTANCE";
 
 #[cfg(test)]
 #[path = "tests/callback_metadata_test.rs"]
@@ -215,13 +218,44 @@ fn runs_under_nested_provider(ancestry: &[crate::platform::ProcessInstance]) -> 
     else {
         return false;
     };
-    let providers: Vec<_> = ancestors
+    let frontend = std::env::var(NATIVE_FRONTEND_INSTANCE_ENV)
+        .ok()
+        .and_then(|value| serde_json::from_str(&value).ok());
+    let chain = ancestors
         .iter()
-        .map(|process| {
-            crate::platform::process_info(process.pid)
-                .as_ref()
-                .and_then(crate::agents::provider_process)
+        .map(|instance| {
+            (
+                *instance,
+                crate::platform::process_info(instance.pid)
+                    .as_ref()
+                    .and_then(crate::agents::provider_process),
+            )
         })
-        .collect();
+        .collect::<Vec<_>>();
+    provider_chain_is_nested(&chain, frontend)
+}
+
+fn provider_chain_is_nested(
+    chain: &[(
+        crate::platform::ProcessInstance,
+        Option<crate::agents::identify::ProviderProcess>,
+    )],
+    frontend: Option<crate::platform::ProcessInstance>,
+) -> bool {
+    let providers = chain
+        .iter()
+        .map(|(instance, provider)| {
+            // The backend and its exact remote frontend are one managed runtime.
+            // Retain every other provider, including nested Codex tools, stale PID
+            // incarnations and foreign providers at the claimed frontend position.
+            if Some(*instance) == frontend
+                && provider.is_some_and(|p| p.agent == crate::agents::AgentKind::Codex)
+            {
+                None
+            } else {
+                *provider
+            }
+        })
+        .collect::<Vec<_>>();
     crate::agents::runs_nested_provider(&providers)
 }
