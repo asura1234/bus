@@ -19,6 +19,7 @@ import re
 import secrets
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -248,14 +249,36 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                     return value
             self.fail(f"Timed out: {description}; evidence={evidence}")
 
-        def observe(agent, name):
+        def observe(agent, name, menu=None):
             deadline = time.monotonic() + 3
             while True:
-                result = subprocess.run([str(copied), "agent", "observe", agent],
-                                        cwd=root / "project", env=env, text=True,
-                                        capture_output=True, timeout=30)
-                value = json.loads(result.stdout)
-                if result.returncode == 0 and value.get("ok"):
+                if menu:
+                    # The existing native observe API scopes focus to a visible
+                    # label's menu. Reuse that production reading for typed fields;
+                    # historical prompt markers need not be globally unique.
+                    pane, terminal_id, label = menu
+                    request = {"id": "native-read-" + secrets.token_hex(8),
+                               "method": "agent.observe",
+                               "params": {"target": pane, "selection_label": label}}
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                        connection.settimeout(30)
+                        connection.connect(str(root / "data/herdr-config/sessions/bus/herdr.sock"))
+                        connection.sendall((json.dumps(request) + "\n").encode())
+                        with connection.makefile("rb") as stream:
+                            native = save(name + "-native-read", json.loads(stream.readline()))
+                    self.assertEqual(native.get("id"), request["id"])
+                    value = ({"ok": False, "error": native["error"]} if native.get("error") else
+                             {"ok": True, "result": native["result"]["observation"]})
+                    if value["ok"]:
+                        self.assertEqual(value["result"]["terminal_id"], terminal_id)
+                        self.assertEqual(value["result"]["pane_id"], pane)
+                else:
+                    result = subprocess.run([str(copied), "agent", "observe", agent],
+                                            cwd=root / "project", env=env, text=True,
+                                            capture_output=True, timeout=30)
+                    value = json.loads(result.stdout)
+                    self.assertEqual(result.returncode == 0, bool(value.get("ok")), value)
+                if value.get("ok"):
                     return save(name + "-screen", value["result"])
                 save(name + "-read-refusal", value)
                 error = value.get("error", {})
@@ -486,15 +509,16 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
             message = send(agent, "Stay in Plan mode. Do not use skills, delegate, run commands or edit files. "
                 f"Call native request_user_input with exactly one question titled {title!r}, "
                 "offer Alpha and Beta and allow its normal custom Other answer. Wait for the human "
-                "answer rather than answering yourself. After the answer, repeat its exact text in "
+                "answer rather than answering yourself. After the answer, repeat the exact text typed in the custom/notes field in "
                 "your final reply without further questions or implementation.", case + "-send")
             opened = False
+            custom_row = lambda label: label == "Other" or label.startswith("None of the above")
 
             def question_screen():
                 nonlocal opened
                 screen = observe(agent, case)
                 text = screen["text"]
-                other = [label for _, label, option in menu_rows(screen) if option and label == "Other"]
+                other = [label for _, label, option in menu_rows(screen) if option and custom_row(label)]
                 if title in text and other and re.search(r"(?:enter|↵).*submit", text, re.I):
                     return screen
                 if not opened and title in text and re.search(r"(?:⇧←|shift\+left) to answer", text, re.I):
@@ -504,20 +528,27 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
 
             screen = wait("native Codex question with custom row", question_screen)
             blocked(case, agent)
+            custom = unique_label(screen, custom_row)
+            menu = screen["pane_id"], screen["terminal_id"], custom
+            screen = observe(agent, case + "-focused", menu)
             for step in range(8):
                 focus = screen.get("focus")
                 self.assertTrue(focus, "custom-answer navigation needs unique visible focus")
-                if focus[1] == "Other":
+                if focus[1] == custom:
                     break
-                row = next(row for row, label, option in menu_rows(screen) if option and label == "Other")
+                row = next(row for row, label, option in menu_rows(screen) if option and label == custom)
                 old_focus = focus
                 press(case, agent, screen, "--key", "down" if row > focus[0] else "up")
                 def changed_focus():
-                    current = observe(agent, case)
+                    current = observe(agent, case + "-focused", menu)
                     return current if current.get("focus") != old_focus else None
 
                 screen = wait("custom row navigation redraw", changed_focus, 10)
-            self.assertEqual(screen["focus"][1], "Other", "custom field was not reached")
+            self.assertEqual(screen["focus"][1], custom, "custom field was not reached")
+            if custom.startswith("None of the above"):
+                self.assertIn("tab to add notes", screen["text"].lower())
+                press(case, agent, screen, "--key", "tab")
+                screen = observe(agent, case + "-notes")
             self.assertNotIn(token, screen["text"], "answer must originate from this typed action")
             press(case, agent, screen, "--text", token, "--submit", acceptance=True)
             settle(message, case + "-status", token, agent)
