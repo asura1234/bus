@@ -1,4 +1,5 @@
 use super::*;
+use std::process::Child;
 
 fn stop(child: &mut Child) {
     unsafe {
@@ -83,11 +84,7 @@ fn codex_native_attached_profile_retains_the_configured_tui_without_starting_a_s
     fs::create_dir_all(&dir).unwrap();
     let mut runtime = Runtime {
         config: Some(Config {
-            env: HashMap::from([(
-                "BUS_CALLBACK_DIR".into(),
-                dir.to_string_lossy().into_owned(),
-            )]),
-            cwd: dir.clone(),
+            capture: dir.clone(),
         }),
         session: None,
     };
@@ -117,11 +114,7 @@ fn codex_native_explicit_permission_cli_retains_the_configured_tui_before_a_back
     fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
     let mut runtime = Runtime {
         config: Some(Config {
-            env: HashMap::from([(
-                "BUS_CALLBACK_DIR".into(),
-                dir.to_string_lossy().into_owned(),
-            )]),
-            cwd: dir.clone(),
+            capture: dir.clone(),
         }),
         session: None,
     };

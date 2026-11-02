@@ -1,4 +1,5 @@
 //! One local Codex runtime shared by Bus input and the native TUI.
+pub(crate) mod launcher;
 mod rpc;
 mod runtime;
 #[cfg(test)]
