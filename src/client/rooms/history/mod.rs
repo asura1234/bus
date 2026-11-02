@@ -22,9 +22,9 @@ mod phases {
 
 use super::render::Action;
 use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
-pub(super) use exchange::reply;
 #[cfg(test)]
 use exchange::timestamp;
+pub(super) use exchange::{reply, visible_request};
 use markdown::MarkdownBlock;
 use ratatui::style::Style;
 use std::collections::{BTreeMap, BTreeSet};

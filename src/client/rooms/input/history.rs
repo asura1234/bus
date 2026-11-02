@@ -47,14 +47,26 @@ impl BusUi {
             .collect();
         let prompts = state
             .requests()
-            .filter(|request| request.room_id == room)
-            .map(|request| &request.prompt)
-            .chain(
-                state
-                    .room(room)
-                    .and_then(|room| room.latest_prompt.as_ref()),
-            );
+            .filter(|request| {
+                request.room_id == room && super::super::history::visible_request(request)
+            })
+            .map(|request| &request.prompt);
         stamped.extend(prompts.map(|prompt| (prompt.submitted_at_ms, prompt.text.as_str())));
+        // Only a durable notice can supply the latest non-request recall entry.
+        // The obsolete latest-only cache cannot recreate a hidden diagnostic.
+        let latest = state
+            .room(room)
+            .and_then(|room| room.latest_prompt.as_ref())
+            .map(|prompt| prompt.id);
+        stamped.extend(
+            state
+                .notices(room)
+                .filter(|prompt| Some(prompt.id) == latest)
+                .filter_map(|prompt| {
+                    super::super::notices::retained_notice_body(prompt)
+                        .map(|text| (prompt.submitted_at_ms, text))
+                }),
+        );
         // Stable, so same-millisecond entries keep local-before-persisted order.
         stamped.sort_by_key(|(at_ms, _)| *at_ms);
         // Each text once, at its newest position: Up walks distinct prompts.

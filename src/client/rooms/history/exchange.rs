@@ -1,4 +1,5 @@
 //! Durable request grouping, history caching, headers and age labels.
+use super::super::notices::{retained_notice_body, retained_notice_diagnostic};
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
 use super::{
@@ -185,9 +186,10 @@ impl History {
         if prompt.recipient_ids.is_empty() {
             header.push(("You".into(), Tone::You));
         }
+        let text = retained_notice_body(prompt).expect("diagnostic envelopes excluded by grouping");
         let attention = state
             .is_developer_attention_author(room, &prompt.author)
-            .then(|| crate::messaging::attention::text(&prompt.text))
+            .then(|| crate::messaging::attention::text(text))
             .flatten();
         if attention.is_some() {
             header.push(("  [Needs developer]".into(), Tone::Text));
@@ -206,7 +208,7 @@ impl History {
         let prompt_source = MarkdownSource::Prompt(prompt.id);
         active_markdown.insert(prompt_source);
         let scope = link_scope(state, &prompt.author);
-        let block = self.markdown_block(prompt_source, attention.unwrap_or(&prompt.text));
+        let block = self.markdown_block(prompt_source, attention.unwrap_or(text));
         let cold = !block.is_laid_out(width);
         let projected = !block.is_scoped(width, &scope);
         lines.extend(
@@ -430,8 +432,9 @@ fn wrap_header(
 }
 
 /// Routing and diagnostic envelopes have neither a chat body nor a shared-reply slot.
-fn visible_request(request: &Request) -> bool {
+pub(in crate::client::rooms) fn visible_request(request: &Request) -> bool {
     !request.is_error_report()
+        && retained_notice_diagnostic(&request.prompt).is_none()
         && (!request.bus_generated || !matches!(request.prompt.author, Author::Agent(_)))
 }
 
@@ -459,6 +462,9 @@ fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Ex
     }
     // Bus notices for the developer read like messages addressed to nobody.
     for prompt in state.notices(room.id) {
+        if retained_notice_body(prompt).is_none() {
+            continue;
+        }
         exchanges.insert(
             (prompt.submitted_at_ms, prompt.id.0),
             Exchange {
@@ -618,17 +624,12 @@ pub(in crate::client::rooms) fn reply(
     room: RoomId,
     id: RequestId,
 ) -> Option<(AgentId, &str)> {
-    if let Some(request) = state.request(id).filter(|r| r.room_id == room) {
-        if let Some(reply) = request.reply() {
-            return Some((request.agent_id, &reply.text));
-        }
-    }
-    state
-        .room(room)?
-        .latest_replies
-        .values()
-        .find(|r| r.request_id == id)
-        .map(|r| (r.agent_id, r.text.as_str()))
+    let request = state
+        .request(id)
+        .filter(|request| request.room_id == room && visible_request(request))?;
+    request
+        .reply()
+        .map(|reply| (request.agent_id, reply.text.as_str()))
 }
 
 pub(in crate::client::rooms) fn timestamp(at: u64, now: u64) -> String {
