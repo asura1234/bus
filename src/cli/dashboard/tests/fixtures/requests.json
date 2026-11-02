@@ -1,0 +1,1076 @@
+[
+  {
+    "name": "queued",
+    "record": {
+      "id": 100,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 90,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "queued",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null
+    },
+    "delivery": "open",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "submitting",
+    "record": {
+      "id": 101,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 91,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "submitting",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": true,
+      "pending_final": null,
+      "completed_at_ms": null
+    },
+    "delivery": "open",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "awaiting-start",
+    "record": {
+      "id": 102,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 92,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "active",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null
+    },
+    "delivery": "open",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "delivered",
+    "record": {
+      "id": 103,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 93,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "active",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null
+    },
+    "delivery": "delivered",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "reply-not-captured-bound",
+    "record": {
+      "id": 104,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 94,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": 1793581201000,
+      "failure_reason": "reply_not_captured"
+    },
+    "delivery": "delivered",
+    "capture": "missing",
+    "cause": "bus"
+  },
+  {
+    "name": "reply-not-captured-unbound",
+    "record": {
+      "id": 105,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 95,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "reply_not_captured"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "submission_unconfirmed",
+    "record": {
+      "id": 106,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 96,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "submission_unconfirmed"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "prompt_not_shown",
+    "record": {
+      "id": 107,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 97,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "prompt_not_shown"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "delivery_error",
+    "record": {
+      "id": 108,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 98,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "delivery_error"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "prior_request_active",
+    "record": {
+      "id": 109,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 99,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "prior_request_active"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "not_submitted",
+    "record": {
+      "id": 110,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 100,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "not_submitted"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "session_hook_missing",
+    "record": {
+      "id": 111,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 101,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "session_hook_missing"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "new_reason",
+    "record": {
+      "id": 112,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 102,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "new_reason"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "missing-reason",
+    "record": {
+      "id": 113,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 103,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "abandoned-empty-reason",
+    "record": {
+      "id": 114,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 104,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": " "
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "interrupted-before-start",
+    "record": {
+      "id": 115,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 105,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "interrupted"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "external"
+  },
+  {
+    "name": "interrupted-after-start",
+    "record": {
+      "id": 116,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 106,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "interrupted"
+    },
+    "delivery": "delivered",
+    "capture": "missing",
+    "cause": "external"
+  },
+  {
+    "name": "agent_deleted",
+    "record": {
+      "id": 117,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 107,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "agent_deleted"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "external"
+  },
+  {
+    "name": "room_deleted",
+    "record": {
+      "id": 118,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 108,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "room_deleted"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "external"
+  },
+  {
+    "name": "provider_error: quota exhausted",
+    "record": {
+      "id": 119,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 109,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "provider_error: quota exhausted"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "external"
+  },
+  {
+    "name": "provider_error: rate limit",
+    "record": {
+      "id": 120,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 110,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "provider_error: rate limit"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "external"
+  },
+  {
+    "name": "provider_error: overload",
+    "record": {
+      "id": 121,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 111,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "provider_error: overload"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "external"
+  },
+  {
+    "name": "provider-error-after-start",
+    "record": {
+      "id": 122,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 112,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "provider_error: overload"
+    },
+    "delivery": "delivered",
+    "capture": "missing",
+    "cause": "external"
+  },
+  {
+    "name": "completed-without-text",
+    "record": {
+      "id": 123,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 113,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "completed",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null
+    },
+    "delivery": "delivered",
+    "capture": "replied",
+    "cause": "success"
+  },
+  {
+    "name": "explicit-reply-active-anchor",
+    "record": {
+      "id": 124,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 114,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "active",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "completed_reply": {
+        "content": {
+          "callback_id": "redacted",
+          "text": "[redacted reply]",
+          "received_at_ms": 1793581205000,
+          "provider_session_id": null,
+          "provider_turn_id": null
+        },
+        "group": null
+      },
+      "failure_reason": "interrupted"
+    },
+    "delivery": "delivered",
+    "capture": "replied",
+    "cause": "success"
+  },
+  {
+    "name": "late-reply-abandoned",
+    "record": {
+      "id": 125,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 115,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "completed_reply": {
+        "content": {
+          "callback_id": "redacted",
+          "text": "[redacted reply]",
+          "received_at_ms": 1793581205000,
+          "provider_session_id": null,
+          "provider_turn_id": null
+        },
+        "group": null
+      },
+      "failure_reason": "reply_not_captured"
+    },
+    "delivery": "delivered",
+    "capture": "replied",
+    "cause": "success"
+  },
+  {
+    "name": "joined-typed",
+    "record": {
+      "id": 126,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 116,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "active",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "group": 103,
+      "steered": true
+    },
+    "delivery": "delivered",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "joined-not-typed",
+    "record": {
+      "id": 127,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 117,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "queued",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "group": 103
+    },
+    "delivery": "open",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "joined-abandoned-untyped",
+    "record": {
+      "id": 128,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 118,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "group": 103,
+      "failure_reason": "not_submitted"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "bound-unconfirmed-is-failed",
+    "record": {
+      "id": 129,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 119,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "submission_unconfirmed"
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "joined-submit-not-confirmed",
+    "record": {
+      "id": 200,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 116,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "submitting",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "group": 103,
+      "steered": true
+    },
+    "delivery": "open",
+    "capture": "pending",
+    "cause": "pending"
+  },
+  {
+    "name": "joined-uncertain",
+    "record": {
+      "id": 201,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 116,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "active",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": true,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "group": 103,
+      "steered": true
+    },
+    "delivery": "open",
+    "capture": "pending",
+    "cause": "pending"
+  }
+]

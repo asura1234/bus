@@ -1,0 +1,148 @@
+[
+  {
+    "name": "recorded-reply_not_captured-True",
+    "source": "2026-11-02 saved history snapshot: temp/unsent-draft/room-568-history.json",
+    "normalization": "Prompt content redacted; status-only records filled with inert persistence defaults.",
+    "record": {
+      "id": 37026,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 90,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": "01a19a28-ce89-7311-8b3f-79b16616ac7f",
+      "provider_turn_id": "01a19a39-3eff-7c23-bb3e-8011f7ac3ea4",
+      "provider_prompt_id": null,
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "reply_not_captured",
+      "group": null
+    },
+    "delivery": "delivered",
+    "capture": "missing",
+    "cause": "bus"
+  },
+  {
+    "name": "recorded-joined-reply-not-captured",
+    "source": "2026-11-02 saved history snapshot: temp/unsent-draft/room-568-history.json",
+    "normalization": "Prompt content redacted; status-only records filled with inert persistence defaults. Confirmed joined request shares its same-agent bound lead.",
+    "record": {
+      "id": 37045,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 90,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "reply_not_captured",
+      "group": 37026
+    },
+    "delivery": "delivered",
+    "capture": "missing",
+    "cause": "bus"
+  },
+  {
+    "name": "recorded-submission_unconfirmed-False",
+    "source": "2026-11-02 saved history snapshot: temp/unsent-draft/room-568-history.json",
+    "normalization": "Prompt content redacted; status-only records filled with inert persistence defaults.",
+    "record": {
+      "id": 37169,
+      "room_id": 1,
+      "agent_id": 2,
+      "prompt": {
+        "id": 90,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793577599999
+      },
+      "phase": "abandoned",
+      "expected_launch_id": null,
+      "submission_boundary": null,
+      "submission_status_revision": 0,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": null,
+      "trusted_start_bound": false,
+      "uncertain_outcome": true,
+      "pending_final": null,
+      "completed_at_ms": null,
+      "failure_reason": "submission_unconfirmed",
+      "group": null
+    },
+    "delivery": "failed",
+    "capture": "none",
+    "cause": "bus"
+  },
+  {
+    "name": "recorded-abandoned-interrupted",
+    "source": "2026-11-02 scratch acceptance: temp/pr-289/author/acceptance/data/state.json",
+    "normalization": "Prompt and provider identity redacted; lifecycle fields retained.",
+    "record": {
+      "id": 5,
+      "room_id": 2,
+      "agent_id": 2,
+      "prompt": {
+        "id": 4,
+        "author": "human",
+        "text": "[redacted request]",
+        "files": [],
+        "recipient_ids": [
+          2
+        ],
+        "submitted_at_ms": 1793587968727
+      },
+      "phase": "abandoned",
+      "failure_reason": "interrupted",
+      "expected_launch_id": null,
+      "submission_boundary": 1,
+      "submission_status_revision": 9,
+      "provider_session_id": null,
+      "provider_turn_id": null,
+      "provider_prompt_id": "bab32e50-55cc-483d-b60b-d1366c78069f",
+      "trusted_start_bound": true,
+      "uncertain_outcome": false,
+      "pending_final": null,
+      "completed_at_ms": 1793587980415,
+      "submitted_payload": null,
+      "progress_at_ms": 1793587969418,
+      "sender_identity": null
+    },
+    "delivery": "delivered",
+    "capture": "missing",
+    "cause": "external"
+  }
+]

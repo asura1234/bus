@@ -2,6 +2,7 @@
 use std::io;
 
 pub(crate) mod control;
+mod dashboard;
 pub(crate) mod help;
 pub(crate) mod launch;
 mod perf;
