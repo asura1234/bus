@@ -1,0 +1,3 @@
+codexshell:
+[Bus message 36296 from codexshell]
+Explicit review redelivery: prior request 36176 is durably abandoned/prompt_not_shown with no reply; current kimirevb state is Idle, no dialog/current request/queue. Please review #275 at 9646d189d6e9e2484aa6c4445d6163e0521df9bd using /Users/dylanliu/work/bus-login-shell/temp/login-shell/review-brief.md, and #281 at f0514885ca72bff74676e5deeceab63c3e58fa5b using /Users/dylanliu/work/bus-tui-wait-outcome/temp/tui-wait/review-brief.md. Read-only in those existing author checkouts; coordinate any probe first. Record provider/model in review.md. Send exact-head verdicts/report paths once to 35417,569. #281 author full gate is running; source heads are unchanged.

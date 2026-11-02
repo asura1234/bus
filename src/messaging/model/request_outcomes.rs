@@ -25,6 +25,8 @@ pub(crate) fn classify_request_failure(reason: &str) -> RequestFailureClass {
         "interrupted" | "agent_deleted" | "room_deleted" | "background_wait_superseded" => {
             RequestFailureClass::Deliberate
         }
+        // Manual rescue closes stuck delivery and remains a Bus-caused failure.
+        "manual_recovery" => RequestFailureClass::Bus,
         "provider_error" => RequestFailureClass::Provider,
         reason if reason.starts_with("provider_error:") => RequestFailureClass::Provider,
         _ => RequestFailureClass::Bus,

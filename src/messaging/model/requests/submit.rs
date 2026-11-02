@@ -138,6 +138,7 @@ impl BusState {
                     sender_identity: self.message_sender(&prompt.author),
                     phase: RequestPhase::Queued,
                     failure_reason: None,
+                    manual_recovery: None,
                     queued_rejection: None,
                     expected_launch_id: None,
                     submission_boundary: None,

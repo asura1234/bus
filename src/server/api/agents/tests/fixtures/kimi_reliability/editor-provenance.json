@@ -1,0 +1,32 @@
+[
+  {
+    "request_id": 36435,
+    "message_id": 36433,
+    "submitted_at_ms": 1793553263283,
+    "payload_file": "editor-request-36435.txt",
+    "payload_bytes": 840,
+    "payload_sha256": "2547048da220cd9ee943b6ec859b3de8166df6d6f3024eac797a8456b9c95adc",
+    "source": "temp/kimi-reliability/evidence/kimi-requests.json",
+    "payload_source": "submitted_payload"
+  },
+  {
+    "request_id": 36589,
+    "message_id": 36588,
+    "submitted_at_ms": 1793556997292,
+    "payload_file": "editor-request-36589.txt",
+    "payload_bytes": 204,
+    "payload_sha256": "5acdd53f6cc4e7200d12b6f9e49e70f8bdd76825784feec742d3897d0728d1bc",
+    "source": "temp/kimi-reliability/evidence/kimi-requests.json",
+    "payload_source": "sender_identity and prompt; refused before payload submission"
+  },
+  {
+    "request_id": 36297,
+    "message_id": 36296,
+    "submitted_at_ms": 1793551534471,
+    "payload_file": "editor-request-36297.txt",
+    "payload_bytes": 714,
+    "payload_sha256": "a97b76764f82dcdaa7d00c1e5797d59102574606910e3dab060c49759b25a05f",
+    "source": "temp/kimi-reliability/evidence/kimi-requests.json",
+    "payload_source": "submitted_payload"
+  }
+]

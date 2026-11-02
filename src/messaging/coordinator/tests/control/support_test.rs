@@ -19,6 +19,8 @@ mod messages_tests;
 mod open_messaging_tests;
 #[path = "orchestrator_recipient_test.rs"]
 mod orchestrator_recipient_tests;
+#[path = "recovery_test.rs"]
+mod recovery_tests;
 #[path = "rooms_test.rs"]
 mod rooms_tests;
 #[path = "selector_label_roundtrip_test.rs"]

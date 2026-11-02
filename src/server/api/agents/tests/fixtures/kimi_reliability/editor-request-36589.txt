@@ -1,0 +1,3 @@
+bus master (room 0):
+[Bus message 36588 from bus master]
+Read /Users/dylanliu/work/bus/temp/briefs/kimirevc-284r2.md and do what it says. Report with an explicit bus send --room 568 --as YOUR_ID --to 569.

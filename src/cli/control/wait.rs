@@ -221,7 +221,7 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
             ),
         ));
     }
-    if abandoned["reason"] == "submission_unconfirmed" {
+    if abandoned["reason"] == "submission_unconfirmed" || abandoned["uncertain_outcome"] == true {
         return Some((
             "message_abandoned",
             unconfirmed_guidance(status, abandoned, agent),
@@ -237,8 +237,11 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
 }
 
 fn unconfirmed_guidance(status: &Value, request: &Value, agent: &str) -> String {
+    let reason = request["reason"]
+        .as_str()
+        .unwrap_or("submission_unconfirmed");
     let guidance = format!(
-        "Message {} for agent {agent} has an unknown outcome (submission_unconfirmed). \
+        "Message {} for agent {agent} has an unknown outcome ({reason}). \
          The agent may have run it; Bus will not replay it. Inspect the agent's transcript \
          and composer before resending, and clear any remaining draft. \
          Inspect: bus message status {}",

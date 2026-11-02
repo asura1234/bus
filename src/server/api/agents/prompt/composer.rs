@@ -475,3 +475,7 @@ mod codex_image_tests;
 #[cfg(test)]
 #[path = "../tests/kimi_screen_test.rs"]
 mod kimi_screen_tests;
+
+#[cfg(test)]
+#[path = "../tests/kimi_incident_editor_test.rs"]
+mod kimi_incident_editor_tests;

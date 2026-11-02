@@ -534,6 +534,11 @@ fn commands_route_to_exact_methods_with_string_selectors() {
             json!({"request": "64", "confirm": true}),
         ),
         (
+            &["request", "recover", "64", "--confirm", "--as", "codex1"],
+            "request.recover",
+            json!({"request": "64", "confirm": true, "as": "codex1"}),
+        ),
+        (
             &["history", "--room", "Planning"],
             "room.history",
             json!({"room": "Planning"}),
@@ -3433,4 +3438,48 @@ fn agent_interrupt_uses_activity_status_while_directory_is_unavailable() {
         ["agent.interrupt", "state", "state", "state"]
     );
     assert_eq!(pauses.len(), 2);
+}
+
+#[test]
+fn send_async_manual_recovery_of_uncertain_submission_keeps_native_detail_and_no_replay_guidance() {
+    let mut request = recipient(1, "abandoned", false);
+    request["reason"] = json!("manual_recovery");
+    request["uncertain_outcome"] = json!(true);
+    request["detail"] = json!("Composer changed during editor transfer");
+    let snapshot = status(vec![request]);
+    let (outcome, lines, _, _) = run_async(&[], [snapshot.clone()]);
+    let mut responses = vec![(outcome, lines[0].clone())];
+    for args in [
+        vec!["wait", "--message", "19", "--async"],
+        vec!["wait", "--message", "19", "--timeout", "60"],
+    ] {
+        let mut reads = 0;
+        responses.push(run_captured(&args, |request, _| {
+            reads += 1;
+            assert_eq!(reads, 1, "a recovered request is terminal");
+            assert_eq!(request.method, "message.status");
+            Ok(Response::success(&request.id, snapshot.clone()))
+        }));
+    }
+    for (outcome, response) in responses {
+        assert_eq!(exit_code(&outcome), Some(1));
+        assert_eq!(response["error"]["code"], "message_abandoned");
+        assert_eq!(
+            response["result"]["requests"][0]["reason"],
+            "manual_recovery"
+        );
+        let message = response["error"]["message"].as_str().unwrap();
+        for expected in [
+            "manual_recovery",
+            "unknown outcome",
+            "may have run",
+            "will not replay",
+            "Composer changed during editor transfer",
+            "transcript",
+            "composer",
+            "before resending",
+        ] {
+            assert!(message.contains(expected), "missing {expected}: {message}");
+        }
+    }
 }

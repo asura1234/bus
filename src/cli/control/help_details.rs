@@ -57,7 +57,9 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
         (p, "room") if p.starts_with("agent ") && p != "agent add" && p != "agent resume" => {
             "default: none; optional conversation context"
         }
-        ("send", "as") | ("agent interrupt", "as") => "default: developer",
+        ("send", "as") | ("agent interrupt", "as") | ("request recover", "as") => {
+            "default: developer"
+        }
         (_, "as") => "default: no author context or waiter lease",
         (_, "args") => "default: empty string",
         (_, "orchestrates") => "default: none; required in MASTER",
@@ -328,7 +330,10 @@ Result: {request_id,agent_id,stage:"abandoned"}. Preserve other queued work.
 Errors: command_failed for unknown/non-lead/currently working typed request;
 inspect message status and current identity/revision facts, then recover the lead
 only when safe. Replace an invalidated agent before resending. Recovery does not
-undo task effects. --confirm is required."#;
+undo task effects. --confirm is required. Newly closed requests retain reason
+manual_recovery (unless a prior cause exists) and manual_recovery:{actor,at_ms}.
+--as NAME_OR_ID records an agent actor; omitted records the developer. Native
+failure detail and earlier completed replies remain unchanged."#;
 
 const HISTORY: &str = r#"Read durable room history, including deleted agents/rooms and context clears.
 Default is the full history. --limit N takes newest N in chronological order;
@@ -428,11 +433,13 @@ missing --as for you, missing hooks or storage. Fix the named cause first."#;
 
 const STATUS: &str = r#"Read durable settlement once, without waiting or acknowledging delivery.
 Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],requests:
-  [{request_id,agent_id,agent_name,deleted,stage,reason,status,detail,
+  [{request_id,agent_id,agent_name,deleted,stage,reason,manual_recovery,status,detail,
   uncertain_outcome,session_id,turn_id,start_bound,dialog,turn_ended,settling,group,
   queue,event_acks,events:[{key,text}],reply_ack,exit_snapshot,reply}]}.
   prompt includes author/text/files/recipients/time; files are absolute paths.
   reply is null or {text,received_at_ms,...}, with raw Markdown.
+  manual_recovery is null or {actor:"human"|{agent:AGENT_ID},at_ms:UNIX_MS};
+  reason and detail retain any earlier native failure cause and error.
   Notices have stage:posted,requests:[],complete:true. Deleted requests survive.
   complete is true only when every recipient request has replied or closed.
   turn_ended needs trusted Working/Blocked then Idle, a hook-bound turn start/end,
