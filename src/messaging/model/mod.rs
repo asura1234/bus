@@ -7,6 +7,7 @@ mod compactions;
 mod developer_notifications;
 mod disk_space;
 mod error;
+mod error_reports;
 mod history;
 mod idle_agents;
 mod interrupts;

@@ -485,7 +485,9 @@ impl BusState {
             .then(|| self.request_failure_error(id, error))
             .flatten();
         if let Some(owner) = self.agents.get_mut(&agent) {
-            owner.actionable_error = error;
+            if let Some(error) = error {
+                owner.actionable_error = Some(error);
+            }
         }
         Some(id)
     }

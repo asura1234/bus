@@ -417,3 +417,76 @@ fn error_pipe_expired_queued_report_does_not_create_an_agent_error_projection() 
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn error_pipe_expired_report_preserves_an_existing_real_error() {
+    let (worker, room, agent, root) = reporting_worker();
+    let mut state = worker.state.clone();
+    let now = crate::utils::time::now_ms();
+    let report = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: failure (x1 since last notice). Logs: /logs/client.log".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            now,
+            true,
+        )
+        .unwrap()[0];
+    state
+        .set_agent_error(agent, Some("existing real error".into()))
+        .unwrap();
+    assert!(state
+        .expire_stalled_queued_requests(now + crate::messaging::model::QUEUED_STALL_MS + 1000)
+        .unwrap()
+        .contains(&report));
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error.as_deref(),
+        Some("existing real error"),
+        "a suppressed report failure must not clear another error"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn error_pipe_rejected_report_preserves_an_existing_real_error() {
+    let (worker, room, agent, root) = reporting_worker();
+    let mut state = worker.state.clone();
+    let report = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: failure (x1 since last notice). Logs: /logs/client.log".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            100,
+            true,
+        )
+        .unwrap()[0];
+    state.begin_submission(report, "launch", 0).unwrap();
+    state
+        .set_agent_error(agent, Some("existing real error".into()))
+        .unwrap();
+    state
+        .record_submission(
+            report,
+            SubmissionOutcome::DefinitelyRejected {
+                message: "report failed".into(),
+            },
+        )
+        .unwrap();
+    assert!(state.request(report).unwrap().settled());
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error.as_deref(),
+        Some("existing real error"),
+        "closing a failed report must preserve another error"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
