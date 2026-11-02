@@ -218,7 +218,7 @@ impl BusState {
         }
         // A visible dialog blocks the agent even while Codex reports Idle.
         if matches!(
-            agent.shown_status(),
+            agent.activity_status(),
             RuntimeStatus::Working | RuntimeStatus::Blocked
         ) {
             return None;

@@ -3519,3 +3519,25 @@ fn error_pipe_cli_help_hides_the_option_without_dev_and_rejects_mixed_settings()
     ])
     .is_err());
 }
+
+#[test]
+fn agent_interrupt_uses_activity_status_while_directory_is_unavailable() {
+    let states = [("working", true), ("idle", true), ("idle", false)].map(|(activity, pending)| {
+        let mut row = agent_row(4, "unavailable", pending);
+        row["activity_status"] = json!(activity);
+        row["working_directory_error"] = json!("launch directory was removed");
+        vec![row]
+    });
+    let (outcome, response, requests, pauses) =
+        run_interrupt(&["agent", "interrupt", "a4"], interrupting(4), states);
+    assert!(outcome.is_ok(), "{response}");
+    assert_eq!(response["result"]["outcome"], "stopped");
+    assert_eq!(
+        requests
+            .iter()
+            .map(|r| r.method.as_str())
+            .collect::<Vec<_>>(),
+        ["agent.interrupt", "state", "state", "state"]
+    );
+    assert_eq!(pauses.len(), 2);
+}

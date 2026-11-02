@@ -318,7 +318,7 @@ impl Worker {
     ) -> Result<Value, String> {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id": id, "name": agent.name});
-        let status = agent.shown_status();
+        let status = agent.activity_status();
         match status {
             RuntimeStatus::Idle if !needs_stop(state, agent) => {
                 // Nothing to stop. A turn Bus still holds (settling, or
@@ -401,7 +401,7 @@ fn needs_stop(
     state: &crate::messaging::model::BusState,
     agent: &crate::messaging::model::RoomAgent,
 ) -> bool {
-    match agent.shown_status() {
+    match agent.activity_status() {
         RuntimeStatus::Working | RuntimeStatus::Blocked => true,
         RuntimeStatus::Idle => agent
             .current_request

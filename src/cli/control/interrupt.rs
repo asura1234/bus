@@ -137,12 +137,15 @@ fn wait_for_stops(
             for row in rows.iter_mut().filter(|row| interrupting(row)) {
                 let agent = agents.iter().find(|a| a["id"] == row["agent_id"]);
                 let name = row["name"].as_str().unwrap_or("unknown").to_owned();
+                let activity = agent.map(|a| a.get("activity_status").unwrap_or(&a["status"]));
                 match agent {
                     None => fail(row, format!("agent {name} was deleted")),
-                    Some(a) if a["status"] == "idle" && a["interrupt_pending"] != true => {
+                    Some(a)
+                        if activity == Some(&json!("idle")) && a["interrupt_pending"] != true =>
+                    {
                         row["outcome"] = json!("stopped");
                     }
-                    Some(a) if a["status"] == "unavailable" => {
+                    Some(_) if activity == Some(&json!("unavailable")) => {
                         fail(row, format!("agent {name} became unavailable"));
                     }
                     Some(_) => observed_working = true,

@@ -60,7 +60,15 @@ impl RoomAgent {
     pub(crate) fn shown_status(&self) -> RuntimeStatus {
         if self.working_directory_error.is_some() {
             RuntimeStatus::Unavailable
-        } else if self.dialog || self.missing_binary.is_some() {
+        } else {
+            self.activity_status()
+        }
+    }
+
+    /// Execution still needs control and settlement when its launch directory
+    /// disappears. A visible dialog blocks even a natively Idle provider.
+    pub(crate) fn activity_status(&self) -> RuntimeStatus {
+        if self.dialog || self.missing_binary.is_some() {
             RuntimeStatus::Blocked
         } else {
             self.status

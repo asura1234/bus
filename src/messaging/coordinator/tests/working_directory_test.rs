@@ -262,3 +262,35 @@ fn missing_directory_does_not_hide_detached_pane_recovery() {
         "missing pane recovery after directory restoration: {restored_error:?}"
     );
 }
+
+#[test]
+fn missing_launch_directory_preserves_activity_in_control_state() {
+    for (native, expected) in [
+        (schema::AgentStatus::Working, "working"),
+        (schema::AgentStatus::Idle, "idle"),
+    ] {
+        let (mut worker, agent, dir, cwd) = directory_fixture(Provider::Codex, native);
+        std::fs::remove_dir(&cwd).unwrap();
+        poll_until(&mut worker, agent, |a| a.working_directory_error.is_some());
+        let response = worker.control_response_with_events(
+            &crate::messaging::control::Request {
+                id: "inspect-missing-directory".into(),
+                method: "state".into(),
+                params: json!({}),
+            },
+            None,
+        );
+        assert!(response.ok, "{response:?}");
+        let state = response.result;
+        let row = state["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == json!(agent))
+            .unwrap();
+        assert_eq!(row["status"], "unavailable");
+        assert_eq!(row["activity_status"], expected);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
