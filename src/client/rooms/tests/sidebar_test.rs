@@ -888,7 +888,7 @@ fn sidebar_build_hash_never_shares_its_footer_with_save_failure_text() {
 }
 
 #[test]
-fn each_room_has_a_right_aligned_working_agent_count() {
+fn each_room_counts_working_and_blocked_but_not_unavailable_agents() {
     let (mut ui, room, first) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.confirm_hook_setup(first).unwrap();
@@ -917,7 +917,63 @@ fn each_room_has_a_right_aligned_working_agent_count() {
         .map(|x| buffer[(x, row)].symbol())
         .collect();
     assert!(line.starts_with(" Agents"), "{line}");
-    let count = line.find("1/4").expect("active/total count");
+    let count = line.find("2/4").expect("active/total count");
     assert_eq!(count + 3, ui.view.sidebar.width as usize - 2, "{line}");
     assert!(!line.contains("stalled"), "{line}");
+}
+
+#[test]
+fn room_count_remains_visible_and_clickable_when_its_name_scrolls_out() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.confirm_hook_setup(agent).unwrap();
+    for index in 0..20 {
+        snapshot
+            .state
+            .create_room(&format!("extra-{index}"))
+            .unwrap();
+    }
+    let master = snapshot.state.ensure_master_room();
+    ui.receive_snapshot(Arc::new(snapshot));
+    for (room, count) in [(master, "0/0"), (room, "0/1")] {
+        ui.sidebar_scroll =
+            render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() + 1;
+        ui.compute_view(100, 20);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 20));
+        ui.render(&mut buffer);
+        let line = (0..ui.view.sidebar.width - 1)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(line.starts_with(" Agents"), "{line}");
+        assert!(line.trim_end().ends_with(count), "{line}");
+        assert!(ui
+            .view
+            .hits
+            .iter()
+            .any(|hit| hit.rect.y == 0 && hit.action == render::Action::Room(room)));
+    }
+}
+
+#[test]
+fn room_count_excludes_a_working_agent_until_it_is_available() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 1)
+        .unwrap();
+    for (confirmed, expected) in [(false, "0/1"), (true, "1/1")] {
+        if confirmed {
+            snapshot.state.confirm_hook_setup(agent).unwrap();
+        }
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+        ui.compute_view(100, 30);
+        let row = render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() as u16 + 1;
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        let line = (0..ui.view.sidebar.width - 1)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>();
+        assert!(line.trim_end().ends_with(expected), "{line}");
+    }
 }
