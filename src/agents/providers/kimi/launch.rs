@@ -160,7 +160,7 @@ fn resolve_executable(source: &Path) -> Result<PathBuf, String> {
             .trim()
             .split('.')
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-        || !["--session", "--agent-file", "--yolo"]
+        || !["--session", "--agent-file", "--yolo", "--auto"]
             .iter()
             .all(|flag| String::from_utf8_lossy(&help.stdout).contains(flag))
     {
@@ -571,11 +571,12 @@ fn environment_for(
 }
 
 pub(crate) fn validate_run_permissions(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|arg| arg == "--auto")
-        && args
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
+    let positions = common::argument_positions(ProviderKind::Kimi, args);
+    let has_auto = positions.iter().any(|&index| args[index] == "--auto");
+    let has_yolo = positions
+        .iter()
+        .any(|&index| matches!(args[index].as_str(), "--yolo" | "-y"));
+    if has_auto && has_yolo {
         return Err("Kimi --auto and --yolo cannot be combined".into());
     }
     Ok(())
@@ -588,18 +589,9 @@ pub(crate) fn prepare(
     let cwd = common::canonical_directory(&spec.cwd)?;
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
     let adopted_session = validate_owned_launch(&options)?;
-    validate_run_permissions(&options)?;
-    if crate::utils::env::yolo_enabled() && options.iter().any(|arg| arg == "--auto") {
-        return Err("Bus --yolo conflicts with Kimi --auto; choose one permission mode".into());
-    }
     let saved_options = options.clone();
-    if crate::utils::env::yolo_enabled()
-        && !options
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
-        options.insert(0, "--yolo".into());
-    }
+    common::apply_run_permissions(ProviderKind::Kimi, &mut options);
+    validate_run_permissions(&options)?;
     let source = source_home()?;
     let executable = resolve_executable(&source)?;
     let home = private_home(&source, &spec.hooks)?;
