@@ -145,7 +145,8 @@ impl HeadlessServer {
             schema::Method::AgentPrompt(_)
                 | schema::Method::AgentPromptIfIdle(_)
                 | schema::Method::AgentPromptIfUnbound(_)
-        ) {
+        ) || matches!(&msg.request.method, schema::Method::AgentSendKeys(params) if params.native_interrupt.is_some())
+        {
             let deferred_changed = self.app.handle_deferred_agent_api_message(msg);
             return changed | deferred_changed;
         }
