@@ -246,17 +246,10 @@ impl BusState {
             {
                 None
             }
-            // An unconfirmed write ahead of it is failed at its own bound
-            // (`fail_unconfirmed_submissions`); until then nothing refuses it.
-            RequestPhase::Queued
-                if agent.status == RuntimeStatus::Idle
-                    && agent
-                        .current_request
-                        .and_then(|id| self.requests.get(&id))
-                        .is_some_and(|current| current.phase == RequestPhase::Submitting) =>
-            {
-                None
-            }
+            // The owned turn occupies delivery even when its composer is Idle.
+            // Its settlement (or unconfirmed-write bound) releases this queue;
+            // waiting behind it is not a failed submission opportunity.
+            RequestPhase::Queued if agent.current_request.is_some() => None,
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
                 lead.prompt
@@ -469,6 +462,14 @@ impl BusState {
             || !lead.trusted_start_bound
             || lead.pending_final.is_some()
             || lead.turn_ended_at_ms.is_some()
+            // An uncertain member may still occupy the native composer. Its
+            // receipt or turn settlement must resolve it before another write.
+            || self.requests.values().any(|member| {
+                member.group == Some(lead.id)
+                    && (member.phase == RequestPhase::Submitting || member.uncertain_outcome)
+                    && !member.trusted_start_bound
+                    && !member.settled()
+            })
         {
             return None;
         }
@@ -570,7 +571,8 @@ impl BusState {
         match outcome {
             SubmissionOutcome::Confirmed { .. } => request_state.phase = RequestPhase::Active,
             SubmissionOutcome::Uncertain { message } => {
-                request_state.phase = RequestPhase::Active;
+                // Keep the attempted group membership, but only a native
+                // receipt can promote this unconfirmed write to Active.
                 request_state.uncertain_outcome = true;
                 request_state.submission_error = Some(message);
             }
@@ -761,7 +763,7 @@ impl Request {
             return self.submission_error.clone();
         }
         let unconfirmed = self.failure_reason.as_deref() == Some("submission_unconfirmed")
-            || self.phase == RequestPhase::Submitting
+            || matches!(self.phase, RequestPhase::Submitting | RequestPhase::Active)
                 && self.uncertain_outcome
                 && !self.trusted_start_bound;
         if !unconfirmed {

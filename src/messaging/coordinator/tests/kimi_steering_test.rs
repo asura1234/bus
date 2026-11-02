@@ -33,7 +33,12 @@ pub(super) fn home(fixture: &Fixture) -> PathBuf {
     session.join("agents/main/wire.jsonl")
 }
 
-fn native_turn(turn: u64, prompt: &str, guidance: &[String], final_text: &str) -> String {
+pub(super) fn native_turn(
+    turn: u64,
+    prompt: &str,
+    guidance: &[String],
+    final_text: &str,
+) -> String {
     let prompt_id = format!("p{turn}");
     let mut rows = vec![
         json!({"type":"turn.prompt","agentId":"main","turnId":turn,"promptId":prompt_id,"input":[{"type":"text","text":prompt}]}),
@@ -117,7 +122,7 @@ fn stop(fixture: &Fixture) {
     fixture.record(json!({"hook_event_name":"Stop","session_id":"session"}));
 }
 
-fn reopen(fixture: &mut Fixture) {
+pub(super) fn reopen(fixture: &mut Fixture) {
     let replacement = Worker::open(
         crate::utils::test_temp::unique_temp_path("kimi-restart-swap"),
         Box::new(Native(fixture.native.clone())),
@@ -171,6 +176,12 @@ fn guidance_case(restart: bool, uncertain: bool) {
     let first = fixture.send("first correction", false);
     let second = fixture.send("second correction", false);
     fixture.deliver();
+    if uncertain {
+        assert_eq!(fixture.typed().len(), 2);
+        assert_eq!(fixture.request(second).phase, RequestPhase::Queued);
+        fixture.started("1", "first correction");
+        fixture.consume();
+    }
     fixture.deliver();
     let typed = fixture.typed();
     assert_eq!(

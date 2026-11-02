@@ -11,6 +11,10 @@ const MAX_INDEX_BYTES: u64 = 4 * 1024 * 1024;
 #[path = "../tests/kimi_steering_wire_test.rs"]
 mod steering_tests;
 
+#[cfg(test)]
+#[path = "../tests/kimi_error_end_test.rs"]
+mod error_end_tests;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Outcome {
     Final(String),
@@ -99,6 +103,7 @@ fn scan_committed_outcome(
     let mut agent_outcome = None;
     let mut agent_error = None;
     let mut turn_reason = None;
+    let mut root_error = None;
     let mut prompts = Vec::new();
     let mut guidance_ids = std::collections::HashSet::new();
     for line in lines {
@@ -156,8 +161,8 @@ fn scan_committed_outcome(
                 if value.get("agentId").and_then(Value::as_str) == Some("main")
                     && value.get("turnId").and_then(Value::as_u64) == Some(turn_id)
                 {
-                    agent_outcome.as_ref()?;
                     turn_reason = Some(value.get("reason")?.as_str()?.to_owned());
+                    root_error = native_turn_error(&value);
                 }
             }
             "prompt.completed"
@@ -178,6 +183,7 @@ fn scan_committed_outcome(
                         value.get("reason")?.as_str()?,
                         answer,
                         agent_error,
+                        root_error,
                     )?,
                     prompts,
                 });
@@ -275,7 +281,13 @@ fn terminal_outcome(
     prompt: &str,
     answer: Option<String>,
     error: Option<String>,
+    root_error: Option<String>,
 ) -> Option<Outcome> {
+    // Kimi flushes inner agent events after the outer commit on failures.
+    // The owned root failure and matching prompt commit carry the actual error.
+    if let (Some("failed"), "failed", Some(error)) = (turn, prompt, root_error) {
+        return Some(Outcome::Failed(error));
+    }
     match (agent, turn, prompt) {
         (Some("done"), Some("completed"), "completed") => {
             Some(answer.map_or(Outcome::NoReply, Outcome::Final))
@@ -288,6 +300,21 @@ fn terminal_outcome(
         }
         _ => None,
     }
+}
+
+fn native_turn_error(value: &Value) -> Option<String> {
+    let error = value.get("error")?;
+    let message = error.get("message")?.as_str()?;
+    if message.trim().is_empty() {
+        return None;
+    }
+    let category = ["name", "code"].into_iter().find_map(|key| {
+        error
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+    });
+    Some(category.map_or_else(|| message.to_owned(), |name| format!("{name}: {message}")))
 }
 
 #[cfg(test)]
@@ -386,7 +413,8 @@ pub(crate) fn resolve_turn(
 pub(crate) enum MainTurn {
     /// `turn.prompt` has no completed terminal chain yet.
     Open,
-    /// `agent.turn.ended`, `turn.ended`, and `prompt.completed` agree.
+    /// The terminal chain agrees, or a structured root failure and its owned
+    /// prompt committed before the delayed inner event.
     Settled,
 }
 
@@ -589,6 +617,7 @@ fn main_turn_lines(
             turn.prompt_reason.as_deref().unwrap_or(""),
             None,
             None,
+            turn.root_error,
         )
         .is_some()
         {
@@ -605,6 +634,7 @@ struct OpenTurn {
     agent: Option<String>,
     turn_reason: Option<String>,
     prompt_reason: Option<String>,
+    root_error: Option<String>,
 }
 
 fn observe_main_turn(value: &Value, current: &mut Option<OpenTurn>) {
@@ -631,6 +661,7 @@ fn observe_main_turn(value: &Value, current: &mut Option<OpenTurn>) {
                 agent: None,
                 turn_reason: None,
                 prompt_reason: None,
+                root_error: None,
             });
         }
         "agent.turn.ended" => {
@@ -648,14 +679,14 @@ fn observe_main_turn(value: &Value, current: &mut Option<OpenTurn>) {
             let Some(turn) = current.as_mut() else {
                 return;
             };
-            if turn.agent.is_none()
-                || value.get("agentId").and_then(Value::as_str) != Some("main")
+            if value.get("agentId").and_then(Value::as_str) != Some("main")
                 || value.get("turnId").and_then(Value::as_u64) != Some(turn.turn_id)
             {
                 return;
             }
             if let Some(reason) = value.get("reason").and_then(Value::as_str) {
                 turn.turn_reason = Some(reason.to_owned());
+                turn.root_error = native_turn_error(value);
             }
         }
         "prompt.completed" => {

@@ -1,6 +1,6 @@
 //! Content-free delivery diagnostics. Never format commands, prompts or callbacks with Debug.
 use {
-    super::model::{BusState, RequestId},
+    super::model::{BusState, RequestId, RequestPhase},
     crate::messaging::model::RoomAgent,
 };
 
@@ -106,6 +106,31 @@ pub(crate) fn replies(previous: &BusState, next: &BusState, event: &'static str)
                 );
             }
         }
+    }
+}
+
+/// A recovered failure is observable only after the closing state is durable.
+/// Visit live obligations, never the permanent archived request history.
+pub(crate) fn recoveries(previous: &BusState, next: &BusState) {
+    for old in previous.unsettled_requests() {
+        let Some(request) = next
+            .request(old.id)
+            .filter(|request| request.phase == RequestPhase::Abandoned)
+        else {
+            continue;
+        };
+        let reason = match request.failure_reason.as_deref() {
+            Some(reason @ ("reply_not_captured" | "agent_unavailable")) => reason,
+            Some(reason) if reason.starts_with("provider_error:") => "provider_error",
+            _ => continue,
+        };
+        request_with_lead(
+            next,
+            old.id,
+            "bus.message.recovered",
+            reason,
+            old.group.unwrap_or(old.id).0,
+        );
     }
 }
 

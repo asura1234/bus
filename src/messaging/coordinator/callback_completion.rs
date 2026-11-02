@@ -30,6 +30,7 @@ impl Worker {
         turn: String,
         prompt: String,
     ) -> Result<ProviderCallback, String> {
+        let started = started_callback(record, id, session.clone(), turn.clone(), prompt);
         if record.manifest.provider == ProviderKind::Kimi
             && state
                 .agent(id)
@@ -39,20 +40,21 @@ impl Worker {
         {
             // The wire is authoritative even when Stop was lost or reordered.
             if let Some(callback) =
-                self.committed_kimi_final_callback(id, state, record, session.clone())?
+                self.committed_kimi_completion_callback(id, state, record, session, Some(&started))?
             {
                 self.apply_request_callback(id, state, callback)?;
             }
         }
-        Ok(started_callback(record, id, session, turn, prompt))
+        Ok(started)
     }
 
-    fn committed_kimi_final_callback(
+    fn committed_kimi_completion_callback(
         &self,
         id: AgentId,
         state: &mut BusState,
         record: &callbacks::Record,
         session: String,
+        started: Option<&ProviderCallback>,
     ) -> Result<Option<ProviderCallback>, String> {
         Ok(match self.recorded_kimi_end(state, id)? {
             Some(crate::messaging::model::RecordedTurnEnd::Final {
@@ -72,6 +74,15 @@ impl Worker {
                 callback.callback_id = format!("{}:kimi-wire:{turn_id}", record.id);
                 Some(callback)
             }
+            Some(crate::messaging::model::RecordedTurnEnd::Error(error)) => {
+                // Stop has no next-turn identity. Periodic settlement runs
+                // after this batch, allowing a later Started to claim its
+                // submitted input before the failed group closes.
+                if let Some(started) = started {
+                    state.settle_kimi_failure_before_start(started, error);
+                }
+                None
+            }
             _ => None,
         })
     }
@@ -89,7 +100,8 @@ impl Worker {
             // Stop carries no turn id. Read the committed owned turn before
             // processing a queued prompt's Started callback, which otherwise
             // rebinds the old lead and makes its final impossible to match.
-            let callback = self.committed_kimi_final_callback(id, &mut state, record, session)?;
+            let callback =
+                self.committed_kimi_completion_callback(id, &mut state, record, session, None)?;
             return Ok(ControlFlow::Continue((
                 state,
                 callback,

@@ -1,5 +1,5 @@
 //! Durable storage pause and recovery for the single coordinator.
-use super::{mpsc, BusEvent, BusState, Duration, Worker};
+use super::{diagnostics, mpsc, BusEvent, BusState, Duration, Worker};
 use crate::messaging::storage::state_store::StoreError;
 use std::sync::Arc;
 use std::time::Instant;
@@ -124,6 +124,7 @@ impl Worker {
             }
             return;
         }
+        diagnostics::recoveries(&self.durable_state, &self.state);
         self.durable_state = self.state.clone();
         self.storage_pause = None;
         self.error = None;

@@ -437,7 +437,7 @@ fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_un
         f.worker.state.agent(worker).unwrap().dialog_notice_to,
         Some(DialogNoticeTo::Developer)
     );
-    assert_eq!(f.request(notice).phase, RequestPhase::Active);
+    assert_eq!(f.request(notice).phase, RequestPhase::Submitting);
     assert_eq!(f.request(notice).group, Some(lead));
     let room = f.worker.state.room(f.request(notice).room_id).unwrap();
     assert_eq!(room.notices.len(), 1);

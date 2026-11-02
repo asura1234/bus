@@ -1,5 +1,5 @@
 //! Read Kimi terminal evidence before settling a request.
-use super::{AgentId, BusState, Path, RuntimeStatus};
+use super::{AgentId, BusState, Path, RequestId, RuntimeStatus};
 
 pub(super) fn state_provider_is_kimi(state: &BusState, agent: AgentId) -> bool {
     state
@@ -14,21 +14,38 @@ pub(super) fn recorded_kimi_end(
     state: &mut BusState,
     agent: AgentId,
 ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
-    if !state.agent(agent).is_some_and(|owner| {
-        matches!(
-            owner.status,
-            RuntimeStatus::Idle | RuntimeStatus::Unavailable
-        )
-    }) {
-        return Ok(None);
+    recorded_kimi_request_end(data_dir, state, agent, None)
+}
+
+fn recorded_kimi_request_end(
+    data_dir: &Path,
+    state: &mut BusState,
+    agent: AgentId,
+    request: Option<RequestId>,
+) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
+    match committed_kimi_end(data_dir, state, agent, request) {
+        // A busy provider may be appending a partial record. Read/parse errors
+        // are not committed provider failures; keep their previous idle-only
+        // diagnostic settlement without gating an owned native error commit.
+        Err(_)
+            if !state.agent(agent).is_some_and(|owner| {
+                matches!(
+                    owner.status,
+                    RuntimeStatus::Idle | RuntimeStatus::Unavailable
+                )
+            }) =>
+        {
+            Ok(None)
+        }
+        result => result,
     }
-    committed_kimi_end(data_dir, state, agent)
 }
 
 fn committed_kimi_end(
     data_dir: &Path,
     state: &mut BusState,
     agent: AgentId,
+    request_id: Option<RequestId>,
 ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
     use crate::agents::providers::kimi::{launch, wire};
     use crate::messaging::model::RecordedTurnEnd;
@@ -38,12 +55,15 @@ fn committed_kimi_end(
     if owner.provider != crate::agents::providers::ProviderKind::Kimi {
         return Ok(None);
     }
-    let Some(current) = owner.current_request else {
+    let Some(current) = request_id.or(owner.current_request) else {
         return Ok(None);
     };
     let Some(request) = state.request(current).cloned() else {
         return Ok(None);
     };
+    if request.agent_id != agent {
+        return Ok(None);
+    }
     let Some(launch_id) = request.expected_launch_id.as_deref() else {
         return Ok(None);
     };
@@ -118,6 +138,43 @@ impl super::Worker {
         agent: AgentId,
     ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
         // Stop and a later Started can arrive while the new turn is Working.
-        committed_kimi_end(&self.data_dir, state, agent)
+        committed_kimi_end(&self.data_dir, state, agent, None)
+    }
+
+    pub(in crate::messaging::coordinator) fn settle_previous_kimi_requests(
+        &self,
+        state: &mut BusState,
+        agent: AgentId,
+        now_ms: u64,
+    ) -> bool {
+        if !state_provider_is_kimi(state, agent) {
+            return false;
+        }
+        let current = state.agent(agent).and_then(|owner| owner.current_request);
+        let previous: Vec<_> = state
+            .unsettled_requests()
+            .filter(|request| {
+                request.agent_id == agent
+                    && Some(request.id) != current
+                    && request.group.is_none()
+                    && request.trusted_start_bound
+            })
+            .map(|request| request.id)
+            .collect();
+        let mut changed = false;
+        for id in previous {
+            let recorded = recorded_kimi_request_end(&self.data_dir, state, agent, Some(id))
+                .unwrap_or_else(|error| {
+                    if state.record_error_episode(format!("kimi-evidence:{}:{error}", agent.0)) {
+                        tracing::warn!(event = "bus.kimi.evidence_failed", agent_id = agent.0,
+                            request_id = id.0, %error, "Kimi completion evidence failed; closing the request with an actionable error");
+                    }
+                    Some(crate::messaging::model::RecordedTurnEnd::Error(error))
+                });
+            changed |= state
+                .settle_previous_kimi_request(agent, id, now_ms, recorded)
+                .is_some();
+        }
+        changed
     }
 }
