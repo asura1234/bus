@@ -164,6 +164,44 @@ fn provider_flake_cursor_monthly_quota_keeps_its_terminal_contract() {
 }
 
 #[test]
+fn provider_flake_kimi_connection_abort_is_not_a_user_cancellation() {
+    // Recorded Kimi 2.4.1 OAuth connection failure from the private proxy503 acceptance.
+    let error = "OAuthConnectionError: OAuth request to https://auth.kimi.com/api/oauth/token failed: fetch failed: Request was cancelled.: Proxy response (503) !== 200 when HTTP Tunneling";
+    for error in [
+        error,
+        // Synthetic control for the other already-supported native connection category.
+        "APIConnectionError: Connection attempt was cancelled: HTTP503",
+    ] {
+        let (state, _, agent, request) = failed_turn(Provider::Kimi, error);
+        assert!(
+            !state.request(request).unwrap().settled(),
+            "a transport abort must retain the delivery"
+        );
+        assert!(state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .is_some_and(|hold| !hold.quota));
+    }
+    for error in [
+        "OAuthConnectionError: HTTP401 unauthorized: Request was cancelled.",
+        "OAuthConnectionError: HTTP403 permission denied: Request was cancelled.",
+        "OAuthConnectionError: Request cancelled by user",
+        "Kimi turn interrupted",
+        "Request was cancelled.",
+    ] {
+        let (state, _, agent, request) = failed_turn(Provider::Kimi, error);
+        assert_eq!(
+            state.request(request).unwrap().phase,
+            RequestPhase::Abandoned,
+            "{error}"
+        );
+        assert!(state.agent(agent).unwrap().provider_retry.is_none());
+    }
+}
+
+#[test]
 fn provider_flake_explicit_overload_and_429_are_held_for_grok_and_kimi() {
     for provider in [Provider::Grok, Provider::Kimi] {
         for error in [

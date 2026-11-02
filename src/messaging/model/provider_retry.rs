@@ -392,19 +392,29 @@ impl BusState {
 /// Only a provider-owned terminal failure enters this classifier, never assistant text.
 fn transient(provider: Provider, error: &str) -> Option<bool> {
     let text = error.to_ascii_lowercase();
-    if [
-        "authentication",
-        "unauthorized",
-        "permission",
-        "invalid",
-        "not found",
-        "cancel",
-        "interrupt",
-        "401",
-        "403",
-    ]
-    .iter()
-    .any(|s| text.contains(s))
+    // Kimi's native connection errors can wrap a fetch/Proxy AbortError.
+    // That nested cancellation does not mean the user interrupted the turn.
+    let kimi_connection = provider == Provider::Kimi
+        && ["oauthconnectionerror:", "apiconnectionerror:"]
+            .iter()
+            .any(|category| text.starts_with(category));
+    if text.contains("cancel") && !kimi_connection
+        || [
+            "authentication",
+            "unauthorized",
+            "permission",
+            "invalid",
+            "not found",
+            "cancelled by user",
+            "canceled by user",
+            "user cancelled",
+            "user canceled",
+            "interrupt",
+            "401",
+            "403",
+        ]
+        .iter()
+        .any(|s| text.contains(s))
     {
         return None;
     }
