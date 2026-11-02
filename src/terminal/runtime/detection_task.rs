@@ -336,6 +336,8 @@ impl DetectionTask {
     async fn wait_for_change(&self, status: &DetectionState) {
         let recheck = if self.terminal.has_transient_default_color_override() {
             Some(TICK_TRANSIENT_COLOR_OVERRIDE)
+        } else if let Some(until) = status.agent_startup_grace_until {
+            Some(until.saturating_duration_since(Instant::now()))
         } else if status.pending_idle.active() {
             Some(AGENT_PENDING_IDLE_RECHECK)
         } else {
@@ -1095,5 +1097,29 @@ mod blocked_tests {
             (AgentState::Unknown, false)
         );
         assert!(writes.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn startup_grace_deadline_wakes_without_terminal_output() {
+        let (runtime, _writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        let (events, _received) = mpsc::channel(16);
+        let task = DetectionTask {
+            pane_id: runtime.pane_id,
+            child_pid: runtime.child_pid.clone(),
+            terminal: runtime.terminal.clone(),
+            state_events: events,
+            detection_content_seq: runtime.detection_content_seq.clone(),
+            detection_notify: Arc::new(Notify::new()),
+            managed_launch_pending: runtime.managed_launch_pending.clone(),
+            detection_context: runtime.detection_context.clone(),
+            render_notify: Arc::new(Notify::new()),
+            render_dirty: Arc::new(RenderSignal::default()),
+            kimi_code_home: Arc::new(Mutex::new(None)),
+        };
+        let mut status = DetectionState::new(Some(AgentKind::Codex));
+        status.agent_startup_grace_until = Some(Instant::now() + Duration::from_millis(10));
+        tokio::time::timeout(Duration::from_millis(50), task.wait_for_change(&status))
+            .await
+            .expect("startup grace did not wake without output");
     }
 }
