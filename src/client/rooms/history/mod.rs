@@ -75,17 +75,6 @@ pub(super) struct Line {
     anchor: RowAnchor,
 }
 
-impl Line {
-    /// Empty filtered searches select one header per message, even when wrapped.
-    pub(super) fn starts_message(&self) -> bool {
-        self.anchor.position == 0
-            && matches!(
-                self.anchor.kind,
-                RowKind::PromptHeader | RowKind::ReplyHeader
-            )
-    }
-}
-
 /// Relative paths in a message resolve against `cwd`, its authoring agent's
 /// working directory; the developer and Bus have none.
 #[derive(Clone)]
@@ -146,8 +135,47 @@ impl RowAnchor {
 }
 
 /// Inputs to a history layout: content signature, room, width, age-label
-/// minute, and thumbnail cell size.
-type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
+/// minute, thumbnail cell size and developer-direction filters.
+type LayoutKey = (
+    u64,
+    RoomId,
+    u16,
+    u64,
+    Option<(u32, u32)>,
+    crate::messaging::model::RoomHistoryFilters,
+);
+
+pub(super) fn filter_lines(
+    lines: Vec<Line>,
+    filters: crate::messaging::model::RoomHistoryFilters,
+) -> Vec<Line> {
+    if filters == Default::default() {
+        return lines;
+    }
+    let accepts = |line: &Line| {
+        (filters.to_you && line.to_developer) || (filters.from_you && line.from_developer)
+    };
+    let accepted: Vec<bool> = lines.iter().map(accepts).collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| {
+            accepted[*index]
+                || line.anchor.kind == RowKind::Gap
+                    && (*index > 0 && accepted[index - 1]
+                        || *index + 1 < accepted.len() && accepted[index + 1])
+        })
+        .fold(Vec::new(), |mut filtered, (_, line)| {
+            if line.anchor.kind != RowKind::Gap
+                || filtered
+                    .last()
+                    .is_some_and(|previous: &Line| previous.anchor.kind != RowKind::Gap)
+            {
+                filtered.push(line.clone());
+            }
+            filtered
+        })
+}
 
 #[derive(Default)]
 pub(super) struct History {

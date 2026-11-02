@@ -223,13 +223,14 @@ impl History {
         let _timer = REQUEST.start();
         let Some(background) = self.background.as_mut() else {
             if let Some(room) = snapshot.state.room(room) {
-                self.lines(
+                self.lines_filtered(
                     &snapshot.state,
                     room,
                     width,
                     snapshot.revision,
                     now,
                     thumbnails,
+                    room.history_filters,
                 );
             }
             return;
@@ -351,13 +352,14 @@ fn run(shared: Arc<Shared>) {
             width_px,
             height_px,
         }));
-        history.lines(
+        history.lines_filtered(
             &job.snapshot.state,
             room,
             job.key.width,
             job.key.revision,
             job.now,
             &mut thumbnails,
+            room.history_filters,
         );
         #[cfg(test)]
         shared.progress.finished.fetch_add(1, Ordering::Relaxed);
