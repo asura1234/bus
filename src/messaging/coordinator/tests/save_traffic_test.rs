@@ -260,9 +260,7 @@ fn a_ui_command_queued_behind_follower_polls_runs_first() {
     run_queued(worker, queued);
     let calls = calls.lock().unwrap().clone();
     let focus = calls.iter().position(|call| *call == "pane.focus");
-    let first_poll = calls
-        .iter()
-        .position(|call| *call == "agent.dialog.observe");
+    let first_poll = calls.iter().position(|call| *call == "agent.observe");
     assert!(
         focus.is_some() && first_poll.is_some() && focus < first_poll,
         "the developer's command must not wait behind follower polls: {calls:?}"

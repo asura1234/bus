@@ -4,142 +4,111 @@ use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// What the fake server shows for the watched agent's screen.
+/// The fake server exposes the same styled Grid as the production driver.
 #[derive(Clone, Default)]
 struct Screen {
     pending_question: bool,
-    settle_errors: u32,
-    answer_sent: bool,
+    unavailable_reads: u32,
+    inputs: u32,
     dialog: bool,
     blocked: bool,
     question: bool,
     text: Option<String>,
-    next_dialog: Option<(bool, String)>,
+    raw_screen: Option<String>,
     revision: u64,
+    wrong_terminal: bool,
+    wrong_pane: bool,
+    session: Option<String>,
 }
 
 struct FakeServer(Arc<Mutex<Screen>>);
 
-fn dialog() -> schema::AgentDialog {
-    schema::AgentDialog {
-        kind: schema::AgentDialogKind::Choice,
-        text: "Do you want to proceed?".into(),
-        options: vec![
-            schema::AgentDialogOption {
-                number: 1,
-                label: "Yes".into(),
-                selected: true,
-                free_text: false,
-            },
-            schema::AgentDialogOption {
-                number: 2,
-                label: "No".into(),
-                selected: false,
-                free_text: false,
-            },
-        ],
-        hint: Some("Esc to cancel".into()),
-        id: "dialog-id".into(),
-        digest: "dialog-digest".into(),
-        free_text: None,
-        tabs: Vec::new(),
-    }
-}
-
 impl Screen {
-    fn current_dialog(&self) -> Option<schema::AgentDialog> {
-        self.dialog.then(|| {
-            let mut dialog = dialog();
-            if self.question {
-                dialog.kind = schema::AgentDialogKind::Question;
-                dialog.text = "What token should Bus use?".into();
-                dialog.options.clear();
+    fn observation(&self, pane: &str) -> schema::TerminalObservation {
+        let text = self.raw_screen.clone().unwrap_or_else(|| {
+            if self.dialog || self.pending_question {
+                let heading = self.text.as_deref().unwrap_or(if self.question {
+                    "What token should Bus use?"
+                } else if self.pending_question {
+                    "Another question needs an answer"
+                } else {
+                    "Do you want to proceed?"
+                });
+                format!("{heading}\n❯ 1. Yes\n  2. No\nEnter to select · Esc to cancel")
+            } else {
+                "> ".into()
             }
-            if let Some(text) = &self.text {
-                dialog.text.clone_from(text);
+        });
+        let mut grid = schema::driver::Grid::blank(160, 12);
+        for (row, line) in text.lines().enumerate().take(12) {
+            for (col, ch) in line.chars().enumerate().take(160) {
+                grid.cells[row][col].symbol = ch.to_string();
             }
-            // Native dialog ids also change with kind/text, not selection or redraws.
-            dialog.id = format!("{:?}:{}", dialog.kind, dialog.text);
-            dialog.digest.clone_from(&dialog.id);
-            dialog
-        })
+        }
+        schema::TerminalObservation {
+            terminal_id: if self.wrong_terminal {
+                "replacement"
+            } else {
+                "terminal"
+            }
+            .into(),
+            pane_id: if self.wrong_pane { "replacement" } else { pane }.into(),
+            content_revision: 4 + self.revision,
+            text: grid.text(),
+            focus: crate::terminal::driver::selection_focus_for_label(&grid, None).ok(),
+            focus_occurrence: 0,
+            grid,
+        }
+    }
+
+    fn current_dialog(&self) -> Option<String> {
+        crate::terminal::driver::blocker(&self.observation("pane").grid)
+    }
+
+    fn info(&self, pane: &str) -> schema::AgentInfo {
+        serde_json::from_value(json!({
+            "terminal_id": if self.wrong_terminal { "replacement" } else { "terminal" },
+            "pane_id": if self.wrong_pane { "replacement" } else { pane },
+            "name": "bus-r1-a2", "agent": "claude", "workspace_id": "w", "tab_id": "t",
+            "focused": false, "interactive_ready": true, "revision": 1,
+            "agent_status": if self.dialog || self.blocked || self.pending_question { "blocked" } else { "idle" },
+            "dialog_id": self.current_dialog(),
+            "agent_session": self.session.as_ref().map(|session| json!({
+                "source":"bus", "agent":"claude", "kind":"id", "value":session,
+            })),
+        })).unwrap()
     }
 }
 
 impl Transport for FakeServer {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        let screen = self.0.lock().unwrap().clone();
-        if matches!(&method, Method::AgentDialogObserve(_))
-            && screen.answer_sent
-            && screen.settle_errors > 0
-        {
-            self.0.lock().unwrap().settle_errors -= 1;
+        let mut screen = self.0.lock().unwrap();
+        if matches!(&method, Method::AgentObserve(_)) && screen.unavailable_reads > 0 {
+            screen.unavailable_reads -= 1;
             return Err(TransportError {
-                code: Some("dialog_observation_unavailable".into()),
+                code: Some("terminal_observation_unavailable".into()),
                 message: "Agent screen changed while it was being observed".into(),
                 definitely_rejected: true,
             });
         }
-        match method {
-            Method::AgentGet(params) => Ok(ResponseResult::AgentInfo {
-                agent: serde_json::from_value(json!({
-                    "terminal_id": "terminal", "pane_id": params.target, "name": "bus-r1-a2",
-                    "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
-                    "interactive_ready": true, "revision": 1,
-                    "agent_status": if screen.dialog || screen.blocked { "blocked" } else { "idle" },
-                    "dialog_id": screen.current_dialog().map(|dialog| dialog.id),
-                })).unwrap(),
-            }),
-            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
-                agents: vec![serde_json::from_value(json!({
-                    "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
-                    "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
-                    "interactive_ready": true, "revision": 1,
-                    "agent_status": if screen.dialog || screen.blocked { "blocked" } else { "idle" },
-                    "dialog_id": screen.current_dialog().map(|dialog| dialog.id),
-                }))
-                .unwrap()],
-            }),
-            Method::AgentDialogObserve(params) => Ok(ResponseResult::AgentDialog {
-                observation: schema::AgentDialogObservation {
-                    pending_question: screen.pending_question,
-                    terminal_id: "terminal".into(),
-                    // Every watched agent shows the same screen in its own pane.
-                    pane_id: params.target,
-                    session_id: None,
-                    content_revision: 4 + screen.revision,
-                    dialog: screen.current_dialog(),
-                },
-            }),
-            Method::AgentDialogChoose(_) | Method::AgentDialogAnswer(_) => {
-                let mut screen = self.0.lock().unwrap();
-                screen.answer_sent = true;
-                if let Some((question, text)) = screen.next_dialog.take() {
-                    screen.dialog = true;
-                    screen.question = question;
-                    screen.text = Some(text);
-                } else {
-                    screen.dialog = false;
+        Ok(match method {
+            Method::AgentGet(params) => ResponseResult::AgentInfo {
+                agent: screen.info(&params.target),
+            },
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                ResponseResult::AgentList {
+                    agents: vec![screen.info("pane")],
                 }
-                screen.revision += 1;
-                Ok(ResponseResult::AgentDialogChosen {
-                    choice: schema::AgentDialogChooseResult {
-                        written: true,
-                        reason: None,
-                        keys: vec!["enter".into()],
-                        observation: schema::AgentDialogObservation {
-                            pending_question: false,
-                            terminal_id: "terminal".into(),
-                            pane_id: "pane".into(),
-                            session_id: None,
-                            content_revision: 4 + screen.revision,
-                            dialog: screen.current_dialog(),
-                        },
-                    },
-                })
             }
-            _ => Ok(ResponseResult::Ok {}),
-        }
+            Method::AgentObserve(params) => ResponseResult::TerminalObserved {
+                observation: screen.observation(&params.target),
+            },
+            Method::AgentPress(_) => {
+                screen.inputs += 1;
+                panic!("observing and notifying must never answer a native prompt")
+            }
+            _ => ResponseResult::Ok {},
+        })
     }
 }
 
@@ -227,7 +196,7 @@ fn sent_by(worker: &Worker, room: RoomId, about: AgentId) -> Vec<(Vec<AgentId>, 
 
 fn expected_blocked(worker: &Worker, id: AgentId) -> String {
     let body = format!(
-        "{}. Blocked, needs help to continue.\nInspect: bus agent dialog '{}'",
+        "{}. Blocked, needs help to continue.\nInspect: bus agent observe '{}'",
         worker.state.agent(id).unwrap().name,
         worker.state.agent(id).unwrap().name
     );
@@ -239,43 +208,6 @@ fn expected_blocked(worker: &Worker, id: AgentId) -> String {
         format!("{} {body}", crate::messaging::attention::TAG)
     } else {
         body
-    }
-}
-
-#[test]
-fn grok_login_reason_is_inspectable_when_orchestrator_is_notified() {
-    for capture in [
-        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error.txt"),
-        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-connecting.txt"),
-        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-71col.txt"),
-        include_str!("../../../../tests/fixtures/grok-login/native-1.0.70-error-61col.txt"),
-    ] {
-        let parsed = crate::agents::dialog::parse(capture).expect("native login dialog");
-        let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
-        {
-            let mut screen = screen.lock().unwrap();
-            screen.dialog = true;
-            screen.blocked = true;
-            screen.text = Some(parsed.text.clone());
-        }
-        for _ in 0..3 {
-            worker.poll().unwrap();
-        }
-        let notices = sent_by(&worker, room, agent);
-        assert_eq!(
-            notices,
-            vec![(
-                vec![orchestrator.unwrap()],
-                expected_blocked(&worker, agent)
-            )]
-        );
-        let observation = worker
-            .native_dialog("pane", "terminal", None, false)
-            .unwrap();
-        assert_eq!(observation.dialog.unwrap().text, parsed.text);
-        assert!(parsed.text.contains("Grok login required"));
-        drop(worker);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -308,7 +240,7 @@ fn polls(worker: &mut Worker, count: usize) {
 }
 
 #[test]
-fn parser_null_blocked_worker_notifies_its_orchestrator_once() {
+fn generic_blocked_worker_notifies_its_orchestrator_once() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
@@ -319,13 +251,12 @@ fn parser_null_blocked_worker_notifies_its_orchestrator_once() {
             expected_blocked(&worker, agent)
         )]
     );
-    assert!(worker
-        .native_dialog("pane", "terminal", None, false)
-        .unwrap()
-        .dialog
-        .is_none());
+    assert_eq!(
+        worker.native_blocker(agent).unwrap().as_deref(),
+        Some(BLOCKED)
+    );
     assert!(
-        !screen.lock().unwrap().answer_sent,
+        screen.lock().unwrap().inputs == 0,
         "an unparsed screen must receive no automatic key"
     );
     polls(&mut worker, 3);
@@ -363,34 +294,6 @@ fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
     polls(&mut worker, 3);
     screen.lock().unwrap().dialog = false;
     screen.lock().unwrap().blocked = true;
-    polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
-    assert_only_bus_signed_notices(&worker);
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn answering_retires_old_help_and_a_new_dialog_is_a_new_episode() {
-    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
-    let orchestrator = orchestrator.unwrap();
-    screen.lock().unwrap().dialog = true;
-    polls(&mut worker, 3);
-    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
-    assert_eq!(chosen["outcome"], "closed");
-    let blocked = (vec![orchestrator], expected_blocked(&worker, agent));
-    assert_eq!(
-        sent_by(&worker, room, agent),
-        std::slice::from_ref(&blocked),
-        "closing posts nothing"
-    );
-
-    // The identical next prompt appears before any idle status poll.
-    screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
     assert_only_bus_signed_notices(&worker);
@@ -589,22 +492,13 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
             );
             assert_eq!(sent_by(&worker, room, sender).len(), 1);
 
-            // The next permission/question form appears immediately after the answer.
-            screen.lock().unwrap().next_dialog = Some((next_question, next_text.into()));
-            let fingerprint = worker.observe_dialog(sender).unwrap()["fingerprint"]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            let answered = if question {
-                worker
-                    .answer_dialog(sender, Some("answer"), false, &fingerprint)
-                    .unwrap()
-            } else {
-                worker
-                    .choose_dialog_option(sender, 1, &fingerprint)
-                    .unwrap()
-            };
-            assert_eq!(answered["outcome"], "replaced");
+            // The native screen can replace one form without becoming idle.
+            {
+                let mut screen = screen.lock().unwrap();
+                screen.question = next_question;
+                screen.text = Some(next_text.into());
+                screen.revision += 1;
+            }
             polls(&mut worker, 3);
             assert_eq!(
                 worker.state.agent(sender).unwrap().status,
@@ -617,22 +511,9 @@ fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
             polls(&mut worker, 3);
             assert_eq!(sent_by(&worker, room, sender).len(), 2);
 
-            // A confirmed close is another boundary, even if the next form
-            // has identical text and is shown before the next status poll.
-            let fingerprint = worker.observe_dialog(sender).unwrap()["fingerprint"]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            let answered = if next_question {
-                worker
-                    .answer_dialog(sender, Some("answer"), false, &fingerprint)
-                    .unwrap()
-            } else {
-                worker
-                    .choose_dialog_option(sender, 1, &fingerprint)
-                    .unwrap()
-            };
-            assert_eq!(answered["outcome"], "closed");
+            // A coherent native close establishes the next episode boundary.
+            screen.lock().unwrap().dialog = false;
+            polls(&mut worker, 3);
             assert_eq!(sent_by(&worker, room, sender).len(), 2);
             screen.lock().unwrap().dialog = true;
             polls(&mut worker, 3);
@@ -711,7 +592,7 @@ fn blocked_notice_identifies_worker_and_exact_inspection_command() {
     let messages = sent_by(&worker, room, agent);
     assert_eq!(messages[0].0, vec![orchestrator.unwrap()]);
     assert!(messages[0].1.contains("builder"), "{}", messages[0].1);
-    assert!(messages[0].1.contains("bus agent dialog 'builder'"));
+    assert!(messages[0].1.contains("bus agent observe 'builder'"));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -736,77 +617,12 @@ fn message_status_rechecks_a_dialog_that_closed_between_polls() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A worker whose queued Codex question starts collapsed. The native list
-/// reports its pending-question id until `agent dialog` opens the panel, then
-/// the id of the expanded question parsed from the real capture.
-struct CollapsedCodexQuestion(Arc<Mutex<bool>>);
-
-impl Transport for CollapsedCodexQuestion {
-    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        let expanded = crate::agents::dialog::parse(include_str!(
-            "../../../../tests/fixtures/codex-question/expanded.txt"
-        ))
-        .expect("expanded Codex question parses");
-        let mut open = self.0.lock().unwrap();
-        match method {
-            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
-                agents: vec![serde_json::from_value(json!({
-                    "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
-                    "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
-                    "interactive_ready": true, "revision": 1, "agent_status": "blocked",
-                    "dialog_id": if *open { expanded.id() } else { "codex:pending_question".into() },
-                }))
-                .unwrap()],
-            }),
-            Method::AgentDialogObserve(params) => {
-                *open |= params.open_pending_question;
-                let mut observed = dialog();
-                observed.id = expanded.id();
-                Ok(ResponseResult::AgentDialog {
-                    observation: schema::AgentDialogObservation {
-                        pending_question: !*open,
-                        terminal_id: "terminal".into(),
-                        pane_id: "pane".into(),
-                        session_id: None,
-                        content_revision: 4,
-                        dialog: open.then_some(observed),
-                    },
-                })
-            }
-            _ => Ok(ResponseResult::Ok {}),
-        }
-    }
-}
-
-#[test]
-fn opening_a_collapsed_codex_question_does_not_repeat_the_blocked_notice() {
-    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
-    worker.transport = Box::new(CollapsedCodexQuestion(Arc::default()));
-    polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1, "collapsed question");
-    // The orchestrator follows the notice's own inspection command.
-    worker.observe_dialog(agent).unwrap();
-    polls(&mut worker, 3);
-    assert_eq!(
-        sent_by(&worker, room, agent),
-        [(
-            vec![orchestrator.unwrap()],
-            expected_blocked(&worker, agent)
-        )],
-        "the same question, now expanded, is not a new blocked episode"
-    );
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// Lists agents like `FakeServer` but cannot read the screen, as while the
-/// native server restarts or the pane closes between polls.
 struct UnreadableScreen(FakeServer);
 
 impl Transport for UnreadableScreen {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentDialogObserve(_) => Err(TransportError {
+            Method::AgentObserve(_) => Err(TransportError {
                 code: None,
                 message: "native server unavailable".into(),
                 definitely_rejected: false,
@@ -833,274 +649,6 @@ fn message_status_still_answers_when_a_flagged_recipients_screen_is_unreadable()
         status.is_ok(),
         "a status read must not fail on a screen refresh: {status:?}"
     );
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn collapsed_question_inspection_retries_redraw_without_repeating_notice() {
-    struct RedrawDuringOpen {
-        inner: CollapsedCodexQuestion,
-        stage: u8,
-        opens: Arc<Mutex<Vec<bool>>>,
-    }
-    impl Transport for RedrawDuringOpen {
-        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            if let Method::AgentDialogObserve(params) = &method {
-                if params.open_pending_question || self.stage > 0 {
-                    self.opens
-                        .lock()
-                        .unwrap()
-                        .push(params.open_pending_question);
-                    match self.stage {
-                        0 => {
-                            self.stage = 1;
-                            let mut pending = params.clone();
-                            pending.open_pending_question = false;
-                            return self.inner.request(Method::AgentDialogObserve(pending));
-                        }
-                        1 => {
-                            assert!(!params.open_pending_question);
-                            self.stage = 2;
-                            *self.inner.0.lock().unwrap() = true;
-                            return Err(TransportError {
-                                code: Some("dialog_observation_unavailable".into()),
-                                message: "Agent screen changed while it was being observed".into(),
-                                definitely_rejected: true,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            self.inner.request(method)
-        }
-    }
-    let (mut worker, agent, room, _, _, dir) = worker(true);
-    let opens = Arc::default();
-    worker.transport = Box::new(RedrawDuringOpen {
-        inner: CollapsedCodexQuestion(Arc::default()),
-        stage: 0,
-        opens: Arc::clone(&opens),
-    });
-    polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    let observed = worker.observe_dialog(agent);
-    polls(&mut worker, 3);
-    let notices = sent_by(&worker, room, agent).len();
-    assert!(
-        observed.is_ok(),
-        "redraw aborted inspection: {observed:?}; notices={notices}"
-    );
-    assert!(observed.unwrap()["fingerprint"].is_string());
-    assert_eq!(
-        notices, 1,
-        "opening the same question must not notify twice"
-    );
-    let opens = opens.lock().unwrap();
-    assert_eq!(opens.iter().filter(|open| **open).count(), 1);
-    assert!(opens.len() >= 3, "must read again after the redraw error");
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-fn redraw_error() -> TransportError {
-    TransportError {
-        code: Some("dialog_observation_unavailable".into()),
-        message: "Agent screen changed while it was being observed".into(),
-        definitely_rejected: true,
-    }
-}
-
-#[test]
-fn collapsed_question_inspection_retries_a_redraw_on_the_opening_read() {
-    struct RedrawOnOpen {
-        inner: CollapsedCodexQuestion,
-        observes: Arc<Mutex<Vec<bool>>>,
-    }
-    impl Transport for RedrawOnOpen {
-        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            if let Method::AgentDialogObserve(params) = &method {
-                self.observes
-                    .lock()
-                    .unwrap()
-                    .push(params.open_pending_question);
-                if params.open_pending_question {
-                    // The server queued Shift+Left, then Codex's redraw broke the snapshot.
-                    *self.inner.0.lock().unwrap() = true;
-                    return Err(redraw_error());
-                }
-            }
-            self.inner.request(method)
-        }
-    }
-    let (mut worker, agent, room, _, _, dir) = worker(true);
-    let observes = Arc::default();
-    worker.transport = Box::new(RedrawOnOpen {
-        inner: CollapsedCodexQuestion(Arc::default()),
-        observes: Arc::clone(&observes),
-    });
-    polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    let observed = worker.observe_dialog(agent);
-    polls(&mut worker, 3);
-    assert!(observed.is_ok(), "{observed:?}");
-    assert!(observed.unwrap()["fingerprint"].is_string());
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    assert_eq!(
-        *observes.lock().unwrap(),
-        [true, false, false, false],
-        "one opening read, its retry, and two read-only notice rechecks"
-    );
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn dialog_inspection_gives_up_after_the_bounded_wait_when_redraws_never_settle() {
-    struct AlwaysRedrawing {
-        inner: CollapsedCodexQuestion,
-        observes: Arc<Mutex<Vec<bool>>>,
-    }
-    impl Transport for AlwaysRedrawing {
-        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            if let Method::AgentDialogObserve(params) = &method {
-                self.observes
-                    .lock()
-                    .unwrap()
-                    .push(params.open_pending_question);
-                return Err(redraw_error());
-            }
-            self.inner.request(method)
-        }
-    }
-    let (mut worker, agent, room, _, _, dir) = worker(true);
-    let observes = Arc::default();
-    worker.transport = Box::new(AlwaysRedrawing {
-        inner: CollapsedCodexQuestion(Arc::default()),
-        observes: Arc::clone(&observes),
-    });
-    polls(&mut worker, 3);
-    let notice = worker.state.agent(agent).unwrap().dialog_notice.clone();
-    let started = std::time::Instant::now();
-    let observed = worker.observe_dialog(agent);
-    assert!(observed.is_err());
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
-    let observes = observes.lock().unwrap();
-    assert_eq!(observes.len(), 21, "one opening read plus 20 settle reads");
-    assert_eq!(observes.iter().filter(|open| **open).count(), 1);
-    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn collapsed_question_inspection_waits_past_a_torn_frame_without_repeating_notice() {
-    // Codex replaces the collapsed queue with the opened question; a snapshot
-    // between the two shows neither, while the screen is still being drawn.
-    struct TornFrameDuringOpen {
-        inner: CollapsedCodexQuestion,
-        stage: u8,
-    }
-    impl Transport for TornFrameDuringOpen {
-        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            if let Method::AgentDialogObserve(params) = &method {
-                match self.stage {
-                    0 if params.open_pending_question => {
-                        self.stage = 1;
-                        let mut collapsed = params.clone();
-                        collapsed.open_pending_question = false;
-                        return self.inner.request(Method::AgentDialogObserve(collapsed));
-                    }
-                    1 => {
-                        self.stage = 2;
-                        *self.inner.0.lock().unwrap() = true;
-                        return Ok(ResponseResult::AgentDialog {
-                            observation: schema::AgentDialogObservation {
-                                pending_question: false,
-                                terminal_id: "terminal".into(),
-                                pane_id: "pane".into(),
-                                session_id: None,
-                                content_revision: 5,
-                                dialog: None,
-                            },
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            self.inner.request(method)
-        }
-    }
-    let (mut worker, agent, room, _, _, dir) = worker(true);
-    worker.transport = Box::new(TornFrameDuringOpen {
-        inner: CollapsedCodexQuestion(Arc::default()),
-        stage: 0,
-    });
-    polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    let observed = worker.observe_dialog(agent).unwrap();
-    polls(&mut worker, 3);
-    let notices = sent_by(&worker, room, agent).len();
-    assert_eq!(
-        notices, 1,
-        "a torn frame ended inspection with dialog={}; the opened question notified again",
-        observed["dialog"]
-    );
-    assert!(observed["fingerprint"].is_string());
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn collapsed_question_inspection_bounds_the_wait_for_an_empty_replacement_frame() {
-    struct EmptyAfterOpen {
-        inner: CollapsedCodexQuestion,
-        observes: Arc<Mutex<Vec<bool>>>,
-    }
-    impl Transport for EmptyAfterOpen {
-        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            if let Method::AgentDialogObserve(params) = &method {
-                self.observes
-                    .lock()
-                    .unwrap()
-                    .push(params.open_pending_question);
-                let response = self.inner.request(method)?;
-                let ResponseResult::AgentDialog { mut observation } = response else {
-                    panic!("dialog response");
-                };
-                observation.pending_question = false;
-                observation.dialog = None;
-                return Ok(ResponseResult::AgentDialog { observation });
-            }
-            self.inner.request(method)
-        }
-    }
-    let (mut worker, agent, room, _, _, dir) = worker(true);
-    let observes = Arc::default();
-    worker.transport = Box::new(EmptyAfterOpen {
-        inner: CollapsedCodexQuestion(Arc::default()),
-        observes: Arc::clone(&observes),
-    });
-    polls(&mut worker, 3);
-    let notice = worker.state.agent(agent).unwrap().dialog_notice.clone();
-    assert_eq!(
-        notice.as_deref(),
-        Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID)
-    );
-    let observed = worker.observe_dialog(agent).unwrap();
-    assert!(observed["dialog"].is_null());
-    assert!(observed["fingerprint"].is_null());
-    let observes = observes.lock().unwrap();
-    assert_eq!(
-        observes.len(),
-        21,
-        "pending episode waits through the full bound even if the opening read is empty"
-    );
-    assert_eq!(observes.iter().filter(|open| **open).count(), 1);
-    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, notice);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1182,22 +730,6 @@ fn message_status_saves_once_when_several_recipients_dialogs_closed() {
 }
 
 #[test]
-fn choosing_reports_closed_after_transient_redraw() {
-    let (mut worker, agent, _, _, screen, dir) = worker(false);
-    screen.lock().unwrap().dialog = true;
-    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    screen.lock().unwrap().settle_errors = 2;
-    let result = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
-    assert_eq!(result["outcome"], "closed");
-    assert!(result["dialog"].is_null());
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
 fn settled_dialog_does_not_send_a_stale_blocked_notice() {
     let (mut worker, agent, room, _, _, dir) = worker(true);
     // Two cached AgentList observations still describe the old dialog, but
@@ -1255,7 +787,7 @@ fn a_fresh_native_dialog_close_suppresses_fallback_before_episode_debounce_finis
 fn closed_dialog_resolves_help_even_while_blocked_metadata_stays_cached() {
     let (mut worker, agent, room, _, screen, dir) = worker(true);
     screen.lock().unwrap().dialog = true;
-    let episode = screen.lock().unwrap().current_dialog().unwrap().id;
+    let episode = screen.lock().unwrap().current_dialog().unwrap();
     notify_steady(&mut worker, agent, Some(&episode));
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
     screen.lock().unwrap().dialog = false;
@@ -1275,38 +807,16 @@ fn uncertain_close_retains_help_until_a_readable_observation_confirms_settlement
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     let episode = worker.state.agent(agent).unwrap().dialog_notice.clone();
-    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    screen.lock().unwrap().settle_errors = 22;
-    let result = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
-    assert_eq!(result["outcome"], "unknown");
+    {
+        let mut current = screen.lock().unwrap();
+        current.dialog = false;
+        current.unavailable_reads = 2;
+    }
+    notify_steady(&mut worker, agent, episode.as_deref());
     assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, episode);
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
     notify_steady(&mut worker, agent, episode.as_deref());
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    notify_steady(&mut worker, agent, episode.as_deref());
     assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, None);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn closing_a_dialog_through_choose_posts_no_resolved_notice() {
-    let (mut worker, agent, room, _, screen, dir) = worker(true);
-    screen.lock().unwrap().dialog = true;
-    polls(&mut worker, 3);
-    assert_eq!(sent_by(&worker, room, agent).len(), 1);
-    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let result = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
-    assert_eq!(result["outcome"], "closed");
-    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
-    // The answerer already knows; only the blocked notice was sent.
     assert_eq!(sent_by(&worker, room, agent).len(), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -1416,8 +926,7 @@ fn an_unreadable_deadline_observation_retains_help_until_an_open_snapshot() {
     worker.expire_queued_requests(deadline).unwrap();
     {
         let mut current = screen.lock().unwrap();
-        current.answer_sent = true;
-        current.settle_errors = 1;
+        current.unavailable_reads = 1;
     }
     worker.expire_unconfirmed_submissions(deadline).unwrap();
     assert_eq!(
@@ -1460,8 +969,7 @@ fn a_persistently_unreadable_open_dialog_still_gets_a_bounded_developer_fallback
         let mut current = screen.lock().unwrap();
         // AgentList continues to report this same open dialog. Detailed
         // observation remains unreadable, as during a sustained redraw.
-        current.answer_sent = true;
-        current.settle_errors = u32::MAX;
+        current.unavailable_reads = u32::MAX;
     }
     let grace = crate::messaging::coordinator::expiry::DIALOG_OBSERVATION_GRACE_MS;
     for elapsed in [
@@ -2010,6 +1518,78 @@ fn a_stale_restart_marker_does_not_suppress_a_real_dialog_forever() {
         !restart_suppresses(&worker, agent, much_later),
         "a marker left by an interrupted restart must not hide a real dialog a day later"
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_generic_blocked_screen_retires_only_after_a_matching_coherent_clear() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().blocked = true;
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    let episode = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    screen.lock().unwrap().wrong_terminal = true;
+    notify_steady(&mut worker, agent, Some(BLOCKED));
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, episode);
+    {
+        let mut current = screen.lock().unwrap();
+        current.wrong_terminal = false;
+        current.blocked = false;
+    }
+    notify_steady(&mut worker, agent, Some(BLOCKED));
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    assert_eq!(screen.lock().unwrap().inputs, 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_changed_native_session_cannot_retire_the_previous_sessions_help() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    let episode = worker.state.agent(agent).unwrap().dialog_notice.clone();
+    let mut state = worker.state.clone();
+    let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = Some("original-session".into());
+    state.set_agent_runtime_identity(agent, identity).unwrap();
+    worker.save(state).unwrap();
+    {
+        let mut current = screen.lock().unwrap();
+        current.dialog = false;
+        current.session = Some("replacement-session".into());
+    }
+    notify_steady(&mut worker, agent, episode.as_deref());
+    assert_eq!(worker.state.agent(agent).unwrap().dialog_notice, episode);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    screen.lock().unwrap().session = Some("original-session".into());
+    notify_steady(&mut worker, agent, episode.as_deref());
+    assert!(worker.state.agent(agent).unwrap().dialog_notice.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_formerly_automatic_latency_notice_uses_ordinary_orchestrator_help_without_input() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    {
+        let mut current = screen.lock().unwrap();
+        current.dialog = true;
+        current.raw_screen = Some(
+            include_str!("../../../../tests/fixtures/provider-ui/claude-extra-thought.txt").into(),
+        );
+    }
+    polls(&mut worker, 5);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(
+            vec![orchestrator.unwrap()],
+            expected_blocked(&worker, agent)
+        )]
+    );
+    assert_eq!(screen.lock().unwrap().inputs, 0);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

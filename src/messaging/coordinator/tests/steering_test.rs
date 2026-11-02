@@ -65,7 +65,8 @@ impl Transport for Native {
                 }))
                 .unwrap(),
             },
-            Method::AgentDialogObserve(params) => open_native_question(&params.target),
+            Method::AgentObserve(params) => open_native_question(&params.target),
+            Method::AgentGet(params) => open_native_info(&params.target),
             _ => ResponseResult::Ok {},
         };
         self.0.lock().unwrap().push(method);
@@ -73,17 +74,43 @@ impl Transport for Native {
     }
 }
 
-/// A coherent collapsed question in the blocked worker's owned pane.
+/// A coherent generic menu in the blocked worker's owned pane.
 fn open_native_question(pane: &str) -> ResponseResult {
-    ResponseResult::AgentDialog {
-        observation: schema::AgentDialogObservation {
+    let mut grid = schema::driver::Grid::blank(60, 5);
+    for (row, line) in [
+        "Which option?",
+        "❯ 1. First",
+        "  2. Second",
+        "Enter to select · Esc to cancel",
+    ]
+    .iter()
+    .enumerate()
+    {
+        for (col, ch) in line.chars().enumerate() {
+            grid.cells[row][col].symbol = ch.to_string();
+        }
+    }
+    ResponseResult::TerminalObserved {
+        observation: schema::TerminalObservation {
             terminal_id: "terminal".into(),
             pane_id: pane.into(),
-            session_id: None,
-            content_revision: 1,
-            pending_question: true,
-            dialog: None,
+            content_revision: 2,
+            text: grid.text(),
+            focus: Some((1, "First".into())),
+            focus_occurrence: 0,
+            grid,
         },
+    }
+}
+
+fn open_native_info(pane: &str) -> ResponseResult {
+    ResponseResult::AgentInfo {
+        agent: serde_json::from_value(json!({
+            "terminal_id":"terminal", "pane_id":pane, "agent":"codex",
+            "workspace_id":"workspace", "tab_id":"tab", "focused":false,
+            "revision":1, "agent_status":"blocked", "interactive_ready":false,
+        }))
+        .unwrap(),
     }
 }
 
@@ -1139,7 +1166,10 @@ fn orchestrator_with_blocked_worker_notice() -> (Fixture, AgentId, RequestId, Re
     let lead = running(&mut f, "keep working", "turn-1");
     for _ in 0..2 {
         f.worker
-            .notify_dialogs(vec![(codex, Some("codex:pending_question".into()))])
+            .notify_dialogs(vec![(
+                codex,
+                Some(crate::messaging::coordinator::dialogs::BLOCKED.into()),
+            )])
             .unwrap();
     }
     let Some(DialogNoticeTo::Orchestrator(notice)) =
@@ -1157,7 +1187,8 @@ fn an_uncertain_steered_dialog_notice_reaches_the_developer_even_if_its_turn_set
     impl Transport for UncertainNative {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             Ok(match method {
-                Method::AgentDialogObserve(params) => open_native_question(&params.target),
+                Method::AgentObserve(params) => open_native_question(&params.target),
+                Method::AgentGet(params) => open_native_info(&params.target),
                 _ => ResponseResult::Ok {},
             })
         }

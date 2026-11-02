@@ -352,68 +352,6 @@ fn subscribe_request_parses_parameterized_subscriptions() {
 }
 
 #[test]
-fn agent_dialog_choose_schema_has_no_launch_or_arbitrary_keys() {
-    let request = Request {
-        id: "choose-1".into(),
-        method: Method::AgentDialogChoose(AgentDialogChooseParams {
-            target: "w1:p2".into(),
-            expected_terminal_id: "terminal-1".into(),
-            expected_pane_id: "w1:p2".into(),
-            expected_session_id: None,
-            expected_dialog_digest: "abc".into(),
-            option: 2,
-            action: Default::default(),
-        }),
-    };
-    let value = serde_json::to_value(&request).unwrap();
-    assert_eq!(value["method"], "agent.dialog.choose");
-    let params = &value["params"];
-    assert!(params.get("expected_session_id").is_none());
-    assert!(
-        params.get("action").is_none(),
-        "normal choices retain the old wire shape"
-    );
-    assert!(params.get("keys").is_none());
-    assert_eq!(serde_json::from_value::<Request>(value).unwrap(), request);
-    assert!(serde_json::from_value::<Request>(serde_json::json!({
-        "id":"x","method":"agent.dialog.choose","params":{
-            "target":"w1:p2","expected_terminal_id":"terminal-1","expected_pane_id":"w1:p2",
-            "expected_dialog_digest":"abc","option":1,"keys":["enter"]
-        }
-    }))
-    .is_err());
-}
-
-#[test]
-fn agent_dialog_answer_schema_round_trips_and_old_dialogs_default_to_choice() {
-    let request = Request {
-        id: "answer".into(),
-        method: Method::AgentDialogAnswer(AgentDialogAnswerParams {
-            target: "pane".into(),
-            expected_terminal_id: "terminal".into(),
-            expected_pane_id: "pane".into(),
-            expected_session_id: None,
-            expected_dialog_digest: "digest".into(),
-            text: Some("token".into()),
-            skip: false,
-        }),
-    };
-    let mut value = serde_json::to_value(&request).unwrap();
-    assert_eq!(value["method"], "agent.dialog.answer");
-    assert_eq!(
-        serde_json::from_value::<Request>(value.clone()).unwrap(),
-        request
-    );
-    value["params"]["keys"] = serde_json::json!(["enter"]);
-    assert!(serde_json::from_value::<Request>(value).is_err());
-    let old = serde_json::json!({"text":"Allow?","options":[],"id":"id","digest":"digest"});
-    assert_eq!(
-        serde_json::from_value::<AgentDialog>(old).unwrap().kind,
-        AgentDialogKind::Choice
-    );
-}
-
-#[test]
 fn agent_status_request_values_remain_strict() {
     assert!(serde_json::from_str::<AgentStatus>(r#""working""#).is_ok());
     assert!(serde_json::from_str::<AgentStatus>(r#""future_status""#).is_err());
@@ -565,36 +503,6 @@ fn runtime_status_silent_socket_is_unavailable() {
         matches!(result, Ok(None)),
         "a status receive timeout must classify the API as unavailable, got {result:?}"
     );
-}
-
-#[test]
-fn auto_ui_choice_actions_are_closed_and_keep_the_default_wire_shape() {
-    let base = serde_json::json!({
-        "target":"pane", "expected_terminal_id":"terminal", "expected_pane_id":"pane",
-        "expected_dialog_digest":"digest", "option":2
-    });
-    let normal: AgentDialogChooseParams = serde_json::from_value(base.clone()).unwrap();
-    assert_eq!(normal.action, AgentDialogChoiceAction::Choose);
-    assert!(serde_json::to_value(&normal)
-        .unwrap()
-        .get("action")
-        .is_none());
-    for (action, wire) in [
-        (AgentDialogChoiceAction::Focus, "focus"),
-        (AgentDialogChoiceAction::Confirm, "confirm"),
-    ] {
-        let mut params = normal.clone();
-        params.action = action;
-        let value = serde_json::to_value(&params).unwrap();
-        assert_eq!(value["action"], wire);
-        assert_eq!(
-            serde_json::from_value::<AgentDialogChooseParams>(value).unwrap(),
-            params
-        );
-    }
-    let mut invalid = base;
-    invalid["action"] = serde_json::json!("enter");
-    assert!(serde_json::from_value::<AgentDialogChooseParams>(invalid).is_err());
 }
 
 #[test]

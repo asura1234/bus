@@ -14,9 +14,8 @@ fn identity_agent_commands_resolve_names_globally_in_every_conversation() {
     }
     for (index, method) in [
         "agent.read",
-        "agent.dialog.observe",
-        "agent.dialog.choose",
-        "agent.dialog.answer",
+        "agent.observe",
+        "agent.press",
         "agent.clear",
         "agent.rename",
         "agent.setup-confirm",
@@ -35,7 +34,7 @@ fn identity_agent_commands_resolve_names_globally_in_every_conversation() {
             .state
             .create_agent(other, "foreign-peer", Provider::Codex, dir.clone(), None)
             .unwrap();
-        let params = json!({"agent":"codex1", "room":other.0.to_string(), "confirm":true, "name":"codex1", "on":true, "option":"1", "fingerprint":"invalid", "text":"answer", "source":"visible"});
+        let params = json!({"agent":"codex1", "room":other.0.to_string(), "confirm":true, "name":"codex1", "on":true, "text":"answer", "source":"visible"});
         let fields = method_spec(method).unwrap().fields;
         let mut by_name = params.as_object().unwrap().clone();
         by_name.retain(|key, _| fields.contains(&key.as_str()) || key == "room");
@@ -187,13 +186,13 @@ fn identity_unresolved_agent_selector_errors_name_the_failing_selector() {
     let bad_author = call(
         &mut w,
         "bad-as",
-        "agent.dialog.observe",
+        "agent.observe",
         json!({"agent":"codex1","as":"ghost-author"}),
     );
     let bad_target = call(
         &mut w,
         "bad-agent",
-        "agent.dialog.observe",
+        "agent.observe",
         json!({"agent":"ghost-target","as":"codex1"}),
     );
     let author_error = error_message(&bad_author);

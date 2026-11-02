@@ -412,10 +412,7 @@ impl Worker {
     ) -> Result<(), String> {
         let mut state = self.state.clone();
         for agent in agents {
-            let observation = (|| {
-                let (_, _, terminal, pane, session) = self.dialog_identity(agent)?;
-                self.native_dialog(&pane, &terminal, session.as_deref(), false)
-            })();
+            let observation = self.native_blocker(agent);
             let Ok(observation) = observation else {
                 // An unreadable screen cannot prove the cached dialog closed.
                 continue;
@@ -423,7 +420,7 @@ impl Worker {
             state
                 .observe_dialog(
                     agent,
-                    observation.dialog.is_some() || observation.pending_question,
+                    observation.is_some(),
                     crate::messaging::storage::io::now_ms(),
                 )
                 .map_err(|error| error.to_string())?;

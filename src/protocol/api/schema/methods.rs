@@ -1,5 +1,5 @@
+use super::{AgentObserveParams, AgentPressParams, AgentStartupSnapshotParams};
 use super::{
-    AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogObserveParams,
     AgentPromptIfIdleParams, AgentPromptIfUnboundParams, AgentPromptParams, AgentReadParams,
     AgentRenameParams, AgentSendKeysParams, AgentStartIfIdentityParams, AgentStartParams,
     AgentTarget, AgentWaitParams, ClientShellSurfaceSetParams, ClientWindowTitleSetParams,
@@ -13,7 +13,6 @@ use super::{
     TabListParams, TabRenameParams, TabTarget, WorkspaceCloseParams, WorkspaceCreateParams,
     WorkspaceMoveParams, WorkspaceRenameParams, WorkspaceTarget,
 };
-use super::{AgentObserveParams, AgentPressParams, AgentStartupSnapshotParams};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -85,12 +84,6 @@ pub enum Method {
     AgentObserve(AgentObserveParams),
     #[serde(rename = "agent.press")]
     AgentPress(AgentPressParams),
-    #[serde(rename = "agent.dialog.observe")]
-    AgentDialogObserve(AgentDialogObserveParams),
-    #[serde(rename = "agent.dialog.choose")]
-    AgentDialogChoose(AgentDialogChooseParams),
-    #[serde(rename = "agent.dialog.answer")]
-    AgentDialogAnswer(AgentDialogAnswerParams),
     #[serde(rename = "agent.send_keys")]
     AgentSendKeys(AgentSendKeysParams),
     #[serde(rename = "agent.rename")]
@@ -199,9 +192,6 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentRead(_) => "agent.read",
         Method::AgentObserve(_) => "agent.observe",
         Method::AgentPress(_) => "agent.press",
-        Method::AgentDialogObserve(_) => "agent.dialog.observe",
-        Method::AgentDialogChoose(_) => "agent.dialog.choose",
-        Method::AgentDialogAnswer(_) => "agent.dialog.answer",
         Method::AgentSendKeys(_) => "agent.send_keys",
         Method::AgentRename(_) => "agent.rename",
         Method::AgentFocus(_) => "agent.focus",

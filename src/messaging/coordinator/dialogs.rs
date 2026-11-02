@@ -62,72 +62,38 @@ impl Worker {
             let Some(agent) = self.state.agent(id) else {
                 continue;
             };
-            // A coherent close retires an automatic reservation immediately;
-            // ordinary help notices keep their existing steady-poll policy.
-            if agent.deletion_pending
-                || !(steady || wait.is_none() && agent.automatic_dialog_answer.is_some())
-            {
+            if agent.deletion_pending || !steady {
                 continue;
             }
             let notice = agent.dialog_notice.clone();
-            if wait.is_none() && notice.is_none() && agent.automatic_dialog_answer.is_none() {
+            if wait.is_none() && notice.is_none() {
                 continue;
             }
-            // Native ids change with question/command text and options, but
-            // ignore selection redraws. A changed id needs another answer.
-            let mut verified_shape = wait.clone();
-            let mut open_dialog = wait.as_deref() != Some(BLOCKED);
-            if wait.as_deref() != Some(crate::agents::dialog::CODEX_PENDING_QUESTION_ID) {
-                // AgentList metadata can outlive an answer or manual close.
-                // Never open a pending panel or send keys while verifying.
-                if let Ok((_, _, terminal, pane, session)) = self.dialog_identity(id) {
-                    let Ok(current) =
-                        self.native_dialog(&pane, &terminal, session.as_deref(), false)
-                    else {
-                        continue;
-                    };
-                    if current.dialog.is_none()
-                        && !current.pending_question
-                        && wait.as_deref() != Some(BLOCKED)
-                    {
-                        if steady {
-                            self.finish_closed_dialog(id)?;
-                        } else {
-                            self.clear_automatic_dialog_answer(id)?;
-                        }
-                        continue;
-                    }
-                    // Blocked is itself the detector's published observation.
-                    // A missing provider parser cannot close this generic wait.
-                    if !self.retain_unparsed_blocked_wait(id, wait.as_deref(), &current)? {
-                        continue;
-                    }
-                    open_dialog |= wait.as_deref() == Some(BLOCKED);
-                    // Missing list metadata can be an unreadable redraw. An
-                    // open dialog or pending question keeps earlier help live.
-                    if wait.is_none() {
-                        continue;
-                    }
-                    if let Some(dialog) = current.dialog {
-                        verified_shape = Some(dialog.id.clone());
-                        if wait.as_deref() != Some(BLOCKED)
-                            && wait.as_deref() != Some(dialog.id.as_str())
-                        {
-                            self.dialog_seen.insert(id, (Some(dialog.id), 1));
-                            continue;
-                        }
-                    }
+            // List metadata may outlive an answered screen. Verify through the
+            // same read-only driver used by orchestrators, with native identity
+            // and status checks. Never open a question panel or send input here.
+            if self.terminal_identity(id).is_ok() {
+                let Ok(current) = self.native_blocker(id) else {
+                    continue;
+                };
+                let Some(current) = current else {
+                    self.finish_closed_dialog(id)?;
+                    continue;
+                };
+                if wait.is_none() {
+                    continue;
+                }
+                if wait.as_deref() != Some(BLOCKED)
+                    && current != BLOCKED
+                    && wait.as_deref() != Some(current.as_str())
+                {
+                    self.dialog_seen.insert(id, (Some(current), 1));
+                    continue;
                 }
             }
-            if !steady {
-                continue;
-            }
             if wait.is_none() {
-                // Keep the existing fallback for agents without a bound pane.
+                // Keep the fallback for agents without a bound pane.
                 self.finish_closed_dialog(id)?;
-                continue;
-            }
-            if self.auto_answer_dialog(id, verified_shape.as_deref())? {
                 continue;
             }
             if notice == wait {
@@ -146,7 +112,7 @@ impl Worker {
                 continue;
             }
             let mut state = self.state.clone();
-            let to = post_blocked(&mut state, id, open_dialog)?;
+            let to = post_blocked(&mut state, id)?;
             state
                 .set_dialog_notice(id, wait)
                 .map_err(|error| error.to_string())?;
@@ -159,73 +125,16 @@ impl Worker {
         self.dialog_seen.retain(|id, _| state.agent(*id).is_some());
         Ok(())
     }
-
-    fn retain_unparsed_blocked_wait(
-        &mut self,
-        id: AgentId,
-        wait: Option<&str>,
-        current: &super::schema::AgentDialogObservation,
-    ) -> Result<bool, String> {
-        if wait != Some(BLOCKED) || current.dialog.is_some() || current.pending_question {
-            return Ok(true);
-        }
-        match self.blocked_screen_is_current(
-            &current.pane_id,
-            &current.terminal_id,
-            current.session_id.as_deref(),
-        ) {
-            Some(true) => Ok(true),
-            Some(false) => {
-                self.finish_closed_dialog(id)?;
-                Ok(false)
-            }
-            None => Ok(false),
-        }
-    }
-
-    /// The list can still carry the Blocked frame from a dialog just closed.
-    /// Verify its native state rather than using parser-null as either proof.
-    fn blocked_screen_is_current(
-        &mut self,
-        pane: &str,
-        terminal: &str,
-        session: Option<&str>,
-    ) -> Option<bool> {
-        let super::ResponseResult::AgentInfo { agent } = self
-            .transport
-            .request(super::Method::AgentGet(super::schema::AgentTarget {
-                target: pane.to_owned(),
-            }))
-            .ok()?
-        else {
-            return None;
-        };
-        if agent.pane_id != pane
-            || agent.terminal_id != terminal
-            || agent
-                .agent_session
-                .as_ref()
-                .map(|session| session.value.as_str())
-                != session
-        {
-            return None;
-        }
-        Some(agent.agent_status == super::schema::AgentStatus::Blocked)
-    }
 }
 
 /// Bus's notice about a blocked agent in its work room: to the room's
 /// orchestrator, which delivers it like any message and wakes the
 /// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
 /// the developer directly, since MASTER cannot itself be orchestrated.
-fn post_blocked(
-    state: &mut BusState,
-    id: AgentId,
-    open_dialog: bool,
-) -> Result<Option<DialogNoticeTo>, String> {
+fn post_blocked(state: &mut BusState, id: AgentId) -> Result<Option<DialogNoticeTo>, String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let text = format!(
-        "{}. {BLOCKED_MESSAGE}\nInspect: bus agent dialog {}",
+        "{}. {BLOCKED_MESSAGE}\nInspect: bus agent observe {}",
         state.agent_message_label(id),
         state.agent_cli_selector(id)
     );
@@ -235,15 +144,14 @@ fn post_blocked(
             .map(|_| None)
             .map_err(|error| error.to_string());
     }
-    post_dialog_notice(state, id, open_dialog, text)
+    post_dialog_notice(state, id, text)
 }
 
 /// Blocked and resolved notices share the existing room/recipient policy.
 /// Returns who the notice went to.
-pub(super) fn post_dialog_notice(
+fn post_dialog_notice(
     state: &mut BusState,
     id: AgentId,
-    open_dialog: bool,
     text: String,
 ) -> Result<Option<DialogNoticeTo>, String> {
     let room = state.agent(id).ok_or("Unknown agent")?.room_id;
@@ -251,9 +159,7 @@ pub(super) fn post_dialog_notice(
         return Ok(None);
     }
     let now = crate::messaging::storage::io::now_ms();
-    let orchestrator = state
-        .notice_orchestrator(room, Some(id))
-        .filter(|_| open_dialog);
+    let orchestrator = state.notice_orchestrator(room, Some(id));
     match orchestrator {
         Some(orchestrator) => state
             .submit_message_from(
@@ -437,7 +343,3 @@ fn spooled_turn_final(worker: &Worker, id: AgentId, now: u64) -> bool {
 #[cfg(test)]
 #[path = "tests/dialogs_test.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests/auto_ui_test.rs"]
-mod auto_ui_tests;

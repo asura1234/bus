@@ -31,8 +31,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::AgentPrompt(_)
             | Method::AgentPromptIfIdle(_)
             | Method::AgentPromptIfUnbound(_)
-            | Method::AgentDialogChoose(_)
-            | Method::AgentDialogAnswer(_)
             | Method::AgentSendKeys(_)
             | Method::AgentPress(_)
             | Method::PaneSplit(_)
@@ -184,9 +182,6 @@ impl App {
             Method::AgentRead(params) => self.handle_agent_read(id, params),
             Method::AgentObserve(params) => self.handle_agent_observe(id, params),
             Method::AgentPress(params) => self.handle_agent_press(id, params),
-            Method::AgentDialogObserve(target) => self.handle_agent_dialog_observe(id, target),
-            Method::AgentDialogChoose(params) => self.handle_agent_dialog_choose(id, params),
-            Method::AgentDialogAnswer(params) => self.handle_agent_dialog_answer(id, params),
             Method::AgentSendKeys(params) => self.handle_agent_send_keys(id, params),
             method => self.dispatch_pane_api_method(id, method),
         }
