@@ -255,7 +255,8 @@ class ProvisionTests(Fixture):
             self.assertTrue(evidence["error"])
         finally:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             process.wait()
