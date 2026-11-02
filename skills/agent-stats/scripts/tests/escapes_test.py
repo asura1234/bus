@@ -217,3 +217,30 @@ def test_machine_linked_failed_gate_and_live_roots_can_escape_ready(tmp_path):
         escaped = [r for r in rows if r["kind"] == "escape"]
         assert len(escaped) == 1
         assert escaped[0]["data"]["detected_by"] == [kind]
+        # Millisecond and second precision must compare as instants, not strings.
+        late = tmp_path / (kind + "-late-ready")
+        observed_completion(
+            late, root / "review.md", "early", "2026-11-02T02:00:01.500Z"
+        )
+        again = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "collect",
+                "--store",
+                str(late),
+                "--task",
+                "pr-1",
+                "--artifacts",
+                str(root),
+                "--repo",
+                str(repo),
+            ],
+            text=True,
+            capture_output=True,
+        )
+        assert again.returncode == 0, again.stderr
+        late_rows = [
+            json.loads(x) for x in (late / "events.jsonl").read_text().splitlines()
+        ]
+        assert not [r for r in late_rows if r["kind"] == "escape"]

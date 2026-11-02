@@ -1,5 +1,6 @@
 """Count an escape only with ordered detection and unchanged cited Git objects."""
 
+from datetime import datetime
 import re
 import subprocess
 
@@ -52,15 +53,19 @@ def escapes(rows, repo):
         if not valid or not detected or not locations:
             continue
         detection_time = max(
-            r["ts"] if r["kind"] == "review" else r["data"]["finished_at"]
-            for r in detected
+            [
+                r["ts"] if r["kind"] == "review" else r["data"]["finished_at"]
+                for r in detected
+            ],
+            key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")),
         )
         defect_head = root["data"]["head"]
         for ready in reviews:
             if (
                 ready["data"]["verdict"] != "Ready"
                 or not ready["ts"]
-                or ready["ts"] >= detection_time
+                or datetime.fromisoformat(ready["ts"].replace("Z", "+00:00"))
+                >= datetime.fromisoformat(detection_time.replace("Z", "+00:00"))
             ):
                 continue
             h = ready["data"]["head"]
