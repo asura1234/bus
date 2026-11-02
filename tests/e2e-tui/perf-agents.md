@@ -116,7 +116,8 @@ idle fake Claude worker; default room `bus` open.
 **Preconditions/setup:** fresh scratch session at 100×12; use the scratch CLI to
 create `extra-1` through `extra-20`; default room `bus` open, no workers needed.
 
-1. Press Ctrl+N, type `final-room` and press Enter → the new room is created and
+1. Press Ctrl+Shift+R, wait for the `Room name` form, type `final-room` and
+   press Enter → the new room is created and
    its main pane title reads `# final-room`. Capture state and an inspected
    screenshot.
 2. Press F6 to open the current room → both its selected sidebar name/status and
