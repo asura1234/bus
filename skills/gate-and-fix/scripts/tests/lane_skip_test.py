@@ -177,3 +177,19 @@ def test_failed_preflight_cannot_report_passing_rust_from_only_dev_tools(tmp_pat
     report = json.loads(next((tmp_path / "temp/run-test").glob("*.json")).read_text())
     assert report["lanes"]["rust"]["status"] == "FAIL"
     assert report["lanes"]["python"]["status"] == "NOT_RUN"
+
+
+def test_devtools_only_affected_run_does_not_claim_no_rust_changes(tmp_path):
+    put(tmp_path, "src/main.rs", "mod devtools;")
+    put(tmp_path, "src/devtools/mod.rs", '#[path="tests/local_test.rs"] mod local;')
+    put(tmp_path, "src/devtools/tests/local_test.rs", "#[test] fn case() {}")
+    plan = select(["src/devtools/tests/local_test.rs"], root=tmp_path)
+    assert plan.dev_tools and plan.rust_filter == "none()"
+    success = runner.GateResult("dev-tools", ("probe",), 0, 1, "", "")
+    with (patch.object(runner.quality, "ROOT", tmp_path),
+          patch.object(runner.quality, "head", return_value="head"),
+          patch.object(runner, "batch", side_effect=[[], [success]])):
+        assert runner.execute(plan) == 0
+    report = json.loads(next((tmp_path / "temp/run-test").glob("*.json")).read_text())
+    assert report["lanes"]["rust"]["status"] == "PASS"
+    assert report["coverage"] == {"status": "SKIPPED", "reason": "affected mode"}

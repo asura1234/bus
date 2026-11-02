@@ -159,7 +159,7 @@ def execute(selection: Selection, *, nested: bool = False, base: str = "origin/m
     results.extend(batch(tests, nested=nested))
     result = int(any(not entry.passed for entry in results))
     coverage_ms = None
-    coverage_status = {"status": "SKIPPED", "reason": f"no Rust changes vs {base}" if selection.rust_filter == "none()" else "affected mode"}
+    coverage_status = {"status": "SKIPPED", "reason": lanes["rust"]["reason"] if lanes["rust"]["status"] == "SKIPPED" else "affected mode"}
     if selection.coverage_floor and not result:
         target = quality.llvm_cov_target(os.environ)
         quality.OUTPUT.mkdir(parents=True, exist_ok=True)
