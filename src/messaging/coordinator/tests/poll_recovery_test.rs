@@ -392,3 +392,96 @@ fn uncertain_protocol_failures_do_not_assert_native_server_death() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn whitespace_only_poll_response_preserves_agent_status() {
+    use crate::messaging::native::BusTransport;
+    use crate::protocol::api::client::ConnectionTarget;
+    use interprocess::local_socket::traits::Listener;
+    use std::io::{BufRead, Write};
+
+    let socket_dir = crate::utils::test_temp::unique_temp_path("bus-poll-whitespace");
+    crate::messaging::storage::io::private_dir(&socket_dir).unwrap();
+    let socket_path = socket_dir.join("api.sock");
+    let listener = crate::platform::ipc::bind_local_listener(&socket_path).unwrap();
+    let server = std::thread::spawn(move || {
+        for _ in 0..3 {
+            let mut stream = listener.accept().unwrap();
+            let mut request = String::new();
+            std::io::BufReader::new(&mut stream)
+                .read_line(&mut request)
+                .unwrap();
+            writeln!(stream, "   ").unwrap();
+        }
+    });
+    let mut transport = BusTransport::new(ConnectionTarget::SocketPath(socket_path));
+    let replies = (0..3)
+        .map(|_| {
+            transport.request(Method::AgentListWithDetectionContext(
+                crate::protocol::api::schema::AgentDetectionContexts { agents: Vec::new() },
+            ))
+        })
+        .collect();
+    server.join().unwrap();
+    std::fs::remove_dir_all(socket_dir).unwrap();
+
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, replies);
+    for _ in 0..3 {
+        worker.tick().unwrap();
+    }
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Idle
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn server_unavailable_poll_response_marks_agent_unavailable() {
+    use crate::protocol::api::client::ApiClientError;
+    use crate::protocol::api::schema::{ErrorBody, ErrorResponse};
+    let replies = (0..3)
+        .map(|_| {
+            native_error(ApiClientError::ErrorResponse(ErrorResponse {
+                id: "r".into(),
+                error: ErrorBody {
+                    code: "server_unavailable".into(),
+                    message: "server is shutting down".into(),
+                },
+            }))
+        })
+        .collect();
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, replies);
+    for _ in 0..3 {
+        worker.tick().unwrap();
+    }
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn write_zero_poll_failure_marks_agent_unavailable() {
+    use crate::protocol::api::client::ApiClientError;
+    let replies = (0..3)
+        .map(|_| {
+            native_error(ApiClientError::Io(std::io::Error::from(
+                std::io::ErrorKind::WriteZero,
+            )))
+        })
+        .collect();
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, replies);
+    for _ in 0..3 {
+        worker.tick().unwrap();
+    }
+    assert_eq!(
+        worker.state.agent(agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

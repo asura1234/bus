@@ -155,16 +155,11 @@ fn classify_error(error: ApiClientError) -> TransportError {
             ApiClientError::ErrorResponse(response) => Some(response.error.code.clone()),
             ApiClientError::EmptyResponse => Some(NATIVE_SERVER_UNAVAILABLE.into()),
             ApiClientError::Io(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound
-                        | std::io::ErrorKind::ConnectionRefused
-                        | std::io::ErrorKind::ConnectionReset
-                        | std::io::ErrorKind::ConnectionAborted
-                        | std::io::ErrorKind::NotConnected
-                        | std::io::ErrorKind::BrokenPipe
-                        | std::io::ErrorKind::UnexpectedEof
-                ) =>
+                if crate::platform::ipc::is_connection_closed_error(error)
+                    || matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) =>
             {
                 Some(NATIVE_SERVER_UNAVAILABLE.into())
             }
