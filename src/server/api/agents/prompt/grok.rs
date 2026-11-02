@@ -686,7 +686,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grok_uncertain_paste_after_write_is_retained_without_enter_or_retry() {
+    async fn grok_unattributed_paste_after_write_submits_once_without_ownership_readback() {
         use bytes::Bytes;
         use std::time::{Duration, Instant};
         let (runtime, mut writes) =
@@ -730,18 +730,20 @@ mod tests {
         };
         assert_eq!(pasted, Bytes::from_static(b"Bus task"));
         draw(PASTED);
-        let error = completion
-            .recv_timeout(
-                crate::protocol::api::submission::maximum_budget(Duration::ZERO, b"Bus task")
-                    + Duration::from_secs(1),
-            )
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        completion
+            .recv_timeout(Duration::from_secs(1))
             .unwrap()
-            .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(!crate::terminal::runtime::PromptNotShown::is(&error));
+            .unwrap();
         assert!(
             writes.try_recv().is_err(),
-            "uncertain paste received clear, Enter or retry bytes"
+            "one paste and one Enter, with no ownership readback or retry"
         );
         assert_eq!(
             input(&runtime.visible_ansi()).as_deref(),
