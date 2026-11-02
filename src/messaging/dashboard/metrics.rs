@@ -3,6 +3,8 @@ use crate::messaging::model::{BusState, Request, RequestPhase};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+pub(super) const PROVIDERS: [&str; 5] = ["claude", "codex", "kimi", "grok", "cursor"];
+
 #[derive(Debug, Default, Serialize)]
 struct Counts {
     attempts: u64,
@@ -81,13 +83,13 @@ struct Rates {
     bus_reliability: Metric,
 }
 #[derive(Default, Serialize)]
-struct Metric {
+pub(super) struct Metric {
     numerator: u64,
     denominator: u64,
     percent: Option<f64>,
 }
 impl Metric {
-    fn new(numerator: u64, denominator: u64) -> Self {
+    pub(super) fn new(numerator: u64, denominator: u64) -> Self {
         Self {
             numerator,
             denominator,
@@ -159,7 +161,7 @@ impl GroupBuilder {
 }
 #[derive(Clone)]
 pub(super) struct HourKey {
-    start_ms: i64,
+    pub(super) start_ms: i64,
     pub(super) label: String,
 }
 struct Outcome {
@@ -272,7 +274,7 @@ impl SeriesBuilder {
 }
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
     let mut all = SeriesBuilder::default();
-    let mut providers: BTreeMap<_, _> = ["claude", "codex", "kimi", "grok", "cursor"]
+    let mut providers: BTreeMap<_, _> = PROVIDERS
         .into_iter()
         .map(|p| (p.to_owned(), SeriesBuilder::default()))
         .collect();
