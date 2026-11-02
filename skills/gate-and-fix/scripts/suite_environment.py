@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 from coverage_run import EXTERNAL_RUN
 from gate_process import Children
@@ -62,20 +63,25 @@ def command(argv: list[str], root: Path, log) -> str:
     children = Children(private_groups=not bool(os.environ.get(EXTERNAL_RUN)))
     log.write('+ ' + subprocess.list2cmdline(argv) + '\n')
     log.flush()
-    process = children.start(argv, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, encoding='utf-8', errors='replace')
-    try:
-        output, _ = process.communicate(timeout=120)
-        log.write(output)
-        log.flush()
-        if process.returncode:
-            raise ValueError(f'setup command exited {process.returncode}')
+    # A private spool retains diagnostics even if communicate times out, without
+    # a pipe drain that can block on a descendant during cleanup.
+    with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='replace') as capture:
+        process = children.start(argv, cwd=root, env=env, stdout=capture, stderr=subprocess.STDOUT,
+                                 text=True, encoding='utf-8', errors='replace')
+        try:
+            process.communicate(timeout=120)
+            if process.returncode:
+                raise ValueError(f'setup command exited {process.returncode}')
+        except BaseException:
+            children.stop()
+            raise
+        finally:
+            children.finished(process)
+            capture.seek(0)
+            output = capture.read()
+            log.write(output)
+            log.flush()
         return output
-    except BaseException:
-        children.stop()
-        raise
-    finally:
-        children.finished(process)
 
 
 def ensure_environment(root: Path, *, requirements: Path | None = None) -> Path:

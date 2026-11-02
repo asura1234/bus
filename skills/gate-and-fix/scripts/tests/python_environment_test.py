@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import zipfile
 
 import pytest
@@ -96,6 +97,28 @@ def test_inherited_pip_configuration_cannot_redirect_private_installation(tmp_pa
         assert list(outside.iterdir())==[], 'setup must not write outside the private environment'
     info=inspect(python)
     assert all(Path(name).resolve().is_relative_to((repo/'temp/gate-tools/python').resolve()) for name in info['files'])
+
+
+def test_setup_timeout_preserves_emitted_stdout_and_stderr(tmp_path, monkeypatch):
+    ready=tmp_path/'ready'
+    script=('import sys,time;from pathlib import Path;'
+            'print("setup-before-timeout",flush=True);'
+            'print("setup-stderr",file=sys.stderr,flush=True);'
+            f'Path({str(ready)!r}).touch();time.sleep(30)')
+    communicate=subprocess.Popen.communicate
+    def short_deadline(process,*args,**kwargs):
+        deadline=time.monotonic()+5
+        while not ready.exists():
+            assert time.monotonic()<deadline,'fixture did not emit its diagnostics'
+            time.sleep(.01)
+        kwargs['timeout']=.05
+        return communicate(process,*args,**kwargs)
+    monkeypatch.setattr(subprocess.Popen,'communicate',short_deadline)
+    log=tmp_path/'python-setup.log'
+    with log.open('w') as stream,pytest.raises(subprocess.TimeoutExpired):
+        environment.command([sys.executable,'-c',script],tmp_path,stream)
+    assert 'setup-before-timeout' in log.read_text().splitlines()
+    assert 'setup-stderr' in log.read_text().splitlines()
 
 
 def test_bootstrap_reexecs_the_private_interpreter_and_preserves_arguments(tmp_path):
