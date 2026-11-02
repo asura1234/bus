@@ -147,7 +147,7 @@ class Scratch:
             self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2')
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
-            self.ok(['wait', '--text', 'fake draft bytes', '--timeout', '20s'])
+            self.ok(['wait', '--text', 'fake draft bytes:', '--timeout', '20s'])
             history = self.bus(['history', '--room', 'bus', '--limit', '100'])
             replies = [s for s in self.strings(history) if 'fake draft bytes: ' in s]
             if not replies:
