@@ -66,6 +66,7 @@ pub(super) enum Action {
     /// Dev builds only: the live performance overlay.
     TogglePerfOverlay,
     OpenErrorOrchestrator,
+    OpenDeliveryDashboard,
     ChooseErrorOrchestrator(Option<crate::messaging::model::AgentId>),
     ToggleSound(SoundTarget),
     /// Picks the next (true) or previous system sound for a Settings sound row.
@@ -186,6 +187,9 @@ pub(super) enum SoundSettingsLine {
         adjust: fn(bool) -> Action,
     },
     ErrorOrchestrator {
+        field: usize,
+    },
+    Dashboard {
         field: usize,
     },
     /// Dev builds only.

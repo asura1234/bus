@@ -110,7 +110,8 @@ impl BusUi {
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
-            lines.push(SoundSettingsLine::ErrorOrchestrator { field: field - 1 });
+            lines.push(SoundSettingsLine::ErrorOrchestrator { field: field - 2 });
+            lines.push(SoundSettingsLine::Dashboard { field: field - 1 });
             lines.push(SoundSettingsLine::PerfOverlay { field });
         }
         lines
@@ -291,6 +292,15 @@ impl BusUi {
                         if available { "" } else { " (unavailable)" }
                     ),
                     Some(Action::OpenErrorOrchestrator),
+                    self.settings_field == *field,
+                    false,
+                );
+            }
+            SoundSettingsLine::Dashboard { field } => {
+                view.row(
+                    rect,
+                    "Open delivery dashboard",
+                    Some(Action::OpenDeliveryDashboard),
                     self.settings_field == *field,
                     false,
                 );

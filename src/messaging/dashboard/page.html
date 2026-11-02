@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bus delivery dashboard</title>
+<style>
+/* TUI: rooms/render/mod.rs ACCENT (prefs/colors.rs YOU_COLOR), SELECTION, GREY.
+   Failure/warning: utils/theme/builtin.rs default Catppuccin red and peach. */
+:root{--bg:#000;--text:#fff;--accent:#66ff66;--selection:#2c5838;--grey:#91949f;--failure:#f38ba8;--external:#fab387;font:15px/1.5 system-ui,sans-serif;color:var(--text);background:var(--bg);color-scheme:dark}
+*{box-sizing:border-box}body{margin:0}main{max-width:1440px;margin:auto;padding:32px 28px}header{display:flex;align-items:start;justify-content:space-between;gap:24px}h1{font-size:27px;margin:2px 0 8px;letter-spacing:-.6px}h2{font-size:18px;margin:0 0 14px}p{margin:6px 0 14px}
+.eyebrow{font-size:12px;color:var(--accent);letter-spacing:1.5px;font-weight:700;text-transform:uppercase}.muted,small{color:var(--grey)}label{display:block;font-size:12px;font-weight:700;margin-bottom:5px}select{font:inherit;color:var(--text);padding:9px 28px 9px 12px;border:1px solid var(--grey);border-radius:7px;background:var(--bg)}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0 16px}.card,section{background:var(--bg);border:1px solid var(--grey);border-radius:10px;padding:20px}.card h2{font-size:14px;margin-bottom:8px}.rate{font-size:34px;line-height:1.2;font-weight:650;color:var(--accent)}.card p{margin:8px 0 0;font-size:13px}.counts{margin:12px 0 22px}
+.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;text-align:left;font-size:13px}th{font-weight:650;background:var(--bg);white-space:nowrap}th,td{padding:12px;border-bottom:1px solid var(--grey);vertical-align:top}td small{display:block;white-space:nowrap}td:first-child{white-space:nowrap}td strong{font-weight:650}td details{min-width:170px;max-width:350px}
+summary{cursor:pointer;color:var(--accent)}section{margin-top:20px}.counting{font-size:13px;margin-top:20px}.counting summary{font-size:12px}.counting table{margin-top:12px}.help{cursor:help;text-decoration:underline dotted;text-underline-offset:3px}.empty{text-align:center;padding:40px;color:var(--grey)}#updated{font-size:12px;color:var(--grey)}.legend{margin-top:14px;font-size:12px;color:var(--grey)}.pill{display:inline-block;border:1px solid var(--accent);color:var(--accent);padding:3px 9px;border-radius:20px;font-size:12px;font-weight:600}code{font-size:12px}ul{padding-left:20px;margin:6px 0 12px}
+button{font:inherit;border:0;background:transparent;color:var(--accent);padding:0;text-decoration:underline;cursor:pointer;text-align:left}button:hover,summary:hover{background:var(--selection)}button:focus-visible,select:focus-visible,.help:focus-visible,.failure-list:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px;background:var(--selection)}.selected{background:var(--selection);box-shadow:inset 3px 0 var(--accent)}
+svg{display:block}svg .bar{fill:var(--accent)}svg g[role=button]{cursor:pointer}svg g[role=button]:hover .bar,svg g[role=button]:focus-visible .bar{fill:var(--selection);stroke:var(--accent);stroke-width:2}svg text{font:12px system-ui;fill:var(--grey)}svg line{stroke:var(--grey)}
+.command{font:12px ui-monospace,monospace;width:220px;border:1px solid var(--grey);padding:5px;background:var(--bg);color:var(--text)}.causes{min-width:180px}.causes button{display:block;margin-bottom:3px}.cause-bus{color:var(--failure)}.cause-external{color:var(--external)}.headline .rate{font-size:40px}.headline{border-top:3px solid var(--accent)}.failure-list{max-height:420px;overflow:auto;overscroll-behavior:contain}#failure-section th{position:sticky;top:0;z-index:1}
+@media(max-width:750px){main{padding:20px 12px}.cards{grid-template-columns:1fr;gap:10px}header{flex-direction:column}.rate{font-size:28px}.card{padding:16px}}
+</style>
+<main>
+<header><div><div class="eyebrow">Bus · developer tools</div><h1>Delivery reliability</h1><p class="muted">One recipient request, one delivery attempt. Entire session, including archived requests.</p><span class="pill">Read only · refreshes every 30 seconds</span></div><div><label for="group-mode">Break down by</label><select id="group-mode"><option value="recipients">Recipient</option><option value="providers">Provider</option><option value="rooms">Room</option></select></div></header>
+<p id="updated" aria-live="polite">No data</p>
+<div class="cards" id="cards"></div><p class="counts" id="counts"></p>
+<section><h2 id="group-heading">Recipients</h2><div class="scroll"><table aria-label="Recipient reliability"><thead><tr><th>Recipient / group</th><th>Bus reliability</th><th>Delivered / attempts</th><th>Bus failures</th><th>External</th><th>Top causes</th></tr></thead><tbody id="groups"></tbody></table></div><p class="legend">Select a group for its hourly graph; select a failure count or cause for request evidence.</p></section>
+<section><header><h2 id="series-heading">Whole session · hourly</h2><div><label for="graph-metric">Hourly rate</label><select id="graph-metric"><option value="bus">Bus reliability</option><option value="delivery">Delivery</option><option value="reply">Reply capture</option></select></div></header><div id="graph" class="scroll"></div><p class="legend">Local send hours · n = attempts. Select an hour for its failed requests; hover or focus a bar for its rate and counts.</p><div class="scroll"><table aria-label="Hourly delivery reliability"><thead><tr><th>Local hour</th><th>Attempts (n)</th><th>Delivery</th><th>Reply capture</th><th>Bus reliability</th><th>Still open</th><th>Reply pending</th><th>External</th><th>Reasons &amp; stages</th></tr></thead><tbody id="hours"></tbody></table></div></section>
+<section id="failure-section"><h2 id="failure-heading">Failed requests</h2><p id="failure-context" class="muted">Select any failure count, cause, recipient or hour to inspect its requests.</p><div class="scroll failure-list" tabindex="0" role="region" aria-labelledby="failure-heading"><table aria-label="Failed request evidence"><thead><tr><th>Request</th><th>Message</th><th>Recipient</th><th>Provider</th><th>Room</th><th>Send time (local)</th><th>Stage</th><th>Reason</th><th>Responsibility</th><th>Inspect</th></tr></thead><tbody id="failures"></tbody></table></div></section>
+<details class="counting"><summary>How these are counted</summary>
+<div class="scroll"><table aria-label="Outcome classification"><thead><tr><th>Persisted stage / outcome</th><th>Delivery</th><th>Reply capture</th><th>Bus reliability</th></tr></thead><tbody>
+<tr><td>replied / completed, including explicit or late replies</td><td>Delivered</td><td>Replied</td><td>Success; a recorded reply wins over old reasons</td></tr>
+<tr><td>queued, submitting, awaiting_start; no confirmed binding</td><td>Still open</td><td>Pending, excluded</td><td>Pending, excluded</td></tr>
+<tr><td>delivered / confirmed joined; still active</td><td>Delivered</td><td>Reply pending, excluded</td><td>Pending, excluded</td></tr>
+<tr><td>abandoned after confirmed binding</td><td>Delivered</td><td>Reply not captured</td><td>Bus or external, by exact reason below</td></tr>
+<tr><td>abandoned before confirmed binding, or explicit submission failure</td><td>Failed</td><td>Excluded</td><td>Bus or external, by exact reason below</td></tr>
+</tbody></table></div>
+<div class="scroll"><table aria-label="Failure responsibility"><thead><tr><th>Responsibility</th><th>Terminal reasons</th><th>Bus reliability treatment</th></tr></thead><tbody>
+<tr><td>External</td><td>agent_deleted, room_deleted, interrupted (a deliberate interrupt), github_watch_retired, room_digest_retired, messaging_onboarding_retired, operational_notice_retired, background_wait_superseded, provider_error / provider_error: … (quota, rate limit, overload, etc.)</td><td>Shown separately; excluded from this rate</td></tr>
+<tr><td>Bus-caused</td><td>Everything else: prompt_not_shown, prior_request_active, submission_unconfirmed, not_submitted, reply_not_captured, session_hook_missing, delivery_error, unknown/new reasons and missing_reason</td><td>Terminal no-reply outcome counts as a failure</td></tr>
+</tbody></table></div>
+</details>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id), names={all:'Whole session',claude:'Claude',codex:'Codex',kimi:'Kimi',grok:'Grok',cursor:'Cursor',unknown:'Unknown'};
+let latest=null, selected='all', drill={};
+function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
+function button(text,action){const b=node('button',text);b.type='button';b.addEventListener('click',action);return b}
+const definitions={
+ delivery:'Delivered ÷ (delivered + failed). Delivered means submitted and bound to a turn, or a recorded reply/completion. Open unconfirmed requests are excluded; every recipient request is one attempt.',
+ reply:'Replied ÷ (replied + reply_not_captured), among settled delivered requests. Any terminal delivered request without a reply is not captured; active delivered requests remain reply pending.',
+ bus:'Replied ÷ (replied + Bus-caused terminal failures), including lost replies. External outcomes and open/pending requests are excluded. All rates show numerator/denominator; — means no settled attempts.',
+ external:'Deliberate interruptions/closures, agent or room deletion, and provider errors (quota, rate limit, overload). Shown separately and excluded from Bus reliability.',
+ open:'Requests without a confirmed submission/binding that have not settled. Shown separately and excluded from settled rates.',
+ pending:'Delivered requests still awaiting a reply or terminal outcome. Excluded from reply capture and Bus reliability until settled.'
+};
+function explain(e,text){e.title=text;e.setAttribute('aria-label',`${e.textContent}. ${text}`);e.tabIndex=0;e.classList.add('help');return e}
+const columns={
+ 'Recipient / group':'Each recipient request is one attempt. Select a recipient, provider or room to show its hourly graph.',
+ 'Bus reliability':definitions.bus,'Delivery':definitions.delivery,'Reply capture':definitions.reply,
+ 'Delivered / attempts':'Confirmed deliveries / all recipient requests, including still-open requests. The plain delivery rate excludes still-open attempts.',
+ 'Bus failures':'Terminal no-reply outcomes attributed to Bus, including reply_not_captured. Select the count for request evidence.',
+ 'External':definitions.external,'Top causes':'Terminal failure reasons, ordered by count. Select a cause for its requests.',
+ 'Local hour':'The request message send hour in the timezone shown above. Overall includes every launch of this session.',
+ 'Attempts (n)':'One recipient request is one attempt, including settled and still-open requests.',
+ 'Still open':definitions.open,'Reply pending':definitions.pending,
+ 'Reasons & stages':'Failure counts by exact reason and persisted stage; open requests retain their stage without being counted as failures.',
+ 'Request':'Persisted recipient-request ID. A message sent to several recipients has one request for each.',
+ 'Message':'Original message ID; use its message-status command to inspect the saved record.',
+ 'Recipient':'Receiving agent name and ID, including retired agents.',
+ 'Provider':'Saved terminal provider. Older deleted agents without a saved provider are Unknown; identities are never guessed.',
+ 'Room':'The original message conversation room and its ID.',
+ 'Send time (local)':'Original message send time in the local timezone shown above.',
+ 'Stage':'Shared message-status delivery stage. Recorded replies/completions win over old terminal reasons.',
+ 'Reason':'Exact terminal reason, or missing_reason when an abandoned request has none. Hover or focus a cause for its meaning.',
+ 'Responsibility':definitions.external+' Every other terminal no-reply outcome is Bus-caused.',
+ 'Inspect':'Read-only command for inspecting the original message, its recipient requests and outcomes.',
+ 'Persisted stage / outcome':'How saved request state becomes a delivery, reply or pending outcome.',
+ 'Terminal reasons':'Exact saved reason decides responsibility only after a request settles.',
+ 'Bus reliability treatment':'External outcomes are excluded; other terminal no-reply outcomes are Bus-caused failures.'
+};
+for(const th of document.querySelectorAll('th'))explain(th,columns[th.textContent]);
+const causes={
+ missing_reason:'An abandoned request has no recorded terminal reason.',
+ submission_unconfirmed:'Bus could not confirm that submission was accepted.',
+ prompt_not_shown:'The submitted prompt was not observed in the terminal.',
+ delivery_error:'Delivery ended with a recorded delivery error.',
+ prior_request_active:'A prior request remained active and prevented submission.',
+ not_submitted:'The request was not submitted to the terminal.',
+ session_hook_missing:'The expected provider session hook was missing.',
+ reply_not_captured:'The delivered request ended without a captured reply.',
+ agent_deleted:'The receiving agent was deliberately deleted.',
+ room_deleted:'The conversation room was deliberately deleted.',
+ interrupted:'The agent was deliberately interrupted.',
+ github_watch_retired:'The GitHub watch was deliberately retired.',
+ room_digest_retired:'The room digest was deliberately retired.',
+ messaging_onboarding_retired:'The onboarding request was deliberately retired.',
+ operational_notice_retired:'The operational notice was deliberately retired.',
+ background_wait_superseded:'The background wait was deliberately superseded.'
+};
+function causeHelp(reason,cause){const meaning=(Object.hasOwn(causes,reason)?causes[reason]:null)||(reason==='provider_error'||reason.startsWith('provider_error:')?'The provider reported an error such as quota, rate limit or overload.':'Recorded terminal no-reply reason.');return `${meaning} ${cause==='external'?'External; excluded from Bus reliability.':'Bus-caused; included as a Bus reliability failure.'}`}
+function causeNode(e,reason,cause){e.classList.add(cause==='external'?'cause-external':'cause-bus');return explain(e,causeHelp(reason,cause))}
+const rateKeys={delivery:'delivery',reply:'reply_capture',bus:'bus_reliability'};
+function ratio(series,kind){const m=series.rates[rateKeys[kind]];return [m.numerator,m.denominator]}
+function rate(series,kind){const p=series.rates[rateKeys[kind]].percent;return p===null?'—':`${p.toFixed(1)}%`}
+function ordered(map){return Object.entries(map).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))}
+function currentFilter(){return selected==='all'?{}:{mode:$('group-mode').value,id:selected}}
+function groupData(){return latest?.metrics?.[$('group-mode').value]||{}}
+function selectedSeries(){return selected==='all'?latest?.metrics?.all:($('group-mode').value==='providers'?groupData()[selected]:groupData()[selected]?.series)}
+function groupName(id,g){return $('group-mode').value==='providers'?(names[id]||id):`${g.name} (#${id})`}
+function selectGroup(id){selected=id;drill={...currentFilter()};renderDetail();renderGroups();renderFailures()}
+function inspect(filter,label){drill={...filter,label};renderFailures();$('failure-section').scrollIntoView({behavior:'smooth',block:'start'})}
+function metric(title,series,kind,detail,headline=false){const [n,d]=ratio(series,kind),e=node('div',undefined,headline?'card headline':'card');e.append(explain(node('h2',title),definitions[kind]),node('div',rate(series,kind),'rate'),node('p',`${n} / ${d} · ${detail}`));return e}
+function renderHeadline(){const series=latest?.metrics?.all,c=series?.counts;$('cards').replaceChildren();if(!c){$('counts').textContent='No data';return}$('cards').append(metric('Whole-session Bus reliability',series,'bus',`${c.delivered} delivered / ${c.attempts} attempts`,true),metric('Delivery',series,'delivery',`${c.delivered} delivered`),metric('Reply capture',series,'reply',`${c.replied} replied`));$('cards').children[1].lastElementChild.append(node('span',' · '),button(`${c.failed} failed`,()=>inspect({delivery:'failed'},'Whole session · delivery failures')));$('cards').children[2].lastElementChild.append(node('span',' · '),button(`${c.reply_not_captured} not captured`,()=>inspect({delivery:'delivered'},'Whole session · reply not captured')));$('counts').replaceChildren(node('span',`${c.attempts} attempts · `),explain(node('span',`${c.open} still open`),definitions.open),node('span',' · '),explain(node('span',`${c.reply_pending} replies pending`),definitions.pending),node('span',' · '),explain(button(`${c.bus_failures} Bus-caused failures`,()=>inspect({cause:'bus'},'Whole session · Bus-caused')),columns['Bus failures']),node('span',' · '),explain(button(`${c.external} external outcomes`,()=>inspect({cause:'external'},'Whole session · external')),definitions.external))}
+function causeButtons(c,filter,limit=Infinity){const box=node('div',undefined,'causes');const map=Object.assign(Object.create(null),c.bus_reasons);for(const [r,n] of Object.entries(c.external_reasons))map[r]=(map[r]||0)+n;for(const [reason,n] of ordered(map).slice(0,limit))box.append(causeNode(button(`${reason}: ${n}`,()=>inspect({...filter,reason},reason)),reason,Object.hasOwn(c.external_reasons,reason)?'external':'bus'));if(!box.children.length)box.append(node('small','None'));return box}
+function renderGroups(){const mode=$('group-mode').value;$('group-heading').textContent=mode==='recipients'?'Recipients':mode==='providers'?'Providers':'Rooms';$('groups').replaceChildren();const all=latest?.metrics?.all;if(!all)return;const groups=Object.entries(groupData()).map(([id,g])=>[id,groupName(id,g),mode==='providers'?g:g.series]);groups.sort((a,b)=>b[2].counts.bus_failures-a[2].counts.bus_failures||b[2].counts.attempts-a[2].counts.attempts);for(const [id,name,series] of [['all','Whole session',all],...groups]){const c=series.counts,filter=id==='all'?{}:{mode,id},tr=node('tr',undefined,id===selected?'selected':'');let td=node('td');td.append(button(name,()=>selectGroup(id)));tr.append(td);td=node('td');const [n,d]=ratio(series,'bus');td.append(node('strong',`${rate(series,'bus')} (${n}/${d})`));tr.append(td,node('td',`${c.delivered} / ${c.attempts}`));td=node('td');td.append(button(c.bus_failures,()=>inspect({...filter,cause:'bus'},`${name} · Bus-caused`)));tr.append(td);td=node('td');td.append(button(c.external,()=>inspect({...filter,cause:'external'},`${name} · external`)));tr.append(td);td=node('td');td.append(causeButtons(c,filter,3));tr.append(td);$('groups').append(tr)}}
+function breakdown(c,filter){const d=node('details');d.append(node('summary','Counts & reasons'));for(const [label,map,extra] of [['Delivery failures',c.failure_reasons,{delivery:'failed'}],['Bus-caused failures',c.bus_reasons,{cause:'bus'}],['External outcomes',c.external_reasons,{cause:'external'}]]){d.append(node('b',label));const list=node('ul');for(const [reason,n] of ordered(map)){const li=node('li');li.append(causeNode(button(`${reason}: ${n}`,()=>inspect({...filter,...extra,reason},`${label} · ${reason}`)),reason,Object.hasOwn(c.external_reasons,reason)?'external':'bus'));list.append(li)}if(!list.children.length)list.append(node('li','None'));d.append(list)}d.append(node('b','Persisted stages'));for(const [stage,n] of ordered(c.stages))d.append(node('div',`${stage}: ${n}`));return d}
+function hourlyRow(h,overall=false){const c=h.counts,filter={...currentFilter(),...(overall?{}:{hour:h.start_ms})},tr=node('tr');tr.append(node('td',h.hour),node('td',c.attempts));for(const kind of ['delivery','reply','bus']){const [n,d]=ratio(h,kind),td=node('td');td.append(node('strong',`${rate(h,kind)} (${n}/${d})`));if(kind==='delivery')td.append(button(`${c.failed} failed`,()=>inspect({...filter,delivery:'failed'},`${h.hour} · delivery failures`)));if(kind==='reply')td.append(button(`${c.reply_not_captured} not captured`,()=>inspect({...filter,delivery:'delivered'},`${h.hour} · reply not captured`)));if(kind==='bus')td.append(button(`${c.bus_failures} Bus failures`,()=>inspect({...filter,cause:'bus'},`${h.hour} · Bus-caused`)));tr.append(td)}tr.append(node('td',c.open),node('td',c.reply_pending));let td=node('td');td.append(button(c.external,()=>inspect({...filter,cause:'external'},`${h.hour} · external`)));tr.append(td);td=node('td');td.append(breakdown(c,filter));tr.append(td);return tr}
+function svgNode(tag,attrs={},text){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);if(text!==undefined)e.textContent=text;return e}
+function renderGraph(series){const box=$('graph');box.replaceChildren();if(!series?.hours.length){box.append(node('p','No data','empty'));return}const hours=series.hours,w=Math.max(720,hours.length*85+70),height=300,left=48,bottom=235,plot=185,step=(w-left-20)/hours.length,kind=$('graph-metric').value;const svg=svgNode('svg',{width:w,height,viewBox:`0 0 ${w} ${height}`,role:'img','aria-label':'Hourly success percentages and attempt counts'});for(const pct of [0,25,50,75,100]){const y=bottom-plot*pct/100;svg.append(svgNode('line',{x1:left,x2:w-10,y1:y,y2:y,stroke:'var(--grey)'}),svgNode('text',{x:2,y:y+4},`${pct}%`))}hours.forEach((h,i)=>{const [n,d]=ratio(h,kind),pct=h.rates[rateKeys[kind]].percent??0,x=left+i*step+8,y=bottom-plot*pct/100;const g=svgNode('g',{role:'button',tabindex:0,'aria-label':`${h.hour}: ${rate(h,kind)}, ${n}/${d}, n=${h.counts.attempts}`});g.append(svgNode('title',{},`${h.hour}: ${rate(h,kind)} (${n}/${d}), n=${h.counts.attempts}`),svgNode('rect',{class:'bar',x,y,width:Math.max(15,step-20),height:Math.max(2,bottom-y)}),svgNode('text',{x,y:Math.max(15,y-10)},`n=${h.counts.attempts}`),svgNode('text',{x,y:bottom+19},h.hour.slice(5,10)),svgNode('text',{x,y:bottom+35},h.hour.slice(11,16)),svgNode('text',{x,y:bottom+51},rate(h,kind)));const show=()=>inspect({...currentFilter(),hour:h.start_ms},h.hour);g.addEventListener('click',show);g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();show()}});svg.append(g)});box.append(svg)}
+function renderDetail(){const series=selectedSeries();$('hours').replaceChildren();if(!series){$('graph').replaceChildren(node('p','No data','empty'));return}const g=groupData()[selected],name=selected==='all'?'Whole session':groupName(selected,g);$('series-heading').textContent=`${name} · hourly`;$('hours').append(hourlyRow({hour:'Overall',counts:series.counts,rates:series.rates},true));for(const h of series.hours)$('hours').append(hourlyRow(h));renderGraph(series)}
+function matchingFailures(){return (latest?.metrics?.failures||[]).filter(f=>(!drill.mode||(drill.mode==='recipients'?String(f.recipient_id):drill.mode==='rooms'?String(f.room_id):f.provider)===drill.id)&&(drill.hour===undefined||f.hour_start_ms===drill.hour)&&(!drill.reason||f.reason===drill.reason)&&(!drill.cause||f.cause===drill.cause)&&(!drill.delivery||f.delivery===drill.delivery))}
+function renderFailures(){const failures=matchingFailures();$('failure-heading').textContent=`Failed requests (${failures.length})`;$('failure-context').textContent=drill.label||'All terminal failures, including delivered requests without captured replies.';$('failures').replaceChildren();for(const f of failures){const tr=node('tr');for(const [index,value] of [f.request_id,f.message_id,`${f.recipient} (#${f.recipient_id})`,names[f.provider]||f.provider,`${f.room} (#${f.room_id})`,new Date(f.sent_at_ms).toLocaleString(),f.stage,f.reason,f.cause==='bus'?'Bus-caused':'External'].entries())tr.append(index===7?causeNode(node('td',value),f.reason,f.cause):node('td',value));const td=node('td'),cmd=`bus message status ${f.message_id}`,input=node('input',undefined,'command');input.value=cmd;input.readOnly=true;input.setAttribute('aria-label',`Inspect message ${f.message_id}`);input.addEventListener('focus',()=>input.select());td.append(input,node('br'),button('Copy command',()=>{if(navigator.clipboard)navigator.clipboard.writeText(cmd).catch(()=>{input.focus();input.select()});else{input.focus();input.select()}}));tr.append(td);$('failures').append(tr)}if(!failures.length){const tr=node('tr'),td=node('td','No matching failed requests','empty');td.colSpan=10;tr.append(td);$('failures').append(tr)}}
+function render(){if(selected!=='all'&&!groupData()[selected])selected='all';renderHeadline();renderGroups();renderDetail();renderFailures()}
+async function refresh(){try{const r=await fetch('/data',{cache:'no-store'});if(!r.ok)throw new Error('unavailable');latest=await r.json();$('updated').textContent=`${latest.timezone} · Updated ${new Date(latest.generated_at_ms).toLocaleTimeString()}`;render()}catch{latest=null;$('updated').textContent='No data';render()}finally{setTimeout(refresh,30000)}}
+$('group-mode').addEventListener('change',()=>{selected='all';drill={};render()});$('graph-metric').addEventListener('change',renderDetail);refresh();
+</script>
+</html>

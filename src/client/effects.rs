@@ -59,6 +59,18 @@ pub(super) fn dispatch_client_shell_actions(
                     repaint = true;
                 }
             }
+            shell::ClientShellAction::OpenDeliveryDashboard(root) => {
+                if let Err(error) = std::thread::Builder::new()
+                    .name("bus-dashboard-open".into())
+                    .spawn(move || {
+                        if let Err(error) = crate::messaging::dashboard::open_in_browser(&root) {
+                            tracing::info!(event = "bus.dashboard.open_failed", %error);
+                        }
+                    })
+                {
+                    tracing::info!(event = "bus.dashboard.open_failed", %error);
+                }
+            }
             shell::ClientShellAction::OpenSafeWebUrl(url) => {
                 if crate::utils::url::safe_web_url(&url).is_some() {
                     match crate::platform::open_url(&url) {

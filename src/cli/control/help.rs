@@ -272,7 +272,12 @@ pub(crate) fn command_tree(dev: bool) -> Command {
                 .after_help("Example: bus perf --since 2h"),
         );
     if dev {
-        command.subcommand(restart_command())
+        command.subcommand(restart_command()).subcommand(
+            Command::new("dashboard")
+                .about("Serve local-hour delivery reliability on a random loopback port; read-only")
+                .long_about("Read the selected session's persisted requests, journal and history. Prints a random http://127.0.0.1:PORT/ URL and serves an auto-refreshing page with whole-session and per-provider delivery, reply capture and Bus reliability rates. Local send-hour buckets include counts and failure reasons. External outcomes are excluded from Bus reliability. No session state is written; read failures go to dashboard.log in the session logs directory. Stop with Ctrl+C.")
+                .after_help("Example: bus --dev dashboard"),
+        )
     } else {
         command
     }

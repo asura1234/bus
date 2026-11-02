@@ -16,6 +16,7 @@ mod provider_failure;
 mod recovery;
 mod replies;
 mod reply_routing;
+mod request_outcomes;
 mod requests;
 mod restart;
 mod rooms;
@@ -41,6 +42,7 @@ pub(crate) use idle_agents::MIN_IDLE_FOR_ALERT_MS;
 pub(crate) use interrupts::INTERRUPTED;
 #[cfg(test)]
 use payload::payload_matches;
+pub(crate) use request_outcomes::{classify_request_failure, RequestFailureClass};
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::{fingerprint_digest, BusState};
 pub(crate) use {

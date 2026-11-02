@@ -32,15 +32,8 @@ pub(super) struct WorkerEvent {
 /// Cancelling retired inputs preserves history without creating replacement work.
 fn retired_automation(request: &Request) -> bool {
     request.prompt.author == Author::Bus
-        && matches!(
-            request.failure_reason.as_deref(),
-            Some(
-                "github_watch_retired"
-                    | "room_digest_retired"
-                    | "messaging_onboarding_retired"
-                    | "operational_notice_retired"
-            )
-        )
+        && super::classify_request_failure(request.failure_reason.as_deref().unwrap_or(""))
+            == super::RequestFailureClass::RetiredAutomation
 }
 
 impl BusState {

@@ -35,19 +35,8 @@ impl RequestNotices {
     }
 
     fn deliberate(&self) -> bool {
-        matches!(
-            self.reason.as_deref(),
-            Some(
-                "interrupted"
-                    | "agent_deleted"
-                    | "room_deleted"
-                    | "github_watch_retired"
-                    | "room_digest_retired"
-                    | "messaging_onboarding_retired"
-                    | "operational_notice_retired"
-                    | "background_wait_superseded"
-            )
-        )
+        crate::messaging::model::classify_request_failure(self.reason.as_deref().unwrap_or(""))
+            .is_deliberate()
     }
 }
 

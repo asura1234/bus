@@ -136,6 +136,8 @@ pub(in crate::client) struct BusUi {
     pub(super) settings_scroll: usize,
     /// Dev builds show a Developer group in Settings (the performance overlay).
     pub(super) dev_settings: bool,
+    pub(super) dashboard_pending: Option<std::path::PathBuf>,
+    pub(super) dashboard_root: Option<std::path::PathBuf>,
     /// Set only by the coordinator-owning client; `None` never plays a sound.
     pub(super) sound_config: Option<crate::utils::config::SoundConfig>,
     /// System sound names, read from the OS when Settings first opens.
@@ -240,6 +242,8 @@ impl BusUi {
             settings_field: 0,
             settings_scroll: 0,
             dev_settings: false,
+            dashboard_pending: None,
+            dashboard_root: crate::utils::env::bus_data_dir(),
             sound_config: None,
             system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
@@ -313,6 +317,9 @@ impl BusUi {
     }
 
     pub(super) fn perf_overlay_field(&self) -> Option<usize> {
+        self.dev_settings.then(|| self.feishu_field() + 5)
+    }
+    pub(super) fn dashboard_field(&self) -> Option<usize> {
         self.dev_settings.then(|| self.feishu_field() + 4)
     }
 

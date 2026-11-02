@@ -1,0 +1,568 @@
+{
+  "note": "Synthetic edge cases overlay this complete request. Recorded request fixtures remain unmodified in recorded.json.",
+  "base": {
+    "id": 100,
+    "room_id": 1,
+    "agent_id": 2,
+    "prompt": {
+      "id": 90,
+      "author": "human",
+      "text": "[redacted request]",
+      "files": [],
+      "recipient_ids": [
+        2
+      ],
+      "submitted_at_ms": 1793577599999
+    },
+    "phase": "queued",
+    "expected_launch_id": null,
+    "submission_boundary": null,
+    "submission_status_revision": 0,
+    "provider_session_id": null,
+    "provider_turn_id": null,
+    "provider_prompt_id": null,
+    "trusted_start_bound": false,
+    "uncertain_outcome": false,
+    "pending_final": null,
+    "completed_at_ms": null
+  },
+  "cases": [
+    {
+      "name": "queued",
+      "record": {},
+      "delivery": "open",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "submitting",
+      "record": {
+        "id": 101,
+        "prompt": {
+          "id": 91
+        },
+        "phase": "submitting",
+        "uncertain_outcome": true
+      },
+      "delivery": "open",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "awaiting-start",
+      "record": {
+        "id": 102,
+        "prompt": {
+          "id": 92
+        },
+        "phase": "active"
+      },
+      "delivery": "open",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "delivered",
+      "record": {
+        "id": 103,
+        "prompt": {
+          "id": 93
+        },
+        "phase": "active",
+        "trusted_start_bound": true
+      },
+      "delivery": "delivered",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "reply-not-captured-bound",
+      "record": {
+        "id": 104,
+        "prompt": {
+          "id": 94
+        },
+        "phase": "abandoned",
+        "trusted_start_bound": true,
+        "completed_at_ms": 1793581201000,
+        "failure_reason": "reply_not_captured"
+      },
+      "delivery": "delivered",
+      "capture": "missing",
+      "cause": "bus"
+    },
+    {
+      "name": "reply-not-captured-unbound",
+      "record": {
+        "id": 105,
+        "prompt": {
+          "id": 95
+        },
+        "phase": "abandoned",
+        "failure_reason": "reply_not_captured"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "submission_unconfirmed",
+      "record": {
+        "id": 106,
+        "prompt": {
+          "id": 96
+        },
+        "phase": "abandoned",
+        "failure_reason": "submission_unconfirmed"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "prompt_not_shown",
+      "record": {
+        "id": 107,
+        "prompt": {
+          "id": 97
+        },
+        "phase": "abandoned",
+        "failure_reason": "prompt_not_shown"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "delivery_error",
+      "record": {
+        "id": 108,
+        "prompt": {
+          "id": 98
+        },
+        "phase": "abandoned",
+        "failure_reason": "delivery_error"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "prior_request_active",
+      "record": {
+        "id": 109,
+        "prompt": {
+          "id": 99
+        },
+        "phase": "abandoned",
+        "failure_reason": "prior_request_active"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "not_submitted",
+      "record": {
+        "id": 110,
+        "prompt": {
+          "id": 100
+        },
+        "phase": "abandoned",
+        "failure_reason": "not_submitted"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "session_hook_missing",
+      "record": {
+        "id": 111,
+        "prompt": {
+          "id": 101
+        },
+        "phase": "abandoned",
+        "failure_reason": "session_hook_missing"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "new_reason",
+      "record": {
+        "id": 112,
+        "prompt": {
+          "id": 102
+        },
+        "phase": "abandoned",
+        "failure_reason": "new_reason"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "missing-reason",
+      "record": {
+        "id": 113,
+        "prompt": {
+          "id": 103
+        },
+        "phase": "abandoned"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "abandoned-empty-reason",
+      "record": {
+        "id": 114,
+        "prompt": {
+          "id": 104
+        },
+        "phase": "abandoned",
+        "failure_reason": " "
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "interrupted-before-start",
+      "record": {
+        "id": 115,
+        "prompt": {
+          "id": 105
+        },
+        "phase": "abandoned",
+        "failure_reason": "interrupted"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "interrupted-after-start",
+      "record": {
+        "id": 116,
+        "prompt": {
+          "id": 106
+        },
+        "phase": "abandoned",
+        "trusted_start_bound": true,
+        "failure_reason": "interrupted"
+      },
+      "delivery": "delivered",
+      "capture": "missing",
+      "cause": "external"
+    },
+    {
+      "name": "agent_deleted",
+      "record": {
+        "id": 117,
+        "prompt": {
+          "id": 107
+        },
+        "phase": "abandoned",
+        "failure_reason": "agent_deleted"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "room_deleted",
+      "record": {
+        "id": 118,
+        "prompt": {
+          "id": 108
+        },
+        "phase": "abandoned",
+        "failure_reason": "room_deleted"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "provider_error: quota exhausted",
+      "record": {
+        "id": 119,
+        "prompt": {
+          "id": 109
+        },
+        "phase": "abandoned",
+        "failure_reason": "provider_error: quota exhausted"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "provider_error: rate limit",
+      "record": {
+        "id": 120,
+        "prompt": {
+          "id": 110
+        },
+        "phase": "abandoned",
+        "failure_reason": "provider_error: rate limit"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "provider_error: overload",
+      "record": {
+        "id": 121,
+        "prompt": {
+          "id": 111
+        },
+        "phase": "abandoned",
+        "failure_reason": "provider_error: overload"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "provider-error-after-start",
+      "record": {
+        "id": 122,
+        "prompt": {
+          "id": 112
+        },
+        "phase": "abandoned",
+        "trusted_start_bound": true,
+        "failure_reason": "provider_error: overload"
+      },
+      "delivery": "delivered",
+      "capture": "missing",
+      "cause": "external"
+    },
+    {
+      "name": "completed-without-text",
+      "record": {
+        "id": 123,
+        "prompt": {
+          "id": 113
+        },
+        "phase": "completed"
+      },
+      "delivery": "delivered",
+      "capture": "replied",
+      "cause": "success"
+    },
+    {
+      "name": "explicit-reply-active-anchor",
+      "record": {
+        "id": 124,
+        "prompt": {
+          "id": 114
+        },
+        "phase": "active",
+        "completed_reply": {
+          "content": {
+            "callback_id": "redacted",
+            "text": "[redacted reply]",
+            "received_at_ms": 1793581205000,
+            "provider_session_id": null,
+            "provider_turn_id": null
+          },
+          "group": null
+        },
+        "failure_reason": "interrupted"
+      },
+      "delivery": "delivered",
+      "capture": "replied",
+      "cause": "success"
+    },
+    {
+      "name": "late-reply-abandoned",
+      "record": {
+        "id": 125,
+        "prompt": {
+          "id": 115
+        },
+        "phase": "abandoned",
+        "completed_reply": {
+          "content": {
+            "callback_id": "redacted",
+            "text": "[redacted reply]",
+            "received_at_ms": 1793581205000,
+            "provider_session_id": null,
+            "provider_turn_id": null
+          },
+          "group": null
+        },
+        "failure_reason": "reply_not_captured"
+      },
+      "delivery": "delivered",
+      "capture": "replied",
+      "cause": "success"
+    },
+    {
+      "name": "joined-typed",
+      "record": {
+        "id": 126,
+        "prompt": {
+          "id": 116
+        },
+        "phase": "active",
+        "group": 103,
+        "steered": true
+      },
+      "delivery": "delivered",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "joined-not-typed",
+      "record": {
+        "id": 127,
+        "prompt": {
+          "id": 117
+        },
+        "group": 103
+      },
+      "delivery": "open",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "joined-abandoned-untyped",
+      "record": {
+        "id": 128,
+        "prompt": {
+          "id": 118
+        },
+        "phase": "abandoned",
+        "group": 103,
+        "failure_reason": "not_submitted"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "bound-unconfirmed-is-failed",
+      "record": {
+        "id": 129,
+        "prompt": {
+          "id": 119
+        },
+        "phase": "abandoned",
+        "trusted_start_bound": true,
+        "failure_reason": "submission_unconfirmed"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "bus"
+    },
+    {
+      "name": "joined-submit-not-confirmed",
+      "record": {
+        "id": 200,
+        "prompt": {
+          "id": 116
+        },
+        "phase": "submitting",
+        "group": 103,
+        "steered": true
+      },
+      "delivery": "open",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "joined-uncertain",
+      "record": {
+        "id": 201,
+        "prompt": {
+          "id": 116
+        },
+        "phase": "active",
+        "uncertain_outcome": true,
+        "group": 103,
+        "steered": true
+      },
+      "delivery": "open",
+      "capture": "pending",
+      "cause": "pending"
+    },
+    {
+      "name": "github_watch_retired",
+      "record": {
+        "id": 300,
+        "prompt": {
+          "id": 105
+        },
+        "phase": "abandoned",
+        "failure_reason": "github_watch_retired"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "room_digest_retired",
+      "record": {
+        "id": 301,
+        "prompt": {
+          "id": 105
+        },
+        "phase": "abandoned",
+        "failure_reason": "room_digest_retired"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "messaging_onboarding_retired",
+      "record": {
+        "id": 302,
+        "prompt": {
+          "id": 105
+        },
+        "phase": "abandoned",
+        "failure_reason": "messaging_onboarding_retired"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "operational_notice_retired",
+      "record": {
+        "id": 303,
+        "prompt": {
+          "id": 105
+        },
+        "phase": "abandoned",
+        "failure_reason": "operational_notice_retired"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    },
+    {
+      "name": "background_wait_superseded",
+      "record": {
+        "id": 304,
+        "prompt": {
+          "id": 105
+        },
+        "phase": "abandoned",
+        "failure_reason": "background_wait_superseded"
+      },
+      "delivery": "failed",
+      "capture": "none",
+      "cause": "external"
+    }
+  ]
+}

@@ -471,7 +471,7 @@ impl Worker {
             let agent = self.state.agent(r.agent_id);
             let outcomes = self.state.worker_outcomes_for(r);
             let worker_events = self.state.worker_events_for(r);
-            let stage = if r.reply().is_some() { "replied" } else { match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" }};
+            let stage = r.delivery_stage();
             // The native server's last refusal explains a queued wait best.
             let reason = r.failure_reason.clone()
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))

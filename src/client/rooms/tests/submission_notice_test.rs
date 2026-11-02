@@ -1116,3 +1116,27 @@ fn tui_error_text_uncertain_steering_retains_native_detail_in_log_only() {
         assert!(log.contains(&field), "missing {field}: {log}");
     }
 }
+
+#[test]
+fn shared_request_classification_keeps_provider_errors_and_bus_failures_at_warning() {
+    // The companion deliberate_request_outcomes_log_at_info... pins all eight
+    // deliberate reasons. Provider errors are external to dashboard reliability,
+    // but remain actionable warnings in request diagnostics.
+    for reason in [
+        "provider_error: quota",
+        "reply_not_captured",
+        "submission_unconfirmed",
+    ] {
+        let (mut ui, mut snapshot, _) = snapshot_with_terminal_reason(reason);
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            snapshot.revision += 1;
+            ui.receive_snapshot(Arc::new(snapshot));
+        });
+        assert!(
+            capture.text().contains("WARN") && capture.text().contains("bus.request.failed"),
+            "{}",
+            capture.text()
+        );
+    }
+}
