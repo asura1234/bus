@@ -148,6 +148,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                                                 text=True).strip(), sha)
         self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO,
                                                 text=True), "", "acceptance requires the clean committed head")
+        self.assertTrue(os.environ.get("USER"), "USER is required for the real macOS Keychain login")
         binary = Path(os.environ["BUS_UNIVERSAL_DIALOG_BINARY"]).resolve(strict=True)
         self.assertFalse("target" in binary.parts or ".cargo-targets" in binary.parts,
                          "supply a copied, verified binary outside shared Cargo targets")
@@ -170,7 +171,8 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
 
         copied = root / "bin/bus"
         mapping = {**PROVIDERS, "node": Path("/opt/homebrew/bin/node")}
-        env = {"HOME": str(Path.home()), "PATH": f"{root / 'bin'}:/usr/bin:/bin",
+        env = {"HOME": str(Path.home()), "USER": os.environ["USER"],
+               "PATH": f"{root / 'bin'}:/usr/bin:/bin",
                "SHELL": "/bin/zsh", "ZDOTDIR": str(root / "zsh"),
                "TERM": "xterm-256color", "LANG": "en_US.UTF-8",
                "BUS_DATA_DIR": str(root / "data")}
@@ -360,6 +362,17 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                          "kimi": lambda label: label == "Trust and continue"}
                 label = unique_label(screen, tests[provider])
                 press(case, agent, screen, "--select", label, acceptance=True)
+                if provider == "codex":
+                    # A separate first-launch setup card reviews Bus's own
+                    # three callbacks. This is an explicit observed setup step.
+                    def hooks_screen():
+                        current = observe(agent, "codex-hooks-setup")
+                        return current if "Hooks need review" in current["text"] else None
+
+                    hooks = wait("Codex project hook review setup", hooks_screen, 30)
+                    blocked("codex-hooks-setup", agent)
+                    hook_label = unique_label(hooks, lambda label: label == "Trust all and continue")
+                    press("codex-hooks-setup", agent, hooks, "--select", hook_label)
                 wait(provider + " native composer after trust", lambda: ready(agent), 60)
                 completed.add(case)
 
