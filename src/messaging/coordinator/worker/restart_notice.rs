@@ -3,7 +3,9 @@ use super::Worker;
 
 impl Worker {
     /// A failed save leaves the file so the next tick can try again.
-    pub(super) fn announce_recorded_restart(&mut self) -> Result<(), String> {
+    pub(in crate::messaging::coordinator) fn announce_recorded_restart(
+        &mut self,
+    ) -> Result<(), String> {
         let path = crate::utils::restart_record::outcome_path(&self.data_dir);
         let Some(record) = crate::utils::restart_record::read_outcome(&path)? else {
             return Ok(());
