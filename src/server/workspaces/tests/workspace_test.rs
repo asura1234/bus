@@ -129,14 +129,7 @@ fn linked_worktree_auto_label_uses_checkout_name_not_repo_name() {
 
 #[test]
 fn display_name_reads_cached_identity_without_rechecking_filesystem() {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "bus-workspace-label-cache-{}-{stamp}",
-        std::process::id()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path("bus-workspace-label-cache");
     let cwd = root.join("deep/nested");
     std::fs::create_dir_all(&cwd).expect("create nested cwd");
 

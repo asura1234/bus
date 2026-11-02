@@ -112,8 +112,8 @@ fn socket_path_prefers_explicit_env_override() {
 fn socket_path_defaults_to_config_dir_even_when_xdg_runtime_dir_is_set() {
     let _guard = env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&_guard);
-    let config_home = unique_test_path("socket-default-config-home");
-    let runtime_dir = unique_test_path("socket-default-runtime");
+    let config_home = crate::utils::test_temp::unique_temp_path("bus-socket-default-config-home");
+    let runtime_dir = crate::utils::test_temp::unique_temp_path("bus-socket-default-runtime");
     std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);
     std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
     crate::utils::paths::clear_explicit_session_for_test();
@@ -133,7 +133,7 @@ fn socket_path_defaults_to_config_dir_even_when_xdg_runtime_dir_is_set() {
 fn socket_path_uses_named_session_dir() {
     let _guard = env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&_guard);
-    let config_home = unique_test_path("socket-named-config-home");
+    let config_home = crate::utils::test_temp::unique_temp_path("bus-socket-named-config-home");
     std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);
     crate::utils::paths::clear_explicit_session_for_test();
     std::env::set_var(crate::utils::paths::SESSION_ENV_VAR, "work");
@@ -152,7 +152,7 @@ fn socket_path_uses_named_session_dir() {
 
 #[test]
 fn restrict_socket_permissions_sets_user_only_mode() {
-    let dir = unique_test_path("socket-perms");
+    let dir = crate::utils::test_temp::unique_temp_path("bus-socket-perms");
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("api.sock");
     let _listener = UnixListener::bind(&path).unwrap();

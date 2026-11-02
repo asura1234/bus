@@ -113,14 +113,7 @@ fn with_restored_workspaces(
     let _guard = crate::utils::config::test_config_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let root_dir = std::env::temp_dir().join(format!(
-        "bus-restore-index-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root_dir = crate::utils::test_temp::unique_temp_path("bus-restore-index");
     std::fs::create_dir_all(&root_dir).unwrap();
     let root = root_dir.canonicalize().unwrap();
     let previous_root = std::env::var_os("BUS_DATA_DIR");

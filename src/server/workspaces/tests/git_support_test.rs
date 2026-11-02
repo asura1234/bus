@@ -1,17 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn temp_test_dir(name: &str) -> PathBuf {
-    let unique = format!(
-        "bus-workspace-tests-{}-{}-{}",
-        name,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    let path = std::env::temp_dir().join(unique);
+    let path = crate::utils::test_temp::unique_temp_path(&format!("bus-workspace-tests-{name}"));
     std::fs::create_dir_all(&path).unwrap();
     path
 }

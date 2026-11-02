@@ -259,14 +259,7 @@ mod tests {
         // Drop runtimes so cwd resolution deterministically uses cached state.
         shutdown_test_runtimes(&mut app);
 
-        let focused_cwd = std::env::temp_dir().join(format!(
-            "bus-ws-follow-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let focused_cwd = crate::utils::test_temp::unique_temp_path("bus-ws-follow");
         std::fs::create_dir_all(&focused_cwd).unwrap();
         let ws = &app.state.workspaces[0];
         let root_cwd = ws.identity_cwd.clone();

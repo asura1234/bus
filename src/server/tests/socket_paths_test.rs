@@ -1,19 +1,11 @@
 use super::*;
 use std::fs;
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
 use std::time::Duration;
 
 #[test]
 fn prepare_socket_path_removes_stale_socket() {
-    let dir = PathBuf::from(format!(
-        "/tmp/hs-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("hs");
     let _ = fs::create_dir_all(&dir);
     let socket_path = dir.join("stale.sock");
 
@@ -38,14 +30,7 @@ fn prepare_socket_path_removes_stale_socket() {
 
 #[test]
 fn prepare_socket_path_rejects_live_socket() {
-    let dir = PathBuf::from(format!(
-        "/tmp/hl-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("hl");
     let _ = fs::create_dir_all(&dir);
     let socket_path = dir.join("live.sock");
 
@@ -70,14 +55,7 @@ fn prepare_socket_path_rejects_live_socket() {
 fn restrict_socket_permissions_keeps_owner_read_write_only() {
     use std::os::unix::fs::PermissionsExt;
     // macOS TMPDIR can exceed sockaddr_un's path limit before the socket name.
-    let dir = PathBuf::from("/tmp").join(format!(
-        "hperm-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("hperm");
     fs::create_dir(&dir).unwrap();
     let socket_path = dir.join("private.sock");
     let _listener = UnixListener::bind(&socket_path).unwrap();
@@ -95,14 +73,7 @@ fn restrict_socket_permissions_keeps_owner_read_write_only() {
 
 #[test]
 fn prepare_socket_path_preserves_an_existing_regular_file() {
-    let dir = PathBuf::from("/tmp").join(format!(
-        "socket-file-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("socket-file");
     fs::create_dir(&dir).unwrap();
     let socket_path = dir.join("endpoint.sock");
     let contents = b"existing user data";
