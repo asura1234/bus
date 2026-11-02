@@ -3,7 +3,7 @@
   "properties": {
     "schema_version": {"type": "integer","enum": [1]},
     "id": {"type": "string","minLength": 1,"pattern": "^[0-9a-f]{64}$"},
-    "kind": {"type": "string","minLength": 1,"enum": ["assignment","handover","pr","review","root_cause","run","coverage","delta","workflow","delivery","compaction"]},
+    "kind": {"type": "string","minLength": 1,"enum": ["assignment","handover","pr","review","root_cause","run","coverage","delta","workflow","delivery","compaction","phase"]},
     "task": {"type": "string","minLength": 1,"pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"},
     "ts": {"type": ["string","null"],"format": "date-time"},
     "role": {"type": "string","minLength": 1,"enum": ["author","reviewer","tester","explorer","investigator","operator","orchestrator"]},
@@ -12,7 +12,7 @@
     "sources": {"type": "array","minItems": 1,"items": {"type": "object","properties": {"path": {"type": "string","minLength": 1},"sha256": {"type": "string","minLength": 1,"pattern": "^[0-9a-f]{64}$"},"locator": {"type": "string","minLength": 1}},"required": ["path","sha256","locator"],"additionalProperties": false}},
     "data": {"type": "object"}
   },
-  "required": ["schema_version", "id", "kind", "task", "ts", "role", "agent", "orchestrator", "sources", "data"],
+  "required": ["schema_version","id","kind","task","ts","role","agent","orchestrator","sources","data"],
   "additionalProperties": false,
   "data_schemas": {
     "assignment": {"type": "object","properties": {"message_id": {"type": ["integer","null"],"minimum": 1}},"required": ["message_id"],"additionalProperties": false},
@@ -25,6 +25,7 @@
     "delta": {"type": "object","properties": {"ready_head": {"type": "string","minLength": 1,"pattern": "^[0-9a-f]{7,64}$"},"merged_head": {"type": "string","minLength": 1,"pattern": "^[0-9a-f]{7,64}$"},"files": {"type": "integer","minimum": 0},"additions": {"type": "integer","minimum": 0},"deletions": {"type": "integer","minimum": 0}},"required": ["ready_head","merged_head","files","additions","deletions"],"additionalProperties": false},
     "workflow": {"type": "object","properties": {"text": {"type": "string","minLength": 1},"event": {"type": "string","minLength": 1,"enum": ["ownership","handover","rebase","compaction","merged"]}},"required": ["text","event"],"additionalProperties": false},
     "delivery": {"type": "object","properties": {"message_id": {"type": "integer","minimum": 1},"request_id": {"type": "integer","minimum": 1},"stage": {"type": "string","minLength": 1,"enum": ["queued","submitting","awaiting_start","delivered","joined","replied","abandoned"]},"reason": {"type": ["string","null"]}},"required": ["message_id","request_id","stage","reason"],"additionalProperties": false},
-    "compaction": {"type": "object","properties": {"count": {"type": "integer","minimum": 0},"last_at_ms": {"type": ["integer","null"],"minimum": 0}},"required": ["count","last_at_ms"],"additionalProperties": false}
+    "compaction": {"type": "object","properties": {"count": {"type": "integer","minimum": 0},"last_at_ms": {"type": ["integer","null"],"minimum": 0}},"required": ["count","last_at_ms"],"additionalProperties": false},
+    "phase": {"type": "object","properties": {"phase": {"type": "string","enum": ["work","waiting_review","in_review","gate","waiting_build_slot"]},"transition": {"type": "string","enum": ["start","end"]},"start_id": {"type": ["string","null"],"pattern": "^[0-9a-f]{64}$"},"duration_ms": {"type": ["integer","null"],"minimum": 0}},"required": ["phase","transition","start_id","duration_ms"],"additionalProperties": false}
   }
 }

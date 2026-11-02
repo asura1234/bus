@@ -41,6 +41,9 @@ def append(store, records):
             if item["id"] not in ids:
                 fresh.append(item)
                 ids.add(item["id"])
+        from stats_phases import validate_phases
+
+        validate_phases(existing + fresh)
         if fresh:
             fd = os.open(
                 path, os.O_APPEND | os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600

@@ -130,10 +130,24 @@ def main():
     r = sub.add_parser("report")
     r.add_argument("--store", type=Path)
     r.add_argument("--json", action="store_true")
+    for command in ("task-start", "task-end"):
+        p = sub.add_parser(command)
+        p.add_argument("--store", type=Path)
+        p.add_argument("--task", required=True)
+        p.add_argument("--agent", required=True)
+        p.add_argument(
+            "--phase",
+            choices=SCHEMA["data_schemas"]["phase"]["properties"]["phase"]["enum"],
+            required=True,
+        )
     args = parser.parse_args()
     try:
         if args.command == "validate":
             result = {"validated": len(read_records(args.file))}
+        elif args.command in ("task-start", "task-end"):
+            from stats_phases import phase
+
+            result = phase(args, args.store or default_store())
         elif args.command == "collect":
             from stats_collect import collect
 

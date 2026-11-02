@@ -81,8 +81,20 @@ def report(rows):
                     measured["lane_" + lane["name"] + "_ms"] += lane["duration_ms"]
             if data["slot_wait_ms"] is not None:
                 measured["slot_wait_ms"] += data["slot_wait_ms"]
+        elif kind == "phase" and data["transition"] == "end":
+            measured["phase_" + data["phase"] + "_ms"] += data["duration_ms"]
         elif kind == "delivery" and data["stage"] == "abandoned":
             entry(row)["abandoned_deliveries"] += 1
+    starts = {
+        r["id"]
+        for r in rows
+        if r["kind"] == "phase" and r["data"]["transition"] == "start"
+    }
+    ends = {
+        r["data"]["start_id"]
+        for r in rows
+        if r["kind"] == "phase" and r["data"]["transition"] == "end"
+    }
     for value in board.values():
         denominator = value["applied"] + value["rejected"]
         value["precision_denominator"] = denominator
@@ -94,7 +106,9 @@ def report(rows):
         ),
         prs=dict(sorted(timeline.items())),
         bottlenecks=dict(
-            measured=dict(sorted(measured.items())), unmeasured=sorted(unmeasured)
+            measured=dict(sorted(measured.items())),
+            open_phases=len(starts - ends),
+            unmeasured=sorted(unmeasured),
         ),
         root_causes=len(roots),
     )
