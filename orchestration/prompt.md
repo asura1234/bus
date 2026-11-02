@@ -154,16 +154,18 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   Reuse `<worktree>/target` for all Cargo/gate/coverage/E2E runs; use the room's
   two-build slot protocol. Preflight long device work and ask once for a bounded
   app relaunch/retry lease. [Guide]({{DOCS}}/orchestrator-guide.md#resource-leases-and-build-slots).
-- Agents stop at permission, trust and question dialogs and other screens
-  they cannot pass alone. A blocked worker sends you one message, "Blocked,
+- Agents stop at screens they cannot pass alone, including permission, trust
+  and question dialogs, shell prompts and pagers. A blocked worker sends you one message, "Blocked,
   needs help to continue.", with no details; a `--async` send keeps waiting
   until the worker is unblocked. Look at that worker's terminal yourself:
-  `bus agent dialog AGENT` shows a dialog with a fresh fingerprint (`bus agent
-  read AGENT --source visible` shows any other screen). Then use `bus agent
-  choose AGENT --option N --fingerprint F` for choices, or `bus agent answer
-  AGENT --text "..." --fingerprint F` / `--skip` for text questions. A
-  choice option marked `free_text` (Claude's `Type something.`) takes
-  `agent answer --text`, never `agent choose`.
+  `bus agent observe AGENT` shows the current screen, focus and terminal identity;
+  add `--cells` for styled cells. Use `bus agent press AGENT --select "LABEL"`
+  for a complete visible option label, `--key KEY` for a shortcut or navigation,
+  or `--text "..." --submit` for a typed answer followed by Enter. Text alone
+  does not submit; repeat `--key` for a sequence. For a shell or pager, use its
+  terminal or pane ID with `--pane` on both observe and press. Bind input with
+  `--terminal-id ID` from the observation. Inspect every pending or uncertain
+  result before acting again, then observe the resulting screen to verify it.
   Answer promptly. Ask the developer about destructive or outward-facing actions
   only when existing workflow or developer authorization does not cover them.
 - Steer a working agent with a plain `bus send` from the running turn's room;

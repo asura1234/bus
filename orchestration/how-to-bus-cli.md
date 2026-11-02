@@ -1,27 +1,23 @@
 # How to use the Bus CLI
 
-Bus coordinates native coding-agent terminals. The UI is for conversations;
-control commands drive an already-running session. Bus stores delivery and replies; callers decide what
-those replies mean and which task comes next.
+Bus coordinates native coding-agent terminals. Its UI is for conversations; control commands drive a running
+session. Bus stores delivery and replies; callers interpret them and decide which task comes next.
 
 ## Getting help
 
-Run `bus <cmd> --help` for behavior, flags/defaults, JSON fields, errors, and
-examples. Nested commands use `bus agent add --help`, for example. `bus --help`
-lists commands; a bare group also lists its children. Help needs no session.
-Control commands emit one JSON envelope; require `ok: true` and capture IDs.
-Local session commands describe their own text/JSON output in their help.
-Read the [orchestrator guide](orchestrator-guide.md) for running a team, the
-[binding rules](orchestrator-rules.md) for authority, and the
-[Bus communication guide](bus-communication-guide.md) for message routing.
+Run `bus <cmd> --help` for behavior, flags/defaults, JSON fields, errors and examples; nested commands
+use `bus agent add --help`, for example. `bus --help` lists commands; a bare group lists its children.
+Help needs no session. Control commands emit one JSON envelope: require `ok: true` and capture IDs.
+Local session commands describe their text/JSON output in help. Read the
+[orchestrator guide](orchestrator-guide.md) for teams, [binding rules](orchestrator-rules.md) for authority,
+and [Bus communication guide](bus-communication-guide.md) for message routing.
 
 ## Start or resume Bus
 
-A plain `bus` launch creates a new local session. Keep its terminal open; run
-control commands from another terminal or an agent pane. They never start Bus.
-Use `bus sessions`, then `bus resume SESSION_ID` or `bus resume --last` to
-resume. `bus --paths` prints data/log/config/state locations without launching.
-See `bus resume --help` for hooks, provider sessions, and environment restrictions.
+A plain `bus` launch creates a local session. Keep its terminal open; run control commands from another
+terminal or agent pane. They never start Bus. Use `bus sessions`, then `bus resume SESSION_ID` or
+`bus resume --last` to resume. `bus --paths` prints data/log/config/state locations without launching.
+See `bus resume --help` for hooks, provider sessions and environment restrictions.
 
 ## Target the intended running session
 By default, control commands target the last opened session. For concurrent
@@ -44,40 +40,34 @@ orchestrators for this run only; it defaults off and is never saved.
 
 ## Rooms, agents, messages and turns
 
-Every session has exactly one MASTER room. It contains orchestrators; each
-orchestrates exactly one work room for life, and each work room has at most one.
-Deleting a work room deletes its orchestrator. MASTER cannot be renamed/deleted.
-Use `bus agent add --help` for `agent add --room master ... --orchestrates ROOM`,
+Every session has exactly one MASTER room containing orchestrators. Each orchestrates one work room
+for life; each work room has at most one. Deleting a work room deletes its orchestrator. MASTER cannot
+be renamed/deleted. Use `bus agent add --help` for `agent add --room master ... --orchestrates ROOM`,
 prompt replacement/adoption, providers, hook consent and launch restrictions.
 
-Rooms are conversations; agents have home rooms and globally unique current
-names/IDs. Any agent can message any other agent across rooms. `--room` selects
-the conversation, never a namespace. Capture numeric IDs when identity must stay
-stable through renames. `bus agent list` maps names, IDs and home rooms.
-On loading old duplicate names, the lowest ID keeps its name; later duplicates
-become NAME-ID (with a suffix if needed). This is recorded once before clients
-connect, preserving sessions, room bindings and queued work.
+Rooms are conversations; agents have home rooms and globally unique current names/IDs.
+Any agent can message any other agent across rooms. `--room` selects the conversation, never a namespace.
+Capture numeric IDs for identity stable through renames; `bus agent list` maps names, IDs and home rooms. On loading
+old duplicate names, the lowest ID keeps its name; later duplicates become NAME-ID (with a suffix if
+needed), recorded once before clients connect, preserving sessions, room bindings and queued work.
 
-A message has one ID and one recipient request per selected agent. The request
-tracks delivery and its answer; a provider turn is the agent's execution context.
-A same-room message can steer into a running turn and join its group; `--queue`
-gets an independent idle turn. A cross-room message waits for the next turn.
-Explicit correlated replies complete individual requests without ending the turn.
-An eventual final answers only the group's still-outstanding requests.
+A message has one ID and one recipient request per selected agent, tracking delivery and its answer.
+A provider turn is the agent's execution context. A same-room message can steer into a running turn
+and join its group; `--queue` gets an independent idle turn. A cross-room message waits for the next
+turn. Explicit correlated replies complete individual requests without ending the turn; an eventual
+final answers only the group's still-outstanding requests.
 
-A reply lands in the message's room, equally for developer and agent senders.
-A turn no message started posts in the orchestrator's work room. A captured Stop
-answer ends its matching requests immediately even if background shells keep
-Working; later background results are follow-ups and never replace that answer.
+Replies land in the message's room for developer and agent senders alike. A turn no message started
+posts in the orchestrator's work room. A captured Stop answer ends matching requests immediately,
+even if background shells keep Working; later background results are follow-ups, never replacements.
 
 ### Who to message
 
 Use the [Bus communication guide](bus-communication-guide.md). Send only the body;
-do not add a "from X", "X here" or signature line. Bus adds `name:` locally or
-`name (room R):` across rooms/MASTER; numeric/historical names include an ID.
-Agent-authored batches add position/time without repeating the sender header.
-New agents get protocol instructions at launch; upgrades do not insert task turns
-into existing conversations with saved instructions.
+do not add a "from X", "X here" or signature line. Bus adds `name:` locally or `name (room R):`
+across rooms/MASTER; numeric/historical names include an ID. Agent-authored batches add position/time
+without repeating that header. New agents get protocol instructions at launch;
+upgrades do not insert task turns into existing conversations with saved instructions.
 #### Reach the developer from any room
 
 For a developer-only request from any room:
@@ -154,15 +144,14 @@ Waiters defer only their own wakes and mark only flushed output seen; use `messa
 A killed waiter's lease expires, resuming delivery with composer guards. Deleted requesters are not replaced.
 stdout and native injection can expose an already-delivered wake.
 
-Event decisions, pending sources and batches persist together. Repeated callbacks,
-polls and restarts are not new events; later outcomes/turns are. Definite rejection
-retains the queue ID and pauses retries after its queued outcome window until new
-work/identity/status/restart, not idle polls. Uncertain submissions are never
-replayed. Payloads freeze once native submission starts. Failed acknowledgements
-preserve fallback. First upgrade backfills retained eligible replies/outcomes once;
-expired history stays expired, while rollback discarding routing state can repeat recovery.
+Event decisions, pending sources and batches persist together. Repeated callbacks, polls and restarts
+are not new events; later outcomes/turns are. Definite rejection retains the queue ID and pauses retries
+after its queued outcome window until new work/identity/status/restart, not idle polls. Uncertain
+submissions are never replayed. Payloads freeze once native submission starts; failed acknowledgements
+preserve fallback. First upgrade backfills retained eligible replies/outcomes once. Expired history stays
+expired; rollback discarding routing state can repeat recovery.
 
-## Diagnose, recover and answer dialogs
+## Diagnose, recover and drive blocked screens
 
 Start with `state`, `message status ID`, and `history --room ROOM`. Inspect a
 terminal only when those leave a question: `agent read AGENT --source visible`
@@ -185,10 +174,22 @@ After two minutes unsubmitted/unconfirmed it falls back to the developer; a
 readable closed dialog suppresses fallback. Unreadable state gets at most three
 extra minutes before fallback; uncertain writes are never replayed.
 
-Observe with `agent dialog AGENT`, then use `agent choose AGENT --option N
---fingerprint FINGERPRINT` or `agent answer --help`. Every action needs a fresh
-observation and a decision; do not automate by guessing from terminal text.
-Read the help for checkbox forms, custom text, drafts and tab navigation.
+Use `bus agent observe AGENT` for any blocked screen: permission, trust and question dialogs,
+shell prompts or pagers. Results include text, focus, dimensions, cursor and terminal identity;
+add `--cells` for styled cells. Use `bus agent press AGENT` with the input the screen calls for:
+
+- `bus agent press AGENT --select "LABEL"` navigates to a complete visible option label,
+  observes focus after each move, then presses Enter.
+- `--key KEY` sends a key or chord (`y`, `2`, `tab`, `pageup`, `ctrl+c`); repeat it for a sequence.
+- `--text "..."` types text; `--submit` presses Enter after text and keys, or alone for Enter.
+
+Use either `--select` or a combination of text, keys and submit. For a plain shell or pager,
+target its terminal or pane ID with `--pane` on both commands: `bus agent observe w1:p2 --pane`,
+then `bus agent press w1:p2 --pane --key n`. Bind input with `--terminal-id ID` from the observation.
+Every action needs a fresh observation and a decision. Without unique visible menu focus,
+read the styled screen and use explicit keys. Inspect pending or uncertain results before
+acting again; sent input is not retried implicitly. A successful press proves input was queued;
+observe the resulting screen to verify the program's response. See `bus agent press --help`.
 Fix provider installation/startup first, then `agent resume --room ROOM` for
 saved agents. Use `request recover REQUEST_ID --confirm` only after checking
 identity/status and effects; it closes work, never undoes or replays it.
@@ -197,13 +198,12 @@ Sending provider reset slash commands as messages leaves requests unanswered.
 
 ## UI, settings and cleanup
 
-The UI renders Markdown; copying/quoting keeps raw source. Pasted images live in
-session attachments/ as absolute paths.
-History shows PNG/JPEG/GIF-first-frame/WebP images up to eight rows tall when
-fully visible without a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2
-3.7+, inline images in older iTerm2 (TERM_PROGRAM or LC_TERMINAL and version).
-Kitty moves images with scrolling; older iTerm2 redraws them. tmux, disabled terminal.kitty_graphics,
-missing/unreadable images and unsupported hosts use clickable file rows. Clicking an image opens file detail.
+The UI renders Markdown; copying/quoting keeps raw source. Pasted images live in session attachments/ as absolute paths.
+History shows PNG/JPEG/GIF-first-frame/WebP images up to eight rows tall when fully visible without
+a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in older iTerm2
+(TERM_PROGRAM or LC_TERMINAL and version). Kitty moves images with scrolling; older iTerm2 redraws.
+tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable
+file rows. Clicking an image opens file detail.
 
 Enter steers; Option/Alt+Enter queues. Ctrl+J or supported Shift+Enter adds a
 newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
@@ -226,11 +226,10 @@ with Ctrl+Q to save drafts before stopping; `bus stop` disconnects without savin
 A failed or five-second save shows an unsaved warning: Ctrl+Q again within five seconds forces quit,
 potentially losing edits. Wait out that window to retry saving; presses before a warning keep waiting.
 
-Sessions from pre-control builds answer control only if launched in developer mode;
-after restart every session does. Older orchestrator-build sessions gain MASTER (a conflicting old room becomes Master (old)); brief goal/
-non-goals append once to notes. Obsolete orchestrator transcripts/workflow drafts/
-capability grants are dropped. private/orchestrator-credentials.json is no longer
-read; delete it yourself if its old API key is no longer needed.
+Sessions from pre-control builds answer control only if launched in developer mode; after restart every
+session does. Older orchestrator-build sessions gain MASTER (a conflicting old room becomes Master (old));
+brief goal/non-goals append once to notes. Obsolete orchestrator transcripts/workflow drafts/capability
+grants are dropped. private/orchestrator-credentials.json is no longer read; delete it yourself if its old API key is no longer needed.
 
 ## Developer restart for orchestrators
 

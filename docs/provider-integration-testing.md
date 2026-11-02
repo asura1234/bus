@@ -148,30 +148,21 @@ build actually supports it. Preserve the private root until evidence is saved.
   already exists: it sets hook consent and does not install hooks. Without
   `--confirm` it is rejected with
   `This command changes or removes work; add --confirm to proceed`.
-- [ ] Fresh first launch in a never-trusted directory. The folder-trust prompt
-  and ordinary permission prompts must surface as actionable Bus dialogs for
-  every provider under test. Grok 1.0.70's "Do you trust the contents of this
-  directory?" must be `dialog` true and status blocked before any delivery.
-  Answer Grok with `y` or `n` and no Enter; `y` only for the agent's own cwd.
-  `session_hook_missing` with `dialog` false on that screen fails. Kimi 2.4.0's
-  "Trust this folder?" is not that `y`/`n` check. `src/agents/dialog/kimi.rs`
-  parses it as a choice dialog: the marked "Trust and continue" is chosen with
-  Enter, and "Exit" is Down then Enter. There is no `y`/`n` key. The hint is
-  `↑↓ navigate · Enter select · Esc exit`. Answer only through
-  `sbus agent dialog` and `sbus agent choose`, and only when
-  `agent add --help` lists `kimi`. Enter on an empty composer is not this
-  check. An agent left "launching", with messages abandoned as
-  `agent_launching`, fails. After trust is chosen, this master has no
-  `Try "..."` composer match, so Claude Code 2.1.309's untouched placeholder
-  is not an empty composer here. After #239 merges, that untouched
-  `Try "..."` placeholder (no SGR, cursor on the first cell) is an empty
-  composer. The first message must deliver with no manual key.
-  `composer_busy` on that placeholder fails. The same glyphs are a draft
-  after any real keystroke or after Bus has pasted; do not paste over them.
-  Until that merge, do not score the placeholder rule as current master
-  behaviour. Observe `sbus agent dialog AGENT` and `sbus agent read AGENT
-  --source visible`; choose only an authorized option using its fresh
-  fingerprint. Re-observe after a stale fingerprint.
+- [ ] Fresh first launch in a never-trusted directory. Inspect the full screen
+  with `sbus agent observe AGENT`. Folder trust and ordinary permission prompts
+  must be readable and status blocked before delivery. Answer only the scratch
+  agent's own cwd. Use `sbus agent press AGENT --select 'complete visible label'
+  --terminal-id TERMINAL_ID` for a list, and observe the resulting screen. Kimi's
+  "Trust and continue" is a list selection, not a `y`/`n` answer. For an actual
+  y/n prompt, send its documented key with `--key y` or `--key n`, without Enter
+  unless the screen requires it. No provider-specific parser, synthetic option
+  or fingerprint is involved. Do not press Enter on an empty composer to stand
+  in for trust. An agent left launching, with messages abandoned as
+  `agent_launching`, fails. A first message must deliver from the untouched
+  native placeholder with no manual composer key; a real typed draft must stay
+  protected. `composer_busy` on a proven untouched placeholder fails. After a
+  stale or uncertain driver result, inspect the fresh observation and the keys
+  already sent before deciding the next input.
 - [ ] While the welcome card is still above the composer, send the first
   message through Bus. After resolving any dialog through Bus, it must reach
   the model and get the unique marker back without a manual terminal keypress.
@@ -205,7 +196,7 @@ with `--consent-hooks`, then stop.
 
 Run only the sequence that matches the provider under test. A fresh
 `$scratch/project` has no hook files, so Codex, Cursor, and Grok take the
-missing-file sequence. Continue with the dialog commands for the agent that
+missing-file sequence. Continue with observe/press for the agent that
 returned `ok: true`.
 
 ```sh
@@ -242,10 +233,10 @@ sbus agent add --room ROOM --name new-worker --provider grok \
 ```sh
 # Existing agent only. Records consent and does not install hooks:
 sbus agent setup-confirm new-worker --confirm
-sbus agent dialog new-worker
-sbus agent read new-worker --source visible
-# If a dialog is present and its choice is authorized:
-sbus agent choose new-worker --option N --fingerprint F
+sbus agent observe new-worker
+# If the visible choice is authorized, use its complete row label and observed terminal:
+sbus agent press new-worker --select 'VISIBLE LABEL' --terminal-id TERMINAL_ID
+sbus agent observe new-worker
 sbus send --room ROOM --to new-worker --text 'Reply with FIRST_LAUNCH_MARKER.'
 sbus message status MESSAGE_ID
 sbus history --room ROOM --limit 100
@@ -412,9 +403,9 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   chooser, then send. Kimi's "Cache expired — the next message re-sends the
   entire history at full price" chooser (Compact and continue / Start a new
   session / Continue as-is / Don't ask me again) must be a Bus dialog.
-  `submission_unconfirmed` with `agent dialog` null fails. Answer only through
-  `sbus agent dialog` and `sbus agent choose`, the same way as "Trust this
-  folder?". For a delivery that must keep the same session, choose
+  `submission_unconfirmed` while that screen is visible fails. Answer only through
+  `sbus agent observe` and `sbus agent press --select 'Continue as-is'`, as for
+  "Trust this folder?". For a delivery that must keep the same session, choose
   "Continue as-is". Do not press Enter on the composer. Compact spends a
   full-history resend, and a new session drops the thread. Do not choose
   "Don't ask me again" to invent a tester default.
@@ -624,9 +615,10 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   Also run one worker with neither Bus `--yolo` nor the provider's
   skip-permissions flag. Grok 1.0.70's tool-approval card (a selected `●`, a
   trailing `┃`, footer `Ctrl+c:cancel`, no `◆` header) is returned by
-  `sbus agent dialog` with status blocked. `dialog` false while it is up
-  fails. Do not press Enter. Yes is a permission decision. Choose only an
-  authorized option with a fresh fingerprint.
+  `sbus agent observe` with status blocked. A missing blocked state while it is up
+  fails. Yes is a permission decision: select only an authorized complete visible
+  label through `sbus agent press --select`, bound with `--terminal-id`, then
+  inspect the resulting screen.
 - [ ] `git -C "$scratch/project" status --short` may list `?? .codex/` and
   `?? .cursor/` after a consented Codex or Cursor add (`.codex/hooks.json` and
   `.cursor/hooks.json`). Grok writes `.grok/hooks/bus.json` and
@@ -704,6 +696,12 @@ run-scoped bypass. This relaunch does not rescue an interrupted run.
 
 ## Testing lessons
 
+The dated observations below include failures of the retired dialog parser.
+They are historical diagnoses; their action rules use the current shared
+`agent observe` / `agent press` route. A former parsed `dialog` result is not a
+current acceptance requirement: verify the visible screen, blocked status,
+terminal identity, input receipt and resulting behavior.
+
 - **2026-10-30 — Grok:** four scratch paths passed, yet live first launch could
   not receive messages: folder trust was missed and the composer under the
   1.0.70 welcome card was reported `prompt_not_shown`. Test that exact screen
@@ -735,15 +733,15 @@ idle then deliver, and an approval card without `--yolo`.
   the live Bus data dir. `bus resume` cannot be combined with `BUS_DATA_DIR`;
   relaunch with `sbus --dev` on that private root.
 - **2026-10-31 — Grok welcome composer:** Symptom: `prompt_not_shown`, status
-  idle, `dialog` false, welcome card above a real `❯` composer. Cause: the
+  idle, no recognized blocker, welcome card above a real `❯` composer. Cause: the
   1.0.70 frame ends on the model-labelled border and was not a composer Bus
   recognised. Test: fresh first launch in an untrusted directory; send while
   the card is visible; no manual key. Rule: that layout must reach the model.
   A warmed or card-free launch does not count.
 - **2026-10-31 — Grok trust:** Symptom: `session_hook_missing`, status idle,
-  `agent dialog` null, on "Do you trust the contents of this directory?".
+  no recognized blocker, on "Do you trust the contents of this directory?".
   Cause: the chooser was not a blocked dialog, so the bootstrap was abandoned.
-  Test: fresh untrusted directory; `agent dialog` must list Yes (`y`) and No
+  Test: fresh untrusted directory; `agent observe` must show the Yes (`y`) and No
   (`n`) before any send. Rule: `y` only for the agent's own cwd. No Enter.
   After the choose, the welcome-card send still has to run.
 - **2026-10-31 — Grok paste size:** Symptom: `prompt_not_shown` because no
@@ -783,12 +781,12 @@ idle then deliver, and an approval card without `--yolo`.
   with Ctrl+C, read the composer, withdraw Bus's own restored text, then
   require `stage: replied`. An Esc failure is not a pass.
 - **2026-10-31 — Grok approval card:** Symptom: a worker without
-  `--always-approve` sat on the tool-approval card, `agent dialog` was null,
+  `--always-approve` sat on the tool-approval card, the former parser returned null,
   and no reply was sent. Cause: the card has a selected `●`, a trailing `┃`,
   and `Ctrl+c:cancel`, and no `◆` header. Test: approval card without
   Bus `--yolo` and without the provider skip-permissions flag. Do not press
   Enter. Yes is a permission decision. The card is a blocked dialog.
-  `dialog` false while it is up fails.
+  Missing blocked status while it is up fails.
 - **2026-10-31 — Claude `Try "..."` placeholder:** Symptom: `composer_busy` on
   a fresh Claude Code 2.1.309 worker, so no agent-to-agent message arrived. One
   manual key was required, and the welcome ghost survived a key plus a
@@ -796,7 +794,7 @@ idle then deliver, and an approval card without `--yolo`.
   Cause: the placeholder has no SGR and the cursor sits on the first cell, so
   it was stashed as a developer draft. This master has no `Try "..."` match
   under `src/server/api/agents/prompt`. Test: fresh first launch in an untrusted
-  directory, trust answered only through `agent dialog` / `agent choose`, no
+  directory, trust answered only through `agent observe` / `agent press --select`, no
   manual key. After #239 merges, that untouched placeholder is empty, and
   after a real key or a Bus paste the same text is a draft. Do not treat an
   unrecognised composer as empty. Until that merge, do not score the empty
@@ -826,11 +824,11 @@ idle then deliver, and an approval card without `--yolo`.
   suffix, and do not submit an unrelated draft. A one-line pointer does not
   prove this case.
 - **2026-10-31 — Kimi cache chooser:** Symptom: `submission_unconfirmed`,
-  `agent dialog` null, status idle, on the cache-expired chooser. Cause: the
+  no recognized blocker, status idle, on the cache-expired chooser. Cause: the
   four rows (Compact and continue / Start a new session / Continue as-is /
   Don't ask me again) were not a dialog, so the blocked clock never started.
-  Test: long idle, then deliver. Rule: answer only through `sbus agent dialog`
-  and `sbus agent choose`. For the same session, choose "Continue as-is".
+  Test: long idle, then deliver. Rule: answer only through `sbus agent observe`
+  and `sbus agent press --select 'Continue as-is'`. For the same session, choose "Continue as-is".
   Do not press Enter on the composer. Compact spends a full resend; a new
   session drops history. Do not choose "Don't ask me again" to invent a
   tester default. `cache_expiry_hint` in `tui.toml` is a product setting,
@@ -839,8 +837,8 @@ idle then deliver, and an approval card without `--yolo`.
   `prompt_not_shown`) on a fresh agent, status still launching. Cause: "Trust
   this folder?" was not a Bus dialog. Test: fresh first launch in an untrusted
   directory, only when `agent add --help` lists `kimi`. Rule
-  (`src/agents/dialog/kimi.rs`): answer only through `sbus agent dialog` and
-  `sbus agent choose`. The prompt must be a dialog before any send. The marked "Trust and continue"
+  (the former parser missed this screen): answer only through `sbus agent observe`
+  and `sbus agent press --select 'Trust and continue'`. It must be blocked before any send. The marked "Trust and continue"
   is chosen with Enter; "Exit" is Down then Enter. There is no `y`/`n` key.
   Do not press Enter on the composer. An agent left launching fails the case.
 - **2026-10-31 — scratch relaunch is not `bus --dev restart`:** Symptom: an
@@ -877,7 +875,7 @@ idle then deliver, and an approval card without `--yolo`.
   including `✻ Thinking N times`, stays Idle. A send while that marker
   is Working queues with `agent_working` and must not leave `draft-*.txt`.
   `▶ Run this command?` for the test's own `sleep 45` is a dialog. Choose
-  `Approve once` through `sbus agent dialog` and `sbus agent choose`. Do not
+  `Approve once` through `sbus agent observe` and `sbus agent press --select 'Approve once'`. Do not
   press Enter on the composer. Scratch `sbus` must pass `SHELL` (`zsh`,
   `bash`, or `fish`); `env -i` without it spawns `/bin/sh` and `agent add`
   sends no launch input. A later `reply_not_captured` after the text is on
@@ -911,7 +909,7 @@ idle then deliver, and an approval card without `--yolo`.
 
 - **2026-11-01 — startup expiry retains ownership:** A live provider stuck on
   onboarding must keep its managed name after the startup deadline. Check the
-  same pane and terminal with `agent read` and `agent dialog`, then answer the
+  same pane and terminal with `agent read` and `agent observe`, then answer the
   chooser through Bus and confirm readiness without replacing the agent.
   Cursor's workspace-trust card uses `[a] Trust this workspace` and `[q] Quit`;
   the shortcuts act directly. A sessionless timed-out agent must retain its

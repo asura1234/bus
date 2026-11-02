@@ -115,18 +115,21 @@ fn grok_dispatch_keeps_durable_notifications_and_uncertain_submissions() {
 }
 
 #[test]
-fn grok_dialog_guidance_requires_fresh_fingerprints_and_developer_authority() {
+fn grok_blocked_screen_guidance_uses_the_universal_driver_and_developer_authority() {
     let prompt = flat(&orchestrator_prompt("Synthetic policy.").unwrap());
     for command in [
-        "bus agent dialog WORKER",
-        "bus agent read WORKER --source visible",
-        "bus agent choose WORKER --option N --fingerprint F",
-        r#"bus agent answer WORKER --text "..." --fingerprint F"#,
-        "bus agent answer WORKER --skip --fingerprint F",
+        "bus agent observe WORKER",
+        "bus agent press WORKER --select",
+        "--key tab",
+        "--text",
+        "--submit",
+        "--pane",
+        "--terminal-id ID",
     ] {
         assert!(prompt.contains(command), "missing: {command}");
     }
-    assert!(prompt.contains("fresh fingerprint"));
+    assert!(!prompt.contains("agent choose"));
+    assert!(!prompt.contains("agent answer"));
     assert!(prompt.contains("destructive or outward-facing"));
     assert!(prompt.contains("do not invent an approval"));
 }
