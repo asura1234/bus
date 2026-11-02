@@ -129,11 +129,7 @@ mod orchestrator_turn_routing {
     }
 
     fn bus() -> Bus {
-        let dir = std::env::temp_dir().join(format!(
-            "bus-routing-{}-{}",
-            std::process::id(),
-            crate::messaging::storage::io::now_ns()
-        ));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-routing");
         let mut worker = Worker::open(dir.clone(), Box::new(Accepting)).unwrap();
         let mut state = worker.state.clone();
         let master = state.master_room().unwrap().id;

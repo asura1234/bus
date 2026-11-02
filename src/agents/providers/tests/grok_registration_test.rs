@@ -45,11 +45,7 @@ fn grok_registration_has_stable_identity_and_observation_contract() {
 
 #[test]
 fn grok_registration_invalid_directory_never_initializes_capture() {
-    let root = std::env::temp_dir().join(format!(
-        "bus-grok-g0-{}-{}",
-        std::process::id(),
-        crate::utils::time::now_ns()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path("bus-grok-g0");
     let initialized = std::cell::Cell::new(false);
     let spec = launch::LaunchSpec {
         provider: serde_json::from_str("\"grok\"").unwrap(),

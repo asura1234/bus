@@ -11,20 +11,7 @@ impl Drop for TestSocketPath {
 }
 
 fn unique_test_path(name: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let filename = format!("h{}-{nanos}.sock", std::process::id());
-    #[cfg(unix)]
-    {
-        let _ = name;
-        PathBuf::from("/tmp").join(filename)
-    }
-    #[cfg(windows)]
-    {
-        std::env::temp_dir().join(format!("bus-{name}-{filename}"))
-    }
+    crate::utils::test_temp::unique_temp_path(&format!("h-{name}.sock"))
 }
 
 fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, TestSocketPath) {

@@ -64,11 +64,7 @@ impl Drop for Fixture {
 /// A Bus with an orchestrator in MASTER for room "work", and a worker there.
 /// Each agent has its own launch (`orch` and `builder`) and session.
 fn fixture(provider: Provider) -> Fixture {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-reports-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-reports");
     let mut worker = Worker::open(dir.clone(), Box::new(Accepting)).unwrap();
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;

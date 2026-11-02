@@ -11,11 +11,7 @@ impl Transport for NoAgents {
 }
 
 fn data_dir(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "bus-{name}-{}-{}",
-        std::process::id(),
-        io::now_ns()
-    ))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-{name}"))
 }
 
 fn call(

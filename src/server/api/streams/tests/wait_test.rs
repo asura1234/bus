@@ -106,14 +106,7 @@ fn output_matched_subscription_setup_error_carries_the_client_request_id() {
 fn events_wait_on_missing_pane_answers_with_the_client_request_id() {
     let (api_tx, app) = spawn_pane_not_found_app();
     let event_hub = EventHub::default();
-    let path = std::env::temp_dir().join(format!(
-        "bus-events-wait-missing-pane-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path = crate::utils::test_temp::unique_temp_path("bus-events-wait.sock");
     let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
     let _client = crate::platform::ipc::connect_local_stream(&path).unwrap();
     let mut server = {

@@ -26,14 +26,7 @@ fn windows_wmi_daemon_preserves_environment_and_working_directory() {
         return;
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "bus-wmi-daemon-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
+    let base = crate::utils::test_temp::unique_temp_path("bus-wmi-daemon-test");
     fs::create_dir_all(&base).unwrap();
     let capture = base.join("capture.txt");
     let test_exe = std::env::current_exe().expect("resolve test executable");

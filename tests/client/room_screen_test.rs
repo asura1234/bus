@@ -2,7 +2,8 @@
 #![cfg(any(unix, windows))]
 
 #[path = "../support/fixture_dir_test.rs"]
-mod fixture_dirs;
+mod utils;
+use utils::test_temp as fixture_dirs;
 
 #[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;

@@ -4,16 +4,8 @@ use crate::server::persistence::schema::{
 };
 
 fn temp_session_path(name: &str) -> PathBuf {
-    let unique = format!(
-        "bus-session-tests-{}-{}-{}",
-        name,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    std::env::temp_dir().join(unique).join("session.json")
+    crate::utils::test_temp::unique_temp_path(&format!("bus-session-tests-{name}"))
+        .join("session.json")
 }
 
 fn temp_session_paths(name: &str) -> (PathBuf, PathBuf) {

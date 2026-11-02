@@ -373,11 +373,7 @@ mod tests {
     }
 
     fn unique_test_dir(name: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::path::PathBuf::from(format!("/tmp/ha-{name}-{}-{nanos}", std::process::id()))
+        crate::utils::test_temp::unique_temp_path(&format!("ha-{name}"))
     }
 
     #[test]

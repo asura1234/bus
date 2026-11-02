@@ -96,14 +96,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
     workspace.custom_name = None;
     let root = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(root).cloned().unwrap();
-    let temp_root = std::env::temp_dir().join(format!(
-        "bus-toast-context-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let temp_root = crate::utils::test_temp::unique_temp_path("bus-toast-context");
     let stale_cwd = temp_root.join("__bus_original__");
     let live_cwd = temp_root.join("__bus_projects__");
     std::fs::create_dir_all(&stale_cwd).unwrap();
@@ -192,14 +185,7 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
     workspace.custom_name = None;
     let root = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(root).cloned().unwrap();
-    let temp_root = std::env::temp_dir().join(format!(
-        "bus-delayed-toast-context-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let temp_root = crate::utils::test_temp::unique_temp_path("bus-delayed-toast-context");
     let stale_cwd = temp_root.join("__bus_original__");
     let live_cwd = temp_root.join("__bus_projects__");
     std::fs::create_dir_all(&stale_cwd).unwrap();

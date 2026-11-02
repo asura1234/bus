@@ -3,7 +3,8 @@
 #![cfg(unix)]
 
 #[path = "../support/fixture_dir_test.rs"]
-mod fixture_dirs;
+mod utils;
+use utils::test_temp as fixture_dirs;
 
 // Separate instances retain each original suite's cleanup registry and support test identities.
 #[allow(clippy::duplicate_mod)]
@@ -52,7 +53,7 @@ pane_scrollbars = false
 "#;
 
     fn unique_test_dir() -> PathBuf {
-        crate::fixture_dirs::unique_test_dir("bus-detach-test")
+        crate::fixture_dirs::unique_temp_path("bus-detach-test")
     }
 
     struct SpawnedBus {

@@ -12,16 +12,7 @@ fn foreground_process(pid: u32, name: &str, argv: &[&str]) -> crate::platform::F
 
 #[cfg(unix)]
 fn temp_detection_path(name: &str) -> std::path::PathBuf {
-    let unique = format!(
-        "bus-detect-tests-{}-{}-{}",
-        name,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be after unix epoch")
-            .as_nanos()
-    );
-    std::env::temp_dir().join(unique)
+    crate::utils::test_temp::unique_temp_path(&format!("bus-detect-tests-{name}"))
 }
 
 // ---- Agent identification ----

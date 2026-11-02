@@ -24,11 +24,7 @@ fn test_app() -> App {
 }
 
 fn unique_temp_path(name: &str) -> std::path::PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("bus-{name}-{}-{stamp}", std::process::id()))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-{name}"))
 }
 
 fn config_env_lock() -> &'static Mutex<()> {
@@ -36,15 +32,7 @@ fn config_env_lock() -> &'static Mutex<()> {
 }
 
 fn temp_config_path(name: &str) -> std::path::PathBuf {
-    let unique = format!(
-        "bus-{name}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    std::env::temp_dir().join(unique).join("config.toml")
+    crate::utils::test_temp::unique_temp_path(&format!("bus-{name}")).join("config.toml")
 }
 
 #[test]

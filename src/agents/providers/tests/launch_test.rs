@@ -70,14 +70,7 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
 
 #[test]
 fn unreadable_pwd_error_names_the_field_and_path() {
-    let path = std::env::temp_dir().join(format!(
-        "missing-bus-pwd-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path = crate::utils::test_temp::unique_temp_path("missing-bus-pwd");
     assert!(path.is_absolute());
     let input = path.to_string_lossy();
     let cause = std::fs::canonicalize(input.as_ref()).unwrap_err();

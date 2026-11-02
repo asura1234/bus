@@ -3,11 +3,7 @@ use interprocess::local_socket::traits::Listener as _;
 
 #[cfg(unix)]
 fn unique_test_path(name: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("bus-{name}-{}-{nanos}", std::process::id()))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-{name}.sock"))
 }
 
 #[cfg(unix)]
@@ -124,11 +120,7 @@ fn stop_without_any_recorded_local_session_succeeds() {
         .map(|key| (key, std::env::var_os(key)))
         .collect(),
     );
-    let home = std::env::temp_dir().join(format!(
-        "bus-stop-empty-home-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let home = crate::utils::test_temp::unique_temp_path("bus-stop-empty-home");
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("HOME", &home);
 

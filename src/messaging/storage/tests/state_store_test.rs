@@ -7,14 +7,7 @@ use crate::messaging::model::{
 };
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-store-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path(&format!("bus-store-{label}"));
     fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }

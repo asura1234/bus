@@ -473,12 +473,7 @@ fn pane_link_activate_round_trips() {
 fn runtime_status_silent_socket_is_unavailable() {
     use std::io::BufRead;
 
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let socket_path = std::path::Path::new("/tmp")
-        .join(format!("bus-status-{}-{nonce:x}.sock", std::process::id()));
+    let socket_path = crate::utils::test_temp::unique_temp_path("bus-status.sock");
     let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
     let (release, wait_for_release) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {

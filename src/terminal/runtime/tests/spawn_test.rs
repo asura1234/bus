@@ -354,14 +354,7 @@ fn login_shell_builder_rejects_missing_shell_instead_of_falling_back() {
 #[test]
 fn login_shell_builder_resolves_bare_shell_names_from_path() {
     let _lock = self::env::env_lock();
-    let base = std::env::temp_dir().join(format!(
-        "bus-login-shell-path-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let base = crate::utils::test_temp::unique_temp_path("bus-login-shell-path");
     let bin = base.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let shell = bin.join("fake-shell");
@@ -394,14 +387,7 @@ fn login_shell_from_relative_path_runs_in_the_pane_directory() {
     use std::os::unix::fs::PermissionsExt;
 
     let _lock = self::env::env_lock();
-    let base = std::env::temp_dir().join(format!(
-        "bus-relative-login-shell-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let base = crate::utils::test_temp::unique_temp_path("bus-relative-login-shell");
     let bin = base.join("bin");
     let pane_cwd = base.join("pane");
     std::fs::create_dir_all(&bin).unwrap();

@@ -4,11 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::sync::mpsc::{self, Receiver};
 
 fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "bus-api-{name}-{}-{}.sock",
-        std::process::id(),
-        Instant::now().elapsed().as_nanos()
-    ));
+    let path = crate::utils::test_temp::unique_temp_path(&format!("bus-api-{name}.sock"));
     let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
     let client = crate::platform::ipc::connect_local_stream(&path).unwrap();
     let server = listener.accept().unwrap();

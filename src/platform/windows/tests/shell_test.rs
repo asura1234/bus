@@ -159,14 +159,7 @@ fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
 #[test]
 fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
     let _lock = crate::utils::test_env::env_lock();
-    let base = std::env::temp_dir().join(format!(
-        "bus-agent-argv-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
+    let base = crate::utils::test_temp::unique_temp_path("bus-agent-argv");
     fs::create_dir_all(&base).unwrap();
     let helper = base.join("pi.cmd");
     fs::write(

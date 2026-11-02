@@ -11,13 +11,7 @@ impl Transport for NoTerminals {
 }
 
 fn root(label: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("temp")
-        .join(format!(
-            "bus-global-settings-{label}-{}-{}",
-            std::process::id(),
-            crate::messaging::storage::io::now_ns()
-        ))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-global-settings-{label}"))
 }
 
 /// A session in `root/name` sharing `root/settings.json`, as registry sessions do.
