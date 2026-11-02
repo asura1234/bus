@@ -118,3 +118,72 @@ async fn codex_native_interrupt_rejects_a_stale_session_without_pressing_escape(
     assert!(response.contains("agent_not_ready"), "{response}");
     assert!(!calls.iter().any(|call| call["method"] == "turn/interrupt"));
 }
+
+fn show_working_projection(app: &mut App) {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    assert_eq!(
+        app.agent_info(0, pane).unwrap().agent_status,
+        crate::protocol::api::schema::AgentStatus::Working
+    );
+}
+
+#[tokio::test]
+async fn codex_native_idle_admits_despite_a_transient_working_projection() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "developer draft");
+    show_working_projection(&mut app);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let native = app.lookup_runtime_sender(0, pane).unwrap().codex_native();
+    let (path, server) = test_support::server_for("session", false, false);
+    *native.lock().unwrap() = test_support::connected_runtime(path);
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    // On the red implementation, drain the untouched external fixture.
+    if !response.contains("agent_prompted") {
+        let _ = native.lock().unwrap().interrupt(
+            "session",
+            std::time::Instant::now() + Duration::from_secs(3),
+        );
+    }
+    let calls = server.join().unwrap();
+    assert!(response.contains("agent_prompted"), "{response}");
+    assert!(writes.try_recv().is_err());
+    assert_eq!(calls.last().unwrap()["method"], "thread/queue/add");
+}
+
+#[tokio::test]
+async fn codex_native_actual_busy_turn_refuses_unsteered_working_projection() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "draft");
+    show_working_projection(&mut app);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let native = app.lookup_runtime_sender(0, pane).unwrap().codex_native();
+    let (path, server) = test_support::server_for("session", true, false);
+    *native.lock().unwrap() = test_support::connected_runtime(path);
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    let _ = native.lock().unwrap().interrupt(
+        "session",
+        std::time::Instant::now() + Duration::from_secs(3),
+    );
+    let calls = server.join().unwrap();
+    assert!(
+        response.contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN),
+        "{response}"
+    );
+    assert!(writes.try_recv().is_err());
+    assert!(!calls
+        .iter()
+        .any(|call| call["method"] == "thread/queue/add" || call["method"] == "turn/steer"));
+}
+
+#[tokio::test]
+async fn codex_native_working_projection_never_uses_unavailable_channel_fallback() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "draft");
+    show_working_projection(&mut app);
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(response.contains("agent_not_idle"), "{response}");
+    assert!(writes.try_recv().is_err());
+}
