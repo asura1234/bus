@@ -146,7 +146,11 @@ class Scratch:
             draft = f'"{image}"\nfake:draft-bytes S2-{self.name}-{i}\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
             self.ok(['click', '--hit', 'agent:a1'])
             self.ok(['paste', draft])
-            self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2')
+            record = self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2', wait=False)
+            time.sleep(2)
+            initial = self.request(record['id'])
+            record['initial_stage'] = initial.get('stage')
+            record['initial_reason'] = initial.get('reason')
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
             self.ok(['wait', '--text', 'fake draft bytes:', '--timeout', '20s'])
@@ -157,7 +161,9 @@ class Scratch:
             restored = json.loads(replies[-1].split('fake draft bytes: ', 1)[1])
             if restored != draft + '-END':
                 raise RuntimeError(('draft mismatch', repr(restored), repr(draft + '-END')))
-            self.records[-1]['draft_exact'] = True
+            record['draft_exact'] = True
+            self.wait_reply(record)
+            record['correct'] = record['correct'] and record['status'].get('stage') == 'replied'
 
     def s3(self):
         lead = self.send('a1', f'fake:work 15 S3-lead-{self.name}', 'S3-lead', wait=False)
