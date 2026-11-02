@@ -166,6 +166,8 @@ impl Tab {
             )?
         };
 
+        #[cfg(unix)]
+        crate::server::terminals::native_input::bind(&runtime, launch_env);
         let terminal_id = TerminalId::alloc();
         let terminal = match argv {
             Some(argv) => {
@@ -349,6 +351,8 @@ impl Tab {
                 return Err(err);
             }
         };
+        #[cfg(unix)]
+        crate::server::terminals::native_input::bind(&runtime, launch_env);
         let terminal_id = TerminalId::alloc();
         let terminal = match launch_argv {
             Some(argv) => {

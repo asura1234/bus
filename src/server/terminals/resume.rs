@@ -368,6 +368,8 @@ impl App {
             }
         };
 
+        #[cfg(unix)]
+        super::native_input::bind(&runtime, &launch_env);
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             guard_resumed_agent_launch(terminal, &runtime);
         }
