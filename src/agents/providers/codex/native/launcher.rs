@@ -100,6 +100,12 @@ impl Server {
             .mode(0o600)
             .open(capture.join("codex-native.log"))?;
         let mut command = supervised_command(&runtime::server_argv(argv, endpoint), lock);
+        let frontend = crate::platform::process_instance(std::process::id())
+            .ok_or_else(|| io::Error::other("Cannot identify native Codex frontend"))?;
+        command.env(
+            crate::agents::providers::callback_entry::NATIVE_FRONTEND_INSTANCE_ENV,
+            serde_json::to_string(&frontend).map_err(io::Error::other)?,
+        );
         let child = command
             .stdin(Stdio::from(OwnedFd::from(control)))
             .stdout(Stdio::null())
