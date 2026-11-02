@@ -23,9 +23,10 @@ pub(super) fn queue(
     expected_turn: Option<String>,
     message: &str,
     deadline: Instant,
-) -> Option<InputCompletion> {
+    native_only: bool,
+) -> Result<Option<InputCompletion>, String> {
     if agent.agent.as_deref() != Some("codex") || text.starts_with('/') {
-        return None;
+        return fallback(native_only, message);
     }
     let native = runtime.shared_codex_handle();
     if !native
@@ -34,7 +35,7 @@ pub(super) fn queue(
         .as_ref()
         .is_some_and(|runtime| runtime.has_session())
     {
-        return None;
+        return fallback(native_only, message);
     }
     let text = text.to_owned();
     let thread = agent
@@ -73,7 +74,19 @@ pub(super) fn queue(
             });
         let _ = send.send(result);
     });
-    Some(recv.into())
+    Ok(Some(recv.into()))
+}
+
+fn fallback(native_only: bool, message: &str) -> Result<Option<InputCompletion>, String> {
+    if native_only {
+        Err(crate::server::api::errors::encode_error(
+            message.to_owned(),
+            "agent_not_idle",
+            "Agent is not idle; prompt was not sent",
+        ))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(super) fn interrupt(runtime: &TerminalRuntime, agent: &AgentInfo) -> Option<io::Result<()>> {
