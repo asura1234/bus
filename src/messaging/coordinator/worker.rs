@@ -16,6 +16,7 @@ mod history;
 mod kimi_settlement;
 mod restart_notice;
 mod restored_prompt;
+mod snapshot;
 use control_reads::interrupts_delivery;
 use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 
@@ -521,18 +522,6 @@ impl Worker {
                 full_saves: self.store.writes() - before,
             });
         }
-    }
-
-    fn publish_snapshot(&self, snapshots: &Mutex<Arc<BusSnapshot>>) {
-        let snapshot = self.timed_snapshot();
-        if let Ok(mut shared) = snapshots.lock() {
-            *shared = snapshot;
-        }
-    }
-
-    fn timed_snapshot(&self) -> Arc<BusSnapshot> {
-        let _timer = perf::SNAPSHOT.start();
-        Arc::new(self.snapshot())
     }
 
     #[cfg(test)]
