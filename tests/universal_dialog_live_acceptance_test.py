@@ -250,6 +250,14 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
             row = next(item for item in state["agents"] if str(item["id"]) == agent)
             return row.get("status") == "idle" and not row.get("current_request")
 
+        def blocked(case, agent):
+            def poll():
+                state = control("state")["result"]
+                row = next(item for item in state["agents"] if str(item["id"]) == agent)
+                save(case + "-blocked", row)
+                return row if row.get("status") == "blocked" else None
+            return wait(case + " Blocked status before input", poll, 30)
+
         def send(agent, text, name):
             return str(save(name, control("send", "--room", room, "--to", agent,
                                           "--text", text))["result"]["message_id"])
@@ -345,6 +353,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                     return screen if "trust" in text and str(project) in screen["text"] else None
 
                 screen = wait(case, trust_screen, 90)
+                blocked(case, agent)
                 tests = {"claude": lambda label: bool(re.fullmatch(
                              r"Yes, (?:I )?trust this folder[.!]?", label)),
                          "codex": lambda label: label == "Yes, continue",
@@ -379,6 +388,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                                       and any(predicate(label) for label in rows)) else None
 
                 screen = wait(case, permission_screen)
+                blocked(case, agent)
                 self.assertFalse(marker.exists(), "command ran before native approval")
                 label = unique_label(screen, predicate)
                 press(case, agent, screen, "--select", label, acceptance=True)
@@ -417,6 +427,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 return None
 
             screen = wait("native Codex question with custom row", question_screen)
+            blocked(case, agent)
             for step in range(8):
                 focus = screen.get("focus")
                 self.assertTrue(focus, "custom-answer navigation needs unique visible focus")
