@@ -396,7 +396,9 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 def permission_screen():
                     screen = observe(agent, case)
                     rows = [label for _, label, option in menu_rows(screen) if option]
-                    return screen if (token in screen["text"] and screen.get("focus")
+                    # Transcript prompts may make the unscoped focus ambiguous;
+                    # --select resolves current focus within the visible label's menu.
+                    return screen if (token in screen["text"]
                                       and "esc" in screen["text"].lower()
                                       and any(predicate(label) for label in rows)) else None
 
