@@ -153,7 +153,7 @@ impl ObservedSubmission {
 
     fn wait_transfer(&self, mut ready: impl FnMut() -> io::Result<bool>) -> io::Result<()> {
         loop {
-            let generation = self.clock.generation();
+            let generation = self.generation();
             if ready()? {
                 return Ok(());
             }
@@ -163,7 +163,13 @@ impl ObservedSubmission {
                     "Provider did not finish draft transfer",
                 ));
             }
-            self.clock.sleep(Duration::from_millis(20), generation);
+            if crate::protocol::api::submission::spike_fast_confirm() {
+                // External-editor exchange files also change without a PTY event.
+                self.terminal
+                    .wait_for_change(generation, Duration::from_millis(20));
+            } else {
+                self.clock.sleep(Duration::from_millis(20), generation);
+            }
         }
     }
 

@@ -6,6 +6,10 @@ use std::process::Command;
 impl FakeAgent {
     /// Applies one input to the draft, redrawing it.
     pub(super) fn apply(&mut self, input: Input) -> Option<Typed> {
+        super::spike_audit(
+            "input",
+            serde_json::json!({"session":self.session,"input":format!("{input:?}"),"draft":self.draft}),
+        );
         match input {
             Input::Text(text) => self.draft.push_str(&text),
             Input::Paste(text) => {
@@ -48,6 +52,10 @@ impl FakeAgent {
         if self.draft.is_empty() {
             self.collapsed_paste = false;
         }
+        super::spike_audit(
+            "draft",
+            serde_json::json!({"session":self.session,"draft":self.draft}),
+        );
         self.redraw();
         None
     }

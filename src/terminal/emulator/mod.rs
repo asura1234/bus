@@ -174,11 +174,33 @@ pub(crate) struct GhosttyPaneCore {
 
 pub(crate) struct PaneTerminal {
     pub(crate) ghostty: GhosttyPaneTerminal,
+    changes: (Mutex<u64>, std::sync::Condvar),
 }
 
 impl PaneTerminal {
     pub(crate) fn new(ghostty: GhosttyPaneTerminal) -> Self {
-        Self { ghostty }
+        Self {
+            ghostty,
+            changes: (Mutex::new(0), std::sync::Condvar::new()),
+        }
+    }
+
+    pub(crate) fn change_generation(&self) -> u64 {
+        *self.changes.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub(crate) fn changed(&self) {
+        let mut generation = self.changes.0.lock().unwrap_or_else(|p| p.into_inner());
+        *generation = generation.wrapping_add(1);
+        self.changes.1.notify_all();
+    }
+
+    pub(crate) fn wait_for_change(&self, generation: u64, timeout: Duration) {
+        let state = self.changes.0.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = self
+            .changes
+            .1
+            .wait_timeout_while(state, timeout, |state| *state == generation);
     }
 
     pub fn scroll_up(&self, lines: usize) {

@@ -76,3 +76,8 @@ pub(crate) fn method_budget(method: &Method) -> Option<Duration> {
     };
     Some(maximum_budget(delay, text) + transfer)
 }
+
+/// Throwaway idea-B switch. Unset runs the unchanged master submission path.
+pub(crate) fn spike_fast_confirm() -> bool {
+    cfg!(feature = "dev-tools") && std::env::var_os("BUS_SPIKE_FAST_CONFIRM").is_some()
+}

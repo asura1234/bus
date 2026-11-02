@@ -44,6 +44,10 @@ impl FakeAgent {
             };
             self.pending.extend(bytes);
             for input in drain_input(&mut self.pending) {
+                super::spike_audit(
+                    "dialog_input",
+                    serde_json::json!({"session":self.session,"input":format!("{input:?}")}),
+                );
                 match input {
                     Input::Enter => {
                         // Let native choose acknowledge its one write first.

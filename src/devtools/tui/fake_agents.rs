@@ -304,6 +304,10 @@ impl FakeAgent {
 
     /// Answers `prompt` in one turn; the exit code when interrupted meanwhile.
     fn submit(&mut self, prompt: &str) -> Option<i32> {
+        spike_audit(
+            "submit",
+            json!({"session":self.session,"prompt":prompt,"draft":self.draft}),
+        );
         let turn = self.next_turn();
         let mut out = std::io::stdout();
         let _ = write!(out, "{}", submitted(prompt));
@@ -763,3 +767,19 @@ fn pseudo_uuid() -> String {
 #[cfg(test)]
 #[path = "tests/fake_agents_test.rs"]
 mod tests;
+
+/// Content audit, only inside this spike's private fake-agent scratch root.
+fn spike_audit(event: &str, data: Value) {
+    use std::io::Write;
+    let Some(root) = std::env::var_os("BUS_SPIKE_AUDIT_DIR") else {
+        return;
+    };
+    let row = json!({"event": event, "data": data, "pid": std::process::id(), "wall_ns": crate::utils::time::now_ns()});
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(PathBuf::from(root).join("fake.jsonl"))
+    {
+        let _ = writeln!(file, "{row}");
+    }
+}

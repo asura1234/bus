@@ -38,8 +38,15 @@ impl PaneTerminal {
         response_writer: &mpsc::Sender<Bytes>,
         foreground_job: impl Fn(u32) -> Option<crate::platform::ForegroundJob>,
     ) -> ProcessBytesResult {
-        self.ghostty
-            .process_pty_bytes(pane_id, shell_pid, bytes, response_writer, foreground_job)
+        let result = self.ghostty.process_pty_bytes(
+            pane_id,
+            shell_pid,
+            bytes,
+            response_writer,
+            foreground_job,
+        );
+        self.changed();
+        result
     }
 
     pub fn resize(

@@ -222,6 +222,11 @@ impl TerminalRuntime {
         deadline: Option<Instant>,
         inspect: Box<dyn SubmissionInspector>,
     ) -> io::Result<InputCompletion> {
+        let delay = if crate::protocol::api::submission::spike_fast_confirm() {
+            Duration::ZERO
+        } else {
+            delay
+        };
         let clock = self.io.submission_clock();
         let now = clock.now();
         let withdraw_grace = withdrawal_budget(&text);
@@ -297,6 +302,31 @@ impl TerminalRuntime {
 }
 
 impl ObservedSubmission {
+    fn generation(&self) -> u64 {
+        if crate::protocol::api::submission::spike_fast_confirm() {
+            self.terminal.change_generation()
+        } else {
+            self.clock.generation()
+        }
+    }
+
+    fn wait_render(&self, generation: u64) {
+        if crate::protocol::api::submission::spike_fast_confirm() {
+            // Generation is sampled before inspection: a repaint between the
+            // inspection and wait cannot be lost. Retry/deadline still wake us.
+            self.terminal.wait_for_change(
+                generation,
+                Duration::from_millis(250).min(
+                    self.deadline
+                        .get()
+                        .saturating_duration_since(self.clock.now()),
+                ),
+            );
+        } else {
+            self.clock.sleep(Duration::from_millis(20), generation);
+        }
+    }
+
     fn observe(&self, phase: &'static str) -> InputObservation {
         self.observe_frame(phase)
             .unwrap_or(InputObservation::Unavailable)
@@ -322,7 +352,7 @@ impl ObservedSubmission {
     fn observe_initial(&self, phase: &'static str) -> io::Result<InputObservation> {
         let mut waited = false;
         loop {
-            let generation = self.clock.generation();
+            let generation = self.generation();
             if let Some(observation) = self
                 .observe_frame(phase)
                 .filter(|_| !waited || self.check_deadline().is_ok())
@@ -337,7 +367,7 @@ impl ObservedSubmission {
             waited = true;
             #[cfg(test)]
             self.clock.waiting_for_draft();
-            self.clock.sleep(Duration::from_millis(20), generation);
+            self.wait_render(generation);
         }
     }
 
@@ -575,6 +605,13 @@ impl ObservedSubmission {
                 .and_then(|result| result)
         });
         self.diagnostics.entered(&result, self.clock.now());
+        if cfg!(feature = "dev-tools") && std::env::var_os("BUS_SPIKE_AUDIT_DIR").is_some() {
+            tracing::info!(
+                event = "bus.spike.enter_flushed",
+                flushed = result.is_ok(),
+                wall_ns = crate::utils::time::now_ns()
+            );
+        }
         result
     }
 
@@ -627,7 +664,7 @@ impl ObservedSubmission {
         // the owned draft to render before attempting the first Enter.
         let mut verified_lease = None;
         loop {
-            let generation = self.clock.generation();
+            let generation = self.generation();
             let observation = self.observe("await_paste");
             if observation == InputObservation::Pending {
                 break;
@@ -643,11 +680,11 @@ impl ObservedSubmission {
             }
             #[cfg(test)]
             self.clock.waiting_for_draft();
-            self.clock.sleep(Duration::from_millis(20), generation);
+            self.wait_render(generation);
         }
         let mut last_enter = None;
         loop {
-            let generation = self.clock.generation();
+            let generation = self.generation();
             let guard = self
                 .content_lock
                 .lock()
@@ -705,7 +742,7 @@ impl ObservedSubmission {
             }
             #[cfg(test)]
             self.clock.submission_checked(generation);
-            self.clock.sleep(Duration::from_millis(20), generation);
+            self.wait_render(generation);
         }
     }
 }
