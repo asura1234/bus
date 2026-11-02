@@ -460,6 +460,10 @@ impl ObservedSubmission {
             })?;
             self.wait_transfer(|| exchange.acknowledged())?;
             let first = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
+            tracing::info!(target: "bus::terminal::submission",
+                event = "bus.terminal.submission.editor_installed",
+                at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                bytes = editor.text.len(), "Bus input installed through native editor");
             let verified = if editor.verification_error.is_some() {
                 exchange.request_verify()?;
                 self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
