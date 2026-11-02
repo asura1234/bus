@@ -636,7 +636,7 @@ fn bus_sidebar_blocked_does_not_jump_when_the_shared_phase_wraps() {
 #[test]
 fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
     let (mut ui, _, _) = fixture();
-    for count in [1, 4] {
+    for (count, divider_row) in [(1, 5), (4, 14)] {
         let mut snapshot = (*ui.snapshot).clone();
         for index in 1..count {
             snapshot
@@ -652,17 +652,17 @@ fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
         assert!(row_text(1).starts_with("ROOMS"));
         // The agents header names the open room in the ROOMS `#` style.
         assert!(
-            row_text(4 + count * 2).starts_with("# room"),
+            row_text(divider_row + 1).starts_with("# room"),
             "{}",
-            row_text(4 + count * 2)
+            row_text(divider_row + 1)
         );
         let color = buffer[(27, 0)].fg;
         for x in 1..26 {
-            assert_eq!(buffer[(x, 3 + count * 2)].symbol(), "─");
-            assert_eq!(buffer[(x, 3 + count * 2)].fg, color);
+            assert_eq!(buffer[(x, divider_row)].symbol(), "─");
+            assert_eq!(buffer[(x, divider_row)].fg, color);
         }
         assert_eq!(buffer[(25, 1)].symbol(), "+");
-        assert_eq!(buffer[(25, 4 + count * 2)].symbol(), "+");
+        assert_eq!(buffer[(25, divider_row + 1)].symbol(), "+");
     }
 }
 
