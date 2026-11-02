@@ -122,20 +122,6 @@ fn room_sound_names_persist_and_old_sessions_load_with_the_default() {
 }
 
 #[test]
-fn master_room_has_no_notes_and_work_rooms_keep_theirs() {
-    let mut state = BusState::new();
-    let master = state.ensure_master_room();
-    let work = state.create_room("work").unwrap();
-    assert_eq!(
-        state.set_room_notes(master, "status"),
-        Err(ModelError::MasterRoomHasNoNotes)
-    );
-    assert_eq!(state.room(master).unwrap().notes, "");
-    state.set_room_notes(work, "status").unwrap();
-    assert_eq!(state.room(work).unwrap().notes, "status");
-}
-
-#[test]
 fn master_room_cannot_be_renamed_or_deleted_and_its_name_is_reserved() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();
@@ -299,14 +285,11 @@ fn pending_deletion_rejects_new_work_even_with_an_empty_draft() {
 }
 
 #[test]
-fn room_notes_drafts_and_names_are_room_local_and_ids_survive_renames() {
+fn drafts_and_names_are_room_local_and_ids_survive_renames() {
     let (mut state, first, agent, _) = state_with_room_and_agents();
     let second = state.create_room("second").expect("second room");
     state.rename_room(first, "renamed").expect("rename room");
     state.rename_agent(agent, "new name").expect("rename agent");
-    state
-        .set_room_notes(first, "Goal\nNon-goals")
-        .expect("notes");
     state.set_draft_text(first, "first draft").expect("draft");
     state.set_draft_text(second, "second draft").expect("draft");
     state
@@ -317,7 +300,6 @@ fn room_notes_drafts_and_names_are_room_local_and_ids_survive_renames() {
     assert_eq!(state.room(first).expect("first").name, "renamed");
     assert_eq!(state.agent(agent).expect("agent").id, agent);
     assert_eq!(state.agent(agent).expect("agent").name, "new name");
-    assert_eq!(state.room(first).expect("first").notes, "Goal\nNon-goals");
     assert_eq!(state.room(first).expect("first").draft.text, "first draft");
     assert_eq!(
         state.room(second).expect("second").draft.text,

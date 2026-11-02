@@ -107,7 +107,6 @@ pub(crate) enum BusCommand {
     LeaveRoom,
     /// Dev `room seen`; the shell marks rooms seen with SelectRoom.
     MarkRoomSeen(RoomId),
-    SetNotes(RoomId, String),
     SetDraftText(RoomId, String),
     SetRecipients(RoomId, AgentRecipients),
     AttachFile(RoomId, String),

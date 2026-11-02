@@ -148,9 +148,8 @@ impl RoomClient {
             thread::sleep(Duration::from_millis(25));
         }
         // The server socket precedes the client's asynchronous default-room
-        // creation. Wait for its notes acknowledgement as well as its header
-        // before test controls can race that startup RoomCreated event.
-        client.observe("Goal: stay in the room to coordinate selected agents.");
+        // creation. Wait for the opened room before test controls can race
+        // that startup RoomCreated event.
         client.observe_room("bus");
         client
     }
@@ -164,13 +163,12 @@ impl RoomClient {
             "room.focus" => {
                 args.extend(["room", "focus", params["room"].as_str().unwrap()]);
             }
-            "room.notes" => {
+            "room.rename" => {
                 args.extend([
                     "room",
-                    "notes",
+                    "rename",
                     params["room"].as_str().unwrap(),
-                    "--text",
-                    params["text"].as_str().unwrap(),
+                    params["name"].as_str().unwrap(),
                 ]);
             }
             _ => panic!("unsupported room-screen fixture command {method}"),

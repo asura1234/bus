@@ -1,10 +1,10 @@
-//! Draft/notes editing, key handling, recipients and image attachment persistence.
+//! Draft editing, key handling, recipients and image attachment persistence.
 use super::super::{
     editor::Editor, forms::RenameTarget, render::Action, BusUi, ComposerSize, Effect, Recalled,
 };
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, AgentRecipients, RoomId, RoomKind},
+    model::{AgentId, AgentRecipients, RoomId},
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -17,36 +17,6 @@ impl BusUi {
                 .composer_rows
                 .saturating_sub(usize::from(self.view.composer.height));
             local.composer_scroll = Some(if forward {
-                offset.saturating_add(lines).min(maximum)
-            } else {
-                offset.min(maximum).saturating_sub(lines)
-            });
-        }
-    }
-
-    /// MASTER has no notes: they are a work room's status board, and MASTER is
-    /// where the developer talks to orchestrators.
-    pub(in crate::client::rooms) fn room_has_notes(&self) -> bool {
-        self.room
-            .and_then(|id| self.snapshot.state.room(id))
-            .is_some_and(|room| room.kind != RoomKind::Master)
-    }
-
-    /// Starting to edit the notes brings their caret back into view.
-    pub(super) fn reveal_notes_caret(&mut self) {
-        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
-            local.notes_scroll = None;
-        }
-    }
-
-    pub(super) fn scroll_notes(&mut self, forward: bool, lines: usize) {
-        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
-            let offset = local.notes_scroll.unwrap_or(self.view.notes_scroll);
-            let maximum = self
-                .view
-                .notes_rows
-                .saturating_sub(usize::from(self.view.notes.height));
-            local.notes_scroll = Some(if forward {
                 offset.saturating_add(lines).min(maximum)
             } else {
                 offset.min(maximum).saturating_sub(lines)
@@ -105,21 +75,13 @@ impl BusUi {
             return;
         };
         if let Some(local) = self.locals.get_mut(&room) {
-            if self.notes_focus {
-                local.notes.insert(text);
-            } else {
-                local.history_index = None;
-                local.live_draft = None;
-                local.text.insert(text);
-            }
+            local.history_index = None;
+            local.live_draft = None;
+            local.text.insert(text);
         }
         self.pending_line_continue = false;
         self.last_esc = None;
-        if self.notes_focus {
-            self.notes_changed(room);
-        } else {
-            self.text_changed(room);
-        }
+        self.text_changed(room);
     }
 
     pub(super) fn key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
@@ -151,7 +113,7 @@ impl BusUi {
             self.chat_search_key(code, modifiers);
             return true;
         }
-        if self.history_search.is_some() && !self.notes_focus {
+        if self.history_search.is_some() {
             self.search_key(code, modifiers);
             return true;
         }
@@ -219,18 +181,9 @@ impl BusUi {
                     self.start_rename(RenameTarget::Room(id));
                 }
             }
-            (KeyCode::F(3), _) => {
-                if self.room_has_notes() {
-                    if !self.notes_focus {
-                        self.reveal_notes_caret();
-                    }
-                    self.notes_focus = !self.notes_focus;
-                }
-            }
             (KeyCode::Char('e' | 'E'), modifiers)
                 if modifiers.contains(KeyModifiers::CONTROL)
-                    && modifiers.contains(KeyModifiers::SHIFT)
-                    && !self.notes_focus =>
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
             {
                 if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
                     local.composer_size = if local.composer_size == ComposerSize::Full
@@ -243,19 +196,13 @@ impl BusUi {
                     };
                 }
             }
-            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if self.notes_focus => {
-                self.scroll_notes(
-                    code == KeyCode::PageDown,
-                    usize::from(self.view.notes.height.saturating_sub(1).max(1)),
-                );
-            }
-            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if !self.notes_focus => {
+            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) => {
                 self.scroll_composer(
                     code == KeyCode::PageDown,
                     usize::from(self.view.composer.height.saturating_sub(1).max(1)),
                 );
             }
-            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) if !self.notes_focus => {
+            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) => {
                 self.cycle_history_search();
             }
             (KeyCode::Char('r' | 'R'), modifiers)
@@ -264,10 +211,10 @@ impl BusUi {
             {
                 self.action(Action::NewRoom);
             }
-            (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) if !self.notes_focus => {
+            (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) => {
                 self.stash_prompt();
             }
-            (KeyCode::Char('v' | 'V'), KeyModifiers::CONTROL) if !self.notes_focus => {
+            (KeyCode::Char('v' | 'V'), KeyModifiers::CONTROL) => {
                 self.paste_image();
             }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
@@ -289,12 +236,11 @@ impl BusUi {
                 self.insert("\n")
             }
             (KeyCode::Char('\\'), modifiers)
-                if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+                if modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
                 self.insert("\\");
                 self.pending_line_continue = true;
             }
-            (KeyCode::Enter, _) if self.notes_focus => self.insert("\n"),
             (KeyCode::Enter, _) if self.pending_line_continue => self.finish_line_continue(),
             (KeyCode::Enter, KeyModifiers::ALT) => {
                 if let Some(room) = self.room {
@@ -306,7 +252,7 @@ impl BusUi {
                     self.request_send(room);
                 }
             }
-            (KeyCode::Up | KeyCode::Down, KeyModifiers::NONE) if !self.notes_focus => {
+            (KeyCode::Up | KeyCode::Down, KeyModifiers::NONE) => {
                 self.history_or_move(code);
             }
             (KeyCode::Esc, _) => self.escape(),
@@ -320,30 +266,16 @@ impl BusUi {
             _ => {
                 if let Some(room) = self.room {
                     if let Some(local) = self.locals.get_mut(&room) {
-                        if self.notes_focus {
-                            local.notes_scroll = None;
-                        } else {
-                            local.composer_scroll = None;
-                        }
-                        let editor = if self.notes_focus {
-                            &mut local.notes
-                        } else {
-                            &mut local.text
-                        };
+                        local.composer_scroll = None;
+                        let editor = &mut local.text;
                         let changed = editor.key(code, modifiers);
                         if changed {
                             // Same invalidation as `insert`: edited text is no
                             // longer the recalled prompt or a trailing `\`.
-                            if !self.notes_focus {
-                                local.history_index = None;
-                                local.live_draft = None;
-                            }
+                            local.history_index = None;
+                            local.live_draft = None;
                             self.pending_line_continue = false;
-                            if self.notes_focus {
-                                self.notes_changed(room);
-                            } else {
-                                self.text_changed(room);
-                            }
+                            self.text_changed(room);
                         }
                     }
                 }
@@ -352,11 +284,6 @@ impl BusUi {
     }
 
     pub(super) fn escape(&mut self) {
-        if self.notes_focus {
-            self.notes_focus = false;
-            self.last_esc = None;
-            return;
-        }
         let now = std::time::Instant::now();
         if self.last_esc.is_some_and(|last| {
             now.saturating_duration_since(last) < std::time::Duration::from_millis(800)

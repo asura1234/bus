@@ -17,7 +17,6 @@ pub(crate) enum ModelError {
     DeletionPending,
     AgentNotIdle,
     MasterRoomFixed,
-    MasterRoomHasNoNotes,
     ReservedRoomName,
     ReservedAgentName,
     AgentNameTaken {
@@ -40,7 +39,6 @@ impl std::fmt::Display for ModelError {
             Self::MasterRoomFixed => {
                 write!(formatter, "The MASTER room cannot be renamed or deleted")
             }
-            Self::MasterRoomHasNoNotes => write!(formatter, "The MASTER room has no notes"),
             Self::ReservedRoomName => write!(
                 formatter,
                 "The name {MASTER_ROOM_NAME} is reserved for the master room"

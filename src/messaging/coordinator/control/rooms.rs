@@ -1,7 +1,5 @@
 //! Rooms development commands on the single coordinator.
-use super::{
-    mpsc, optional_text, required, unique, BTreeMap, BusCommand, BusEvent, RoomId, Worker,
-};
+use super::{mpsc, required, unique, BTreeMap, BusCommand, BusEvent, RoomId, Worker};
 use crate::messaging::model::{PromptId, Request, RequestId};
 use serde_json::{json, Value};
 
@@ -42,10 +40,6 @@ impl Worker {
             "room.rename" => self.control_command(BusCommand::RenameRoom(
                 self.control_room(required(p, "room")?)?,
                 required(p, "name")?.into(),
-            )),
-            "room.notes" => self.control_command(BusCommand::SetNotes(
-                self.control_room(required(p, "room")?)?,
-                optional_text(p, "text")?.ok_or("Missing text")?.into(),
             )),
             "room.seen" => self.control_command(BusCommand::MarkRoomSeen(
                 self.control_room(required(p, "room")?)?,

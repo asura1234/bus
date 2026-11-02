@@ -1,4 +1,4 @@
-//! Mouse text selection in the room notes, history and composer. Selections are
+//! Mouse text selection in the room history and composer. Selections are
 //! anchored to text positions rather than screen cells, so they survive
 //! scrolling; releasing the button copies the selected text to the host
 //! clipboard. History selections cover exactly the dragged characters.
@@ -11,7 +11,6 @@ use ratatui::layout::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Region {
-    Notes,
     History,
     Composer,
 }
@@ -96,7 +95,6 @@ impl BusUi {
                 }
                 let point = (column, row).into();
                 let region = match hit {
-                    Some(Action::Notes) if self.view.notes.contains(point) => Region::Notes,
                     Some(Action::Composer) if self.view.composer.contains(point) => {
                         Region::Composer
                     }
@@ -117,24 +115,16 @@ impl BusUi {
                         .link_at(column, row)
                         .map(|(_, target)| ((column, row), target.clone()));
                 } else {
-                    let offset = self.editor_offset(region, column, row, false);
-                    self.action(if region == Region::Notes {
-                        Action::Notes
-                    } else {
-                        Action::Composer
-                    });
+                    let offset = self.editor_offset(column, row, false);
+                    self.action(Action::Composer);
                     let scroll = self.view.composer_scroll;
                     if let (Some(offset), Some(local)) = (
                         offset,
                         self.room.and_then(|room| self.locals.get_mut(&room)),
                     ) {
-                        if region == Region::Notes {
-                            local.notes.press(offset);
-                        } else {
-                            // Hold the viewport still while the caret follows the pointer.
-                            local.composer_scroll = Some(scroll);
-                            local.text.press(offset);
-                        }
+                        // Hold the viewport still while the caret follows the pointer.
+                        local.composer_scroll = Some(scroll);
+                        local.text.press(offset);
                     }
                 }
                 self.drag = Some(region);
@@ -156,15 +146,11 @@ impl BusUi {
                         self.history_selection = Some((anchor, head));
                     }
                 } else if let (Some(before), Some(after)) = (
-                    self.editor_offset(region, column, row, false),
-                    self.editor_offset(region, column, row, true),
+                    self.editor_offset(column, row, false),
+                    self.editor_offset(column, row, true),
                 ) {
                     if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
-                        let editor = if region == Region::Notes {
-                            &mut local.notes
-                        } else {
-                            &mut local.text
-                        };
+                        let editor = &mut local.text;
                         let anchor = editor.anchor.unwrap_or(editor.cursor);
                         editor.drag(if before >= anchor { after } else { before });
                     }
@@ -241,19 +227,9 @@ impl BusUi {
 
     /// Editor byte offset under the pointer, using the last frame's viewport.
     /// Pointers above or below the editor select to its visible edge.
-    fn editor_offset(
-        &self,
-        region: Region,
-        column: u16,
-        row: u16,
-        inclusive: bool,
-    ) -> Option<usize> {
+    fn editor_offset(&self, column: u16, row: u16, inclusive: bool) -> Option<usize> {
         let local = self.locals.get(&self.room?)?;
-        let (editor, rect, skip) = match region {
-            Region::Notes => (&local.notes, self.view.notes, self.view.notes_scroll),
-            Region::Composer => (&local.text, self.view.composer, self.view.composer_scroll),
-            Region::History => return None,
-        };
+        let (editor, rect, skip) = (&local.text, self.view.composer, self.view.composer_scroll);
         if rect.height == 0 {
             return None;
         }
@@ -307,11 +283,10 @@ impl BusUi {
             return (!text.is_empty()).then_some(text);
         }
         let local = self.locals.get(&self.room?)?;
-        [&local.notes, &local.text].into_iter().find_map(|editor| {
-            editor
-                .selection()
-                .map(|range| editor.text[range].to_owned())
-        })
+        local
+            .text
+            .selection()
+            .map(|range| local.text.text[range].to_owned())
     }
 
     pub(super) fn clear_selection(&mut self) {
@@ -319,7 +294,6 @@ impl BusUi {
         self.history_selection = None;
         self.pressed_link = None;
         for local in self.locals.values_mut() {
-            local.notes.anchor = None;
             local.text.anchor = None;
         }
     }
@@ -332,13 +306,5 @@ impl BusUi {
         }
         self.drag = None;
         self.history_selection = None;
-        let notes_focus = self.notes_focus;
-        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
-            if notes_focus {
-                local.text.anchor = None;
-            } else {
-                local.notes.anchor = None;
-            }
-        }
     }
 }

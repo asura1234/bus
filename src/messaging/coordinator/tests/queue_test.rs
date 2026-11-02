@@ -211,7 +211,7 @@ fn failed_draft_command_keeps_its_outcome_after_later_success() {
         ))
         .unwrap();
     commands
-        .send((12, BusCommand::SetNotes(room, "saved notes".into())))
+        .send((12, BusCommand::RenameRoom(room, "saved name".into())))
         .unwrap();
     drop(commands);
     worker.run(receiver, events, Arc::clone(&snapshots));
@@ -232,7 +232,7 @@ fn failed_draft_command_keeps_its_outcome_after_later_success() {
     assert_eq!(results[1], (12, Ok(())));
     let snapshot = snapshots.lock().unwrap();
     assert_eq!(snapshot.last_command_id, 12);
-    assert_eq!(snapshot.state.room(room).unwrap().notes, "saved notes");
+    assert_eq!(snapshot.state.room(room).unwrap().name, "saved name");
     drop(snapshot);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -25,7 +25,7 @@ pub(crate) static STORE_SAVE: Timer = Timer::new("store.save");
 /// Appending to `state.journal.json`, including its fsyncs.
 pub(crate) static STORE_JOURNAL: Timer = Timer::new("store.journal");
 
-/// The command's variant, never its payload: drafts and notes are user content.
+/// The command's variant, never its payload: drafts are user content.
 pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static str {
     use super::coordinator::BusCommand as C;
     match command {
@@ -52,7 +52,6 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::SelectRoom(_) => "select_room",
         C::LeaveRoom => "leave_room",
         C::MarkRoomSeen(_) => "mark_room_seen",
-        C::SetNotes(..) => "set_notes",
         C::SetDraftText(..) => "set_draft_text",
         C::SetRecipients(..) => "set_recipients",
         C::AttachFile(..) => "attach_file",

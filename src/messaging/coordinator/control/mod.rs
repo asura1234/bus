@@ -229,8 +229,8 @@ impl Worker {
         events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
-            "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.notes"
-            | "room.seen" | "room.sound" | "room.delete" | "room.history" => {
+            "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.seen"
+            | "room.sound" | "room.delete" | "room.history" => {
                 self.execute_rooms(method, p, events)
             }
             "state"
@@ -371,13 +371,6 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "room.rename",
         "room rename",
         &["room", "name"],
-        true,
-        Tier::Agent,
-    ),
-    spec(
-        "room.notes",
-        "room notes",
-        &["room", "text"],
         true,
         Tier::Agent,
     ),

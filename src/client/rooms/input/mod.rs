@@ -265,17 +265,6 @@ impl BusUi {
             return true;
         }
         if self.terminal.is_none()
-            && self.form.is_none()
-            && self
-                .view
-                .notes_box
-                .contains((mouse.column, mouse.row).into())
-        {
-            self.scroll_notes(mouse.kind == MouseEventKind::ScrollDown, 1);
-            outcome.repaint = true;
-            return true;
-        }
-        if self.terminal.is_none()
             && !self.recipient_menu
             && self
                 .view
@@ -350,7 +339,7 @@ impl BusUi {
     }
 
     fn paste_room_text(&mut self, text: &str) {
-        if self.form.is_none() && self.rename.is_none() && !self.notes_focus {
+        if self.form.is_none() && self.rename.is_none() {
             let paths = crate::messaging::attachments::parse_path_tokens(text)
                 .ok()
                 .filter(|paths| {
@@ -388,7 +377,6 @@ impl BusUi {
             && self.form.is_none()
             && self.rename.is_none()
             && self.terminal.is_none()
-            && !self.notes_focus
         {
             outcome
                 .actions
@@ -481,7 +469,6 @@ impl BusUi {
         self.native_focus_pending = false;
         self.form = None;
         self.rename = None;
-        self.notes_focus = false;
         self.recipient_menu = false;
         self.main_scroll = 0;
         self.history_follow_tail = true;
@@ -575,23 +562,12 @@ impl BusUi {
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
             Action::NewAgent => self.open_agent_form(),
             Action::Orchestrates => self.cycle_orchestrates_setting(),
-            Action::Notes => {
-                if self.room_has_notes() {
-                    if !self.notes_focus {
-                        self.reveal_notes_caret();
-                    }
-                    self.notes_focus = true;
-                    self.recipient_menu = false;
-                }
-            }
             Action::Composer => {
-                self.notes_focus = false;
                 self.recipient_menu = false;
             }
             Action::Search(focus) => self.activate_chat_search(focus),
             Action::Recipients => {
                 self.recipient_menu = !self.recipient_menu;
-                self.notes_focus = false;
             }
             Action::Recipient(id) => self.toggle_recipient(id),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),

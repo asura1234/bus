@@ -33,42 +33,33 @@ impl Recalled {
 #[derive(Clone, Debug)]
 pub(super) struct LocalRoom {
     pub text: Editor,
-    pub notes: Editor,
     pub recipients: AgentRecipients,
     pub composer_size: ComposerSize,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
-    // The notes box scrolls the same way: None follows the caret.
-    pub notes_scroll: Option<usize>,
     pub recall: Vec<Recalled>,
     pub stash: Vec<String>,
     pub history_index: Option<usize>,
     pub live_draft: Option<String>,
     pub text_generation: u64,
-    pub notes_generation: u64,
     pub recipient_generation: u64,
     pub saved_text_generation: u64,
-    pub saved_notes_generation: u64,
     pub saved_recipient_generation: u64,
 }
 impl From<&Room> for LocalRoom {
     fn from(room: &Room) -> Self {
         Self {
             text: Editor::new(room.draft.text.clone()),
-            notes: Editor::new(room.notes.clone()),
             recipients: room.draft.recipient_ids.clone(),
             composer_size: ComposerSize::Auto,
             composer_scroll: None,
-            notes_scroll: None,
             recall: Vec::new(),
             stash: Vec::new(),
             history_index: None,
             live_draft: None,
             text_generation: 0,
-            notes_generation: 0,
             recipient_generation: 0,
             saved_text_generation: 0,
-            saved_notes_generation: 0,
             saved_recipient_generation: 0,
         }
     }
@@ -161,7 +152,6 @@ impl BusUi {
             match pending.effect {
                 Effect::Text(id, _) => self.text_changed(id),
                 Effect::Recipients(id, _) => self.recipients_changed(id),
-                Effect::Notes(id, _) => self.notes_changed(id),
                 Effect::Files(id) if id != room => self.failed.push(pending),
                 _ => {
                     self.queue(pending.command, pending.effect);
@@ -240,19 +230,6 @@ impl BusUi {
         };
         let _ = std::fs::remove_file(&path);
         result
-    }
-
-    pub fn notes_changed(&mut self, room: RoomId) {
-        if let Some(local) = self.locals.get_mut(&room) {
-            // Editing brings the caret back into view.
-            local.notes_scroll = None;
-            local.notes_generation += 1;
-            let (text, generation) = (local.notes.text.clone(), local.notes_generation);
-            self.queue(
-                BusCommand::SetNotes(room, text),
-                Effect::Notes(room, generation),
-            );
-        }
     }
 
     pub fn recipients_changed(&mut self, room: RoomId) {

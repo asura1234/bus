@@ -34,8 +34,6 @@ pub(super) struct ChatSearch {
     /// Set when the query changes: the next render selects the newest match
     /// and scrolls to it, since only a render knows the rows' current layout.
     pub jump_to_newest: bool,
-    /// Where focus was when the search opened, restored when it closes.
-    notes_focus: bool,
 }
 
 /// Every case-insensitive occurrence of `query` in the history rows, top to
@@ -115,15 +113,11 @@ impl BusUi {
             focus: SearchFocus::Query,
             current: 0,
             jump_to_newest: false,
-            notes_focus: self.notes_focus,
         });
-        self.notes_focus = false;
     }
 
     fn close_chat_search(&mut self) {
-        if let Some(search) = self.chat_search.take() {
-            self.notes_focus = search.notes_focus && self.room_has_notes();
-        }
+        self.chat_search = None;
         self.view.search_matches.clear();
     }
 

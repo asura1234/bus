@@ -24,7 +24,6 @@ impl BusUi {
         for pending in failed {
             match pending.effect {
                 Effect::Text(room, _) => self.text_changed(room),
-                Effect::Notes(room, _) => self.notes_changed(room),
                 Effect::Recipients(room, _) => self.recipients_changed(room),
                 _ => {
                     self.queue(pending.command, pending.effect);

@@ -82,10 +82,10 @@ fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
 
     client.screen.write(b"\x1b[5;100Hr\x1b[20;100Hd");
     client.control(
-        "room.notes",
-        serde_json::json!({"room":"margin-first", "text":"changed-margin-notes"}),
+        "room.rename",
+        serde_json::json!({"room":"margin-first", "name":"margin-renamed"}),
     );
-    client.observe("changed-margin-notes");
+    client.observe_room("margin-renamed");
     assert_eq!(
         client.screen.margin().replace(' ', ""),
         "rd",
@@ -168,7 +168,6 @@ fn help_examples_manage_a_scratch_room_without_provider_processes() {
             "release-check-room-v1"
         ])
     );
-    run(&["room", "notes", "feature-work", "--text", "Review pending"]);
     let state = run(&["state"]);
     let room = state["rooms"]
         .as_array()
@@ -176,7 +175,7 @@ fn help_examples_manage_a_scratch_room_without_provider_processes() {
         .iter()
         .find(|room| room["id"] == id)
         .unwrap();
-    assert_eq!(room["notes"], "Review pending");
+    assert_eq!(room["name"], "feature-work");
     assert!(state["build"]["binary"].is_string());
     assert!(run(&["agent", "list", "--room", "feature-work"])["agents"]
         .as_array()
@@ -195,7 +194,7 @@ fn help_examples_manage_a_scratch_room_without_provider_processes() {
     // Missing confirmation and protected MASTER are errors, not successful mutations.
     for args in [
         &["room", "delete", "implementation"][..],
-        &["room", "notes", "master", "--text", "Review pending"],
+        &["room", "delete", "master", "--confirm"],
     ] {
         let output = client.cli(args);
         assert!(!output.status.success());

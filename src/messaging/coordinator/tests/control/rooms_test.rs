@@ -2,47 +2,26 @@ use super::*;
 use crate::messaging::model::RoomKind;
 
 #[test]
-fn dev_room_notes_replace_and_clear_the_room_notes() {
+fn retired_room_notes_api_is_unknown_and_state_omits_the_field() {
     let (mut worker, room, _agent, dir) = fixture();
-    let set = call(
+    let response = call(
         &mut worker,
-        "notes-1",
+        "retired-command",
         "room.notes",
-        json!({"room":"test","text":"Goal\nNon-goals"}),
+        json!({"room":room.0.to_string(),"text":"status"}),
     );
-    assert!(set.ok, "{set:?}");
-    assert_eq!(worker.state.room(room).unwrap().notes, "Goal\nNon-goals");
-    let state = call(&mut worker, "state-1", "state", json!({}));
-    // MASTER is listed first; the fixture room follows.
-    assert_eq!(state.result["rooms"][1]["notes"], "Goal\nNon-goals");
-    let cleared = call(
+    assert!(!response.ok, "{response:?}");
+    assert_eq!(response.error.unwrap().code, "unknown_method");
+    let state = call(
         &mut worker,
-        "notes-2",
-        "room.notes",
-        json!({"room":room.0.to_string(),"text":""}),
+        "state-without-retired-field",
+        "state",
+        json!({}),
     );
-    assert!(cleared.ok, "{cleared:?}");
-    assert_eq!(worker.state.room(room).unwrap().notes, "");
-    let missing = call(&mut worker, "notes-3", "room.notes", json!({"room":"test"}));
-    assert!(!missing.ok);
-    let unknown = call(
-        &mut worker,
-        "notes-4",
-        "room.notes",
-        json!({"room":"nope","text":"x"}),
-    );
-    assert!(!unknown.ok);
-    let master = call(
-        &mut worker,
-        "notes-5",
-        "room.notes",
-        json!({"room":"MASTER","text":"x"}),
-    );
-    assert!(!master.ok, "{master:?}");
-    assert_eq!(
-        master.error.unwrap().message,
-        "The MASTER room has no notes"
-    );
+    assert!(state.ok, "{state:?}");
+    for room in state.result["rooms"].as_array().unwrap() {
+        assert!(room.get("notes").is_none(), "{room}");
+    }
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -390,7 +369,7 @@ fn deleting_a_room_deletes_its_orchestrator_from_master() {
 }
 
 #[test]
-fn saved_work_room_named_master_keeps_its_notes_when_addressed_by_name() {
+fn saved_work_room_named_master_keeps_its_draft_when_addressed_by_name() {
     let dir = std::env::temp_dir().join(format!(
         "bus-control-named-master-{}-{}-{}",
         std::process::id(),
@@ -400,7 +379,6 @@ fn saved_work_room_named_master_keeps_its_notes_when_addressed_by_name() {
     crate::messaging::storage::io::private_dir(&dir).unwrap();
     let mut legacy = BusState::default();
     let room = legacy.create_room("plans").unwrap();
-    legacy.set_room_notes(room, "keep-notes").unwrap();
     legacy.set_draft_text(room, "keep-draft").unwrap();
     let mut saved = serde_json::to_value(&legacy).unwrap();
     saved["rooms"][room.0.to_string()]["name"] = json!("Master");
@@ -412,7 +390,6 @@ fn saved_work_room_named_master_keeps_its_notes_when_addressed_by_name() {
 
     let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
     worker.dev_enabled = true;
-    assert_eq!(worker.state.room(room).unwrap().notes, "keep-notes");
     assert_eq!(worker.state.room(room).unwrap().draft.text, "keep-draft");
     assert_eq!(worker.state.room(room).unwrap().unread_count, 4);
     assert_eq!(worker.state.room(room).unwrap().kind, RoomKind::Work);

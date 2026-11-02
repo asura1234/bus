@@ -168,7 +168,6 @@ impl BusUi {
             self.form = None;
             self.rename = None;
             self.recipient_menu = false;
-            self.notes_focus = false;
             self.main_scroll = 0;
             self.history_follow_tail = true;
             self.recipient_scroll = 0;
@@ -187,7 +186,6 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
         BusCommand::RenameRoom(id, _)
         | BusCommand::SelectRoom(id)
         | BusCommand::MarkRoomSeen(id)
-        | BusCommand::SetNotes(id, _)
         | BusCommand::SetDraftText(id, _)
         | BusCommand::SetRecipients(id, _)
         | BusCommand::AttachFile(id, _)

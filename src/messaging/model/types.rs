@@ -223,7 +223,6 @@ pub(crate) struct Reply {
 pub(crate) struct Room {
     pub(crate) id: RoomId,
     pub(crate) name: String,
-    pub(crate) notes: String,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) missing_provider_binaries: BTreeSet<String>,
     pub(crate) draft: Draft,

@@ -330,7 +330,7 @@ fn temporary_state_write_failures_pause_then_recover_without_replaying_a_mutatio
         let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
         let committed = worker.state.clone();
         let mut changed = committed.clone();
-        changed.set_room_notes(room, "not committed").unwrap();
+        changed.rename_room(room, "not committed").unwrap();
         worker.store.fail_once_at(stage);
         let capture = crate::utils::logging::test_capture::Capture::default();
         capture.run(|| assert_eq!(worker.save(changed).unwrap_err(), STORAGE_RETRYING));
@@ -373,7 +373,7 @@ fn post_replace_failure_never_overwrites_an_ambiguous_commit() {
     let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
     let committed = worker.state.clone();
     let mut changed = committed.clone();
-    changed.set_room_notes(room, "maybe committed").unwrap();
+    changed.rename_room(room, "maybe committed").unwrap();
     worker.store.fail_once_at(SaveStage::ParentSync);
     assert_eq!(worker.save(changed.clone()).unwrap_err(), STORAGE_RETRYING);
     assert_eq!(worker.store.load().unwrap(), Some(changed));
@@ -397,7 +397,7 @@ fn post_replace_failure_never_overwrites_an_ambiguous_commit() {
 fn recovery_refuses_corrupt_durable_state() {
     let (mut worker, _, room, dir, _) = fixture(Provider::Codex, vec![]);
     let mut changed = worker.state.clone();
-    changed.set_room_notes(room, "not committed").unwrap();
+    changed.rename_room(room, "not committed").unwrap();
     worker.store.fail_once_at(SaveStage::TempWrite);
     assert!(worker.save(changed).is_err());
     std::fs::write(worker.store.path(), b"{corrupt").unwrap();
@@ -512,7 +512,7 @@ fn journaled_drafts_and_sends_are_durable_and_survive_a_paused_full_save() {
 
     // A full save that fails pauses storage; the journal is not a divergence.
     let mut changed = worker.state.clone();
-    changed.set_room_notes(room, "notes").unwrap();
+    changed.rename_room(room, "renamed").unwrap();
     worker.store.fail_once_at(SaveStage::TempWrite);
     assert_eq!(worker.save(changed).unwrap_err(), STORAGE_RETRYING);
     worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);

@@ -128,7 +128,7 @@ fn every_shifted_symbol_types_into_the_composer() {
 }
 
 #[test]
-fn symbols_stay_literal_in_paste_notes_and_forms() {
+fn symbols_stay_literal_in_paste_and_forms() {
     let (mut ui, room, _) = fixture();
     for event in [
         RawInputEvent::Paste("@author + file.md".into()),
@@ -138,13 +138,6 @@ fn symbols_stay_literal_in_paste_notes_and_forms() {
     }
     assert_eq!(ui.locals[&room].text.text, "@author + file.md@+");
     assert!(!ui.recipient_menu && ui.form.is_none());
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    for symbol in ['@', '+'] {
-        key(&mut ui, KeyCode::Char(symbol), KeyModifiers::SHIFT);
-    }
-    assert_eq!(ui.locals[&room].notes.text, "@+");
-    assert!(!ui.recipient_menu && ui.form.is_none());
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char('o'), KeyModifiers::CONTROL);
     for symbol in ['@', '+'] {
         key(&mut ui, KeyCode::Char(symbol), KeyModifiers::SHIFT);
@@ -260,9 +253,6 @@ fn composer_uses_full_height_and_toggle_preserves_draft_and_recipients() {
     assert_eq!(ui.locals[&room].text.text, draft);
     assert_eq!(ui.locals[&room].recipients, [agent].into());
     assert!(ui.send_intent.is_none());
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     assert!(room_screen(&mut ui, 100, 30).contains("[x] author"));
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
@@ -453,11 +443,10 @@ fn pending_text_commands_coalesce_without_overwriting_the_inflight_generation() 
 }
 
 #[test]
-fn notes_room_navigation_and_all_recipients_remain_room_local() {
+fn draft_room_navigation_and_all_recipients_remain_room_local() {
     let (mut ui, room, agent) = fixture();
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     ui.input(
-        &RawInputEvent::Paste("notes @literal".into()),
+        &RawInputEvent::Paste("draft @literal".into()),
         false,
         &mut Default::default(),
     );
@@ -468,10 +457,10 @@ fn notes_room_navigation_and_all_recipients_remain_room_local() {
     let other = snapshot.state.create_room("other").unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     ui.open_room(other);
-    assert!(ui.locals[&other].notes.text.is_empty());
+    assert!(ui.locals[&other].text.text.is_empty());
     assert!(ui.locals[&other].recipients.is_empty());
     ui.open_room(room);
-    assert_eq!(ui.locals[&room].notes.text, "notes @literal");
+    assert_eq!(ui.locals[&room].text.text, "draft @literal");
 }
 
 #[test]
@@ -556,7 +545,11 @@ fn deleting_the_line_continuation_marker_restores_enter_to_send() {
 fn pending_send_leaves_the_status_line_under_the_composer_empty() {
     let (mut ui, room, _) = fixture();
     ui.open_room(room);
-    ui.locals.get_mut(&room).unwrap().text.insert("ready to send");
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("ready to send");
     let idle = room_screen(&mut ui, 100, 30);
     ui.send_intent = Some(room);
     let pending = room_screen(&mut ui, 100, 30);

@@ -85,7 +85,6 @@ impl BusUi {
         // Fixed-count borders/dividers per client frame, never per agent/pane.
         for rect in [
             self.view.composer_box,
-            self.view.notes_box,
             self.view.search_box,
             self.view.search_field,
         ] {

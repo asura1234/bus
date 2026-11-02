@@ -200,26 +200,6 @@ fn cursor_movement_preserves_live_draft_while_browsing_recall() {
 }
 
 #[test]
-fn notes_deletion_preserves_the_composer_recall_draft() {
-    let (mut ui, room, _) = fixture();
-    let local = ui.locals.get_mut(&room).unwrap();
-    local.text.insert("live draft");
-    local.notes.insert("notes");
-    local.recall = vec![Recalled::now("recalled prompt".into())];
-
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Backspace, KeyModifiers::NONE);
-    assert_eq!(ui.locals[&room].notes.text, "note");
-    assert_eq!(ui.locals[&room].text.text, "recalled prompt");
-    assert_eq!(ui.locals[&room].history_index, Some(0));
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-
-    assert_eq!(ui.locals[&room].text.text, "live draft");
-}
-
-#[test]
 fn recipient_menu_all_and_agent_rows_keep_their_toggle_behavior() {
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
@@ -413,15 +393,15 @@ fn enter_retry_after_failed_queued_send_uses_immediate_delivery() {
 
 #[test]
 fn recovered_draft_saves_wait_for_snapshot_and_retry_the_latest_edits() {
-    let (mut ui, room, _) = fixture();
+    let (mut ui, room, agent) = fixture();
     ui.locals
         .get_mut(&room)
         .unwrap()
         .text
         .insert("initial draft");
     ui.text_changed(room);
-    ui.locals.get_mut(&room).unwrap().notes.insert("room notes");
-    ui.notes_changed(room);
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    ui.recipients_changed(room);
     let ids: Vec<_> = ui
         .pending
         .iter_mut()
@@ -469,8 +449,8 @@ fn recovered_draft_saves_wait_for_snapshot_and_retry_the_latest_edits() {
             if *id == room && text == "initial draft plus newer edit")
     }));
     assert!(ui.pending.iter().any(|pending| {
-        matches!(&pending.command, BusCommand::SetNotes(id, text)
-            if *id == room && text == "room notes")
+        matches!(&pending.command, BusCommand::SetRecipients(id, recipients)
+            if *id == room && recipients.contains(&agent))
     }));
     assert!(ui
         .pending

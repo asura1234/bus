@@ -60,7 +60,6 @@ impl Worker {
             C::SetFeishuNotifications(on) => return self.set_feishu_notifications(on, events),
             C::SetDeveloperSoundName(name) => return self.set_developer_sound(name, events),
             C::SetDeveloperSoundEnabled(on) => return self.set_developer_sound_enabled(on, events),
-            C::SetNotes(id, text) => state.set_room_notes(id, &text),
             C::SetDraftText(id, text) => {
                 state.set_draft_text(id, &text).map_err(|e| e.to_string())?;
                 return self.journal(state, JournalOp::DraftText { room: id, text });
