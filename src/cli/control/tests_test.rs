@@ -215,6 +215,7 @@ const SAMPLES: &[&[&str]] = &[
     &["settings", "color-blind", "--on"],
     &["settings", "feishu-notifications", "--on"],
     &["settings", "room-sound", "--on"],
+    &["settings", "--error-orchestrator", "lead"],
     &["sounds"],
     &["quit"],
     &["diagnostics"],
@@ -238,7 +239,9 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
             .take_while(|part| !part.starts_with("--"))
             .collect();
         let line = format!("\n  {}", words.join(" "));
-        let help = command_help(&words);
+        let mut help_args: Vec<_> = words.iter().map(|word| (*word).to_owned()).collect();
+        help_args.push("--help".into());
+        let help = help_for(command_tree(spec.tier == Tier::Dev), &help_args).unwrap();
         for flag in spec
             .command
             .split_whitespace()
@@ -252,6 +255,19 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
                 "{} missing from bus --help",
                 spec.command
             ),
+            Tier::Dev if spec.command.contains(" --") => {
+                assert!(DEV_HELP.contains(&format!("\n  {}", spec.command)));
+                for flag in spec
+                    .command
+                    .split_whitespace()
+                    .filter(|part| part.starts_with("--"))
+                {
+                    assert!(
+                        !command_help(&words).contains(flag),
+                        "dev setting leaked into normal help"
+                    );
+                }
+            }
             Tier::Dev => {
                 assert!(
                     DEV_HELP.contains(&line),
@@ -3476,4 +3492,30 @@ fn delivery_failure_bounded_wait_stops_before_its_deadline_without_losing_status
     let response: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(response["error"]["code"], "agent_unavailable");
     assert_eq!(response["result"]["requests"][0]["stage"], "queued");
+}
+
+#[test]
+fn error_pipe_settings_option_builds_the_dev_setting_request() {
+    let parsed = command(&["settings", "--error-orchestrator", "lead"]).unwrap();
+    assert_eq!(parsed.method, "settings.error_orchestrator");
+    assert_eq!(parsed.params, json!({"name":"lead"}));
+    let off = command(&["settings", "--error-orchestrator", "off"]).unwrap();
+    assert_eq!(off.params, json!({"name":"off"}));
+}
+
+#[test]
+fn error_pipe_cli_help_hides_the_option_without_dev_and_rejects_mixed_settings() {
+    let args = vec!["settings".to_owned(), "--help".to_owned()];
+    let normal = help_for(command_tree(false), &args).unwrap();
+    let dev = help_for(command_tree(true), &args).unwrap();
+    assert!(!normal.contains("--error-orchestrator"), "{normal}");
+    assert!(dev.contains("--error-orchestrator"), "{dev}");
+    assert!(command(&[
+        "settings",
+        "--error-orchestrator",
+        "lead",
+        "room-sound",
+        "--on"
+    ])
+    .is_err());
 }

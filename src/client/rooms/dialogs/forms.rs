@@ -14,6 +14,9 @@ pub(super) enum Form {
         scroll: usize,
     },
     Settings,
+    ErrorOrchestrator {
+        selected: usize,
+    },
     FeishuSetting {
         cli: bool,
         editor: Editor,

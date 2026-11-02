@@ -214,14 +214,15 @@ impl BusState {
                 .ok_or(ModelError::UnknownRequest(id))?;
             let agent_id = request.agent_id;
             request.failure_reason = Some(reason.clone());
+            let error = self.request_failure_error(id, format!("Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0));
             if let Some(agent) = self
                 .agents
                 .get_mut(&agent_id)
                 .filter(|agent| agent.current_request.is_none())
             {
-                agent.actionable_error = Some(format!(
-                    "Queued request {} was not submitted ({reason}); it was closed and will not run later. Resend the message when ready.", id.0
-                ));
+                if let Some(error) = error {
+                    agent.actionable_error = Some(error);
+                }
             }
             expired.push(id);
         }
@@ -325,7 +326,7 @@ impl BusState {
                 .agents
                 .get(&agent_id)
                 .ok_or(ModelError::UnknownAgent(agent_id))?;
-            let clear_error = agent.current_request.is_none();
+            let clear_error = agent.current_request.is_none() && !request_state.is_error_report();
             let queue = self
                 .queues
                 .get_mut(&agent_id)
@@ -386,6 +387,9 @@ impl BusState {
         request: RequestId,
         recovered_at_ms: u64,
     ) -> Result<(), ModelError> {
+        let report = self
+            .request(request)
+            .is_some_and(super::Request::is_error_report);
         let request_state = self
             .requests
             .get_mut(&request)
@@ -408,7 +412,9 @@ impl BusState {
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
-        agent.actionable_error = None;
+        if !report {
+            agent.actionable_error = None;
+        }
         Ok(())
     }
 }

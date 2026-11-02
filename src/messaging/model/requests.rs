@@ -100,6 +100,9 @@ impl BusState {
         {
             return Err(ModelError::InvalidTransition);
         }
+        if self.consume_failed_error_report(request, &outcome)? {
+            return Ok(());
+        }
         self.record_queue_rejection(request, &outcome);
         self.record_dialog_notice_write(request, &outcome);
         let request_state = self
@@ -424,7 +427,9 @@ impl BusState {
                 .and_then(Request::submission_notice)
                 .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
-            self.set_agent_error(agent, Some(message))?;
+            if let Some(error) = self.request_failure_error(request, message) {
+                self.set_agent_error(agent, Some(error))?;
+            }
             tracing::info!(
                 event = "bus.message.recovered",
                 request_id = request.0,

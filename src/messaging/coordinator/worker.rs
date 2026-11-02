@@ -56,6 +56,7 @@ pub(super) struct Worker {
     /// When each agent last began a turn of its own that has not settled.
     pub(super) own_turns: BTreeMap<AgentId, std::time::Instant>,
     pub(super) dev_enabled: bool,
+    pub(super) error_pipe: crate::utils::error_pipe::Runtime,
     /// Mutation receipts by request ID, so a retried request replays its
     /// response instead of running twice. Oldest first in `control_receipt_order`.
     pub(super) control_receipts: BTreeMap<String, control_dispatch::ControlReceipt>,
@@ -164,6 +165,7 @@ impl Worker {
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
             dev_enabled: false,
+            error_pipe: Default::default(),
             control_receipts: BTreeMap::new(),
             control_receipt_order: std::collections::VecDeque::new(),
             control_receipt_bytes: 0,
@@ -221,6 +223,10 @@ impl Worker {
 
     fn write(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
+            if crate::utils::error_pipe::is_suppressed() {
+                tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
+                return Err(error.to_string());
+            }
             self.pause_storage(&error);
             return Err(self.storage_notice().into());
         }
@@ -524,6 +530,7 @@ impl Worker {
         can_deliver: impl FnMut() -> bool,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        self.refresh_error_pipe_at(io::now_ms());
         perf::COORDINATOR_LOOP.relabel("tick.disk_space");
         self.refresh_disk_space_at(std::time::Instant::now())?;
         if let Err(error) = self.announce_recorded_restart() {

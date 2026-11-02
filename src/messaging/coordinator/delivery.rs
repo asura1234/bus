@@ -163,7 +163,32 @@ impl Worker {
             if self.deliver_launch_prompt(&agent)? {
                 continue;
             }
-            self.deliver_request(&agent, waited, steer_unbound)?;
+            self.deliver_queued_request(&agent, waited, steer_unbound)?;
+        }
+        Ok(())
+    }
+
+    fn deliver_queued_request(
+        &mut self,
+        agent: &RoomAgent,
+        waited: bool,
+        steer: bool,
+    ) -> Result<(), String> {
+        let report = self.state.next_queued_request(agent.id).filter(|id| {
+            self.state
+                .request(*id)
+                .is_some_and(super::Request::is_error_report)
+        });
+        if let Err(error) = self.deliver_request(agent, waited, steer) {
+            let Some(request) = report else {
+                return Err(error);
+            };
+            let _report = crate::utils::error_pipe::suppress(true);
+            tracing::warn!(event = "bus.error_pipe.delivery_failed", request_id = request.0, %error, "Error report preparation failed");
+            let mut state = self.state.clone();
+            if state.recover_idle_request(request, io::now_ms()).is_ok() {
+                let _ = self.save(state);
+            }
         }
         Ok(())
     }
@@ -366,6 +391,11 @@ impl Worker {
         let Some(request) = self.state.next_queued_request(agent.id) else {
             return Ok(());
         };
+        let _error_report = crate::utils::error_pipe::suppress(
+            self.state
+                .request(request)
+                .is_some_and(super::Request::is_error_report),
+        );
         let mut state = self.state.clone();
         // Messages that piled up while the agent was unavailable go as one prompt.
         let text = match waited.then(|| state.coalesce_queue(request)).flatten() {

@@ -65,6 +65,8 @@ pub(super) enum Action {
     EditFeishuCli,
     /// Dev builds only: the live performance overlay.
     TogglePerfOverlay,
+    OpenErrorOrchestrator,
+    ChooseErrorOrchestrator(Option<crate::messaging::model::AgentId>),
     ToggleSound(SoundTarget),
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
@@ -182,6 +184,9 @@ pub(super) enum SoundSettingsLine {
         label: &'static str,
         value: String,
         adjust: fn(bool) -> Action,
+    },
+    ErrorOrchestrator {
+        field: usize,
     },
     /// Dev builds only.
     PerfOverlay {

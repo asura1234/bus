@@ -639,6 +639,14 @@ pub(crate) struct Request {
 }
 
 impl Request {
+    pub(crate) fn is_error_report(&self) -> bool {
+        self.prompt.author == Author::Bus
+            && self
+                .prompt
+                .text
+                .starts_with(crate::utils::error_pipe::NOTICE_PREFIX)
+    }
+
     pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
         match &self.submitted_payload {
             Some(typed) => payload_matches(payload, typed),

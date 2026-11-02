@@ -94,6 +94,8 @@ impl App {
         &mut self,
         request: crate::protocol::api::schema::Request,
     ) -> String {
+        let _error_report =
+            crate::utils::error_pipe::suppress(crate::utils::error_pipe::report_rpc(&request.id));
         self.sync_pending_terminal_titles();
         use crate::protocol::api::schema::{Method, ResponseResult, SuccessResponse};
 

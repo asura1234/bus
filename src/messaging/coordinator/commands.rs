@@ -55,6 +55,7 @@ impl Worker {
                 return self.set_feishu_recipient(recipient, events);
             }
             C::SetFeishuCliPath(path) => return self.set_feishu_cli_path(path, events),
+            C::SetErrorOrchestrator(name) => return self.set_error_orchestrator(name, events),
             C::SetSidebarWidth(width) => return self.set_sidebar_width(width, events),
             C::SetFeishuNotifications(on) => return self.set_feishu_notifications(on, events),
             C::SetDeveloperSoundName(name) => return self.set_developer_sound(name, events),

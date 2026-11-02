@@ -84,6 +84,10 @@ impl BusUi {
                 self.help_view(view, main, *scroll);
                 return;
             }
+            Form::ErrorOrchestrator { selected } => {
+                self.error_orchestrator_dropdown(view, main, *selected);
+                return;
+            }
             Form::Settings => {
                 self.settings_view(view, main);
                 return;

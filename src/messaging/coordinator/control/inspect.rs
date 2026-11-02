@@ -43,6 +43,18 @@ impl Worker {
                 Ok(json!({"updated":true,"color_blind_mode":on}))
             }
             "settings" => Ok(json!({"settings": self.settings_json()})),
+            "settings.error_orchestrator" => {
+                let name = p
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("Choose an orchestrator name or off")?;
+                let selected = (!name.eq_ignore_ascii_case("off")).then(|| name.to_owned());
+                self.set_error_orchestrator(
+                    selected,
+                    events.ok_or("Bus UI event channel unavailable")?,
+                )?;
+                Ok(json!({"updated":true,"settings":self.settings_json()}))
+            }
             "settings.feishu_notifications" => {
                 let on = p
                     .get("on")
@@ -95,6 +107,11 @@ impl Worker {
                 });
                 if let Some(object) = value.as_object_mut() {
                     object.remove("developer_sound_enabled");
+                }
+                if self.dev_enabled {
+                    value["error_orchestrators"] = json!(self.error_orchestrators());
+                } else if let Some(object) = value.as_object_mut() {
+                    object.remove("error_orchestrator");
                 }
                 value["feishu"] = json!(self.attention.status);
                 value

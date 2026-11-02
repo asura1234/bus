@@ -481,8 +481,13 @@ impl BusState {
             None => ("reply_not_captured".to_owned(), no_reply_error.to_owned()),
         };
         let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
+        let error = closed
+            .then(|| self.request_failure_error(id, error))
+            .flatten();
         if let Some(owner) = self.agents.get_mut(&agent) {
-            owner.actionable_error = closed.then_some(error);
+            if let Some(error) = error {
+                owner.actionable_error = Some(error);
+            }
         }
         Some(id)
     }
