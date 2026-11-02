@@ -297,9 +297,14 @@ impl ObservedSubmission {
         if submit {
             self.diagnostics.enter(&key, self.clock.now());
         }
+        let (text, enter) = if submit {
+            (Bytes::new(), key)
+        } else {
+            (key, Bytes::new())
+        };
         let completion = self.io.queue_input_write_scoped(
-            key,
-            Bytes::new(),
+            text,
+            enter,
             Duration::ZERO,
             Some(deadline),
             &self.scope,
@@ -404,6 +409,12 @@ impl ObservedSubmission {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
+        // Native editor installation is distinct from a PTY text write. This
+        // receipt excludes the subsequent submit and developer-draft restoration.
+        tracing::info!(target: "bus::terminal::submission",
+            event = "bus.terminal.submission.editor_installed",
+            at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+            bytes = editor.text.len(), "Bus input installed through native editor");
         self.reset_confirmation(delay);
         let result = self
             .swap_key(self.enter.clone(), true)
