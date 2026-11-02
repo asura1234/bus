@@ -518,29 +518,14 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn set_automatic_dialog_answer(
+    pub(crate) fn clear_automatic_dialog_answer(
         &mut self,
         agent: AgentId,
-        episode: Option<String>,
     ) -> Result<(), ModelError> {
         self.agents
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?
-            .automatic_dialog_answer = episode;
-        Ok(())
-    }
-
-    pub(crate) fn mark_dialog_answered(
-        &mut self,
-        agent: AgentId,
-        option: u32,
-    ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
-            .get_mut(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?;
-        agent.dialog_answered = true;
-        agent.dialog_answer = Some(option);
+            .automatic_dialog_answer = None;
         Ok(())
     }
 

@@ -158,20 +158,6 @@ def use_leaves(code: str, offset: int = 0):
         raise ValueError("Unsupported Rust use tree")
 
 
-def crate_paths(code: str):
-    """Return fully expanded crate use paths and explicit expression paths."""
-    spans = []
-    for use in USE.finditer(code):
-        spans.append(use.span())
-        for offset, parts, _ in use_leaves(use[1], use.start(1)):
-            if parts and parts[0] == "crate":
-                yield offset, "::".join(parts[1:])
-    for match in PATH.finditer(code):
-        parts = _parts(match[0])
-        if parts[0] == "crate" and len(parts) > 1 and not in_ranges(match.start(), spans):
-            yield match.start(), "::".join(parts[1:])
-
-
 @dataclass(frozen=True)
 class Import:
     offset: int

@@ -33,7 +33,7 @@ impl Worker {
             .set_dialog_notice(id, None)
             .map_err(|error| error.to_string())?;
         state
-            .set_automatic_dialog_answer(id, None)
+            .clear_automatic_dialog_answer(id)
             .map_err(|error| error.to_string())?;
         self.save(state)?;
         self.dialog_seen.remove(&id);

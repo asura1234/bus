@@ -46,17 +46,6 @@ def read_agent_output(bus, agent_id, timeout=15):
             time.sleep(0.25)
 
 
-def verify_setup_gate(status, expected, token, outputs):
-    assert not status["complete"], status
-    requests = status["requests"]
-    assert len(requests) == len(expected) and {r["agent_id"] for r in requests} == set(expected), status
-    for request in requests:
-        assert request["stage"] == "queued" and request["reason"] == "hook_setup_unconfirmed", request
-        assert not any(request.get(key) for key in ("start_bound", "session_id", "reply", "uncertain_outcome")), request
-    for agent, output in outputs.items():
-        assert token not in json.dumps(output), (agent, "setup gate leaked prompt into terminal")
-
-
 def recipient_selector(bus, room, agents, recipients):
     owned = {a["id"] for a in agents}
     selected = {a["id"] for a in recipients}

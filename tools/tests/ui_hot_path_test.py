@@ -3,11 +3,12 @@ from pathlib import Path
 import pytest
 
 from tools.quality import hot_path
+from tools.quality.rust_source import mask_comments_and_literals
 
 
 def test_render_hot_paths_avoid_known_expensive_runtime_queries():
     violations = hot_path.find_violations(
-        hot_path.source_paths("hot_path"), hot_path.FORBIDDEN_CALLS
+        hot_path.source_paths("hot_path", hot_path.PROJECT_ROOT), hot_path.FORBIDDEN_CALLS, hot_path.PROJECT_ROOT
     )
     assert not violations, "Render/layout code performs expensive reads:\n" + "\n".join(
         violations
@@ -16,7 +17,7 @@ def test_render_hot_paths_avoid_known_expensive_runtime_queries():
 
 def test_app_and_server_avoid_aggregate_terminal_state():
     violations = hot_path.find_violations(
-        hot_path.source_paths("app_server"), hot_path.AGGREGATE_STATE_CALLS
+        hot_path.source_paths("app_server", hot_path.PROJECT_ROOT), hot_path.AGGREGATE_STATE_CALLS, hot_path.PROJECT_ROOT
     )
     assert not violations, "App/server code needs narrow accessors:\n" + "\n".join(
         violations
@@ -71,7 +72,7 @@ const STRING: &str = "escaped \" crate::server::X";
 const CHAR: char = '\u{7b}';
 fn f<'a>(s: &'a str) { crate::protocol::read(s); }
 """
-    code = hot_path.mask_comments_and_literals(source)
+    code = mask_comments_and_literals(source)
     assert len(code) == len(source)
     assert code.count("\n") == source.count("\n")
     assert "crate::server" not in code and "crate::client" not in code

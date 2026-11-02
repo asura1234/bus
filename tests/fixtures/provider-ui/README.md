@@ -6,10 +6,7 @@ Its native shape id is independently confirmed by the copied server log:
 `6105abde0622e6a34d10c0743d1ad884f13286da890fb7882cf0618c7fbf83a8`.
 
 The blank spacing and final key hint are replay scaffolding, not a claim of a
-new raw-screen capture. They do not determine the allowlist identity; the
-normal guarded writer still checks the fresh complete digest, including hint
-and current selection, before sending keys. Runtime recognition uses provider
-and this exact native shape id, never a substring of terminal output or text.
+new raw-screen capture.
 
 Provenance is retained in `/Users/dylanliu/work/bus/temp/rca-auto-answer-allowlist/seed.md`:
 the copied orchestrator transcript lines 42011 and 42276, and the copied archive
@@ -20,9 +17,6 @@ No live pane or provider launch was used to create this semantic fixture.
 orchestrator from a real `bus agent dialog 21828` observation on 2026-10-23:
 the full two-line text, the three numbered options, option 1 selected, and
 `hint: null`. It is a real Bus observation, not a native PTY capture. The ID and
-digest are derived with the existing native hash contract; fixture transport
-identity is supplied by the test rig. Its semantic shape ID is the same as
-Claude's above: the hint changes the exact digest but is not part of the shape
-ID. The fixture regression feeds this parsed observation through the Codex
-automatic path, without parsing the Claude screen scaffold. Unknown text or
-option variants fail closed.
+digest are derived with the native hash contract. Its semantic shape ID is the
+same as Claude's above: the hint changes the exact digest but is not part of the
+shape ID.

@@ -146,21 +146,6 @@ class AcceptanceObservationTests(unittest.TestCase):
                 acceptance.recipient_selector(lambda *_: {"agents": [{"id": i, "room_id": 2}
                                                                        for i in members]}, 2, agents, agents)
 
-    def test_setup_preflight_rejects_sent_requests_and_any_terminal_leak(self):
-        self.assertTrue(hasattr(acceptance, "verify_setup_gate"))
-        queued = {"complete": False, "requests": [{"agent_id": 3, "request_id": 9,
-                  "stage": "queued", "reason": "hook_setup_unconfirmed", "start_bound": False,
-                  "session_id": None, "uncertain_outcome": False, "reply": None}]}
-        acceptance.verify_setup_gate(queued, [3], "TOKEN", {"cursor1": "idle", "claude1": "idle"})
-        for patch in ({"stage": "delivered"}, {"reason": "agent_working"}, {"reply": {"text": "TOKEN"}}):
-            changed = {**queued, "requests": [{**queued["requests"][0], **patch}]}
-            with self.assertRaises(AssertionError):
-                acceptance.verify_setup_gate(changed, [3], "TOKEN", {"cursor1": "idle"})
-        with self.assertRaises(AssertionError):
-            acceptance.verify_setup_gate(queued, [4], "TOKEN", {"cursor1": "idle"})
-        with self.assertRaises(AssertionError):
-            acceptance.verify_setup_gate(queued, [3], "TOKEN", {"cursor1": "idle", "claude1": "TOKEN"})
-
     def test_observed_status_coverage_cannot_be_satisfied_by_other_agents(self):
         self.assertTrue(hasattr(acceptance, "observe_statuses"))
         self.assertTrue(hasattr(acceptance, "verify_status_coverage"))
