@@ -44,6 +44,13 @@ def append(store, records):
         from stats_phases import validate_phases
 
         validate_phases(existing + fresh)
+        ended = [
+            r["data"]["assignment_id"]
+            for r in existing + fresh
+            if r["kind"] == "assignment_end"
+        ]
+        if len(ended) != len(set(ended)):
+            raise ValueError("invalid duplicate assignment end")
         if fresh:
             fd = os.open(
                 path, os.O_APPEND | os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600

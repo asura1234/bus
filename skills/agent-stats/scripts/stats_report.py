@@ -20,6 +20,8 @@ def report(rows):
                 handovers=0,
                 review_rounds=0,
                 escaped_defects=0,
+                stopped_early=0,
+                assignment_outcomes={},
                 unique_issues=0,
                 shared_issues=0,
                 applied=0,
@@ -68,6 +70,13 @@ def report(rows):
                 ] += 1
         elif kind == "escape":
             entry(row)["escaped_defects"] += 1
+        elif kind == "assignment_end":
+            value = entry(row)
+            value["assignment_outcomes"][data["outcome"]] = (
+                value["assignment_outcomes"].get(data["outcome"], 0) + 1
+            )
+            if data["outcome"] == "stopped_early" and data["proven"]:
+                value["stopped_early"] += 1
         elif kind == "review":
             entry(row)["review_rounds"] += 1
         elif kind in ("assignment", "handover"):

@@ -59,7 +59,23 @@ def assignment(args):
     ]
     if not bound:
         raise ValueError("invalid orchestrator: not bound to agent room")
-    data = dict(message_id=args.message)
+    baseline = None
+    if args.workspace_snapshot:
+        from stats_outcomes import validate_workspace
+
+        baseline = validate_workspace(read_json(args.workspace_snapshot))
+    elif args.worktree:
+        from stats_outcomes import workspace
+
+        baseline = workspace(args.worktree)
+    workspace_path = snapshot(store, baseline) if baseline is not None else None
+    if workspace_path:
+        paths.append(source(workspace_path))
+    data = dict(
+        message_id=args.message,
+        room_id=a["room_id"],
+        workspace_snapshot=str(workspace_path) if workspace_path else None,
+    )
     if args.command == "handover":
         try:
             old = identity(state, args.old_agent)
@@ -109,6 +125,12 @@ def main():
         p.add_argument("--state", type=Path)
         p.add_argument("--pane", type=Path)
         p.add_argument("--orchestrator-pane", type=Path)
+        p.add_argument("--worktree", type=Path)
+        p.add_argument(
+            "--workspace-snapshot",
+            type=Path,
+            help="replay a recorded git/gh workspace snapshot",
+        )
         p.add_argument("--message", type=int)
         p.add_argument("--at")
         if name == "handover":
@@ -141,6 +163,22 @@ def main():
             required=True,
         )
         p.add_argument("--artifact", type=Path)
+    e = sub.add_parser("assignment-end")
+    e.add_argument("--store", type=Path)
+    e.add_argument("--assignment", required=True)
+    e.add_argument(
+        "--outcome",
+        choices=SCHEMA["data_schemas"]["assignment_end"]["properties"]["outcome"][
+            "enum"
+        ],
+        required=True,
+    )
+    e.add_argument("--bus", default="bus")
+    e.add_argument(
+        "--evidence",
+        type=Path,
+        help="replay recorded Bus status/history and git/gh evidence",
+    )
     args = parser.parse_args()
     try:
         if args.command == "validate":
@@ -149,6 +187,10 @@ def main():
             from stats_phases import phase
 
             result = phase(args, args.store or default_store())
+        elif args.command == "assignment-end":
+            from stats_outcomes import end_assignment
+
+            result = end_assignment(args, args.store or default_store())
         elif args.command == "collect":
             from stats_collect import collect
 
