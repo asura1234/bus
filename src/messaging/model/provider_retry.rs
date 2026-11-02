@@ -403,7 +403,16 @@ fn transient(provider: Provider, error: &str) -> Option<bool> {
     {
         return None;
     }
-    let quota = text.contains("rate_limit") || text.contains("429");
+    let codex_quota = provider == Provider::Codex
+        && [
+            "usage_limit_reached",
+            "usage_limit_exceeded",
+            "usagelimitexceeded",
+            "ratelimitexceeded",
+        ]
+        .iter()
+        .any(|code| text.contains(code));
+    let quota = text.contains("rate_limit") || text.contains("429") || codex_quota;
     let overload = text.contains("overload") || text.contains("529");
     let connection = [
         "connection",

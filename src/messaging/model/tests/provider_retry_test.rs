@@ -64,6 +64,29 @@ fn provider_flake_holds_recorded_real_errors_open_and_working_across_restart() {
 }
 
 #[test]
+fn provider_flake_codex_explicit_native_quota_categories_keep_the_delivery_open() {
+    // Synthetic native errors: categories are present in installed Codex 0.164.0
+    // schema/binary evidence. No real quota rollout was observed for these codes.
+    for code in [
+        "usage_limit_reached",
+        "usage_limit_exceeded",
+        "usageLimitExceeded",
+        "rateLimitExceeded",
+    ] {
+        let error = format!("Provider quota exhausted ({code})");
+        let (mut state, _, agent, request) = failed_turn(Provider::Codex, &error);
+        assert!(!state.request(request).unwrap().settled(), "{code}");
+        let hold = state.agent(agent).unwrap().provider_retry.as_ref().unwrap();
+        assert!(hold.quota, "{code}");
+        assert!(
+            hold.retry_at_ms >= 300_100,
+            "unknown reset uses a bounded quota probe"
+        );
+        assert!(!state.retry_provider_requests(1000), "{code}");
+    }
+}
+
+#[test]
 fn provider_flake_does_not_reclassify_permanent_or_cancelled_errors() {
     // Treating these as transient would silently retry invalid work or undo cancellation.
     for (provider, error) in [
