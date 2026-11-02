@@ -7,6 +7,9 @@ use std::time::SystemTime;
 const MAX_WIRE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: u64 = 4 * 1024 * 1024;
 
+#[path = "failed_turn.rs"]
+mod failed_turn;
+
 #[cfg(test)]
 #[path = "../tests/kimi_steering_wire_test.rs"]
 mod steering_tests;
@@ -14,6 +17,10 @@ mod steering_tests;
 #[cfg(test)]
 #[path = "../tests/kimi_error_end_test.rs"]
 mod error_end_tests;
+
+#[cfg(test)]
+#[path = "../tests/kimi_failed_turn_wire_test.rs"]
+mod failed_turn_tests;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Outcome {
@@ -68,28 +75,46 @@ fn committed_outcome_lines(
 ) -> Result<Option<CommittedTurn>, String> {
     let mut lines = lines.into_iter();
     let mut invalid = None;
-    let checked = std::iter::from_fn(|| {
-        let line = lines.next()?;
-        match line {
-            Err(error) => {
-                invalid = Some(error);
-                None
-            }
-            Ok(line) if line.len() as u64 > MAX_WIRE_BYTES => Some(Ok(line)),
-            Ok(line) => match serde_json::from_str::<Value>(&line) {
-                Ok(_) => Some(Ok(line)),
-                Err(_) => {
-                    invalid = Some("Kimi wire contains malformed JSON".into());
+    let mut failed = failed_turn::Evidence::new(turn_id);
+    let outcome = {
+        let mut checked = std::iter::from_fn(|| {
+            let line = lines.next()?;
+            match line {
+                Err(error) => {
+                    invalid = Some(error);
                     None
                 }
-            },
+                Ok(line) if line.len() as u64 > MAX_WIRE_BYTES => Some(Ok(line)),
+                Ok(line) => match serde_json::from_str::<Value>(&line) {
+                    Ok(value) => {
+                        failed.observe(&value);
+                        Some(Ok(line))
+                    }
+                    Err(_) => {
+                        invalid = Some("Kimi wire contains malformed JSON".into());
+                        None
+                    }
+                },
+            }
+        });
+        let outcome = scan_committed_outcome(&mut checked, turn_id, prompt);
+        // Native terminal records can be appended after the next prompt or
+        // their own outer commit. Keep the ordinary parser, but read through
+        // its early exit to collect a complete, independently owned failure.
+        if outcome.is_none() {
+            for _ in checked {}
         }
-    });
-    let outcome = scan_committed_outcome(checked, turn_id, prompt);
+        outcome
+    };
     if let Some(error) = invalid {
         return Err(error);
     }
-    Ok(outcome)
+    Ok(outcome.or_else(|| {
+        failed.committed(prompt, |agent_error, outer_error| {
+            native_turn_error(&serde_json::json!({"error": outer_error}))
+                .unwrap_or_else(|| agent_error.unwrap_or("Kimi turn failed").to_owned())
+        })
+    }))
 }
 
 fn scan_committed_outcome(

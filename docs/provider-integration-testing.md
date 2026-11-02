@@ -985,3 +985,12 @@ idle then deliver, and an approval card without `--yolo`.
   restored draft must remain for a person; do not clear it or type the queued
   message over it. Ordinary Cursor delivery and the other providers' quota
   fixtures are required neighbours.
+
+- **2026-11-03 — reordered failed Kimi commits:** A failed main turn can append
+  its agent end after the owned outer end/prompt completion, or interleave the
+  next native prompt before those records. Do not discard a complete owned
+  failure because of physical line order. Retain the prompt/session binding
+  and native time bounds so the next turn cannot supply the old turn's agent
+  error. Replay delayed and interleaved records, pending-record restart and
+  queued follow-ups; require provider-error closure and one FIFO delivery per
+  accepted follow-up. Preserve normal successful and in-order failed turns.

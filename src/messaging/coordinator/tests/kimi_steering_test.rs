@@ -405,3 +405,6 @@ mod boundary_tests;
 
 #[path = "kimi_incident_replay_test.rs"]
 mod incident_replays;
+
+#[path = "kimi_failed_turn_settlement_test.rs"]
+mod failed_turn_tests;

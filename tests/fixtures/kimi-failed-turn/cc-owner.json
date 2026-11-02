@@ -1,0 +1,78 @@
+[
+  {
+    "type": "turn.prompt",
+    "agentId": "main",
+    "turnId": 2,
+    "promptId": "msg_01M6EF8F4X9ZW0WK31VGHFKREQ",
+    "time": 1793634614449,
+    "input": [
+      {
+        "type": "text",
+        "text": "Bus task"
+      }
+    ]
+  },
+  {
+    "type": "turn.prompt",
+    "agentId": "main",
+    "turnId": 3,
+    "time": 1793640328541,
+    "input": [
+      {
+        "type": "text",
+        "text": "Background notification"
+      }
+    ]
+  },
+  {
+    "type": "turn.ended",
+    "agentId": "main",
+    "turnId": 2,
+    "time": 1793640328543,
+    "reason": "failed",
+    "error": {
+      "code": "provider.api_error",
+      "name": "APIProviderQuotaExhaustedError",
+      "message": "429 You've reached your 5-hour usage limit.",
+      "details": {
+        "statusCode": 429
+      }
+    }
+  },
+  {
+    "type": "prompt.completed",
+    "agentId": "main",
+    "promptId": "msg_01M6EF8F4X9ZW0WK31VGHFKREQ",
+    "time": 1793640328547,
+    "reason": "failed"
+  },
+  {
+    "type": "agent.turn.ended",
+    "turnId": 2,
+    "time": 1793640328533,
+    "outcome": "failed",
+    "errorMessage": "[object Object]"
+  },
+  {
+    "type": "agent.turn.ended",
+    "turnId": 3,
+    "time": 1793640329550,
+    "outcome": "failed",
+    "errorMessage": "[object Object]"
+  },
+  {
+    "type": "turn.ended",
+    "agentId": "main",
+    "turnId": 3,
+    "time": 1793640329552,
+    "reason": "failed",
+    "error": {
+      "code": "provider.api_error",
+      "name": "APIProviderQuotaExhaustedError",
+      "message": "429 You've reached your 5-hour usage limit.",
+      "details": {
+        "statusCode": 429
+      }
+    }
+  }
+]
