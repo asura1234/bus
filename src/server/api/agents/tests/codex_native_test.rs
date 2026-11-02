@@ -54,7 +54,7 @@ async fn codex_native_lost_ack_does_not_fall_back_to_typing() {
 }
 
 #[tokio::test]
-async fn codex_native_missing_socket_uses_the_existing_guarded_typed_fallback() {
+async fn codex_native_disconnected_remote_refuses_without_terminal_bytes() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let dir = crate::utils::test_temp::unique_temp_path("codex-native-missing");
@@ -65,9 +65,12 @@ async fn codex_native_missing_socket_uses_the_existing_guarded_typed_fallback() 
         .lock()
         .unwrap() = Some(test_support::connected_runtime(dir.join("missing")));
     let response = start(&mut app, method);
-    accept_paste(&app, AgentKind::Codex, "from bus", &mut writes).await;
     let value = response.recv_timeout(WAIT).unwrap();
-    assert!(value.contains("agent_prompted"), "{value}");
+    assert!(value.contains("agent_prompt_not_shown"), "{value}");
+    assert!(
+        writes.try_recv().is_err(),
+        "an attached remote pane has no standalone backend"
+    );
 }
 
 #[tokio::test]
