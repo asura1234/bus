@@ -71,12 +71,24 @@ and enqueue, refusing incomplete or changed frames without input. Selection stil
 advances one arrow per observed focus change. Existing prompt ownership readers
 continue to protect drafts before Bus submits a message.
 
-Provider lifecycle manifests and native composer ownership remain: their callers
-identify activity/authentication and prove exact message ownership, rather than
-parse answer options. Captured manifest/composer fixtures remain their regression
-proof. The old parser-hash automatic latency choice is retired; orchestrators use
-the same observe/press path for it as any other blocker. Historical persisted
-metadata is a separate storage compatibility boundary and never supplies input.
+Provider manifests retain activity, idle and viewer rules. The 55 answerable
+screen rules are removed; the six retained Blocked rules are five native OSC-title
+states (Amp, Codex, Grok, Hermes and Qwen) and Grok's captured login/connectivity
+state. These report independent status rather than extract screen choices.
+Native composer readers continue to prove message ownership; a proven Bus-owned
+draft containing control-like text remains pending input.
+
+The known Claude/Codex latency notice retains its closed coordinator policy. A
+generic menu content identity identifies the evidenced notice, and the coordinator
+uses `agent press --select 'Dismiss and keep waiting'` once per runtime/episode,
+reserving durably before input. No provider vocabulary enters the driver. Other
+blocked surfaces use the ordinary help route. Historical persisted metadata keeps
+its storage shape.
+
+The caller revision/digest guard proposed in the original inventory is superseded
+by the developer's current-screen input design (master37327). Orchestrators are
+trusted; no caller revision is required. Coherent observation and enqueue within
+one handler still exclude partially redrawn frames.
 
 Author evidence and acceptance are recorded under `temp/universal-dialog/` and
 will be archived with the final head under the main checkout's PR evidence folder.

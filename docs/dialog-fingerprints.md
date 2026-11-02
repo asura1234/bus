@@ -24,10 +24,10 @@ observation: inspect that result before continuing. Never blindly repeat an
 uncertain action.
 
 With dev logging, correlate `bus.terminal.driver.result` by API request ID and
-terminal ID. It records outcome and input metadata, including keys and whether
-text was written. A successful queue receipt proves enqueueing; inspect the
-resulting screen and, for a Bus task, its durable message status to prove what
-the terminal program did.
+terminal ID. It records outcome and input metadata, including key count and
+whether text was written. The press receipt contains the exact keys sent. A
+successful queue receipt proves enqueueing; inspect the resulting screen and,
+for a Bus task, its durable message status to prove what the terminal program did.
 
 The captures under `tests/fixtures/dialog-fingerprint/` are historical terminal
 screens from the retired parser. They are not evidence that a current driver
