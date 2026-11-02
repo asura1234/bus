@@ -512,6 +512,20 @@ class BusQualityTest(unittest.TestCase):
                     call.args,
                 )
 
+    def test_children_never_inherit_secret_environment(self):
+        secrets = {
+            "ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN": "fake-alibaba-token",
+            "OPENAI_API_KEY": "fake-openai-key",
+            "AWS_SECRET_ACCESS_KEY": "fake-aws-secret",
+            "GOOGLE_APPLICATION_CREDENTIALS": "fake-google-credentials",
+            "GITHUB_PAT": "fake-github-pat",
+            "DOCKER_AUTH_CONFIG": "fake-docker-auth",
+        }
+        with patch.dict(os.environ, {**secrets, "KEEP_ME": "1"}):
+            env = quality.child_env()
+        self.assertEqual(env["KEEP_ME"], "1")
+        self.assertTrue(set(secrets).isdisjoint(env))
+
     def test_optional_nextest_has_a_real_cargo_fallback(self):
         for nextest in (False, True):
             with (

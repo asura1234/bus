@@ -16,6 +16,14 @@ class GenericGateTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        global_config = self.root / "global.gitconfig"
+        global_config.write_text("")
+        from unittest.mock import patch
+        self.git_config = patch.dict(os.environ, {
+            "GIT_CONFIG_GLOBAL": str(global_config), "GIT_CONFIG_NOSYSTEM": "1",
+        })
+        self.git_config.start()
+        self.addCleanup(self.git_config.stop)
         self.repo = self.root / "target"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "trunk")
@@ -156,6 +164,33 @@ class GenericGateTest(unittest.TestCase):
             "--base", self.base, "--gate", "repository-gate", "--stream", "stdout"
         ], text=True, capture_output=True, check=True)
         self.assertEqual(shown.stdout, "absent:absent:kept")
+
+    def test_failing_test_environment_and_traceback_exclude_secrets(self):
+        secret = "fake-gate-secret-never-log-this"
+        test = self.repo / "secret_test.py"
+        test.write_text(
+            "import os\n"
+            "def test_intentional_failure():\n"
+            "    assert os.environ.get('ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN') is None\n"
+            "    raise AssertionError('intentional traceback')\n"
+        )
+        self.git("add", "secret_test.py")
+        self.git("commit", "-qm", "failing secret probe")
+        self.profile(
+            f'PYTHONDONTWRITEBYTECODE=1 "{sys.executable}" -m pytest -q -p no:cacheprovider secret_test.py'
+        )
+        result = self.run_gate(env_extra={"ALIBABA_CLOUD_YUNXIAO_ACCESS_TOKEN": secret})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        streams = []
+        for stream in ("stdout", "stderr"):
+            shown = subprocess.run([
+                sys.executable, str(self.runner), "show", "--artifact", result.stdout.strip(),
+                "--base", self.base, "--gate", "repository-gate", "--stream", stream,
+            ], text=True, capture_output=True, check=True)
+            streams.append(shown.stdout)
+        logs = "".join(streams)
+        self.assertIn("intentional traceback", logs)
+        self.assertNotIn(secret, result.stdout + result.stderr + logs)
 
     def test_unignored_evidence_is_relocated_to_git_metadata(self):
         (self.repo / ".gitignore").write_text("")

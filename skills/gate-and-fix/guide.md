@@ -62,8 +62,9 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
     This includes all maintenance suites and all skill suites, on every round.
     The instrumented CLI is built before Python tests; its explicit `BUS_TEST_BINARY` and profile
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
-  - **Environment**: every lane's children run without inherited `BUS_*`/`HERDR_*` variables, so a
-    gate started from a Bus agent pane never sees (or writes to) that live Bus. Each Rust test
+  - **Environment**: every lane's children run without inherited `BUS_*`/`HERDR_*` variables or
+    secret-looking credentials, so a gate started from a Bus agent pane never sees (or writes to)
+    that live Bus and failing test logs cannot expose inherited tokens or API keys. Each Rust test
     binary also drops a live Bus's variables before its tests run (`src/utils/tests/live_bus_env_test.rs`).
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
     `IN_PROCESS_SERVER_TESTS` harness. The same prefix drives nextest and libtest filters.
@@ -94,8 +95,9 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
   also clear legacy flat raw profiles and the workspace index before collecting counters.
   Tests run only once per round; coverage consumes
   their profiles before cleanup.
-  The gate drops every inherited `BUS_*`/`HERDR_*` variable (see **Environment** above); tests
-  that model isolated config roots set and restore those variables within their fixture boundaries.
+  The gate drops every inherited `BUS_*`/`HERDR_*` variable and secret-looking credential (see
+  **Environment** above); tests that model isolated config roots set and restore their required
+  variables within fixture boundaries.
 - Coverage builds use `--no-rustc-wrapper`, so Cargo includes instrumentation flags in its artifact
   cache key even when `CARGO_LLVM_COV_TARGET_DIR` equals `CARGO_TARGET_DIR`. Keep instrumented output
   separate from normal output; regressions cover both separate and shared target settings.

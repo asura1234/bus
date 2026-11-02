@@ -1,12 +1,28 @@
-"""Own gate child process groups so interruption finishes before profile cleanup."""
+"""Isolate gate child environments and own their process-group teardown."""
 from __future__ import annotations
 
 import contextlib
 import os
+import re
 import signal
 import subprocess
 import threading
 import time
+
+
+SECRET_NAME = re.compile(
+    r"TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIAL|APIKEY|PRIVATE|COOKIE|JWT|(?:^|_)PAT(?:_|$)",
+    re.IGNORECASE,
+)
+SECRET_NAMES = {"DOCKER_AUTH_CONFIG"}
+
+
+def scrubbed_env() -> dict[str, str]:
+    return {
+        name: value for name, value in os.environ.items()
+        if not name.startswith(("BUS_", "HERDR_"))
+        and not SECRET_NAME.search(name) and name not in SECRET_NAMES
+    }
 
 
 class Interrupted(BaseException):

@@ -17,7 +17,7 @@ from typing import Sequence
 
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
 from coverage_run import Run
-from gate_process import Children, Interrupted, interrupt_signals
+from gate_process import Children, Interrupted, interrupt_signals, scrubbed_env
 from repo_gate import artifact_root, command_argv, gate_policy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rebase-origin-main/scripts"))
@@ -78,8 +78,7 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
             encoding="utf-8",
             errors="replace",
             env=gate.env if gate.env is not None else (
-                {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_"))}
-                if gate.scrub_session_env else None
+                scrubbed_env() if gate.scrub_session_env else None
             ),
         )
     except OSError as error:

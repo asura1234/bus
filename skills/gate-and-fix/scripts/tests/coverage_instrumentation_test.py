@@ -136,6 +136,19 @@ class CoverageInstrumentationTest(unittest.TestCase):
                 self.assertIn("more than 20 points", measured["failure"])
                 self.assertFalse((root / "last-successful.json").exists())
 
+    def test_cargo_lock_wait_timeout_is_a_clear_test_failure(self):
+        error = subprocess.TimeoutExpired(
+            ["cargo", "generate-lockfile", "--offline"], 30,
+            stderr=b"Blocking waiting for file lock on package cache\n",
+        )
+        with (
+            patch.object(subprocess, "run", side_effect=error),
+            self.assertRaisesRegex(
+                AssertionError, "(?s)Cargo fixture timed out after 30s.*package cache"
+            ),
+        ):
+            self.exercise_target_cache(False)
+
     @unittest.skipUnless(
         shutil.which("cargo") and shutil.which("cargo-llvm-cov"),
         "requires the Rust coverage tools",
@@ -145,9 +158,21 @@ class CoverageInstrumentationTest(unittest.TestCase):
             with self.subTest(shared_target=shared_target):
                 self.exercise_target_cache(shared_target)
 
+    def cargo(self, *argv, cwd, env, timeout):
+        try:
+            return subprocess.run(
+                ["cargo", *argv], cwd=cwd, env=env,
+                check=True, capture_output=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            output = error.stderr or error.output or b""
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", errors="replace")
+            self.fail(f"Cargo fixture timed out after {timeout}s: {error.cmd}\n{output}")
+
     def exercise_target_cache(self, shared_target):
-        # A dependency-free fixture exercises Cargo's real artifact cache. Its
-        # private target and profiles never touch the enclosing gate's coverage.
+        # A dependency-free fixture exercises Cargo's real artifact cache without
+        # sharing the developer's package-cache lock or the enclosing gate's profiles.
         with tempfile.TemporaryDirectory(prefix="bus-cov-cache-") as folder:
             root = Path(folder)
             target = root / "target"
@@ -173,19 +198,15 @@ class CoverageInstrumentationTest(unittest.TestCase):
             }
             env.update(
                 BUS_DATA_DIR=str(root / "data"),
+                CARGO_HOME=str(root / "cargo-home"),
+                CARGO_NET_OFFLINE="true",
                 CARGO_TARGET_DIR=str(target),
                 CARGO_LLVM_COV_TARGET_DIR=str(coverage_target),
                 CARGO_ENCODED_RUSTFLAGS="",
                 CARGO_INCREMENTAL="0",
             )
-            subprocess.run(
-                ["cargo", "generate-lockfile", "--offline"], cwd=root, env=env,
-                check=True, capture_output=True, timeout=30,
-            )
-            subprocess.run(
-                ["cargo", "test", "--locked", "--lib", "--no-run"],
-                cwd=root, env=env, check=True, capture_output=True, timeout=30,
-            )
+            self.cargo("generate-lockfile", "--offline", cwd=root, env=env, timeout=30)
+            self.cargo("test", "--frozen", "--lib", "--no-run", cwd=root, env=env, timeout=30)
             real_which = shutil.which
             modes = [False, True] if real_which("cargo-nextest") else [False]
             for nextest in modes:

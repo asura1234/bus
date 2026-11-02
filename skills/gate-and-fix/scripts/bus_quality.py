@@ -15,7 +15,7 @@ import tomllib
 from pathlib import Path
 
 from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
-from gate_process import Children, Interrupted, interrupt_signals
+from gate_process import Children, Interrupted, interrupt_signals, scrubbed_env
 from profile_report import merged_profile
 
 ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
@@ -66,13 +66,8 @@ def python_roots() -> tuple[str, ...]:
 
 
 def child_env(**overrides: str) -> dict:
-    """A gate started from a Bus agent pane inherits that live Bus's BUS_*/HERDR_*
-    variables; tests must never see them (or reach its data dir), so drop them all."""
-    env = {
-        name: value for name, value in os.environ.items()
-        if not name.startswith(("BUS_", "HERDR_"))
-    }
-    return {**env, **overrides}
+    """Keep live Bus endpoints and inherited secrets out of every test child."""
+    return {**scrubbed_env(), **overrides}
 
 
 def python_test_command(files: list[str]) -> tuple[str, ...]:
