@@ -1,15 +1,19 @@
-//! The pane owns its server child; input and TUI share this one runtime.
-use super::{remote_argv, rpc::Rpc};
+//! Prepare a shell-owned shared runtime; Bus owns only its lifetime channel.
+use super::rpc::Rpc;
 use portable_pty::CommandBuilder;
 use std::{
-    collections::HashMap,
     fs, io,
-    os::unix::{
-        fs::{DirBuilderExt, OpenOptionsExt},
-        process::CommandExt,
+    os::{
+        fd::AsRawFd,
+        unix::{
+            fs::{DirBuilderExt, OpenOptionsExt},
+            net::{UnixListener, UnixStream},
+            process::CommandExt,
+        },
     },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -20,39 +24,46 @@ pub(crate) struct Runtime {
 }
 
 struct Config {
-    env: HashMap<String, String>,
-    cwd: PathBuf,
+    capture: PathBuf,
 }
 
 struct Session {
-    child: Child,
     directory: PathBuf,
     socket: PathBuf,
     rpc: Option<Rpc>,
-    _writer_lock: fs::File,
+    lifetime: Option<mpsc::Sender<()>>,
+    watcher: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Runtime {
     pub(crate) fn shared_from_builder(
         cmd: &CommandBuilder,
     ) -> std::sync::Arc<std::sync::Mutex<Self>> {
-        let enabled = cmd
+        let environment = cmd
             .iter_extra_env_as_str()
-            .any(|(k, v)| k == "BUS_CODEX_NATIVE" && v == "1");
-        let config = enabled.then(|| Config {
-            env: cmd
-                .iter_full_env_as_str()
-                .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                .collect(),
-            cwd: cmd
-                .get_cwd()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/")),
-        });
-        std::sync::Arc::new(std::sync::Mutex::new(Self {
-            config,
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect::<Vec<_>>();
+        std::sync::Arc::new(std::sync::Mutex::new(
+            Self::from_environment(&environment).unwrap_or_default(),
+        ))
+    }
+
+    pub(crate) fn from_environment(env: &[(String, String)]) -> Option<Self> {
+        if !env
+            .iter()
+            .any(|(key, value)| key == "BUS_CODEX_NATIVE" && value == "1")
+        {
+            return None;
+        }
+        let capture = env
+            .iter()
+            .find(|(key, _)| key == "BUS_CALLBACK_DIR")
+            .map(|(_, value)| PathBuf::from(value))
+            .filter(|path| path.is_absolute())?;
+        Some(Self {
+            config: Some(Config { capture }),
             session: None,
-        }))
+        })
     }
 
     pub(crate) fn launch(&mut self, argv: &[String]) -> io::Result<Vec<String>> {
@@ -67,33 +78,20 @@ impl Runtime {
         }
         self.session.take();
         if !supports_native(&argv[1..]) {
-            // App-server 0.164 rejects profiles; remote resume rejects explicit
-            // permission CLI overrides. Preserve their configured standalone TUI
-            // before any differently configured native backend is started.
             return Ok(argv.to_vec());
         }
-        // Only the guarded shell launcher calls this, after ownership admission.
-        // Retire the previous pair before creating a replacement runtime.
-        match Session::start(config, argv) {
-            Ok(session) => {
-                let endpoint = format!("unix://{}", session.socket.display());
-                let argv = remote_argv(argv, &endpoint);
-                self.session = Some(session);
-                Ok(argv)
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied
-                ) =>
-            {
-                Err(error)
-            }
-            Err(error) => {
-                tracing::warn!(event="bus.codex.native_unavailable", kind=?error.kind(), "Codex app-server unavailable before TUI launch; retaining typed delivery");
-                Ok(argv.to_vec())
-            }
-        }
+        // This is inert provider preparation under the shell's guarded launch.
+        // The helper runs only after that initialized shell accepts the command.
+        let session = Session::prepare()?;
+        let mut launch = vec![
+            std::env::current_exe()?.to_string_lossy().into_owned(),
+            "--bus-codex-runtime".into(),
+            session.directory.to_string_lossy().into_owned(),
+            config.capture.to_string_lossy().into_owned(),
+        ];
+        launch.extend_from_slice(argv);
+        self.session = Some(session);
+        Ok(launch)
     }
 
     pub(crate) fn prompt(
@@ -106,10 +104,13 @@ impl Runtime {
         expected_turn: Option<&str>,
     ) -> Option<io::Result<()>> {
         let session = self.session.as_mut()?;
-        let rpc = session.connection(deadline)?;
+        if session.standalone() {
+            return None;
+        }
         let started = Instant::now();
-        let result = rpc
-            .prompt(thread, text, steer, message, expected_turn)
+        let result = session
+            .connection(deadline)
+            .and_then(|rpc| rpc.prompt(thread, text, steer, message, expected_turn))
             .map(|_| ());
         tracing::info!(
             event = "bus.codex.native_submit",
@@ -120,7 +121,6 @@ impl Runtime {
             elapsed_us = started.elapsed().as_micros() as u64,
             "Codex app-server admission result"
         );
-        // The request may have been admitted. Never retry or type this input.
         session.rpc.take();
         Some(result)
     }
@@ -131,7 +131,12 @@ impl Runtime {
 
     pub(crate) fn interrupt(&mut self, thread: &str, deadline: Instant) -> Option<io::Result<()>> {
         let session = self.session.as_mut()?;
-        let result = session.connection(deadline)?.interrupt(thread);
+        if session.standalone() {
+            return None;
+        }
+        let result = session
+            .connection(deadline)
+            .and_then(|rpc| rpc.interrupt(thread));
         tracing::info!(
             event = "bus.codex.native_interrupt",
             thread_id = thread,
@@ -176,116 +181,77 @@ fn supports_native(args: &[String]) -> bool {
 }
 
 impl Session {
-    fn start(config: &Config, argv: &[String]) -> io::Result<Self> {
-        let capture = config
-            .env
-            .get("BUS_CALLBACK_DIR")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| io::Error::other("Codex native launch has no callback identity"))?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let writer_lock = loop {
-            match acquire_launch_lock(&capture.join("codex-native-writer.lock")) {
-                Ok(lock) => break lock,
-                Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(10))
-                }
-                Err(error) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        format!("Cannot verify Codex writer ownership: {}", error.kind()),
-                    ))
-                }
-            }
-        };
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(capture.join("codex-native.log"))?;
+    fn prepare() -> io::Result<Self> {
         let token = crate::utils::time::digest(
             format!("{}:{}", std::process::id(), crate::utils::time::now_ns()).as_bytes(),
         );
         let directory = std::env::temp_dir().join(format!("bus-codex-{}", &token[..20]));
         fs::DirBuilder::new().mode(0o700).create(&directory)?;
-        let socket = directory.join("s");
-        let endpoint = format!("unix://{}", socket.display());
-        let mut command = owned_command(&server_argv(argv, &endpoint), &writer_lock);
-        command
-            .env_clear()
-            .envs(&config.env)
-            .current_dir(&config.cwd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(log))
-            .process_group(0);
-        let child = match command.spawn() {
-            Ok(child) => child,
+        let listener = match UnixListener::bind(directory.join("l")) {
+            Ok(listener) => listener,
             Err(error) => {
                 let _ = fs::remove_dir_all(&directory);
                 return Err(error);
             }
         };
-        let mut session = Self {
-            child,
+        listener.set_nonblocking(true)?;
+        let (stop, stopped) = mpsc::channel();
+        let cleanup = directory.clone();
+        let watcher = std::thread::spawn(move || {
+            let mut control = None;
+            while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                if control.is_none() {
+                    match listener.accept() {
+                        Ok((stream, _)) => control = Some(stream),
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(_) => break,
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // EOF reaches the helper's supervisor before the endpoint disappears.
+            drop(control);
+            drop(listener);
+            let _ = fs::remove_dir_all(cleanup);
+        });
+        Ok(Self {
+            socket: directory.join("s"),
             directory,
-            socket,
             rpc: None,
-            _writer_lock: writer_lock,
-        };
-        loop {
-            if session.child.try_wait()?.is_some() {
-                return Err(io::Error::other(
-                    "Codex app-server exited before attachment",
-                ));
-            }
-            if Rpc::connect(&session.socket, deadline).is_ok() {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Codex app-server did not accept attachment",
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        Ok(session)
+            lifetime: Some(stop),
+            watcher: Some(watcher),
+        })
     }
 
-    fn connection(&mut self, deadline: Instant) -> Option<&mut Rpc> {
+    fn standalone(&self) -> bool {
+        fs::read(self.directory.join("mode")).is_ok_and(|mode| mode == b"standalone")
+    }
+
+    fn connection(&mut self, deadline: Instant) -> io::Result<&mut Rpc> {
         if self.rpc.is_none() {
-            // A connect/initialize failure precedes a mutating RPC. Only this
-            // boundary permits the caller's guarded typed fallback.
-            self.rpc = Rpc::connect(&self.socket, deadline).ok();
+            // An attached TUI has no independent backend. A disconnected pair
+            // must not receive terminal fallback, even before any mutation.
+            self.rpc = Some(Rpc::connect(&self.socket, deadline).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Codex attached runtime is unavailable; input was not sent",
+                )
+            })?);
         }
-        let rpc = self.rpc.as_mut()?;
+        let rpc = self.rpc.as_mut().expect("connected native RPC");
         rpc.set_deadline(deadline);
-        Some(rpc)
+        Ok(rpc)
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
-            let pid = self.child.id() as i32;
-            // A private process group isolates provider tools from Bus itself.
-            unsafe {
-                libc::kill(-pid, libc::SIGTERM);
-            }
-            let deadline = Instant::now() + Duration::from_millis(300);
-            while matches!(self.child.try_wait(), Ok(None)) && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            if matches!(self.child.try_wait(), Ok(None)) {
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
-                let _ = self.child.wait();
-            }
+        self.lifetime.take();
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        } else {
+            let _ = fs::remove_dir_all(&self.directory);
         }
-        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 
@@ -293,16 +259,14 @@ impl Drop for Session {
 pub(crate) mod test_support {
     pub(crate) use super::super::rpc::tests::server_for;
     pub(crate) fn connected_runtime(socket: std::path::PathBuf) -> super::Runtime {
-        let child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
-        let writer_lock = super::acquire_launch_lock(&socket.with_extension("lock")).unwrap();
         super::Runtime {
             config: None,
             session: Some(super::Session {
-                child,
                 directory: socket.parent().unwrap().to_owned(),
                 socket,
                 rpc: None,
-                _writer_lock: writer_lock,
+                lifetime: None,
+                watcher: None,
             }),
         }
     }
@@ -312,66 +276,7 @@ pub(crate) mod test_support {
 #[path = "runtime_test.rs"]
 mod tests;
 
-fn acquire_launch_lock(path: &Path) -> io::Result<fs::File> {
-    use std::os::fd::AsRawFd;
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::other("Codex writer lock is not a regular file"));
-    }
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(file)
-}
-
-fn owned_command(argv: &[String], lock: &fs::File) -> Command {
-    // The lifetime watcher keeps the original pipe, while the provider reads
-    // /dev/null. Either provider exit or Bus EOF tears down the whole group.
-    const SUPERVISOR: &str = r#"
-cleanup() {
-    trap '' HUP INT TERM
-    kill -TERM 0 2>/dev/null
-    /bin/sleep 0.3
-    kill -KILL 0 2>/dev/null
-}
-trap cleanup EXIT HUP INT TERM
-"$@" </dev/null &
-provider=$!
-( IFS= read -r lifetime || :; kill -TERM "$$" 2>/dev/null ) <&0 &
-wait "$provider"
-"#;
-    let mut command = Command::new("/bin/sh");
-    command
-        .args(["-c", SUPERVISOR, "bus-codex-runtime"])
-        .args(argv)
-        .stdin(Stdio::piped());
-    inherit_writer_lock(&mut command, lock);
-    command
-}
-
-fn inherit_writer_lock(command: &mut Command, lock: &fs::File) {
-    use std::os::fd::AsRawFd;
-    let fd = lock.as_raw_fd();
-    // F_DUPFD allocates a free descriptor with CLOEXEC cleared. It never
-    // overwrites std::process's own exec-error pipe or any inherited handle.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::fcntl(fd, libc::F_DUPFD, 3) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-}
-
-fn server_argv(argv: &[String], endpoint: &str) -> Vec<String> {
+pub(super) fn server_argv(argv: &[String], endpoint: &str) -> Vec<String> {
     let mut server = vec![
         argv[0].clone(),
         "app-server".into(),
@@ -399,4 +304,111 @@ fn server_argv(argv: &[String], endpoint: &str) -> Vec<String> {
         }
     }
     server
+}
+
+pub(super) fn acquire_launch_lock(path: &Path) -> io::Result<fs::File> {
+    use std::os::fd::AsRawFd;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("Writer lock is not a regular file"));
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+pub(super) fn owned_command(argv: &[String], lock: &fs::File) -> Command {
+    // The lifetime watcher keeps the original pipe, while the provider reads
+    // /dev/null. Either provider exit or Bus EOF tears down the whole group.
+    const SUPERVISOR: &str = r#"
+cleanup() {
+    trap '' HUP INT TERM
+    kill -TERM 0 2>/dev/null
+    /bin/sleep 0.3
+    kill -KILL 0 2>/dev/null
+}
+trap cleanup EXIT HUP INT TERM
+"$@" </dev/null &
+provider=$!
+( IFS= read -r lifetime || :; kill -TERM "$$" 2>/dev/null ) <&0 &
+wait "$provider"
+"#;
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", SUPERVISOR, "bus-owned-process"])
+        .args(argv)
+        .stdin(Stdio::piped())
+        .process_group(0);
+    inherit_writer_lock(&mut command, lock);
+    command
+}
+
+pub(super) fn inherit_writer_lock(command: &mut Command, lock: &fs::File) {
+    use std::os::fd::AsRawFd;
+    let fd = lock.as_raw_fd();
+    // F_DUPFD allocates a free descriptor with CLOEXEC cleared. It never
+    // overwrites std::process's own exec-error pipe or any inherited handle.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_DUPFD, 3) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+/// A lifetime socket carries no payload. Readability, including HUP, is EOF.
+pub(super) fn ensure_owner_alive(control: &UnixStream) -> io::Result<()> {
+    let mut descriptor = libc::pollfd {
+        fd: control.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let result = unsafe { libc::poll(&mut descriptor, 1, 0) };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if result > 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "Process owner stopped",
+        ));
+    }
+    Ok(())
+}
+
+/// Retire the entire private group, including tools that outlive its leader.
+pub(super) fn terminate_group(child: &mut Child, timeout: Duration) -> io::Result<()> {
+    let group = -(child.id() as i32);
+    unsafe {
+        libc::kill(group, libc::SIGTERM);
+    }
+    let started = Instant::now();
+    loop {
+        child.try_wait()?;
+        if unsafe { libc::kill(group, 0) } != 0 {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Process group has not retired",
+            ));
+        }
+        if started.elapsed() >= Duration::from_millis(300) {
+            unsafe {
+                libc::kill(group, libc::SIGKILL);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
