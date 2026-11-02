@@ -129,3 +129,31 @@ pub(crate) fn setup_notice(root: &Path) -> SetupNotice {
         message: super::super::launch::hook_notice_message("codex-hook"),
     }
 }
+
+/// Pin the TUI executable and opt this managed pane into native runtime ownership.
+/// Non-Unix/legacy launches retain their ordinary private TUI runtime.
+#[cfg(unix)]
+pub(crate) fn environment(
+    hooks: &super::super::hook_json::HookContext,
+) -> std::collections::HashMap<String, String> {
+    let mut env = hooks.env();
+    if let Some(path) = crate::utils::env::path_var() {
+        if let Some(directory) = std::env::split_paths(&path).find(|dir| {
+            dir.is_absolute() && crate::utils::env::is_executable_file(&dir.join("codex"))
+        }) {
+            let paths = std::iter::once(directory).chain(std::env::split_paths(&path));
+            if let Ok(path) = std::env::join_paths(paths) {
+                env.insert("PATH".into(), path.to_string_lossy().into_owned());
+                env.insert("BUS_CODEX_NATIVE".into(), "1".into());
+            }
+        }
+    }
+    env
+}
+
+#[cfg(not(unix))]
+pub(crate) fn environment(
+    hooks: &super::super::hook_json::HookContext,
+) -> std::collections::HashMap<String, String> {
+    hooks.env()
+}
