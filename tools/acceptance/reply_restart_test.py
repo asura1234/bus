@@ -48,6 +48,7 @@ def scenario(binary, root, provider, master):
     home.mkdir()
     fake_bin = root / "bin"
     fake_bin.mkdir()
+    held, release = root / "submission-held", root / "submission-release"
     for name in ["claude", "codex", "open", "osascript", "terminal-notifier", "afplay"]:
         (fake_bin / name).symlink_to(binary)
     data = root / "data"
@@ -55,7 +56,8 @@ def scenario(binary, root, provider, master):
     env = {"PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home),
            "BUS_DATA_DIR": str(data), "BUS_TUI_FAKE_AGENT": "1", "TERM": "xterm-256color",
            "SHELL": "/bin/bash", "XDG_CONFIG_HOME": str(root / "xdg"),
-           "BUS_TUI_EFFECTS": str(root / "effects.jsonl")}
+           "BUS_TUI_EFFECTS": str(root / "effects.jsonl"),
+           "BUS_TUI_FAKE_SUBMIT_GATE": str(root)}
     bus = Bus(binary, root, env, workspace=work)
     began = time.monotonic()
     try:
@@ -80,11 +82,15 @@ def scenario(binary, root, provider, master):
         until(lambda: durable()["visible_room"] == observer)
         before = {key: value["unread_count"] for key, value in durable()["rooms"].items()}
         sent = bus.cli("send", "--room", room, "--to", "restart-agent", "--text",
-                       "fake:work 3 fake:raw-reply restart-proof")
+                       "fake:raw-reply restart-proof")
         message = str(sent["message_id"])
         until(lambda: bus.cli("message", "status", message)["requests"][0]["start_bound"])
+        until(held.exists)
         # Stop only this scratch coordinator while its native provider keeps running.
+        # The provider cannot produce a final until this pause is established,
+        # even if polling or SIGSTOP is delayed longer than the old fake work.
         os.kill(bus.child.pid, signal.SIGSTOP)
+        release.touch()
         until(lambda: stop_spooled(data), timeout=15)
         stopped = subprocess.run([str(binary), "stop"], env=env, capture_output=True, text=True,
                                  timeout=20, check=False)
@@ -130,6 +136,7 @@ def scenario(binary, root, provider, master):
         print(json.dumps({"provider": provider, "room": room, "message": message,
                           "seconds": round(time.monotonic() - began, 3), "result": "PASS"}))
     finally:
+        release.touch()
         if bus.child is not None and bus.child.poll() is None:
             os.kill(bus.child.pid, signal.SIGCONT)
         bus.stop()

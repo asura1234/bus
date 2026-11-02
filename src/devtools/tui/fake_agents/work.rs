@@ -3,6 +3,20 @@ use super::{drain_input, FakeAgent, Turn, Typed};
 use serde_json::json;
 use std::sync::mpsc;
 
+/// Restart acceptance holds the fake after its Started hook has been published,
+/// before a fast final can race the coordinator's pause under host load.
+pub(super) fn hold_after_submit_hook() {
+    let Some(directory) = std::env::var_os("BUS_TUI_FAKE_SUBMIT_GATE") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    std::fs::write(directory.join("submission-held"), b"")
+        .expect("write fake submission gate marker");
+    while !directory.join("submission-release").exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 impl FakeAgent {
     /// Keeps a live turn working until `seconds` after it began, reading
     /// input, so Bus can type a steering message into the running turn. Each

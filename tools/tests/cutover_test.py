@@ -143,7 +143,7 @@ class CutoverTests(unittest.TestCase):
         self.assertIn("--features", args, "cutover resumes with --dev, so it must install the dev variant")
         self.assertEqual(args[args.index("--features") + 1], "dev-tools")
 
-    def run_cutover(self, outcome):
+    def run_cutover(self, outcome, build_delay=0):
         repo = self.root / "repo"
         (repo / "tools").mkdir(parents=True)
         original = Path(cutover.__file__).parent
@@ -159,7 +159,7 @@ class CutoverTests(unittest.TestCase):
         (session / "state.json").write_text('{"fixture":true}\n')
         body = '''source "$1" 0123456789abcdef
 preflight() { bus_cutover_verified_head=$FIXTURE_HEAD; }
-build_candidate() { mkdir -p "$1/debug"; cp "$FIXTURE_CANDIDATE" "$1/debug/bus"; : >"$2"; }
+build_candidate() { sleep "$FIXTURE_BUILD_DELAY"; mkdir -p "$1/debug"; cp "$FIXTURE_CANDIDATE" "$1/debug/bus"; : >"$2"; }
 if [[ "$FIXTURE_OUTCOME" == build_failed ]]; then
     build_candidate() { printf 'fixture compiler failed\\n' >&2; return 19; }
 fi
@@ -195,8 +195,8 @@ fi
             ["bash", "-c", body, "cutover-test", str(repo / "tools/cutover.sh")],
             env={**os.environ, "BUS_CUTOVER_SESSION_DIR": str(session),
                  "FIXTURE_HEAD": self.head, "FIXTURE_CANDIDATE": str(candidate),
-                 "FIXTURE_OUTCOME": outcome},
-            capture_output=True, text=True, timeout=15,
+                 "FIXTURE_OUTCOME": outcome, "FIXTURE_BUILD_DELAY": str(build_delay)},
+            capture_output=True, text=True,
         )
         backup = Path(next(line.split(": ", 1)[1] for line in result.stdout.splitlines()
                            if line.startswith("Backup and build-log directory: ")))
@@ -210,6 +210,11 @@ fi
         self.assertIn("status=installed_verified", (backup / "cutover-status.txt").read_text())
         self.assertIn(self.head, result.stdout)
         self.assertIn("MOCK_RESUME=", result.stdout)
+
+    def test_slow_progress_is_not_mistaken_for_a_hang(self):
+        result, installed, _, _ = self.run_cutover("success", build_delay=16)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed.read_bytes(), self.candidate.read_bytes())
 
     def test_wait_failure_resumes_old_binary_and_records_failed_deployment(self):
         result, installed, old, backup = self.run_cutover("wait_failed")

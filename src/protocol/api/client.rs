@@ -60,11 +60,24 @@ impl ApiClient {
         })?;
 
         let mut reader = BufReader::new(stream);
-        read_json_line(&mut reader).inspect_err(|error| {
-            if let ApiClientError::Io(error) = error {
-                log_io_error("read_response", error, timeout);
-            }
-        })
+        read_json_line(&mut reader)
+            .map_err(|error| match error {
+                ApiClientError::Io(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    ApiClientError::Io(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "native API response timed out after {} ms",
+                            timeout.as_millis()
+                        ),
+                    ))
+                }
+                error => error,
+            })
+            .inspect_err(|error| {
+                if let ApiClientError::Io(error) = error {
+                    log_io_error("read_response", error, timeout);
+                }
+            })
     }
 
     fn connect(&self) -> io::Result<LocalStream> {
