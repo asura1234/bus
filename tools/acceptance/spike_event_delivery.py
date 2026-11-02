@@ -141,7 +141,9 @@ class Scratch:
 
     def s2(self):
         for i in range(3):
-            draft = f'fake:draft-bytes S2-{self.name}-{i}\t中 文\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
+            image = ROOT / self.name / 'work' / 'shot.png'
+            image.write_bytes(b'fake image')
+            draft = f'"{image}"\nfake:draft-bytes S2-{self.name}-{i}\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
             self.ok(['click', '--hit', 'agent:a1'])
             self.ok(['paste', draft])
             self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2')
