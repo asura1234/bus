@@ -72,7 +72,7 @@ impl Worker {
                 )?;
             }
             confirm_interactive_agent(&mut state, agent, info)?;
-            let observed_at_ms = io::now_ms();
+            let observed_at_ms = self.now_ms();
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;

@@ -49,6 +49,8 @@ pub(super) struct Worker {
     pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
     #[cfg(test)]
     pub(super) test_reply_waiter_now: Option<std::time::Instant>,
+    #[cfg(test)]
+    pub(super) test_now_ms: Option<u64>,
     pub(super) reply_delivery_retries: BTreeMap<RequestId, super::delivery::ReplyDeliveryRetry>,
     /// When each agent's provider last failed to show a pasted prompt, which
     /// the server then withdrew; the retry waits `PROMPT_NOT_SHOWN_RETRY`.
@@ -161,6 +163,8 @@ impl Worker {
             reply_waiters: BTreeMap::new(),
             #[cfg(test)]
             test_reply_waiter_now: None,
+            #[cfg(test)]
+            test_now_ms: None,
             reply_delivery_retries: BTreeMap::new(),
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
@@ -179,6 +183,14 @@ impl Worker {
             #[cfg(test)]
             test_save_observations: None,
         })
+    }
+
+    pub(super) fn now_ms(&self) -> u64 {
+        #[cfg(test)]
+        if let Some(now) = self.test_now_ms {
+            return now;
+        }
+        io::now_ms()
     }
 
     pub(super) fn snapshot(&self) -> BusSnapshot {

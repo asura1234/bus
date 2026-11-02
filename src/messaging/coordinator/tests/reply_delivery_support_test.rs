@@ -359,6 +359,13 @@ impl Delivery {
         self.worker_mut().test_reply_waiter_now = Some(now);
     }
 
+    pub(crate) fn pause_clock(&mut self) {
+        let worker = self.worker_mut();
+        if worker.test_now_ms.is_none() {
+            worker.test_now_ms = Some(crate::messaging::storage::io::now_ms());
+        }
+    }
+
     pub(crate) fn real_submission_time(&self, agent: AgentId) {
         self.native.lock().unwrap().terminals[&agent].clock.resume();
     }
@@ -875,9 +882,11 @@ impl Delivery {
             .store(paused, std::sync::atomic::Ordering::Relaxed);
     }
     pub(crate) fn reopen(&mut self) {
+        let test_now_ms = self.worker.as_ref().unwrap().test_now_ms;
         drop(self.worker.take());
         let mut worker =
             Worker::open(self.dir.clone(), Box::new(Native(self.native.clone()))).unwrap();
+        worker.test_now_ms = test_now_ms;
         #[cfg(unix)]
         if let Some(socket) = &self.socket {
             worker.transport = Box::new(FixtureSocketTransport(BusTransport::new(

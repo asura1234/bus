@@ -1278,6 +1278,7 @@ fn idle_cycle(f: &mut Delivery, round: usize) {
     f.status(agent, AgentState::Idle);
     f.tick();
     f.age_request_progress(600_000);
+    f.pause_clock();
     f.reopen();
     f.stop(
         agent,
