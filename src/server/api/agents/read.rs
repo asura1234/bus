@@ -61,9 +61,18 @@ impl App {
         id: String,
         params: AgentSendKeysParams,
     ) -> String {
+        self.prepare_agent_send_keys(id, params)
+            .unwrap_or_else(|response| Box::new(|| response))()
+    }
+
+    pub(super) fn prepare_agent_send_keys(
+        &mut self,
+        id: String,
+        params: AgentSendKeysParams,
+    ) -> Result<Box<dyn FnOnce() -> String + Send>, String> {
         let resolved = match self.resolve_agent_target(&params.target) {
             Ok(resolved) => resolved,
-            Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
+            Err(err) => return Err(encode_error_body(id, self.agent_target_error_body(err))),
         };
         let Some(terminal_id) = self
             .state
@@ -71,7 +80,7 @@ impl App {
             .get(resolved.ws_idx)
             .and_then(|workspace| workspace.terminal_id(resolved.pane_id))
         else {
-            return agent_not_found(id, &params.target);
+            return Err(agent_not_found(id, &params.target));
         };
         let Some(expected_agent) = self
             .state
@@ -79,17 +88,17 @@ impl App {
             .get(terminal_id)
             .and_then(|terminal| terminal.effective_known_agent())
         else {
-            return agent_not_ready(id, &params.target);
+            return Err(agent_not_ready(id, &params.target));
         };
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
-            return agent_not_found(id, &params.target);
+            return Err(agent_not_found(id, &params.target));
         };
         if !crate::server::terminals::agents::runtime_hosts_agent(runtime, expected_agent) {
-            return agent_not_ready(id, &params.target);
+            return Err(agent_not_ready(id, &params.target));
         }
         if let Some(expected) = &params.native_interrupt {
             let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
-                return agent_not_ready(id, &params.target);
+                return Err(agent_not_ready(id, &params.target));
             };
             if agent.terminal_id != expected.expected_terminal_id
                 || agent.agent_session.as_ref().map(|s| s.value.as_str())
@@ -98,28 +107,36 @@ impl App {
                 || agent.agent.as_deref() != Some("codex")
                 || params.keys != ["esc"]
             {
-                return agent_not_ready(id, &params.target);
+                return Err(agent_not_ready(id, &params.target));
             }
-            #[cfg(unix)]
-            if let Some(result) = super::codex_native::interrupt(runtime, &agent) {
-                return match result {
-                    Ok(()) => encode_success(id, ResponseResult::Ok {}),
-                    Err(error) => encode_error(id, "agent_send_keys_failed", error.to_string()),
-                };
-            }
+            return agent_keys_job(runtime, id, params.keys, Some(agent));
         }
-        let encoded =
-            match crate::server::api::input_encoding::encode_api_keys(runtime, &params.keys) {
-                Ok(encoded) => encoded,
-                Err(key) => {
-                    return encode_error(id, "invalid_key", format!("unsupported key {key}"));
-                }
-            };
-        let bytes: Vec<u8> = encoded.into_iter().flatten().collect();
-        if let Err(err) = runtime.try_send_developer_bytes(Bytes::from(bytes)) {
-            return encode_error(id, "agent_send_keys_failed", err.to_string());
-        }
-
-        encode_success(id, ResponseResult::Ok {})
+        agent_keys_job(runtime, id, params.keys, None)
     }
+}
+
+fn agent_keys_job(
+    runtime: &crate::terminal::TerminalRuntime,
+    id: String,
+    keys: Vec<String>,
+    native: Option<crate::protocol::api::schema::AgentInfo>,
+) -> Result<Box<dyn FnOnce() -> String + Send>, String> {
+    let encoded = crate::server::api::input_encoding::encode_api_keys(runtime, &keys)
+        .map_err(|key| encode_error(id.clone(), "invalid_key", format!("unsupported key {key}")))?;
+    let bytes = Bytes::from(encoded.into_iter().flatten().collect::<Vec<u8>>());
+    let sender = runtime.submission_handle(true);
+    let submit: Box<dyn FnOnce() -> std::io::Result<()> + Send> =
+        Box::new(move || sender.try_send_developer_bytes(bytes));
+    #[cfg(unix)]
+    let submit = if let Some(agent) = native {
+        super::codex_native::interrupt_job(runtime, &agent, submit)
+    } else {
+        submit
+    };
+    #[cfg(not(unix))]
+    let _ = native;
+    Ok(Box::new(move || match submit() {
+        Ok(()) => encode_success(id, ResponseResult::Ok {}),
+        Err(err) => encode_error(id, "agent_send_keys_failed", err.to_string()),
+    }))
 }
