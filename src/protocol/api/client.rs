@@ -145,7 +145,8 @@ fn read_json_line<T: DeserializeOwned>(
 ) -> Result<T, ApiClientError> {
     let mut line = String::new();
     let read = reader.read_line(&mut line)?;
-    if read == 0 || line.trim().is_empty() {
+    // Only EOF proves the peer closed; blank lines are malformed JSON.
+    if read == 0 {
         return Err(ApiClientError::EmptyResponse);
     }
     serde_json::from_str(&line).map_err(ApiClientError::Json)

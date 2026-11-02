@@ -5,6 +5,9 @@ use crate::protocol::api::{
 };
 use std::time::{Duration, Instant};
 
+/// Local transport evidence that the native server connection is gone.
+pub(crate) const NATIVE_SERVER_UNAVAILABLE: &str = "native_server_unavailable";
+
 #[derive(Clone, Debug)]
 pub(crate) struct TransportError {
     pub(crate) code: Option<String>,
@@ -150,6 +153,16 @@ fn classify_error(error: ApiClientError) -> TransportError {
     TransportError {
         code: match &error {
             ApiClientError::ErrorResponse(response) => Some(response.error.code.clone()),
+            ApiClientError::EmptyResponse => Some(NATIVE_SERVER_UNAVAILABLE.into()),
+            ApiClientError::Io(error)
+                if crate::platform::ipc::is_connection_closed_error(error)
+                    || matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) =>
+            {
+                Some(NATIVE_SERVER_UNAVAILABLE.into())
+            }
             _ => None,
         },
         message: error.to_string(),

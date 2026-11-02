@@ -20,10 +20,13 @@ impl Worker {
                     failures = self.poll_failures,
                     retry_ms = self.poll_interval().as_millis() as u64,
                     error = ?other, "Native poll failed; delivery paused, queues and active requests retained");
-                // A blocking receive timeout is WouldBlock on macOS. Retry
-                // this read-only observation on later ticks, without feeding
-                // a transport diagnostic into the composer's sticky error.
-                if self.poll_failures >= 3 {
+                // WouldBlock is the macOS read timeout. Inconclusive polls
+                // retain the last status; only connection loss or explicit
+                // server unavailability supports the mass transition.
+                if self.poll_failures >= 3
+                    && matches!(&other, Err(error) if matches!(error.code.as_deref(),
+                        Some(crate::messaging::native::NATIVE_SERVER_UNAVAILABLE | "server_unavailable")))
+                {
                     self.observe_native_unavailable()?;
                 }
                 return Ok(None);
