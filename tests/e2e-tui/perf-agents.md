@@ -12,8 +12,9 @@
   TUI input. Use snapshots and `bus state` for counts; capture and inspect cell
   screenshots for visual assertions. No evidence may be skipped. Always stop the
   scratch session.
-- ACTIVE means agents whose shown status is `working`; all other statuses are
-  inactive. TOTAL means every agent in that room, including unavailable agents.
+- ACTIVE means agents whose displayed status is `Working` or `Blocked`; `Idle`
+  and `Unavailable` are inactive. TOTAL means every agent in that room, including
+  unavailable agents.
   Every room has an `Agents` row beneath its name with `ACTIVE/TOTAL` right-aligned
   to the sidebar.
 
@@ -41,7 +42,7 @@
    to `Agents 0/3`, and both requests have replies in scratch history. Capture an
    inspected screenshot showing the finished count.
 
-**Pass criteria:** ACTIVE counts Working agents only and follows 0 → 1 → 2 → 1 → 0;
+**Pass criteria:** ACTIVE counts Working and Blocked agents and follows 0 → 1 → 2 → 1 → 0;
 TOTAL remains three throughout, including idle agents, and other rooms are unchanged.
 
 ### SIDEBAR-02 — MASTER has its own live count
@@ -78,3 +79,32 @@ idle fake Claude workers; open that room.
 
 **Pass criteria:** the second row remains readable and right-aligned at widths 20,
 28 and 60, including a narrow terminal, without overlapping room or agent content.
+
+### SIDEBAR-04 — Blocked agents stay active
+
+**Preconditions/setup:** fresh scratch session; create `blocked-count` with one
+idle fake Claude worker `waiting`; open that room.
+
+1. Select only waiting, submit `fake:dialog 15 blocked-count`, and wait until the
+   worker is Blocked → the room status is Blocked and its count reads `Agents 1/1`.
+   Capture scratch state and an inspected screenshot.
+2. Wait for the dialog turn to finish → waiting becomes Idle, the room status is
+   Idle, and its count returns to `Agents 0/1`. Capture state, reply history and an
+   inspected screenshot.
+
+**Pass criteria:** a Blocked worker is ACTIVE until it returns to Idle.
+
+### SIDEBAR-05 — Performance overlay contains only performance metrics
+
+**Preconditions/setup:** fresh scratch session; create `overlay-count` with one
+idle fake Claude worker; default room `bus` open.
+
+1. Open Settings and enable `Performance overlay (CPU, memory, FPS)`, then close
+   Settings → the yellow overlay at the top right shows CPU, MEM and FPS on one
+   row, without an agents row; the sidebar still shows `Agents 0/1` beneath
+   overlay-count. Capture the top two rows and an inspected screenshot.
+2. Open Settings, disable the performance overlay, then close Settings → the
+   overlay is gone and the sidebar's `Agents 0/1` row remains. Capture the top two
+   rows and an inspected screenshot.
+
+**Pass criteria:** agent counts remain in the sidebar independently of the overlay.
