@@ -17,6 +17,25 @@ fn restart(fixture: &mut Fixture) {
     .unwrap();
 }
 
+fn server_restart(fixture: &mut Fixture) {
+    let record = crate::utils::restart_record::RestartLog {
+        at_ms: fixture.now,
+        who: "user:restart-test".into(),
+        old_sha: "old".into(),
+        new_sha: "new".into(),
+        old_binary: "/old".into(),
+        new_binary: "/new".into(),
+        outcome: "restarted".into(),
+        reason: String::new(),
+    };
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::outcome_path(&fixture.dir),
+        &record,
+    )
+    .unwrap();
+    fixture.worker.announce_recorded_restart().unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_every_provider_queue()
@@ -29,43 +48,49 @@ fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_ev
         Provider::Grok,
         Provider::Kimi,
     ] {
-        for start_bound in [false, true] {
-            let mut fixture = Fixture::new(provider);
-            if provider == Provider::Kimi {
-                super::kimi_steering_tests::home(&fixture);
-            }
-            let interrupted = if start_bound {
-                running(&mut fixture, "interrupted delivered request", "1")
-            } else {
-                let request = fixture.send("interrupted awaiting-start request", false);
+        for server_only in [false, true] {
+            for start_bound in [false, true] {
+                let mut fixture = Fixture::new(provider);
+                if provider == Provider::Kimi {
+                    super::kimi_steering_tests::home(&fixture);
+                }
+                let interrupted = if start_bound {
+                    running(&mut fixture, "interrupted delivered request", "1")
+                } else {
+                    let request = fixture.send("interrupted awaiting-start request", false);
+                    fixture.deliver();
+                    request
+                };
+                let queued = fixture.send("queued behind the restart", true);
+                if server_only {
+                    server_restart(&mut fixture);
+                } else {
+                    restart(&mut fixture);
+                }
+                fixture.status(RuntimeStatus::Idle);
+                fixture.worker.settle_requests().unwrap();
+                let request = fixture.request(interrupted);
+                if request.phase != RequestPhase::Abandoned
+                    || request.failure_reason.as_deref() != Some("reply_not_captured")
+                    || fixture
+                        .worker
+                        .state
+                        .agent(fixture.agent)
+                        .unwrap()
+                        .current_request
+                        .is_some()
+                {
+                    failures.push(format!(
+                        "{provider:?}/server_only={server_only}/start_bound={start_bound}: old request remained {:?}/{:?}",
+                        request.phase, request.failure_reason
+                    ));
+                }
                 fixture.deliver();
-                request
-            };
-            let queued = fixture.send("queued behind the restart", true);
-            restart(&mut fixture);
-            fixture.status(RuntimeStatus::Idle);
-            fixture.worker.settle_requests().unwrap();
-            let request = fixture.request(interrupted);
-            if request.phase != RequestPhase::Abandoned
-                || request.failure_reason.as_deref() != Some("reply_not_captured")
-                || fixture
-                    .worker
-                    .state
-                    .agent(fixture.agent)
-                    .unwrap()
-                    .current_request
-                    .is_some()
-            {
-                failures.push(format!(
-                    "{provider:?}/start_bound={start_bound}: old request remained {:?}/{:?}",
-                    request.phase, request.failure_reason
-                ));
-            }
-            fixture.deliver();
-            if fixture.request(queued).phase == RequestPhase::Queued {
-                failures.push(format!(
-                    "{provider:?}/start_bound={start_bound}: queued message stayed blocked"
-                ));
+                if fixture.request(queued).phase == RequestPhase::Queued {
+                    failures.push(format!(
+                        "{provider:?}/server_only={server_only}/start_bound={start_bound}: queued message stayed blocked"
+                    ));
+                }
             }
         }
     }
@@ -114,7 +139,7 @@ fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_f
 #[test]
 fn restart_request_recovers_a_completed_codex_turn_from_its_rollout_before_releasing_the_queue() {
     let mut fixture = Fixture::new(Provider::Codex);
-    let rollout = fixture.dir.join("rollout.jsonl");
+    let rollout = fixture.dir.join("rollout-completion.jsonl");
     let lead = running(&mut fixture, "finish without a Stop hook", "turn-1");
     let typed = fixture.typed().last().unwrap().0.clone();
     append(
@@ -137,6 +162,43 @@ fn restart_request_recovers_a_completed_codex_turn_from_its_rollout_before_relea
         fixture.reply(lead).as_deref(),
         Some("recovered after restart")
     );
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
+#[test]
+fn restart_request_recovers_codex_final_from_the_rollout_learned_before_stop() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-before-stop.jsonl");
+    let lead = fixture.send("finish before Bus stops without a Stop hook", false);
+    fixture.deliver();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"finish before Bus stops without a Stop hook",
+        "transcript_path":rollout}),
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&fixture, 1),
+            "turn-1",
+            &typed,
+            Some("committed before the stop"),
+        ),
+    );
+    let queued = fixture.send("next after the committed answer", true);
+    restart(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("committed before the stop"),
+        "a consumed pre-stop submit hook already identified the transcript; a fresh hook is not required"
+    );
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }

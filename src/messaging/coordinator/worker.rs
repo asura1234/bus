@@ -32,6 +32,8 @@ pub(super) struct Worker {
     pub(super) durable_state: BusState,
     /// Current requests loaded when this coordinator process opened.
     pub(super) restart_requests: BTreeMap<AgentId, RequestId>,
+    /// The restart outcome whose requests were captured by a surviving coordinator.
+    pub(super) restart_outcome_at: Option<u64>,
     pub(super) store: JsonStore,
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
@@ -130,6 +132,15 @@ impl Worker {
             .agents()
             .filter_map(|agent| agent.current_request.map(|request| (agent.id, request)))
             .collect();
+        let codex_rollouts = state
+            .agents()
+            .filter_map(|agent| {
+                agent
+                    .codex_rollout
+                    .clone()
+                    .map(|rollout| (agent.id, rollout))
+            })
+            .collect();
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
             super::recovery::check_saved_project_hooks(&mut state, id)?;
@@ -153,6 +164,7 @@ impl Worker {
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             restart_requests,
+            restart_outcome_at: None,
             state,
             store,
             data_dir,
@@ -182,7 +194,7 @@ impl Worker {
             control_receipt_bytes: 0,
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
-            codex_rollouts: BTreeMap::new(),
+            codex_rollouts,
             settings_path: None,
             sound_dirs: None,
             batch: None,

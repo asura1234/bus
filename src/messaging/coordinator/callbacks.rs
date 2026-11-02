@@ -697,6 +697,7 @@ impl Worker {
                 crate::agents::providers::codex::usage::codex_rollout_path(&record.value)
             {
                 self.codex_rollouts.insert(id, path.to_path_buf());
+                state.record_codex_rollout(id, path.to_path_buf())?;
                 if matches!(parsed, Parsed::Final { .. }) {
                     *rollout = Some(path.to_path_buf());
                 }

@@ -370,6 +370,9 @@ pub(crate) struct RoomAgent {
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,
+    /// Validated Codex rollout location learned from this agent's hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) codex_rollout: Option<PathBuf>,
     /// Observed shell boundary for this launch/session, saved with callbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) claude_shells: Option<ClaudeShells>,

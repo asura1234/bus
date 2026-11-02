@@ -48,6 +48,7 @@ impl BusState {
                 cwd,
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
+                codex_rollout: None,
                 claude_shells: None,
                 startup: None,
                 details_disclosed: false,
@@ -84,6 +85,18 @@ impl BusState {
         );
         self.queues.insert(id, Vec::new());
         Ok(id)
+    }
+
+    pub(crate) fn record_codex_rollout(
+        &mut self,
+        id: AgentId,
+        path: PathBuf,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .codex_rollout = Some(path);
+        Ok(())
     }
 
     pub(crate) fn record_compaction(&mut self, id: AgentId, at_ms: u64) -> Result<(), ModelError> {
