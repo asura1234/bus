@@ -185,7 +185,7 @@ impl TerminalRuntime {
                 detection_context: Default::default(),
                 kimi_code_home: Arc::new(Mutex::new(None)),
                 #[cfg(unix)]
-                codex_native: Default::default(),
+                native_input: Default::default(),
                 preserve_processes_on_drop: true,
                 shell_integration: None,
                 launch_prompt_generation: Arc::new(AtomicU64::new(0)),

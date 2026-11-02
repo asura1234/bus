@@ -31,12 +31,11 @@ pub(super) fn queue(
     if agent.agent.as_deref() != Some("codex") || text.starts_with('/') {
         return fallback(native_only, message);
     }
-    let native = runtime.codex_native();
+    let Some(native) = runtime.native_input() else {
+        return fallback(native_only, message);
+    };
     // The App thread never waits for a native mutex, socket, or handshake.
-    if native
-        .try_lock()
-        .is_ok_and(|runtime| !runtime.has_session())
-    {
+    if !native.has_session() {
         return fallback(native_only, message);
     }
     let typed = if native_only {
@@ -79,7 +78,7 @@ pub(super) fn queue(
 type TypedSubmission = Box<dyn FnOnce() -> io::Result<InputCompletion> + Send>;
 
 fn submit(
-    native: std::sync::Arc<std::sync::Mutex<crate::agents::providers::codex::native::Runtime>>,
+    native: crate::terminal::runtime::native_input::NativeInputHandle,
     thread: &str,
     text: &str,
     steer: bool,
@@ -95,9 +94,14 @@ fn submit(
         ))
     } else {
         native
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .prompt(thread, text, steer, message, deadline, expected_turn)
+            .prompt(crate::terminal::runtime::native_input::NativePrompt {
+                thread,
+                text,
+                steer,
+                message,
+                deadline,
+                expected_turn,
+            })
             .unwrap_or_else(|| {
                 // No mutating RPC was sent: only this boundary permits typing.
                 if Instant::now() >= deadline {
@@ -149,7 +153,9 @@ pub(super) fn interrupt_job(
     agent: &AgentInfo,
     fallback: Box<dyn FnOnce() -> io::Result<()> + Send>,
 ) -> Box<dyn FnOnce() -> io::Result<()> + Send> {
-    let native = runtime.codex_native();
+    let Some(native) = runtime.native_input() else {
+        return fallback;
+    };
     let thread = agent
         .agent_session
         .as_ref()
@@ -157,11 +163,5 @@ pub(super) fn interrupt_job(
         .value
         .clone();
     let deadline = Instant::now() + std::time::Duration::from_secs(2);
-    Box::new(move || {
-        native
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .interrupt(&thread, deadline)
-            .unwrap_or_else(fallback)
-    })
+    Box::new(move || native.interrupt(&thread, deadline).unwrap_or_else(fallback))
 }

@@ -9,7 +9,7 @@ async fn codex_native_admission_keeps_the_developer_draft_and_writes_no_terminal
     let runtime = app.lookup_runtime_sender(0, pane).unwrap();
     let before = runtime.visible_text();
     let (path, server) = test_support::server_for("session", false, false);
-    *runtime.codex_native().lock().unwrap() = test_support::connected_runtime(path);
+    crate::server::terminals::native_input::test_bind(runtime, path);
     let response = start(&mut app, method);
     let value = response
         .recv_timeout(Duration::from_millis(500))
@@ -32,11 +32,10 @@ async fn codex_native_lost_ack_does_not_fall_back_to_typing() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let (path, server) = test_support::server_for("session", false, true);
-    *app.lookup_runtime_sender(0, pane)
-        .unwrap()
-        .codex_native()
-        .lock()
-        .unwrap() = test_support::connected_runtime(path);
+    crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let response = start(&mut app, method);
     let value = response
         .recv_timeout(Duration::from_millis(500))
@@ -59,11 +58,10 @@ async fn codex_native_disconnected_remote_refuses_without_terminal_bytes() {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let dir = crate::utils::test_temp::unique_temp_path("codex-native-missing");
     std::fs::create_dir_all(&dir).unwrap();
-    *app.lookup_runtime_sender(0, pane)
-        .unwrap()
-        .codex_native()
-        .lock()
-        .unwrap() = test_support::connected_runtime(dir.join("missing"));
+    crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        dir.join("missing"),
+    );
     let response = start(&mut app, method);
     let value = response.recv_timeout(WAIT).unwrap();
     assert!(value.contains("agent_prompt_not_shown"), "{value}");
@@ -79,14 +77,16 @@ async fn codex_native_does_not_intercept_a_literal_escape_key_request() {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let info = app.agent_info(0, pane).unwrap();
     let (path, server) = test_support::server_for("session", false, false);
-    let native = app.lookup_runtime_sender(0, pane).unwrap().codex_native();
-    *native.lock().unwrap() = test_support::connected_runtime(path);
+    let native = crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let params =
         serde_json::from_value(serde_json::json!({"target":info.pane_id,"keys":["esc"]})).unwrap();
     let response = app.handle_agent_send_keys("literal-key".into(), params);
     let sent = writes.try_recv().ok();
     // Drain the fixture even when the request correctly avoided native RPC.
-    let _ = native.lock().unwrap().interrupt(
+    let _ = native.interrupt(
         "session",
         std::time::Instant::now() + Duration::from_secs(3),
     );
@@ -105,15 +105,17 @@ async fn codex_native_interrupt_rejects_a_stale_session_without_pressing_escape(
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let info = app.agent_info(0, pane).unwrap();
     let (path, server) = test_support::server_for("session", false, false);
-    let native = app.lookup_runtime_sender(0, pane).unwrap().codex_native();
-    *native.lock().unwrap() = test_support::connected_runtime(path);
+    let native = crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let params = serde_json::from_value(serde_json::json!({
         "target":info.pane_id,"keys":["esc"],
         "native_interrupt":{"expected_terminal_id":info.terminal_id,"expected_session_id":"retired-session"}
     })).unwrap();
     let response = app.handle_agent_send_keys("stale-stop".into(), params);
     assert!(writes.try_recv().is_err());
-    let _ = native.lock().unwrap().interrupt(
+    let _ = native.interrupt(
         "session",
         std::time::Instant::now() + Duration::from_secs(3),
     );
@@ -141,13 +143,15 @@ async fn codex_native_idle_admits_despite_a_transient_working_projection() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "developer draft");
     show_working_projection(&mut app);
     let pane = app.state.workspaces[0].tabs[0].root_pane;
-    let native = app.lookup_runtime_sender(0, pane).unwrap().codex_native();
     let (path, server) = test_support::server_for("session", false, false);
-    *native.lock().unwrap() = test_support::connected_runtime(path);
+    let native = crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
     // On the red implementation, drain the untouched external fixture.
     if !response.contains("agent_prompted") {
-        let _ = native.lock().unwrap().interrupt(
+        let _ = native.interrupt(
             "session",
             std::time::Instant::now() + Duration::from_secs(3),
         );
@@ -163,11 +167,13 @@ async fn codex_native_actual_busy_turn_refuses_unsteered_working_projection() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "draft");
     show_working_projection(&mut app);
     let pane = app.state.workspaces[0].tabs[0].root_pane;
-    let native = app.lookup_runtime_sender(0, pane).unwrap().codex_native();
     let (path, server) = test_support::server_for("session", true, false);
-    *native.lock().unwrap() = test_support::connected_runtime(path);
+    let native = crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
-    let _ = native.lock().unwrap().interrupt(
+    let _ = native.interrupt(
         "session",
         std::time::Instant::now() + Duration::from_secs(3),
     );
@@ -249,11 +255,10 @@ async fn codex_native_handshake_cannot_hold_the_app_dispatcher() {
             }
         }
     });
-    *app.lookup_runtime_sender(0, pane)
-        .unwrap()
-        .codex_native()
-        .lock()
-        .unwrap() = test_support::connected_runtime(path);
+    crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let budget = crate::protocol::api::submission::method_budget(&method).unwrap();
     let (respond_to, response) = mpsc::channel();
     let handled = app.handle_deferred_agent_api_request_at(
@@ -316,11 +321,10 @@ async fn codex_native_preflight_approval_is_definite_non_delivery() {
         }
         calls
     });
-    *app.lookup_runtime_sender(0, pane)
-        .unwrap()
-        .codex_native()
-        .lock()
-        .unwrap() = test_support::connected_runtime(path);
+    crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     // The UI guard was idle; the authoritative native read now sees approval.
     let value = start(&mut app, method).recv_timeout(WAIT).unwrap();
     let calls = server.join().unwrap();
@@ -368,7 +372,9 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
                     "id":"session", "status":{"type":"active","activeFlags":[]},
                     "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
                 }}),
-                "thread/turns/list" => serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null}),
+                "thread/turns/list" => {
+                    serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null})
+                }
                 "turn/interrupt" => serde_json::json!({}),
                 other => panic!("unexpected interrupt operation {other}"),
             };
@@ -388,11 +394,10 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
         }
         false
     });
-    *app.lookup_runtime_sender(0, pane)
-        .unwrap()
-        .codex_native()
-        .lock()
-        .unwrap() = test_support::connected_runtime(path);
+    crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
     let params: crate::protocol::api::schema::AgentSendKeysParams = serde_json::from_value(serde_json::json!({
         "target":info.pane_id,"keys":["esc"],
         "native_interrupt":{"expected_terminal_id":info.terminal_id,"expected_session_id":"session"}
