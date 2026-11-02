@@ -74,6 +74,8 @@ pub(super) fn handle_connection_with_stop(
         return Ok(());
     };
 
+    let _error_report =
+        crate::utils::error_pipe::suppress(crate::utils::error_pipe::report_rpc(&request.id));
     let request_id = request.id.clone();
     let method = api_method_name(&request.method);
     let changes_ui = request_changes_ui(&request);
@@ -167,6 +169,8 @@ fn serve_regular_request(
     method: &'static str,
     changes_ui: bool,
 ) -> io::Result<()> {
+    let _error_report =
+        crate::utils::error_pipe::suppress(crate::utils::error_pipe::report_rpc(&request.id));
     let request_id = request.id.clone();
     let response = handle_request_received(request, api_tx, capabilities, server_stop, received_at);
     let result = write_text_line_allow_disconnect(stream, &response);
@@ -517,6 +521,8 @@ fn dispatch_to_app(
     timeout_response: Option<(&str, &str)>,
     received_at: Instant,
 ) -> String {
+    let _error_report =
+        crate::utils::error_pipe::suppress(crate::utils::error_pipe::report_rpc(&request.id));
     let request_id = request.id.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {

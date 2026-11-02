@@ -19,15 +19,25 @@ pub(crate) const RPC_PREFIX: &str = "bus-error-report:";
 pub(crate) const NOTICE_PREFIX: &str = "Bus error: ";
 thread_local! { static SUPPRESSED: Cell<bool> = const { Cell::new(false) }; }
 
-pub(crate) struct Suppression(bool);
+pub(crate) struct Suppression {
+    previous: bool,
+    _span: tracing::span::EnteredSpan,
+}
 impl Drop for Suppression {
     fn drop(&mut self) {
-        SUPPRESSED.set(self.0);
+        SUPPRESSED.set(self.previous);
     }
 }
 pub(crate) fn suppress(enabled: bool) -> Suppression {
     let old = SUPPRESSED.replace(is_suppressed() || enabled);
-    Suppression(old)
+    Suppression {
+        previous: old,
+        _span: if enabled {
+            tracing::info_span!("bus.error_report", bus_error_report = true).entered()
+        } else {
+            tracing::Span::none().entered()
+        },
+    }
 }
 pub(crate) fn is_suppressed() -> bool {
     SUPPRESSED.get()
@@ -48,17 +58,24 @@ pub(crate) struct Record {
 #[derive(Default)]
 struct Fields {
     event: Option<String>,
+    report: bool,
 }
 impl Visit for Fields {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        if field.name() == "bus_error_report" {
+            self.report |= value;
+        }
+    }
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "event" {
             self.event = Some(value.into());
         }
+        if matches!(field.name(), "api_request_id" | "request_id") && report_rpc(value) {
+            self.report = true;
+        }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "event" {
-            self.event = Some(format!("{value:?}"));
-        }
+        self.record_str(field, &format!("{value:?}"));
     }
 }
 
@@ -70,8 +87,37 @@ impl CaptureLayer {
         Self { log }
     }
 }
+struct ReportScope(bool);
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CaptureLayer {
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        let mut fields = Fields::default();
+        attrs.record(&mut fields);
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(ReportScope(fields.report));
+        }
+    }
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        let mut fields = Fields::default();
+        values.record(&mut fields);
+        if fields.report {
+            if let Some(span) = ctx.span(id) {
+                if let Some(scope) = span.extensions_mut().get_mut::<ReportScope>() {
+                    scope.0 = true;
+                }
+            }
+        }
+    }
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         if is_suppressed() {
             return;
         }
@@ -81,6 +127,17 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CaptureLayer {
         }
         let mut fields = Fields::default();
         event.record(&mut fields);
+        if fields.report
+            || ctx.event_scope(event).is_some_and(|mut scope| {
+                scope.any(|span| {
+                    span.extensions()
+                        .get::<ReportScope>()
+                        .is_some_and(|scope| scope.0)
+                })
+            })
+        {
+            return;
+        }
         let name = fields.event.as_deref().unwrap_or(meta.name());
         if *meta.level() == Level::WARN && !broken_warning(name, meta.target()) {
             return;

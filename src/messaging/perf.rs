@@ -41,6 +41,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::SetDiskCriticalGb(_) => "set_disk_critical_gb",
         C::SetFeishuRecipient(_) => "set_feishu_recipient",
         C::SetFeishuCliPath(_) => "set_feishu_cli_path",
+        C::SetErrorOrchestrator(_) => "set_error_orchestrator",
         C::SetSidebarWidth(_) => "set_sidebar_width",
         C::SetFeishuNotifications(_) => "set_feishu_notifications",
         C::SetDeveloperSoundName(_) => "set_developer_sound",

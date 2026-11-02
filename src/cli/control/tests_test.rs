@@ -3477,3 +3477,12 @@ fn delivery_failure_bounded_wait_stops_before_its_deadline_without_losing_status
     assert_eq!(response["error"]["code"], "agent_unavailable");
     assert_eq!(response["result"]["requests"][0]["stage"], "queued");
 }
+
+#[test]
+fn error_pipe_settings_option_builds_the_dev_setting_request() {
+    let parsed = command(&["settings", "--error-orchestrator", "lead"]).unwrap();
+    assert_eq!(parsed.method, "settings.error_orchestrator");
+    assert_eq!(parsed.params, json!({"name":"lead"}));
+    let off = command(&["settings", "--error-orchestrator", "off"]).unwrap();
+    assert_eq!(off.params, json!({"name":"off"}));
+}

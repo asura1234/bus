@@ -100,3 +100,37 @@ fn error_pipe_nested_suppression_restores_the_outer_state() {
     }
     assert!(!is_suppressed());
 }
+
+#[test]
+fn error_pipe_report_rpc_scope_stays_suppressed_on_the_async_submission_thread() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-error-pipe-rpc");
+    let mut runtime = Runtime::default();
+    runtime.configure(&root, Some("lead"));
+    let subscriber =
+        tracing_subscriber::registry().with(CaptureLayer::new(root.join("server.log")));
+    let dispatch = tracing::Dispatch::new(subscriber);
+    tracing::dispatcher::with_default(&dispatch, || {
+        let span = tracing::info_span!(
+            "native_submission",
+            api_request_id = "bus-error-report:123:1"
+        );
+        let _entered = span.enter();
+        let dispatch = dispatch.clone();
+        let span = span.clone();
+        std::thread::spawn(move || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                let _entered = span.enter();
+                emit_error();
+            })
+        })
+        .join()
+        .unwrap();
+    });
+    tracing::dispatcher::with_default(&dispatch, emit_error);
+    assert_eq!(
+        drain(&root).unwrap().len(),
+        1,
+        "only the unrelated error is reportable"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

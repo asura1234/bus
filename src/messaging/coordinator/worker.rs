@@ -56,6 +56,7 @@ pub(super) struct Worker {
     /// When each agent last began a turn of its own that has not settled.
     pub(super) own_turns: BTreeMap<AgentId, std::time::Instant>,
     pub(super) dev_enabled: bool,
+    pub(super) error_pipe: crate::utils::error_pipe::Runtime,
     /// Mutation receipts by request ID, so a retried request replays its
     /// response instead of running twice. Oldest first in `control_receipt_order`.
     pub(super) control_receipts: BTreeMap<String, control_dispatch::ControlReceipt>,
@@ -164,6 +165,7 @@ impl Worker {
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
             dev_enabled: false,
+            error_pipe: Default::default(),
             control_receipts: BTreeMap::new(),
             control_receipt_order: std::collections::VecDeque::new(),
             control_receipt_bytes: 0,
