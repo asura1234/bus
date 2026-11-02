@@ -181,3 +181,192 @@ fn a_new_decision_after_answering_a_master_worker_wake_is_published() {
         "the independently useful later decision must reach MASTER exactly once"
     );
 }
+
+#[test]
+fn worker_woken_decision_with_unclaimed_steering_is_published_after_turn_proof() {
+    let (mut state, room, worker, _) = state_with_room_and_agents();
+    let master = state.ensure_master_room();
+    let orch = state
+        .create_agent(
+            master,
+            "developer-lead-decision-maker",
+            Provider::ClaudeCode,
+            "/repo".into(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orch, room).unwrap();
+    state
+        .set_agent_runtime_identity(
+            orch,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch-orch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("provider-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(orch).unwrap();
+    state.observe_status(orch, RuntimeStatus::Idle, 1).unwrap();
+    let lead = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "developer lead".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Developer,
+            2,
+        )
+        .unwrap()[0];
+    start_request(&mut state, lead, "launch-orch", 10);
+    state
+        .observe_status(orch, RuntimeStatus::Working, 12)
+        .unwrap();
+    let worker_request = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "worker steering".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(worker),
+            12,
+        )
+        .unwrap()[0];
+    let worker_prompt = state.render_request_payload(worker_request).unwrap();
+    state.begin_steering(worker_request, lead).unwrap();
+    state
+        .record_steering(
+            worker_request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let prompt = state.request(lead).unwrap().prompt.rendered_payload();
+    assert!(matches!(
+        state.accept_callback(ProviderCallback::final_event(
+            "decision-final-unclaimed",
+            13,
+            orch,
+            "launch-orch",
+            "provider-session",
+            "turn-1",
+            &prompt,
+            DECISION
+        )),
+        CallbackDisposition::AcceptedCompleted | CallbackDisposition::AcceptedPendingSettlement
+    ));
+    state.observe_status(orch, RuntimeStatus::Idle, 20).unwrap();
+    assert!(state.settle_unclaimed_steering(orch, 21, |_| {
+        Some(RecordedTurnEnd::Final {
+            turn_id: "turn-1".into(),
+            text: DECISION.into(),
+            prompts: vec![prompt.clone(), worker_prompt.clone()],
+        })
+    }));
+    assert_eq!(
+        state.notices(master).filter(|p| p.text == DECISION).count(),
+        1,
+        "the worker provenance established after settlement must publish the decision"
+    );
+}
+
+#[test]
+fn worker_woken_identical_decisions_from_independent_turns_each_publish() {
+    independently_submitted_worker_turns_keep_decisions(DECISION, false);
+}
+
+#[test]
+fn worker_woken_decision_after_a_silent_turn_is_not_an_earlier_explicit_copy() {
+    independently_submitted_worker_turns_keep_decisions("", true);
+}
+
+fn independently_submitted_worker_turns_keep_decisions(first_reply: &str, explicit_first: bool) {
+    let (mut state, master, worker, orch, first) = worker_woken_turn();
+    state
+        .observe_status(orch, RuntimeStatus::Working, 12)
+        .unwrap();
+    let second = state
+        .submit_bus_message_with(
+            state.request(first).unwrap().room_id,
+            Draft {
+                text: "independent worker result".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(worker),
+            12,
+            true,
+        )
+        .unwrap()[0];
+    if explicit_first {
+        state
+            .post_to_developer(master, orch, DECISION.into(), vec![], 12)
+            .unwrap();
+    }
+    let first_prompt = state.request(first).unwrap().prompt.rendered_payload();
+    assert_eq!(
+        state.accept_callback(ProviderCallback::final_event(
+            "first-independent-final",
+            13,
+            orch,
+            "launch-orch",
+            "provider-session",
+            "turn-1",
+            &first_prompt,
+            first_reply,
+        )),
+        CallbackDisposition::AcceptedCompleted
+    );
+    state.observe_status(orch, RuntimeStatus::Idle, 14).unwrap();
+    state.begin_submission(second, "launch-orch", 14).unwrap();
+    state
+        .record_submission(
+            second,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-2".into()),
+            },
+        )
+        .unwrap();
+    let prompt = state.request(second).unwrap().prompt.rendered_payload();
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "trusted-independent-start".into(),
+            sequence: 15,
+            occurred_at_ms: 15,
+            agent_id: orch,
+            launch_id: "launch-orch".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("turn-2".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(prompt.clone()),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    assert_eq!(
+        state.accept_callback(ProviderCallback::final_event(
+            "decision-final-independent",
+            16,
+            orch,
+            "launch-orch",
+            "provider-session",
+            "turn-2",
+            &prompt,
+            DECISION
+        )),
+        CallbackDisposition::AcceptedCompleted
+    );
+    assert_eq!(
+        state.notices(master).filter(|p| p.text == DECISION).count(),
+        2,
+        "identical decisions from separate turns remain separate publications"
+    );
+}

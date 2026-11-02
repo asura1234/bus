@@ -60,14 +60,18 @@ impl BusState {
     }
 
     pub(super) fn orchestrator_final_to_worker(&self, request: &Request) -> bool {
-        self.worker_author(&request.prompt.author)
-            && self
-                .agent(request.agent_id)
-                .is_some_and(|agent| agent.orchestrates.is_some())
+        self.worker_woken_orchestrator(request)
             && request
                 .completed_reply
                 .as_ref()
                 .is_some_and(|reply| reply.group.is_some())
+    }
+
+    pub(crate) fn worker_woken_orchestrator(&self, request: &Request) -> bool {
+        self.worker_author(&request.prompt.author)
+            && self
+                .agent(request.agent_id)
+                .is_some_and(|agent| agent.orchestrates.is_some())
     }
 
     fn worker_author(&self, author: &Author) -> bool {
@@ -101,38 +105,67 @@ impl BusState {
             return Ok(());
         };
         let agent = owner.id;
+        let launch = source
+            .expected_launch_id
+            .clone()
+            .ok_or(ModelError::MissingLaunchIdentity)?;
+        let session = pending
+            .provider_session_id
+            .clone()
+            .or_else(|| source.provider_session_id.clone());
+        let turn = pending
+            .provider_turn_id
+            .clone()
+            .or_else(|| source.provider_turn_id.clone());
+        let key = master_final_key(agent, &launch, &session, &turn, pending);
         let group: Vec<_> = std::iter::once(&lead)
             .chain(members)
             .filter_map(|id| self.request(*id))
             .collect();
-        // An unsettled MASTER request will display this final. A
-        // repeated settlement of a partly claimed group has already posted it.
-        if group.iter().any(|request| {
-            (request.room_id == master && !request.settled()) || request.reply() == Some(pending)
-        }) {
-            return Ok(());
-        }
+        // A work-room answer alone is not proof of MASTER publication: turn
+        // proof may establish a worker contribution only after that answer.
+        let visible = group.iter().any(|request| {
+            request.room_id == master && (!request.settled() || request.reply() == Some(pending))
+        });
         let worker_request = group
             .iter()
             .find(|request| self.worker_author(&request.prompt.author));
-        let Some(worker_request) = worker_request else {
-            return Ok(());
-        };
-        let start = worker_request.prompt.submitted_at_ms;
-        // An explicit developer post of this same decision is the one copy.
-        let explicit = self.notices(master).any(|prompt| {
-            prompt.author == Author::Agent(agent)
-                && prompt.text.trim() == pending.text.trim()
-                && (start..=pending.received_at_ms).contains(&prompt.submitted_at_ms)
-        });
-        if !explicit {
-            self.post_to_developer(
-                master,
-                agent,
-                pending.text.clone(),
-                vec![],
-                pending.received_at_ms,
-            )?;
+        if !pending.text.trim().is_empty() && !self.has_reported_final(&key) {
+            if visible {
+                self.record_reported_final(key, launch);
+            } else if let Some(worker_request) = worker_request {
+                let start = worker_request.prompt.submitted_at_ms;
+                let first = self.report_turn_start(
+                    master,
+                    agent,
+                    turn.as_deref().map(|turn| (&session, turn)),
+                );
+                // A queued request may predate the preceding turn's final.
+                // Only this provider turn's explicit copy can absorb it.
+                let explicit = self
+                    .notices(master)
+                    .rev()
+                    .take_while(|p| p.id.0 >= first)
+                    .any(|p| {
+                        p.author == Author::Agent(agent)
+                            && p.text.trim() == pending.text.trim()
+                            && (start..=pending.received_at_ms).contains(&p.submitted_at_ms)
+                    });
+                if !explicit {
+                    self.post_to_developer(
+                        master,
+                        agent,
+                        pending.text.clone(),
+                        vec![],
+                        pending.received_at_ms,
+                    )?;
+                }
+                self.record_reported_final(key, launch);
+            }
+        }
+        // Silent finals also end the explicit-copy window for the next turn.
+        if let Some(turn) = turn {
+            self.end_report_turn(master, agent, session, turn);
         }
         Ok(())
     }
@@ -242,6 +275,23 @@ impl BusState {
         }
         Ok(())
     }
+}
+
+fn master_final_key(
+    agent: AgentId,
+    launch: &str,
+    session: &Option<String>,
+    turn: &Option<String>,
+    pending: &super::PendingFinal,
+) -> String {
+    format!(
+        "master-final:{}\0{}\0{}\0{}\0{}",
+        agent.0,
+        launch,
+        session.as_deref().unwrap_or_default(),
+        turn.as_deref().unwrap_or(&pending.callback_id),
+        crate::utils::time::digest(pending.text.trim().as_bytes()),
+    )
 }
 
 pub(super) fn reply_key(request: &Request) -> RequestId {

@@ -648,11 +648,11 @@ impl BusState {
         members: &[RequestId],
         pending: &PendingFinal,
     ) -> Result<(), ModelError> {
+        self.publish_orchestrator_final(lead, members, pending)?;
         // A silent completed turn has a durable result but no room message or ding.
         if pending.text.trim().is_empty() {
             return Ok(());
         }
-        self.publish_orchestrator_final(lead, members, pending)?;
         let published_rooms: std::collections::BTreeSet<_> = std::iter::once(&lead)
             .chain(members)
             .filter_map(|id| self.requests.get(id))
