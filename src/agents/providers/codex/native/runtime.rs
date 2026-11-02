@@ -73,13 +73,29 @@ impl Runtime {
         )
         .iter()
         .any(|&index| {
-            matches!(args[index].as_str(), "-p" | "--profile" | "--remote")
-                || args[index].starts_with("--profile=")
+            matches!(
+                args[index].as_str(),
+                "-p" | "--profile"
+                    | "--remote"
+                    | "-s"
+                    | "--sandbox"
+                    | "-a"
+                    | "--ask-for-approval"
+                    | "--yolo"
+                    | "--dangerously-bypass-approvals-and-sandbox"
+                    | "--full-auto"
+                    | "--approve-for-me"
+            ) || args[index].starts_with("--profile=")
                 || (args[index].starts_with("-p") && args[index].len() > 2)
                 || args[index].starts_with("--remote=")
+                || args[index].starts_with("--sandbox=")
+                || args[index].starts_with("--ask-for-approval=")
+                || (args[index].starts_with("-s") && args[index].len() > 2)
+                || (args[index].starts_with("-a") && args[index].len() > 2)
         }) {
-            // App-server 0.164 explicitly rejects config profiles. Keep its
-            // configured native TUI rather than silently changing runtime policy.
+            // App-server 0.164 rejects profiles; remote resume rejects explicit
+            // permission CLI overrides. Preserve their configured standalone TUI
+            // before any differently configured native backend is started.
             return Ok(argv.to_vec());
         }
         // Only the guarded shell launcher calls this, after ownership admission.

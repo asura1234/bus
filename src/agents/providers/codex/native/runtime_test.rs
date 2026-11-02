@@ -98,3 +98,53 @@ fn codex_native_attached_profile_retains_the_configured_tui_without_starting_a_s
     assert_eq!(result, argv);
     assert!(!started,"a config profile must select the legacy TUI before a differently configured app-server starts");
 }
+
+#[test]
+fn codex_native_explicit_permission_cli_retains_the_configured_tui_before_a_backend_starts() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = crate::utils::test_temp::unique_temp_path("codex-policy-fallback");
+    fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("codex");
+    let marker = dir.join("backend-started");
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nprintf started > '{}'\nexit 1\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut runtime = Runtime {
+        config: Some(Config {
+            env: HashMap::from([(
+                "BUS_CALLBACK_DIR".into(),
+                dir.to_string_lossy().into_owned(),
+            )]),
+            cwd: dir.clone(),
+        }),
+        session: None,
+    };
+    let mut attempted = Vec::new();
+    for flags in [
+        vec!["--sandbox", "read-only", "--ask-for-approval", "on-request"],
+        vec!["--sandbox=read-only"],
+        vec!["--ask-for-approval=on-request"],
+        vec!["-sread-only"],
+        vec!["-aon-request"],
+        vec!["--yolo"],
+        vec!["--dangerously-bypass-approvals-and-sandbox"],
+    ] {
+        let mut argv = vec![program.to_string_lossy().into_owned(), "--no-daemon".into()];
+        argv.extend(flags.into_iter().map(str::to_owned));
+        argv.extend(["resume".into(), "fixture-thread".into()]);
+        assert_eq!(runtime.launch(&argv).unwrap(), argv);
+        if marker.exists() {
+            attempted.push(argv);
+            fs::remove_file(&marker).unwrap();
+        }
+    }
+    drop(runtime);
+    fs::remove_dir_all(dir).unwrap();
+    assert!(attempted.is_empty(), "incompatible remote permission options must choose the original TUI before starting a native writer: {attempted:?}");
+}
