@@ -221,3 +221,168 @@ fn kimi_41980_partial_busy_wire_is_not_a_committed_provider_failure() {
         );
     }
 }
+
+#[test]
+fn kimi_committed_failure_settles_even_with_a_stale_dialog_observation() {
+    for stale_dialog in [false, true] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let next = f.send("next independent work", true);
+        std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+        f.status(RuntimeStatus::Blocked);
+        let mut state = f.worker.state.clone();
+        state.observe_dialog(f.agent, stale_dialog, f.now).unwrap();
+        f.worker.save(state).unwrap();
+        f.consume();
+        assert_eq!(
+            f.request(lead).phase,
+            RequestPhase::Abandoned,
+            "owned failure must settle independently of the stale dialog flag={stale_dialog}"
+        );
+        assert!(f
+            .request(lead)
+            .failure_reason
+            .as_deref()
+            .unwrap()
+            .starts_with("provider_error: APIProviderQuotaExhaustedError: 429"));
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .current_request
+            .is_none());
+        assert_eq!(f.request(next).phase, RequestPhase::Queued);
+        assert_eq!(f.typed().len(), 1);
+    }
+}
+
+#[test]
+fn kimi_failed_lead_is_not_rebound_when_queued_input_starts_the_next_turn() {
+    for restart in [false, true] {
+        for stop in [false, true] {
+            let mut f = Fixture::new(Provider::Kimi);
+            let wire = super::kimi_steering_tests::home(&f);
+            let lead = running(&mut f, "original task", "0");
+            let next = uncertain_member(&mut f);
+            let next_payload = f.worker.state.render_request_payload(next).unwrap();
+            let records = failure_wire(&mut f, lead, 0)
+                + &super::kimi_steering_tests::native_turn(
+                    1,
+                    &next_payload,
+                    &[],
+                    "independent answer",
+                );
+            std::fs::write(wire, records).unwrap();
+            if stop {
+                f.record(json!({"hook_event_name":"Stop","session_id":"session"}));
+            }
+            f.started("1", incident()["followup"].as_str().unwrap());
+            if restart {
+                super::kimi_steering_tests::reopen(&mut f);
+            }
+            f.consume();
+            assert_eq!(
+                f.request(lead).phase,
+                RequestPhase::Abandoned,
+                "failed turn rebound to {:?}; next={:?}; stop={stop}; restart={restart}",
+                f.request(lead).provider_turn_id,
+                f.request(next).phase,
+            );
+            assert!(f
+                .request(lead)
+                .failure_reason
+                .as_deref()
+                .unwrap()
+                .starts_with("provider_error: APIProviderQuotaExhaustedError: 429"));
+            assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
+            assert!(f.reply(lead).is_none());
+            assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("1"));
+            assert_eq!(f.reply(next).as_deref(), Some("independent answer"));
+            assert_eq!(f.typed().len(), 2, "neither input was replayed");
+        }
+    }
+}
+
+#[test]
+fn kimi_dialog_without_an_owned_commit_retains_the_turn() {
+    for case in [1, 2] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let next = f.send("queued work", true);
+        std::fs::write(wire, failure_wire(&mut f, lead, case)).unwrap();
+        f.status(RuntimeStatus::Blocked);
+        let mut state = f.worker.state.clone();
+        state.observe_dialog(f.agent, true, f.now).unwrap();
+        f.worker.save(state).unwrap();
+        f.consume();
+        assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(lead)
+        );
+        assert_eq!(f.request(next).phase, RequestPhase::Queued);
+        assert_eq!(f.typed().len(), 1);
+    }
+}
+
+#[test]
+fn kimi_failure_does_not_promote_a_member_from_a_foreign_started_callback() {
+    for foreign_session in [false, true] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let next = uncertain_member(&mut f);
+        std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+        let incident = incident();
+        f.record(json!({"hook_event_name":"TurnStarted","origin_kind":"user","turn_id":1,
+            "session_id": if foreign_session { "foreign-session" } else { "session" },
+            "prompt": if foreign_session { incident["followup"].as_str().unwrap() } else { "foreign input" },
+        }));
+        f.consume();
+        assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
+        assert_eq!(f.request(next).phase, RequestPhase::Abandoned);
+        assert!(!f.request(next).trusted_start_bound);
+        assert!(f.reply(next).is_none());
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .current_request
+            .is_none());
+        assert_eq!(f.typed().len(), 2);
+    }
+}
+
+#[test]
+fn kimi_followup_after_failed_lead_rejects_callbacks_before_submission() {
+    let mut f = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&f);
+    let lead = running(&mut f, "original task", "0");
+    let next = uncertain_member(&mut f);
+    std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+    f.started("1", incident()["followup"].as_str().unwrap());
+    f.consume();
+    assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+    assert_eq!(f.request(next).phase, RequestPhase::Active);
+    let callback = ProviderCallback {
+        callback_id: "stale-start".into(),
+        sequence: f.request(lead).submission_boundary.unwrap(),
+        occurred_at_ms: f.now,
+        agent_id: f.agent,
+        launch_id: "launch".into(),
+        provider_session_id: Some("session".into()),
+        provider_turn_id: Some("1".into()),
+        provider_prompt_id: None,
+        prompt_payload: f.worker.state.render_request_payload(next),
+        kind: CallbackEventKind::PromptStarted,
+    };
+    assert_eq!(
+        f.worker.state.accept_callback(callback),
+        CallbackDisposition::Rejected(CallbackRejection::BeforeSubmissionBoundary)
+    );
+}

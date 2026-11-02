@@ -398,7 +398,7 @@ impl BusState {
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
-        if owner.dialog || owner.deletion_pending || owner.session_binding_invalidated {
+        if owner.deletion_pending || owner.session_binding_invalidated {
             return None;
         }
         let request = self.requests.get(&owner.current_request?)?;
@@ -420,7 +420,7 @@ impl BusState {
             return None;
         }
         let recorded = recorded_end(request);
-        if recorded.is_none() && !exited {
+        if recorded.is_none() && (owner.dialog || !exited) {
             return None;
         }
         self.consume_recorded_end(

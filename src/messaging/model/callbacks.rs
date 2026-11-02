@@ -4,6 +4,8 @@ use super::{
     PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase,
 };
 
+mod kimi;
+
 impl BusState {
     /// Report identity ignores incidental changes to the hook envelope. Keep
     /// these guards with callback keys so they persist and retire by launch.
