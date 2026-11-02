@@ -211,7 +211,7 @@ class Scratch:
                     api = re.search(r'api_request_id=([^ }]+)', line)
                     if request and api:
                         api_requests[api.group(1).rstrip('}:')] = request.group(1)
-                elif 'event="bus.callback.correlated"' in line and 'kind=started' in line:
+                elif 'event="bus.callback.correlated"' in line and 'kind="started"' in line:
                     request = re.search(r'request_id=Some\((\d+)\)', line)
                     if request:
                         started.setdefault(request.group(1), log_time(line))
