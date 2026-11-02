@@ -494,14 +494,12 @@ impl App {
             expected_turn_id,
             &id,
             hard_deadline,
-        ) {
+            native_only,
+        )? {
             return Ok((id, agent, completion));
         }
         #[cfg(not(unix))]
-        let _ = expected_turn_id;
-        if native_only {
-            return Err(native_idle_refused(id));
-        }
+        let _ = (expected_turn_id, native_only);
         let completion = queue_prompt_input(
             runtime,
             expected_agent,
@@ -670,12 +668,4 @@ fn focus_copilot(
             .map_err(std::io::Error::other)?;
     }
     Ok(())
-}
-
-fn native_idle_refused(id: String) -> String {
-    encode_error(
-        id,
-        "agent_not_idle",
-        "Agent is not idle; prompt was not sent",
-    )
 }
