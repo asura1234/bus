@@ -1256,3 +1256,47 @@ fn an_interrupt_that_closes_a_queued_dialog_notice_reaches_the_developer() {
     f.expire_after_reconciliation(at + QUEUED_STALL_MS + 60_000);
     assert_eq!(f.worker.state.room(room).unwrap().notices.len(), 1);
 }
+
+#[test]
+fn codex_idle_background_steering_preserves_expected_turn_identity() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "run the long task", "turn-1");
+    let continuation = fixture.send("continue after the background task", false);
+    let mut state = fixture.worker.state.clone();
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "codex-background-pause".into(),
+            sequence: 2,
+            occurred_at_ms: fixture.now,
+            agent_id: fixture.agent,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: None,
+            prompt_payload: None,
+            kind: CallbackEventKind::BackgroundPending,
+        }),
+        CallbackDisposition::AcceptedProgress
+    );
+    assert!(state.request(lead).unwrap().awaiting_background);
+    state
+        .observe_status(fixture.agent, RuntimeStatus::Idle, fixture.now)
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    let payload = fixture
+        .worker
+        .state
+        .render_request_payload(continuation)
+        .unwrap();
+    fixture.deliver();
+    let methods = fixture.native.lock().unwrap();
+    let steering = methods
+        .iter()
+        .find_map(|method| match method {
+            Method::AgentPromptIfIdle(params) if params.text == payload => Some(params),
+            _ => None,
+        })
+        .expect("idle background continuation must reach native input");
+    assert!(steering.steer);
+    assert_eq!(steering.expected_turn_id.as_deref(), Some("turn-1"));
+}
