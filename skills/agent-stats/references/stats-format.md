@@ -13,7 +13,7 @@ Every record carries agent and orchestrator identities. `unknown` is the sole
 unavailable identity/model expression. Historical lane names remain names; an
 unavailable Bus ID stays `unknown`. No current identity is retroactively applied.
 Every source is a saved file with SHA-256 and a line range or JSON pointer.
-Timestamps are UTC RFC3339 seconds; unavailable timestamps are null. A review
+Timestamps are UTC RFC3339 with zero or 3–6 fractional digits and `Z`; unavailable timestamps are null. A review
 with only a calendar date keeps that date separately. Empty sets use `[]`.
 
 Assignments record observed identity at append time. A handover names the old
