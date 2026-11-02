@@ -18,8 +18,8 @@ from suite_selection import Selection, select  # noqa: E402
 
 def test_full_build_phases_keep_normal_and_instrumented_builds_independent():
     build, tests = runner.commands(select(["run"], full=True))
-    assert {gate.name for gate in build} == {"lint", "docs", "instrumented-build"}
-    assert {gate.name for gate in tests} == {"unit", "integration", "python", "dev-tools", "cli-smoke"}
+    assert {gate.name for gate in build} == {"lint", "instrumented-build"}
+    assert {gate.name for gate in tests} == {"unit", "integration", "python", "dev-tools", "cli-smoke", "docs"}
     assert "none()" in next(g.argv for g in build if g.name == "instrumented-build")
     unit = next(g for g in tests if g.name == "unit")
     integration = next(g for g in tests if g.name == "integration")

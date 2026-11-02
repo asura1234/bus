@@ -86,7 +86,8 @@ Full scheduling overlaps normal-target lint with an instrumented nextest
 preflight build. That preflight deliberately selects no tests and builds the CLI
 used by Python. Default-target unit/integration builders and CLI/Python consumers
 then serialize: preflight does not prevent a later Cargo rebuild or relink.
-Dev-tools tests can overlap on their separate normal target. Default integration includes the
+All test lanes also share one worker budget, including dev-tools on its separate
+normal target. Default integration includes the
 in-process `server::tests::` harness. Normal-target lint completes before the
 dev-tools build; coverage artifacts use cargo-llvm-cov's separate target.
 An explicit shared normal/coverage target serializes all binary consumers to
@@ -95,8 +96,16 @@ Python-only selections that require the CLI build it first in the configured
 target and receive its explicit path, including when no local `target/` exists.
 Empty Python owners are skipped; pytest's no-collection exit is accepted while
 collection errors and genuine test failures remain failures.
-Nextest also parallelizes within each batch (four threads by default; override
-with `NEXTEST_TEST_THREADS`). No separate per-run Cargo target is created.
+Each gate admits one test lane at a time, with at most **4 direct test workers**.
+Rust nextest and libtest batches, including the diagnostic entrypoints, use that
+same cap. `NEXTEST_TEST_THREADS` accepts a positive integer capped at 4;
+`PYTEST_WORKERS` accepts a nonnegative integer capped at 4, with 0 selecting
+serial execution. Single-file Python, lint architecture and documentation checks
+run serially. Three concurrent gates therefore admit at most **12 direct test
+workers**. Controllers, fixture subprocesses and Cargo compiler jobs are separate
+from this direct-worker count. The executable limits and shared scheduler resource
+live in `scripts/suite_parallelism.py`; target ownership resources remain in place.
+No separate per-run Cargo target is created.
 
 Only the preflight permits an empty nextest selection. Every real Rust batch
 fails when it selects no tests. A failed preflight blocks dependent default and

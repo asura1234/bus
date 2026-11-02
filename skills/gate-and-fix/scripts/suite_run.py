@@ -19,6 +19,7 @@ from gate_and_fix import Gate, GateResult, run_gates
 from gate_process import Interrupted, interrupt_signals
 from suite_selection import Selection, changed_paths, select
 from suite_environment import bootstrap
+from suite_parallelism import MAX_TEST_WORKERS, TEST_WORKER_RESOURCE, rust_workers
 
 COMMON = ("--no-fail-fast", "--status-level", "fail", "--final-status-level", "fail",
           "--failure-output", "final", "--success-output", "never")
@@ -42,7 +43,7 @@ def lane_plan(selection: Selection, base: str) -> dict:
 def nextest(*targets: str, coverage: bool = False, expression: str | None = None) -> tuple[str, ...]:
     prefix = ("cargo", "llvm-cov", "nextest", "--no-report", "--no-rustc-wrapper") if coverage else ("cargo", "nextest", "run")
     return (*prefix, "--locked", *targets, *COMMON,
-            "--test-threads", os.environ.get("NEXTEST_TEST_THREADS", "4"),
+            "--test-threads", str(rust_workers()),
             "--no-tests=fail", *(("-E", expression) if expression else ()))
 
 
@@ -58,7 +59,7 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
     target = quality.llvm_cov_target(env) if instrumented else quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
     if selection.full:
         build.append(Gate("lint", (sys.executable, SCRIPT, "lint", *(("--skip-clippy",) if not rust else ())), env=env))
-        build.append(Gate("docs", (sys.executable, "-m", "pytest", "-q", "scripts/skill_migration_contract_test.py"), env=env))
+        tests.append(Gate("docs", (sys.executable, "-m", "pytest", "-q", "-n", "0", "scripts/skill_migration_contract_test.py"), env=env))
     if rust:
         # Explicit empty preflight compiles every default artifact once, including the
         # CLI used by Python, before the test lanes run.
@@ -123,6 +124,9 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         shared = frozenset({"cargo-output"})
         build = [replace(gate, resources=shared) for gate in build]
         tests = [replace(gate, resources=shared) for gate in tests]
+    # Each heavy lane may use the complete worker budget. Keep the lane budget
+    # shared even when normal and instrumented Cargo outputs are independent.
+    tests = [replace(gate, resources=gate.resources | TEST_WORKER_RESOURCE) for gate in tests]
     return build, tests
 
 
@@ -156,7 +160,7 @@ def execute(selection: Selection, *, nested: bool = False, base: str = "origin/m
     failed_build = any(not result.passed and result.name not in {"lint", "docs"} for result in results)
     # A failed instrumented build must not let Python use yesterday's binary.
     if failed_build:
-        tests = [gate for gate in tests if gate.name == "dev-tools"]
+        tests = [gate for gate in tests if gate.name in {"dev-tools", "docs"}]
     results.extend(batch(tests, nested=nested))
     result = int(any(not entry.passed for entry in results))
     coverage_ms = None
@@ -193,6 +197,7 @@ def execute(selection: Selection, *, nested: bool = False, base: str = "origin/m
     report = {
         "head": quality.head(), "base": base, "selection": asdict(selection), "lanes": lanes,
         "coverage": coverage_status, "exit_code": result,
+        "direct_test_worker_limit": MAX_TEST_WORKERS,
         "duration_ms": round((time.monotonic() - started) * 1000),
         "coverage_ms": coverage_ms, "results": [asdict(entry) for entry in results],
     }
@@ -206,9 +211,10 @@ def execute(selection: Selection, *, nested: bool = False, base: str = "origin/m
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, epilog=
-        "Python uses up to four file workers and runs single-file selections serially; "
+        f"Test lanes share a budget of {MAX_TEST_WORKERS} direct workers and run one at a time. "
+        "Python runs single-file selections serially; "
         "set PYTEST_WORKERS=0 for serial diagnosis, "
-        "or a positive integer to set the worker count.")
+        f"or a positive integer capped at {MAX_TEST_WORKERS} to set the worker count.")
     parser.add_argument("--full", action="store_true", help="all applicable tests, lint, docs and fresh Rust coverage floor")
     parser.add_argument("--base", default="origin/master", help="affected merge-base (default: origin/master)")
     parser.add_argument("--plan", action="store_true", help="print selection without building or running tests")
@@ -219,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         selection = select(paths, full=args.full, root=quality.ROOT)
         if args.plan:
             print(json.dumps({**asdict(selection), "head": quality.head(), "paths": paths,
-                              "base": args.base, "lanes": lane_plan(selection, args.base)}, indent=2))
+                              "base": args.base, "lanes": lane_plan(selection, args.base),
+                              "direct_test_worker_limit": MAX_TEST_WORKERS}, indent=2))
             return 0
         with interrupt_signals():
             bootstrap(quality.ROOT, arguments, script=Path(__file__))

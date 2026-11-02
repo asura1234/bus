@@ -2,7 +2,7 @@
 
 `scripts/suite_run.py` writes one UTF-8 JSON report per invocation under
 `temp/run-test/run-<unique id>.json`. Plan mode prints the selection, `head`,
-`base`, changed `paths`, and `lanes` without executing commands.
+`base`, changed `paths`, `lanes`, and `direct_test_worker_limit` without executing commands.
 
 A completed report contains:
 
@@ -16,6 +16,7 @@ A completed report contains:
 | `exit_code` | Integer process outcome |
 | `duration_ms` | Nonnegative integer wall time |
 | `coverage_ms` | Nonnegative integer, or `null` when coverage did not execute |
+| `direct_test_worker_limit` | Maximum direct test workers across concurrent test lanes; currently `4` |
 | `results` | Ordered command results: `name`, string-list `argv`, integer or null `exit_code`, nonnegative `duration_ms`, complete `stdout` and `stderr` |
 
 Plan lane statuses are `RUN` or `SKIPPED`. Completed lane statuses are `PASS`,

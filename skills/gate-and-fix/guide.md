@@ -179,9 +179,10 @@ reported gap leaves the gate failed.
 
 - The full entrypoint overlaps normal-target lint with the instrumented preflight build.
   Default-target unit/integration builders and CLI/Python consumers then serialize because
-  Cargo may rebuild despite preflight. Dev-tools can overlap on its separate normal target;
-  explicitly co-located outputs serialize every binary consumer. Normal-target lint
-  completes before dev-tools uses that target. Coverage consumes fresh profiles after all
+  Cargo may rebuild despite preflight. A shared worker budget also serializes test lanes
+  across separate targets; see [the test entrypoint](references/testing.md) for the numeric
+  bounds. Explicitly co-located outputs still serialize every binary consumer. Normal-target
+  lint completes before dev-tools uses that target. Coverage consumes fresh profiles after all
   tasks succeed; the existing nonempty unit-profile checkpoint remains mandatory.
   The independent diff check can run concurrently. All independent failures are collected.
 - A FAIL round must first collect every gate result and group them by writable owner (not by the
