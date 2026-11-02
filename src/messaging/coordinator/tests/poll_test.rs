@@ -565,6 +565,38 @@ mod status_tests {
     }
 
     #[test]
+    fn cursor_quota_poll_before_pending_start_and_stop_hooks_retains_provider_error() {
+        let reset = io::now_ms() / 1000 + 3600;
+        let (mut worker, agent, room, dir, _) = fixture(
+            Provider::Cursor,
+            vec![Ok(ResponseResult::Ok {}), cursor_limit_listing(reset)],
+        );
+        let request = queue(&mut worker, room, agent, "bootstrap");
+        worker.submit_ready().unwrap();
+        let prompt = delivered_test_prompt(&worker.state, "bootstrap");
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-1","prompt":prompt}),
+        );
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-1","status":"error","loop_count":0}),
+        );
+        assert!(!worker.state.request(request).unwrap().trusted_start_bound);
+        worker.poll().unwrap();
+        consume(&mut worker, agent, &dir);
+        assert_eq!(
+            worker.state.request(request).unwrap().failure_reason.as_deref(),
+            Some("provider_error: You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)"),
+            "the poll and callback order used by an ordinary worker tick must retain the observed quota cause"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn cursor_monthly_usage_limit_pages_once_per_reset() {
         let reset = io::now_ms() / 1000 + 3600;
         let (mut worker, _, _, dir, _) = fixture(

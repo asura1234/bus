@@ -13,7 +13,7 @@ use crate::agents::providers::{
     usage::{Observation, UsageWindow, UsageWindows},
     ProviderKind,
 };
-use crate::messaging::model::{AgentId, Provider, RoomAgent};
+use crate::messaging::model::{AgentId, BusState, Provider, RequestId, RoomAgent};
 use crate::utils::time as bus_io;
 
 const STALE_AFTER_MS: u64 = 15 * 60 * 1000;
@@ -39,9 +39,11 @@ impl UsageSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CursorUsageSnapshot {
+    error: String,
     resets_at: u64,
     read_at_ms: u64,
     observed_by_agent: AgentId,
+    request: Option<RequestId>,
 }
 
 impl CursorUsageSnapshot {
@@ -162,14 +164,18 @@ impl Usage {
     pub(crate) fn observe_cursor(
         &mut self,
         agent: AgentId,
+        error: Option<&str>,
         resets_at: Option<u64>,
         read_at_ms: u64,
+        request: Option<RequestId>,
     ) {
-        if let Some(resets_at) = resets_at {
+        if let (Some(error), Some(resets_at)) = (error, resets_at) {
             self.cursor = Some(CursorUsageSnapshot {
+                error: error.to_owned(),
                 resets_at,
                 read_at_ms,
                 observed_by_agent: agent,
+                request,
             });
         } else if self
             .cursor
@@ -178,6 +184,25 @@ impl Usage {
         {
             self.cursor = None;
         }
+    }
+
+    pub(crate) fn cursor_error_for_turn(
+        &self,
+        agent: AgentId,
+        state: &BusState,
+        session: &str,
+        turn: &str,
+    ) -> Option<String> {
+        let snapshot = self.cursor.as_ref()?;
+        let request_id = state.agent(agent)?.current_request?;
+        let request = state.request(request_id)?;
+        (snapshot.observed_by_agent == agent
+            && snapshot.request == Some(request_id)
+            && snapshot.current(bus_io::now_ms())
+            && request.trusted_start_bound
+            && request.provider_session_id.as_deref() == Some(session)
+            && request.provider_turn_id.as_deref() == Some(turn))
+        .then(|| snapshot.error.clone())
     }
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.

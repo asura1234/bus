@@ -477,3 +477,36 @@ async fn cursor_monthly_usage_limit_screen_is_provider_error_metadata() {
         );
     }
 }
+
+#[tokio::test]
+async fn cursor_quota_metadata_survives_warning_wrap_in_a_narrow_pane() {
+    use crate::agents::{AgentKind, AgentState};
+    let screen = concat!(
+        "Error: You've reached your monthly usage limit\r\n",
+        "Request higher limits to continue using Cursor\r\n",
+        " > [Pasted text #1 +3 lines]\r\n",
+        " / commands · @ files",
+    );
+    let (mut app, _, _) = shell(b"");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(40, 24, 16);
+    runtime.test_process_pty_bytes(screen.as_bytes());
+    app.state.insert_test_runtime(pane, runtime);
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Cursor), AgentState::Idle);
+    let info = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+    assert_eq!(
+        info["provider_error"],
+        "You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)"
+    );
+    assert!(info["provider_quota_reset_at"].as_u64().is_some());
+    assert!(
+        writes.try_recv().is_err(),
+        "quota observation must not modify the restored draft"
+    );
+}

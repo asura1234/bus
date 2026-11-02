@@ -397,17 +397,27 @@ impl Worker {
                 turn,
                 message,
                 error: provider_error,
-            } => Some(callback(
-                record,
-                id,
-                session,
-                turn,
-                None,
-                CallbackEventKind::Error {
-                    message,
-                    provider_error,
-                },
-            )),
+            } => {
+                let provider_error = provider_error.or_else(|| {
+                    (record.manifest.provider == ProviderKind::Cursor)
+                        .then(|| {
+                            self.usage
+                                .cursor_error_for_turn(id, &state, &session, &turn)
+                        })
+                        .flatten()
+                });
+                Some(callback(
+                    record,
+                    id,
+                    session,
+                    turn,
+                    None,
+                    CallbackEventKind::Error {
+                        message,
+                        provider_error,
+                    },
+                ))
+            }
             Parsed::Completed { session, turn } => {
                 return self
                     .cursor_final_callback(id, state, record, records, session, turn)

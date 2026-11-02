@@ -3,18 +3,10 @@ use time::{Date, Month, OffsetDateTime, Time};
 pub(crate) const MONTHLY_USAGE_LIMIT_ERROR: &str = "You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)";
 
 pub(crate) fn is_monthly_usage_limit(text: &str) -> bool {
-    let lines: Vec<_> = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    lines.windows(2).any(|pair| {
-        matches!(
-            pair[0],
-            "Error: You've reached your monthly usage limit"
-                | "You've reached your monthly usage limit"
-        ) && pair[1] == "Request higher limits to continue using Cursor"
-    })
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    text.contains(
+        "You've reached your monthly usage limit Request higher limits to continue using Cursor",
+    )
 }
 
 pub(crate) fn is_restored_monthly_usage_limit(screen: &str) -> bool {

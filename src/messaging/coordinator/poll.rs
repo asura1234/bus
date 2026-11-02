@@ -63,8 +63,10 @@ impl Worker {
                 if let Some(info) = info {
                     self.usage.observe_cursor(
                         agent.id,
+                        info.provider_error.as_deref(),
                         info.provider_quota_reset_at,
                         observed_at_ms,
+                        agent.current_request,
                     );
                     if let Some(error) = info.provider_error.as_deref() {
                         state
