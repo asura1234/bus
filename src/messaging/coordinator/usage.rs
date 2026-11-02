@@ -37,10 +37,27 @@ impl UsageSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CursorUsageSnapshot {
+    resets_at: u64,
+    read_at_ms: u64,
+    observed_by_agent: AgentId,
+}
+
+impl CursorUsageSnapshot {
+    fn current(&self, now_ms: u64) -> bool {
+        self.read_at_ms > 0
+            && self.read_at_ms <= now_ms
+            && now_ms - self.read_at_ms < STALE_AFTER_MS
+            && self.resets_at > now_ms / 1000
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
+    cursor: Option<CursorUsageSnapshot>,
     started_at_ms: u64,
     claude_reads: BTreeMap<AgentId, Instant>,
 }
@@ -50,6 +67,7 @@ impl Default for Usage {
         Self {
             codex: None,
             claude: None,
+            cursor: None,
             started_at_ms: bus_io::now_ms(),
             claude_reads: BTreeMap::new(),
         }
@@ -84,6 +102,13 @@ impl Usage {
                 ));
             }
         }
+        if let Some(snapshot) = &self.cursor {
+            result.push((
+                format!("quota:cursor:monthly:{}", snapshot.resets_at),
+                snapshot.observed_by_agent,
+                snapshot.current(now_ms).then_some(true),
+            ));
+        }
         result
     }
 
@@ -100,7 +125,7 @@ impl Usage {
                     "observed_by_agent": snapshot.observed_by_agent,
                 }),
             },
-            "cursor": unknown("Cursor has no local allowance source"),
+            "cursor": self.cursor_json(bus_io::now_ms()),
             "grok": unknown(crate::agents::providers::grok::usage::allowance_unavailable_reason()),
             "kimi": unknown("Kimi has no local allowance source"),
         })
@@ -121,6 +146,38 @@ impl Usage {
         }
         json!({"status":"observed", "five_hour":five_hour, "weekly":weekly,
             "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+    }
+
+    fn cursor_json(&self, now_ms: u64) -> Value {
+        let Some(snapshot) = &self.cursor else {
+            return unknown("No Cursor usage limit has been observed since Bus started");
+        };
+        if !snapshot.current(now_ms) {
+            return unknown("Cursor usage-limit observation is stale or expired");
+        }
+        json!({"status":"observed", "monthly":{"used_percent":100.0,"resets_at":snapshot.resets_at},
+            "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+    }
+
+    pub(crate) fn observe_cursor(
+        &mut self,
+        agent: AgentId,
+        resets_at: Option<u64>,
+        read_at_ms: u64,
+    ) {
+        if let Some(resets_at) = resets_at {
+            self.cursor = Some(CursorUsageSnapshot {
+                resets_at,
+                read_at_ms,
+                observed_by_agent: agent,
+            });
+        } else if self
+            .cursor
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.observed_by_agent == agent)
+        {
+            self.cursor = None;
+        }
     }
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.

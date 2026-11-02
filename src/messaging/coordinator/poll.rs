@@ -58,6 +58,21 @@ impl Worker {
             }
             let current_agent = state.agent(agent.id).ok_or("Unknown polled agent")?.clone();
             let agent = &current_agent;
+            let observed_at_ms = self.now_ms();
+            if agent.provider == super::Provider::Cursor {
+                if let Some(info) = info {
+                    self.usage.observe_cursor(
+                        agent.id,
+                        info.provider_quota_reset_at,
+                        observed_at_ms,
+                    );
+                    if let Some(error) = info.provider_error.as_deref() {
+                        state
+                            .record_bound_provider_error(agent.id, error, observed_at_ms)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+            }
             let status = polled_status(agent, info);
             let (missing, exit_evidence) =
                 self.observe_missing_binary(&mut state, agent, status, info)?;
@@ -72,7 +87,6 @@ impl Worker {
                 )?;
             }
             confirm_interactive_agent(&mut state, agent, info)?;
-            let observed_at_ms = self.now_ms();
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;

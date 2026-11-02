@@ -435,3 +435,45 @@ async fn driver_agent_metadata_keeps_pending_questions_out_of_working_episodes()
         );
     }
 }
+
+#[tokio::test]
+async fn cursor_monthly_usage_limit_screen_is_provider_error_metadata() {
+    use crate::agents::{AgentKind, AgentState};
+    let limited = concat!(
+        "Error: You've reached your monthly usage limit\r\n",
+        "Request higher limits to continue using Cursor\r\n",
+        " > [Pasted text #1 +3 lines]\r\n",
+        " / commands · @ files",
+    );
+    let ordinary = concat!(
+        "Error: You've reached your monthly usage limit\r\n",
+        "Request higher limits to continue using Cursor\r\n",
+        " > Add a follow-up\r\n",
+        " / commands · @ files",
+    );
+    for (screen, limited) in [(limited, true), (ordinary, false)] {
+        let (mut app, _, mut writes) = shell(screen.as_bytes());
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        app.state
+            .terminals
+            .get_mut(&id)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Cursor), AgentState::Idle);
+        let info = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+        if limited {
+            assert_eq!(
+                info["provider_error"],
+                "You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)"
+            );
+            assert!(info["provider_quota_reset_at"].as_u64().is_some());
+        } else {
+            assert_eq!(info["provider_error"], Value::Null);
+            assert_eq!(info["provider_quota_reset_at"], Value::Null);
+        }
+        assert!(
+            writes.try_recv().is_err(),
+            "reading a restored draft must not clear it or type over it"
+        );
+    }
+}

@@ -43,12 +43,25 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
         }),
         "stop" => match field(value, "status")?.as_str() {
             "completed" => Ok(Parsed::Completed { session, turn }),
-            status => Ok(Parsed::Failure {
-                session,
-                turn,
-                message: format!("Cursor turn {status}; inspect its terminal."),
-                error: None,
-            }),
+            status => {
+                let provider_error = value
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .filter(|error| {
+                        super::usage::is_monthly_usage_limit(error)
+                            && matches!(
+                                value.get("error_code").and_then(Value::as_str),
+                                Some("upgrade")
+                            )
+                    })
+                    .map(|_| super::usage::MONTHLY_USAGE_LIMIT_ERROR.to_owned());
+                Ok(Parsed::Failure {
+                    session,
+                    turn,
+                    message: format!("Cursor turn {status}; inspect its terminal."),
+                    error: provider_error,
+                })
+            }
         },
         _ => Err(format!("Unsupported Bus hook event {event}")),
     }

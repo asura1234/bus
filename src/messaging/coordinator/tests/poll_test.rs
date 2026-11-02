@@ -470,6 +470,138 @@ mod status_tests {
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    fn composer_busy() -> Result<ResponseResult, TransportError> {
+        Err(TransportError {
+            message: "Waiting for the developer's composer".into(),
+            code: Some(crate::protocol::api::AGENT_COMPOSER_BUSY.into()),
+            definitely_rejected: true,
+        })
+    }
+
+    fn cursor_limit_listing(reset: u64) -> Result<ResponseResult, TransportError> {
+        let info = serde_json::from_value(json!({
+            "terminal_id": "terminal", "pane_id": "pane", "name": "bus-r1-a2",
+            "agent": "cursor", "agent_status": "idle",
+            "agent_session": {"source":"herdr:cursor","agent":"cursor","kind":"id","value":"session"},
+            "provider_error": "You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)",
+            "provider_quota_reset_at": reset,
+            "workspace_id": "w1", "tab_id": "t1", "focused": false,
+            "interactive_ready": true, "revision": 1
+        }))
+        .unwrap();
+        Ok(ResponseResult::AgentList { agents: vec![info] })
+    }
+
+    #[test]
+    fn cursor_monthly_usage_limit_closes_the_turn_without_typing_over_the_restored_draft() {
+        let reset = io::now_ms() / 1000 + 3600;
+        let (mut worker, agent, room, dir, calls) = fixture(
+            Provider::Cursor,
+            vec![
+                Ok(ResponseResult::Ok {}),
+                cursor_limit_listing(reset),
+                composer_busy(),
+            ],
+        );
+        let lead = queue(&mut worker, room, agent, "bootstrap");
+        worker.submit_ready().unwrap();
+        let prompt = delivered_test_prompt(&worker.state, "bootstrap");
+        record(
+            &dir,
+            Provider::Cursor,
+            json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-1","prompt":prompt}),
+        );
+        consume(&mut worker, agent, &dir);
+        assert!(
+            worker.state.request(lead).unwrap().trusted_start_bound,
+            "{:?}",
+            worker.state.request(lead).unwrap()
+        );
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, io::now_ms())
+            .unwrap();
+        let next = queue(&mut worker, room, agent, "later brief");
+
+        worker.poll().unwrap();
+        assert_eq!(worker.usage.state_json()["cursor"]["status"], "observed");
+        assert!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .actionable_error
+                .is_some(),
+            "{:?}",
+            worker.state.agent(agent).unwrap()
+        );
+        assert_eq!(
+            worker.state.request(lead).unwrap().phase,
+            RequestPhase::Abandoned
+        );
+        assert_eq!(
+            worker.state.request(lead).unwrap().failure_reason.as_deref(),
+            Some("provider_error: You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)")
+        );
+        assert_eq!(
+            worker.state.request(next).unwrap().phase,
+            RequestPhase::Queued
+        );
+
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            worker.state.request(next).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert_eq!(worker.state.request(next).unwrap().failure_reason, None);
+        assert_eq!(
+            calls.lock().unwrap().iter().filter(|call| call.starts_with("agent.prompt")).count(),
+            2,
+            "the later delivery may inspect the composer, but its definite refusal must not withdraw or replace the restored draft"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cursor_monthly_usage_limit_pages_once_per_reset() {
+        let reset = io::now_ms() / 1000 + 3600;
+        let (mut worker, _, _, dir, _) = fixture(
+            Provider::Cursor,
+            vec![
+                cursor_limit_listing(reset),
+                cursor_limit_listing(reset + 3600),
+            ],
+        );
+        worker.dev_enabled = true;
+        worker.poll().unwrap();
+        let start = io::now_ms();
+        assert_eq!(worker.usage.state_json()["cursor"]["status"], "observed");
+        assert_eq!(
+            worker.usage.state_json()["cursor"]["monthly"]["resets_at"],
+            reset
+        );
+        let (events, _) = mpsc::channel();
+        for offset in [0, 60_000, 120_000] {
+            worker.pump_feishu(&events, start + offset).unwrap();
+        }
+        let master = worker.state.master_room().unwrap().id;
+        assert_eq!(worker.state.notices(master).count(), 1);
+
+        worker.poll().unwrap();
+        worker.pump_feishu(&events, start + 180_000).unwrap();
+        let notices: Vec<_> = worker
+            .state
+            .notices(master)
+            .map(|notice| notice.text.clone())
+            .collect();
+        assert_eq!(notices.len(), 2, "{notices:?}");
+        assert!(notices[0].contains(&format!("quota:cursor:monthly:{reset}")));
+        assert!(notices[1].contains(&format!("quota:cursor:monthly:{}", reset + 3600)));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 mod update_lifecycle_tests {
