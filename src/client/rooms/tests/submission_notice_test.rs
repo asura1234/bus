@@ -1031,3 +1031,88 @@ fn tui_error_text_hidden_report_replies_cannot_be_quoted_into_the_composer() {
     assert!(ui.locals[&room].text.text.is_empty());
     assert_no_diagnostics(&mut ui, &["QUOTED_REPORT_DIAGNOSTIC_SENTINEL"]);
 }
+
+#[test]
+fn tui_error_text_uncertain_steering_retains_native_detail_in_log_only() {
+    const CAUSE: &str = "STEERING_NATIVE_FAILURE_DETAIL_SENTINEL";
+    let (mut ui, room, agent, lead) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn".into()),
+            },
+        )
+        .unwrap();
+    let payload = snapshot.state.render_request_payload(lead).unwrap();
+    assert_eq!(
+        snapshot.state.accept_callback(ProviderCallback {
+            callback_id: "steering-start".into(),
+            sequence: 1,
+            occurred_at_ms: 1001,
+            agent_id: agent,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(payload),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    snapshot
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 1002)
+        .unwrap();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot
+        .state
+        .set_draft_text(room, "VISIBLE_STEERING_PROMPT")
+        .unwrap();
+    let steering = snapshot.state.submit_draft(room, 1003).unwrap()[0];
+    snapshot.state.begin_steering(steering, lead).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        snapshot
+            .state
+            .record_steering(
+                steering,
+                SubmissionOutcome::Uncertain {
+                    message: CAUSE.into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .state
+                .request(steering)
+                .unwrap()
+                .submission_error
+                .as_deref(),
+            Some(CAUSE)
+        );
+        snapshot.state =
+            serde_json::from_slice(&serde_json::to_vec(&snapshot.state).unwrap()).unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+        assert_no_diagnostics(&mut ui, &[CAUSE]);
+        key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(ui.locals[&room].text.text, "VISIBLE_STEERING_PROMPT");
+        assert_no_diagnostics(&mut ui, &[CAUSE]);
+    });
+    let log = capture.text();
+    assert_eq!(log.matches(CAUSE).count(), 1, "{log}");
+    for field in [
+        "bus.request.failed".into(),
+        format!("request_id={}", steering.0),
+        format!("agent_id={}", agent.0),
+        format!("room_id={}", room.0),
+    ] {
+        assert!(log.contains(&field), "missing {field}: {log}");
+    }
+}
