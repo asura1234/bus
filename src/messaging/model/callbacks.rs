@@ -584,11 +584,21 @@ impl BusState {
         if let Some(key) = turn_key {
             self.consumed_provider_turns.insert(key);
         }
+        self.finish_completed_turn(agent_id, request_id, unresolved.is_empty())?;
+        Ok(unresolved.is_empty())
+    }
+
+    fn finish_completed_turn(
+        &mut self,
+        agent_id: AgentId,
+        request_id: RequestId,
+        complete: bool,
+    ) -> Result<(), ModelError> {
         let agent = self
             .agents
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
-        if unresolved.is_empty() {
+        if complete {
             agent.current_request = None;
             if agent
                 .provider_retry
@@ -599,7 +609,7 @@ impl BusState {
             }
         }
         agent.actionable_error = None;
-        Ok(unresolved.is_empty())
+        Ok(())
     }
 
     /// One shared turn can answer messages in a work room and MASTER. Publish

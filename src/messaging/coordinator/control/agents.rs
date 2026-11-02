@@ -286,7 +286,7 @@ impl Worker {
                 .state
                 .agents()
                 .filter(|a| a.room_id == room && Some(a.id) != author && !a.deletion_pending)
-                .filter(|a| needs_stop(&self.state, a))
+                .filter(|a| a.provider_retry.is_some() || needs_stop(&self.state, a))
                 .map(|a| a.id)
                 .collect(),
         };
@@ -412,7 +412,14 @@ fn needs_stop(
 ) -> bool {
     match agent.activity_status() {
         RuntimeStatus::Working | RuntimeStatus::Blocked => true,
-        RuntimeStatus::Idle if agent.provider_retry.is_some() => false,
+        RuntimeStatus::Idle
+            if agent
+                .provider_retry
+                .as_ref()
+                .is_some_and(|h| agent.current_request.is_none_or(|id| id == h.lead)) =>
+        {
+            false
+        }
         RuntimeStatus::Idle => agent
             .current_request
             .and_then(|id| state.request(id))

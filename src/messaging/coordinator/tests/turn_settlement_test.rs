@@ -1302,3 +1302,75 @@ fn provider_flake_uses_only_fresh_owned_exhausted_quota_metadata_for_the_reset()
         assert!(!f.request(lead).settled());
     }
 }
+
+#[test]
+fn provider_flake_reset_diagnostics_follow_successful_persistence_once() {
+    use crate::agents::providers::usage::{UsageWindow, UsageWindows};
+    use crate::messaging::coordinator::usage::UsageSnapshot;
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "retry after quota", "turn-1");
+    f.record(
+        json!({"hook_event_name":"StopFailure","session_id":"session",
+        "prompt_id":"turn-1","error":"rate_limit"}),
+    );
+    f.consume();
+    let before = f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .provider_retry
+        .clone()
+        .unwrap();
+    let now = io::now_ms();
+    let reset = now / 1000 + 3600;
+    f.worker.usage.claude = Some(UsageSnapshot {
+        windows: UsageWindows {
+            five_hour: Some(UsageWindow {
+                used_percent: 100.0,
+                resets_at: Some(reset),
+                window_minutes: 300,
+            }),
+            weekly: None,
+        },
+        read_at_ms: now,
+        observed_by_agent: f.agent,
+    });
+    f.worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        assert!(f.worker.submit_ready().is_err());
+        assert_eq!(
+            f.worker
+                .state
+                .agent(f.agent)
+                .unwrap()
+                .provider_retry
+                .as_ref(),
+            Some(&before)
+        );
+        assert!(
+            !capture.text().contains("bus.provider.reset"),
+            "{}",
+            capture.text()
+        );
+        f.worker.submit_ready().unwrap();
+        f.worker.submit_ready().unwrap();
+    });
+    let log = capture.text();
+    let rows: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("bus.provider.reset"))
+        .collect();
+    assert_eq!(rows.len(), 1, "{log}");
+    for field in [
+        format!("agent_id={}", f.agent.0),
+        format!("request_id={}", lead.0),
+        format!("retry_at_ms={}", reset * 1000 + 2000),
+        "provider=ClaudeCode".into(),
+    ] {
+        assert!(rows[0].contains(&field), "missing {field}: {}", rows[0]);
+    }
+}

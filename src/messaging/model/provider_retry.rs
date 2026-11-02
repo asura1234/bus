@@ -110,9 +110,6 @@ impl BusState {
             return false;
         }
         hold.retry_at_ms = due;
-        tracing::info!(event="bus.provider.reset", agent_id=agent.0, request_id=hold.lead.0,
-            provider=?owner.provider, reset_at_ms, retry_at_ms=due, attempts=hold.attempts,
-            "Provider quota reset deferred the retained delivery");
         true
     }
 
@@ -124,6 +121,10 @@ impl BusState {
     ) -> Option<CallbackDisposition> {
         let owner = self.agents.get(&callback.agent_id)?;
         let hold = owner.provider_retry.as_ref()?;
+        if owner.current_request.is_some_and(|id| id != hold.lead) {
+            // Independently attributed native work keeps the ordinary continuation contract.
+            return None;
+        }
         let anchor = self.requests.get(&hold.lead)?;
         let current_turn = owner
             .current_request
@@ -187,6 +188,37 @@ impl BusState {
         }
     }
 
+    fn prepare_retry_request(&mut self, id: RequestId, attempts: u32, now_ms: u64) {
+        self.retire_retry_turn(id);
+        let request = self.requests.get_mut(&id).expect("held member");
+        request.phase = RequestPhase::Queued;
+        request.provider_retry_attempts = request.provider_retry_attempts.max(attempts);
+        request.expected_launch_id = None;
+        request.submission_boundary = None;
+        request.submission_status_revision = 0;
+        request.provider_session_id = None;
+        request.provider_turn_id = None;
+        request.provider_prompt_id = None;
+        request.trusted_start_bound = false;
+        request.uncertain_outcome = false;
+        request.submission_error = None;
+        request.failure_reason = None;
+        request.queued_rejection = None;
+        request.pending_final = None;
+        request.completed_at_ms = None;
+        request.group = None;
+        request.steered = false;
+        request.submitted_payload = None;
+        request.foreign_turn_settled_at_ms = None;
+        request.progress_at_ms = Some(now_ms);
+        request.turn_ended_at_ms = None;
+        request.awaiting_background = false;
+        let payload = self.render_request_payload(id).expect("retained prompt");
+        self.requests.get_mut(&id).expect("held member").submitted_payload = Some(format!(
+            "Continue the existing task after a transient provider failure; check completed effects before repeating actions.\n\n{payload}"
+        ));
+    }
+
     pub(crate) fn retry_provider_requests(&mut self, now_ms: u64) -> bool {
         let holds: Vec<_> = self
             .agents
@@ -234,35 +266,7 @@ impl BusState {
             }
             let next_lead = pending[0];
             for id in &pending {
-                self.retire_retry_turn(*id);
-                let request = self.requests.get_mut(id).expect("held member");
-                request.phase = RequestPhase::Queued;
-                request.provider_retry_attempts =
-                    request.provider_retry_attempts.max(hold.attempts);
-                request.expected_launch_id = None;
-                request.submission_boundary = None;
-                request.submission_status_revision = 0;
-                request.provider_session_id = None;
-                request.provider_turn_id = None;
-                request.provider_prompt_id = None;
-                request.trusted_start_bound = false;
-                request.uncertain_outcome = false;
-                request.submission_error = None;
-                request.failure_reason = None;
-                request.queued_rejection = None;
-                request.pending_final = None;
-                request.completed_at_ms = None;
-                request.group = None;
-                request.steered = false;
-                request.submitted_payload = None;
-                request.foreign_turn_settled_at_ms = None;
-                request.progress_at_ms = Some(now_ms);
-                request.turn_ended_at_ms = None;
-                request.awaiting_background = false;
-                let payload = self.render_request_payload(*id).expect("retained prompt");
-                self.requests.get_mut(id).expect("held member").submitted_payload = Some(format!(
-                    "Continue the existing task after a transient provider failure; check completed effects before repeating actions.\n\n{payload}"
-                ));
+                self.prepare_retry_request(*id, hold.attempts, now_ms);
             }
             if let Some(anchor) = self.requests.get_mut(&hold.lead).filter(|r| r.settled()) {
                 anchor.phase = RequestPhase::Completed;
@@ -344,16 +348,13 @@ impl BusState {
             .provider_retry_attempts
             .saturating_add(1)
             .max(existing.as_ref().map_or(0, |h| h.attempts));
-        let delay = if quota {
-            300_000
-        } else {
-            (5_000u64 << attempts.saturating_sub(1).min(6)).min(300_000)
-        };
+        let backoff = (5_000u64 << attempts.saturating_sub(1).min(6)).min(300_000);
+        let delay = if quota { 300_000 } else { backoff };
         let reset_at_ms = quota.then(|| reset::deadline(error, now_ms)).flatten();
         let retry_at_ms = reset_at_ms
             .map_or_else(
                 || now_ms.saturating_add(delay),
-                |at| at.saturating_add(2_000).max(now_ms.saturating_add(5_000)),
+                |at| at.saturating_add(2_000).max(now_ms.saturating_add(backoff)),
             )
             .saturating_add(agent.0 % 1000);
         tracing::info!(event = "bus.provider.hold", agent_id = agent.0, request_id = id.0,
@@ -417,7 +418,7 @@ fn transient(provider: Provider, error: &str) -> Option<bool> {
     .any(|s| text.contains(s));
     match provider {
         Provider::Codex | Provider::ClaudeCode if quota || overload || connection => Some(quota),
-        Provider::Grok | Provider::Kimi if quota || overload => Some(quota),
+        Provider::Grok | Provider::Kimi if quota || overload || connection => Some(quota),
         _ => None,
     }
 }

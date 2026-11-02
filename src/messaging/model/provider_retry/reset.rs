@@ -73,7 +73,7 @@ pub(super) fn deadline(error: &str, now_ms: u64) -> Option<u64> {
     }
     let time = Time::from_hms(hour % 12 + if pm { 12 } else { 0 }, minute.parse().ok()?, 0).ok()?;
     let mut target = PrimitiveDateTime::new(date, time).assume_offset(offset);
-    if !explicit && target < now {
+    if !explicit && now - target > Duration::hours(1) {
         target = target.checked_add(Duration::days(1))?;
     }
     u64::try_from(target.unix_timestamp())

@@ -556,3 +556,254 @@ fn provider_flake_a_permanent_error_in_native_queued_input_cannot_orphan_the_hel
     assert!(state.agent(agent).unwrap().provider_retry.is_none());
     assert!(!state.retry_provider_requests(1_000_000));
 }
+
+#[test]
+fn provider_flake_review_past_quota_reset_uses_growing_capped_backoff() {
+    let now = 1_793_545_200_000;
+    let error = "You've hit your weekly limit · resets Oct 25 at 2am (Asia/Singapore) (rate_limit)";
+    for (previous, minimum, maximum) in [
+        (0, 5000, 6000),
+        (1, 10000, 11000),
+        (2, 20000, 21000),
+        (100, 300000, 301000),
+    ] {
+        let (mut state, _, agent, request) = failed_turn_at(Provider::ClaudeCode, error, now);
+        state.agents.get_mut(&agent).unwrap().provider_retry = None;
+        state
+            .requests
+            .get_mut(&request)
+            .unwrap()
+            .provider_retry_attempts = previous;
+        assert!(state.hold_provider_error(request, error, now));
+        let due = state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .retry_at_ms;
+        assert!(
+            (now + minimum..now + maximum).contains(&due),
+            "attempt {previous}: {due}"
+        );
+    }
+}
+
+#[test]
+fn provider_flake_review_minute_rounded_reset_does_not_delay_an_entire_day() {
+    for (now, clock) in [(1_793_549_430_000, "12:10am"), (1_793_556_030_000, "2am")] {
+        let error =
+            format!("You've hit your 5-hour limit · resets {clock} (Asia/Singapore) (rate_limit)");
+        let (state, _, agent, request) = failed_turn_at(Provider::ClaudeCode, &error, now);
+        let due = state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .retry_at_ms;
+        assert!((now + 5000..now + 6000).contains(&due), "{clock}: {due}");
+        assert!(!state.request(request).unwrap().settled());
+    }
+}
+
+fn review_native_input(agent: AgentId, turn: &str, text: &str, sequence: u64) -> ProviderCallback {
+    ProviderCallback {
+        callback_id: format!("review-start-{turn}"),
+        sequence,
+        occurred_at_ms: sequence,
+        agent_id: agent,
+        launch_id: "launch-codex".into(),
+        provider_session_id: Some("provider-session".into()),
+        provider_turn_id: Some(turn.into()),
+        provider_prompt_id: None,
+        prompt_payload: Some(text.into()),
+        kind: CallbackEventKind::PromptStarted,
+    }
+}
+
+#[test]
+fn provider_flake_review_interrupt_closes_the_independent_hold_before_and_after_native_final() {
+    for finished in [false, true] {
+        let (mut state, agent, lead, member, queued) = steering_failure(false, false);
+        assert_eq!(
+            state.accept_callback(review_native_input(agent, "native-2", "second task", 24)),
+            CallbackDisposition::AcceptedSteering
+        );
+        if finished {
+            state.accept_callback(ProviderCallback::final_event(
+                "review-native-final",
+                25,
+                agent,
+                "launch-codex",
+                "provider-session",
+                "native-2",
+                "second task",
+                "second done",
+            ));
+        }
+        state.close_interrupted(agent, 200).unwrap();
+        for id in [lead, queued] {
+            assert_eq!(
+                state.request(id).unwrap().failure_reason.as_deref(),
+                Some("interrupted")
+            );
+            assert!(state.request(id).unwrap().settled());
+        }
+        if finished {
+            assert_eq!(
+                state.request(member).unwrap().reply().unwrap().text,
+                "second done"
+            );
+        } else {
+            assert_eq!(
+                state.request(member).unwrap().failure_reason.as_deref(),
+                Some("interrupted")
+            );
+        }
+        assert!(!state.retry_provider_requests(1_000_000));
+    }
+}
+
+#[test]
+fn provider_flake_review_native_member_background_continuation_keeps_its_own_reply() {
+    let (mut state, agent, lead, member, queued) = steering_failure(false, false);
+    assert_eq!(
+        state.accept_callback(review_native_input(agent, "native-2", "second task", 24)),
+        CallbackDisposition::AcceptedSteering
+    );
+    let mut background = review_native_input(agent, "native-2", "second task", 25);
+    background.callback_id = "review-background".into();
+    background.prompt_payload = None;
+    background.kind = CallbackEventKind::BackgroundPending;
+    assert_eq!(
+        state.accept_callback(background),
+        CallbackDisposition::AcceptedProgress
+    );
+    assert_eq!(
+        state.accept_callback(review_native_input(
+            agent,
+            "native-3",
+            "<task-notification>finished</task-notification>",
+            26
+        )),
+        CallbackDisposition::AcceptedContinuation
+    );
+    assert_eq!(
+        state.accept_callback(ProviderCallback::final_event(
+            "review-continued-final",
+            27,
+            agent,
+            "launch-codex",
+            "provider-session",
+            "native-3",
+            "second task",
+            "second done"
+        )),
+        CallbackDisposition::AcceptedCompleted
+    );
+    assert_eq!(
+        state.request(member).unwrap().reply().unwrap().text,
+        "second done"
+    );
+    assert!(!state.request(lead).unwrap().settled());
+    assert!(state.retry_provider_requests(1_000_000));
+    assert_eq!(state.queued_requests(agent), &[lead, queued]);
+}
+
+#[test]
+fn provider_flake_review_explicit_native_connection_and_server_failures_are_retryable() {
+    for provider in [Provider::Grok, Provider::Kimi] {
+        for error in [
+            "HTTP 503 Service Unavailable",
+            "Connection lost (connection_error)",
+            "Request timeout (timeout)",
+        ] {
+            let (state, _, agent, request) = failed_turn(provider, error);
+            assert!(
+                !state.request(request).unwrap().settled(),
+                "{provider:?}: {error}"
+            );
+            assert_eq!(
+                state.agent(agent).unwrap().shown_status(),
+                RuntimeStatus::Working
+            );
+        }
+    }
+}
+
+#[test]
+fn grok_native_connection_failure_keeps_the_delivery_open() {
+    let native = serde_json::json!({
+        "hookEventName": "stop_failure", "sessionId": "provider-session", "promptId": "turn-1",
+        "error": "server_error", "errorDetails": "API Error: Connection lost mid-response (HTTP 503)"
+    });
+    let crate::agents::providers::spool::Parsed::Failure {
+        error: Some(error), ..
+    } = crate::agents::providers::grok::hooks::parse(&native).unwrap()
+    else {
+        panic!("the native failure must retain its error category");
+    };
+    let (state, _, agent, request) = failed_turn(Provider::Grok, &error);
+    assert!(
+        !state.request(request).unwrap().settled(),
+        "native error was abandoned: {error}"
+    );
+    assert!(state.agent(agent).unwrap().provider_retry.is_some());
+}
+
+#[test]
+fn kimi_native_connection_failure_keeps_the_delivery_open() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::Kimi;
+    state
+        .agents
+        .get_mut(&agent)
+        .unwrap()
+        .runtime_identity
+        .session_id = Some("provider-session".into());
+    let request = submit_text(&mut state, room, agent, "finish the owned task");
+    state.begin_submission(request, "launch-codex", 10).unwrap();
+    let payload = state.render_request_payload(request).unwrap();
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "native-start-seven".into(),
+            sequence: 11,
+            occurred_at_ms: 20,
+            agent_id: agent,
+            launch_id: "launch-codex".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("7".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(payload.clone()),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    let wire = [
+        serde_json::json!({"type":"turn.prompt","agentId":"main","turnId":7,"promptId":"p7","input":[{"type":"text","text":payload}]}),
+        serde_json::json!({"type":"agent.turn.ended","turnId":7,"outcome":"failed","errorMessage":"APIConnectionError: Connection lost mid-response (HTTP 503)"}),
+        serde_json::json!({"type":"turn.ended","agentId":"main","turnId":7,"reason":"failed"}),
+        serde_json::json!({"type":"prompt.completed","agentId":"main","promptId":"p7","reason":"failed"}),
+    ].into_iter().map(|v| v.to_string()).collect::<Vec<_>>().join("\n");
+    let Some(crate::agents::providers::kimi::wire::Outcome::Failed(error)) =
+        crate::agents::providers::kimi::wire::committed_outcome(&wire, 7, &payload)
+    else {
+        panic!("the owned native failure must have a committed error");
+    };
+    state
+        .observe_status(agent, RuntimeStatus::Working, 21)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 100)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request(agent, 101, |_| Some(RecordedTurnEnd::Error(error))),
+        Some(request)
+    );
+    assert!(
+        !state.request(request).unwrap().settled(),
+        "the native connection failure abandoned the owned delivery"
+    );
+    assert!(state.agent(agent).unwrap().provider_retry.is_some());
+}

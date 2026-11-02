@@ -134,6 +134,34 @@ pub(crate) fn recoveries(previous: &BusState, next: &BusState) {
     }
 }
 
+/// Proposed reset deferrals must not be reported until their state is durable.
+pub(crate) fn provider_resets(previous: &BusState, next: &BusState) {
+    for agent in next.agents() {
+        let Some(hold) = agent.provider_retry.as_ref().filter(|h| h.quota) else {
+            continue;
+        };
+        let Some(old) = previous
+            .agent(agent.id)
+            .and_then(|a| a.provider_retry.as_ref())
+        else {
+            continue;
+        };
+        if old.lead != hold.lead
+            || old.attempts != hold.attempts
+            || hold.retry_at_ms <= old.retry_at_ms
+        {
+            continue;
+        }
+        let request = next.request(hold.lead);
+        tracing::info!(event = "bus.provider.reset", agent_id = agent.id.0,
+            request_id = hold.lead.0, room_id = agent.room_id.0, provider = ?agent.provider,
+            session_id = ?request.and_then(|r| r.provider_session_id.as_deref()),
+            turn_id = ?request.and_then(|r| r.provider_turn_id.as_deref()),
+            attempts = hold.attempts, previous_retry_at_ms = old.retry_at_ms,
+            retry_at_ms = hold.retry_at_ms, "Provider quota deadline persisted");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

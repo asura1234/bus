@@ -36,10 +36,13 @@ def main():
                BUS_TUI_OWNER=uuid.uuid4().hex, BUS_TUI_EFFECTS=str(root / 'effects.ndjson'),
                TEST_BUS_PROTECTED_HOME=os.environ['HOME'])
     subprocess.run(['/usr/bin/git', 'init', '--quiet', str(root / 'work')], env=env, check=True)
+    identity = json.loads(subprocess.check_output([str(binary), '--identity'], env=env))
+    assert identity['sha'] == args.expected_head and 'claude' in identity['providers'], identity
+    assert b'fake:overload-once' in binary.read_bytes(), 'fault injection feature missing'
     paths = json.loads(subprocess.check_output([str(binary), '--paths'], env=env))
     assert Path(paths['data']).resolve() == root / 'data', paths
     bus = Bus(binary, artifacts, env, workspace=root / 'work')
-    report = dict(expected_head=args.expected_head, binary=str(binary),
+    report = dict(expected_head=args.expected_head, binary=str(binary), identity=identity,
                   binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                   scratch_root=str(root), provenance='synthetic provider, real Bus delivery path', samples=[])
     trace = artifacts / 'commands.jsonl'
