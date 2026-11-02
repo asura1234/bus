@@ -94,24 +94,6 @@ fn kimi_240_idle_composer_is_ready_and_working_status_is_busy() {
     assert!(!detection.visible_idle);
 }
 
-#[test]
-fn kimi_cache_expiry_chooser_is_blocked() {
-    let frame = "↑↓ navigate · Enter select · Esc cancel\nCache expired — the next message re-sends the entire history at full price.\n ❯ Compact and continue    one-time compact cost\n   Start a new session     zero context cost\n   Continue as-is          full history kept\n   Don't ask me again";
-    let loaded =
-        bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
-    let detection = evaluate_loaded_manifest(
-        DetectionInput {
-            screen: frame,
-            osc_title: "",
-            osc_progress: "",
-        },
-        &loaded,
-        true,
-    );
-    assert_eq!(detection.state, AgentState::Blocked);
-    assert!(detection.visible_blocker);
-}
-
 fn kimi_frame(footer: &str) -> String {
     format!(
         "╭──────────────────────────────────────────────────╮\n│ >                                                │\n╰──────────────────────────────────────────────────╯\n{footer}\n                               context: 3% (24.4k/1M)"
@@ -347,7 +329,7 @@ fn cursor_question_detection(screen: &str) -> Detected {
 }
 
 #[test]
-fn devin_manifest_detects_idle_working_and_blocked_states() {
+fn devin_manifest_detects_idle_and_working_states() {
     let idle = detect_screen(
         AgentKind::Devin,
         "─────────────────────────────────────────────────────\n❭ Ask Devin to build features, fix bugs, or work on\n  your code\n─────────────────────────────────────────────────────\nSWE-1.6               Context: 16k / 200k tokens (7%)",
@@ -389,51 +371,16 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
     );
     assert_eq!(working.state, AgentState::Working);
     assert!(working.visible_working);
-
-    let trust_prompt = detect_screen(
-        AgentKind::Devin,
-        "Do you trust the authors of this directory?\nFor security, devin should not be run in directories\nwith untrusted content.\n❭ 1 Yes, trust /private/tmp/devin-hook-probe\n· 2 No, exit",
-    );
-    assert_eq!(trust_prompt.state, AgentState::Blocked);
-    assert!(trust_prompt.visible_blocker);
-
-    let permission_prompt = detect_screen(
-        AgentKind::Devin,
-        "⏺ Running command\n  └ $ sleep 30\n\n❭ 1 Yes  (Approve once)\n· 2 Yes, allow `sleep` commands\n· 3 Yes, always allow `sleep` commands\n· 4 No\n↑↓ select · ↵ confirm · esc cancel",
-    );
-    assert_eq!(permission_prompt.state, AgentState::Blocked);
-    assert!(permission_prompt.visible_blocker);
 }
 
 #[test]
-fn muse_manifest_requires_complete_live_controls() {
+fn muse_manifest_preserves_working_viewer_and_idle_states() {
     let working = detect_screen(
         AgentKind::Muse,
         "⟩ hello\n\n◆ Working (0s · esc to interrupt)\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
     );
     assert_eq!(working.state, AgentState::Working);
     assert!(working.visible_working);
-
-    let picker = detect_screen(
-        AgentKind::Muse,
-        "Which option should I use?\n\n› 1. Alpha\n  2. Beta\n\nEnter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
-    );
-    assert_eq!(picker.state, AgentState::Blocked);
-    assert!(picker.visible_blocker);
-
-    let command_approval = detect_screen(
-        AgentKind::Muse,
-        "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
-    );
-    assert_eq!(command_approval.state, AgentState::Blocked);
-    assert!(command_approval.visible_blocker);
-
-    let network_approval = detect_screen(
-        AgentKind::Muse,
-        "network: example.com:443 https\nrequested by:\n$ curl -fsS https://example.com\n\n› 1. Yes, proceed (y)\n  2. Yes, don't ask again this session (p)  example.com:443 (https)\n  3. No, and tell Muse Code what to do differently (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
-    );
-    assert_eq!(network_approval.state, AgentState::Blocked);
-    assert!(network_approval.visible_blocker);
 
     let menu = detect_screen(
         AgentKind::Muse,
@@ -449,34 +396,6 @@ fn muse_manifest_requires_complete_live_controls() {
     );
     assert_eq!(ordinary_reply.state, AgentState::Idle);
     assert!(ordinary_reply.visible_idle);
-}
-
-#[test]
-fn cursor_native_question_controls_are_a_visible_blocker() {
-    let result = cursor_question_detection(CURSOR_QUESTION_CONTROLS);
-    assert_eq!(result.state, AgentState::Blocked);
-    assert!(result.visible_blocker);
-    assert!(!result.visible_working);
-    assert_eq!(
-        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-        Some("question_prompt")
-    );
-}
-
-#[test]
-fn cursor_question_blocker_requires_both_options_and_navigation_controls() {
-    let screens = [
-        CURSOR_QUESTION_CONTROLS.replace("[ ]", "option"),
-        CURSOR_QUESTION_CONTROLS.replace("Space select", "Selection finished"),
-        "Question 1 of 1: Continue or Cancel?\n".to_owned(),
-        "Explain ↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip\n"
-            .to_owned(),
-    ];
-    for screen in screens {
-        let result = cursor_question_detection(&screen);
-        assert_eq!(result.state, AgentState::Idle, "{screen}");
-        assert!(!result.visible_blocker, "{screen}");
-    }
 }
 
 #[test]
@@ -550,25 +469,18 @@ fn cursor_managed_startup_requires_a_complete_empty_composer_footer() {
         assert_eq!(detection.state, AgentState::Unknown, "{screen}");
         assert!(!detection.visible_idle, "{screen}");
     }
-    for (screen, expected) in [
-        (format!("{current} ctrl+c to stop\n"), AgentState::Working),
-        (
-            format!("{current}{CURSOR_QUESTION_CONTROLS}"),
-            AgentState::Blocked,
-        ),
-    ] {
-        let detection = evaluate_loaded_manifest(
-            DetectionInput {
-                screen: &screen,
-                osc_title: "",
-                osc_progress: "",
-            },
-            &loaded,
-            true,
-        );
-        assert_eq!(detection.state, expected, "{screen}");
-        assert!(!detection.visible_idle, "{screen}");
-    }
+    let screen = format!("{current} ctrl+c to stop\n");
+    let detection = evaluate_loaded_manifest(
+        DetectionInput {
+            screen: &screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+        true,
+    );
+    assert_eq!(detection.state, AgentState::Working, "{screen}");
+    assert!(!detection.visible_idle, "{screen}");
 }
 
 #[cfg(feature = "dev-tools")]

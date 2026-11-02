@@ -4,14 +4,6 @@ min_engine_version = 2
 updated_at = "2026-10-30T00:00:00Z"
 
 [[rules]]
-id = "blocked"
-state = "blocked"
-priority = 980
-region = "whole_recent"
-visible_blocker = true
-contains = ["enter to select", "esc to cancel"]
-
-[[rules]]
 id = "working"
 state = "working"
 priority = 970

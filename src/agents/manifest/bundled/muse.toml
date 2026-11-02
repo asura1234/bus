@@ -10,43 +10,9 @@ aliases = ["muse-code", "muse-cli"]
 # Idle has a `⟩` prompt and `model · effort · cwd` footer. Active turns show
 # `◆ Working (... · esc to interrupt)` or another activity label with the same interrupt hint.
 #
-# Structured questions show two co-occurring footer controls:
-#   Enter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt
-# Multi-select uses `Enter to toggle` instead. The paired controls distinguish a real picker
-# from ordinary transcript text that happens to mention one action.
-#
-# First launch in an untrusted directory shows `Do you trust this workspace?` together with
-# `Trust and continue`. This is a real blocker. User-opened `/theme` and `/skills` menus are
-# not blockers; their paired footer controls identify overlays whose prior state must be kept.
-#
-# Muse 0.2.1 command approval shows `Allow this stage once` together with
-# `Always allow in this workspace`. Muse 0.1 used `Allow once` with
-# `Allow for this session`. Network approval shows `Yes, proceed` together with
-# `Yes, don't ask again this session`. Each approval rule requires a pair because Muse can
-# emit any one of these phrases as ordinary assistant text after a completed turn.
-
-[[rules]]
-id = "workspace_trust_blocked"
-state = "blocked"
-priority = 970
-region = "bottom_non_empty_lines(12)"
-visible_blocker = true
-contains = ["Do you trust this workspace?"]
-any = [
-  { contains = ["Trust and continue"] },
-  { contains = ["Use Up/Down"] },
-]
-
-[[rules]]
-id = "pick_request_blocked"
-state = "blocked"
-priority = 950
-region = "bottom_non_empty_lines(8)"
-visible_blocker = true
-any = [
-  { contains = ["Enter to select", "Tab for an optional note"] },
-  { contains = ["Enter to toggle", "Esc to interrupt"] },
-]
+# User-opened `/theme` and `/skills` menus retain the previous state; their
+# paired footer controls distinguish these viewers from the live composer.
+# Answerable screens are classified by the shared terminal driver.
 
 [[rules]]
 id = "menu_overlay"
@@ -70,18 +36,6 @@ contains = ["esc to interrupt"]
 not = [
   { contains = ["Enter to select", "Tab for an optional note"] },
   { contains = ["Enter to toggle", "Esc to interrupt"] },
-]
-
-[[rules]]
-id = "blocked_approval"
-state = "blocked"
-priority = 850
-region = "bottom_non_empty_lines(8)"
-visible_blocker = true
-any = [
-  { contains = ["Allow this stage once", "Always allow in this workspace"] },
-  { contains = ["Allow once", "Allow for this session"] },
-  { contains = ["Yes, proceed", "Yes, don't ask again this session"] },
 ]
 
 [[rules]]

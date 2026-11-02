@@ -1,9 +1,7 @@
 # Version-scoped Grok 1.0.5 adaptation of the legacy 0.2.101 manifest.
-# Historical rules below retain their original provenance; they are not verified
-# 1.0.5 permission/question evidence. Current card/frame rules are
-# exercised by SYNTHETIC fixtures in tests/fixtures/grok-{dialog,composer}.
-# Offline 1.0.5 evidence confirms boxed composer and Ctrl+X footer; authenticated
-# permission/trust/question cards, long-paste chips and native wakes remain pending.
+# Activity, composer and authentication rules retain their original provenance.
+# Offline 1.0.5 evidence confirms the boxed composer and Ctrl+X footer.
+# Answerable screens are classified by the shared terminal driver.
 id = "grok"
 version = "2026.10.31.3"
 min_engine_version = 3
@@ -15,8 +13,8 @@ aliases = ["grok-build"]
 # Grok emits OSC 0 titles by default. Idle is "grok" or
 # "<session> - grok". During a turn, the configured title gains a braille
 # spinner and activity text. Permission prompts add "⚠ Action Required";
-# that prefix blinks while the terminal is unfocused, so visible blocker
-# rules outrank the generic non-idle title rule.
+# that prefix blinks while the terminal is unfocused, so its native OSC
+# status rule outranks the generic non-idle title rule.
 #
 # Grok also emits OSC 9;4 progress on supported terminals. Bus retains the
 # payload after "9;": "4;1;-1" while busy and "4;0;0" when idle.
@@ -25,40 +23,15 @@ aliases = ["grok-build"]
 #   "⠧ Waiting on subagent… 2.8s   13s ⇣29.7k [stop]"
 #   "⠴ Explore /tmp/… + 1 more… 5.6s   19s ⇣29.7k [stop]"
 # with a braille spinner and a trailing [stop] chip, plus an Esc:cancel
-# footer hint. Permission prompts and ask-user-question dialogs replace the
-# spinner with "◆" and draw a "┃"-guttered option list:
-#   "┃  2 (○) Yes, proceed"
-#   "┃  z (○) Type your answer here"
-# with footer hints "1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel" (permission)
-# or "Esc:unselect │ Tab:scrollback │ Shift+x:dismiss" (question dialog).
+# footer hint.
 # Idle footers end with "Ctrl+.:shortcuts" and never contain "Esc:cancel".
 # The startup splash draws its logo with braille characters, so working
 # rules must anchor on the [stop] chip, not on a bare spinner glyph.
 
-# Grok Build 1.0.70 startup trust screen, captured in a private scratch
-# home with an untrusted project and a harmless hook. Any reliable live
-# part (the question, Yes, or No) stays blocked while the version line is
-# still the end of the screen. A complete composer directly above that
-# version line is the live frame, so historical trust text does not block.
-# A box edge alone in scrollback is not a composer.
-[[rules]]
-id = "startup_folder_trust"
-state = "blocked"
-priority = 1500
-region = "bottom_non_empty_lines(20)"
-visible_blocker = true
-regex = ['(?m)^\s*Grok Build\s+[0-9][0-9.]*\s*\z']
-any = [
-  { line_regex = ['^\s*Do you trust the contents of this directory\?\s*$'] },
-  { line_regex = ['^\s*Yes, proceed\s+y\s*$'] },
-  { line_regex = ['^\s*No, quit\s+n\s*$'] },
-]
-not = [{ regex = ['(?s)\s*[╭┌]─+[╮┐]\s*\n\s*│\s*❯[^\n]*\n(?:[^\n]*\n)*?\s*[╰└][^\n]*[╯┘]\s*Grok Build\s+[0-9][0-9.]*\s*\z'] }]
-
 # Native login owns the full cwd/logo/control screen, even when it leaves an
 # empty composer underneath. Quoted labels or controls in a conversation do not
 # own this surface. Diagnostics may wrap across a few rows, but cannot contain
-# another composer or input prompt. The dialog parser uses this exact rule.
+# another composer or input prompt.
 [[rules]]
 id = "login_unavailable"
 state = "blocked"
@@ -79,50 +52,6 @@ region = "osc_title"
 visible_blocker = true
 contains = ["Action Required"]
 
-[[rules]]
-id = "option_dialog_blocked"
-state = "blocked"
-priority = 1200
-region = "bottom_non_empty_lines(3)"
-visible_blocker = true
-line_regex = ['^\s*┃\s+(?:❯\s+)?[1-9a-fz]\s+(?:\([●○]\)|\[[ ✓✔x]\])\s']
-
-[[rules]]
-id = "permission_hints_blocked"
-state = "blocked"
-priority = 1190
-region = "bottom_non_empty_lines(2)"
-visible_blocker = true
-contains = [":select", "ctrl+c:cancel"]
-
-[[rules]]
-id = "question_dialog_hints_blocked"
-state = "blocked"
-priority = 1185
-region = "bottom_non_empty_lines(2)"
-visible_blocker = true
-contains = ["shift+x:dismiss"]
-
-# Parked cards keep their blocker even when no selected row is visible.
-[[rules]]
-id = "parked_card_blocked"
-state = "blocked"
-priority = 1180
-region = "bottom_non_empty_lines(2)"
-visible_blocker = true
-any = [
-  { contains = ["tab/space: question"] },
-  { contains = ["tab/space: permission"] },
-]
-
-[[rules]]
-id = "question_editor_blocked"
-state = "blocked"
-priority = 1180
-region = "bottom_non_empty_lines(2)"
-visible_blocker = true
-contains = ["enter:submit", "esc:back"]
-
 # Grok clears its OSC busy signals while background work runs. The first
 # non-empty row is pinned application chrome, where this animated chip shows
 # the number of running background tasks and disappears when the count is zero.
@@ -137,7 +66,7 @@ line_regex = ['[⋅:⸬⁙.·]\s+[1-9][0-9]*\s+│']
 # Grok 1.0.70 keeps an idle OSC title ("grok") and idle progress ("4;0;0")
 # during a live turn. A running task row and the [stop] status line are the
 # signals that remain. They must outrank the idle OSC rules below, and stay
-# under dialog and login rules so a question card is still blocked.
+# under native blocked-title and login status rules.
 # Captured 2026-10-31: "▾ Tasks 1" plus "⸬ Run …", while a braille status
 # line ended in "[stop]". The same live row animates through ⸬, ⋅, :, and ⁙
 # before "Run". Matching only ⸬ lets the other frames fall through to the
@@ -271,7 +200,7 @@ visible_working = true
 line_regex = ['^\s*[\x{2801}-\x{28FF}]\s.*\[stop\]\s*$']
 
 # Above osc_title_idle. A Thinking row whose only cancel hint is Esc:cancel
-# has no [stop] chip. Dialog footers stay blocked at the higher priorities.
+# has no [stop] chip.
 [[rules]]
 id = "esc_cancel_hints_working"
 state = "working"

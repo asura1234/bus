@@ -5,26 +5,6 @@ updated_at = "2026-06-15T00:00:00Z"
 aliases = ["devin-cli", "devin cli"]
 
 [[rules]]
-id = "workspace_trust_prompt"
-state = "blocked"
-priority = 300
-region = "bottom_non_empty_lines(8)"
-visible_blocker = true
-contains = [
-  "do you trust the authors of this directory?",
-  "with untrusted content.",
-  "yes, trust ",
-]
-
-[[rules]]
-id = "permission_prompt"
-state = "blocked"
-priority = 290
-region = "bottom_non_empty_lines(8)"
-visible_blocker = true
-contains = ["approve once", "select", "confirm", "esc cancel"]
-
-[[rules]]
 id = "running_tools_footer"
 state = "working"
 priority = 200

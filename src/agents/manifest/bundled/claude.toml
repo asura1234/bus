@@ -77,51 +77,6 @@ any = [
 ]
 
 [[rules]]
-id = "live_blocked_form"
-state = "blocked"
-priority = 980
-region = "after_last_horizontal_rule"
-visible_blocker = true
-contains = ["esc to cancel"]
-any = [
-  { contains = ["enter to confirm"] },
-  { contains = ["enter to select"], any = [
-    { contains = ["tab/arrow keys to navigate"] },
-    { contains = ["arrow keys to navigate"] },
-    { contains = ["arrows to navigate"] },
-    { contains = ["↑/↓ to navigate"] },
-    { contains = ["↑↓ to navigate"] },
-  ] },
-]
-
-[[rules]]
-id = "dynamic_workflow_prompt"
-state = "blocked"
-priority = 980
-region = "whole_recent"
-visible_blocker = true
-contains = ["run a dynamic workflow?", "esc to cancel"]
-
-[[rules]]
-id = "mcp_elicitation_prompt"
-state = "blocked"
-priority = 980
-region = "whole_recent"
-visible_blocker = true
-# MCP elicitation dialogs (elicitation/create) show Accept/Decline controls
-# with an "Esc to cancel" footer but no Enter hint, so live_blocked_form
-# cannot see them (issue #3283). Gate on the invariant header line, the
-# Accept/Decline control line, and the cancel footer.
-contains = ["esc to cancel"]
-line_regex = ['(?i)^\s*MCP server ["\x{201C}].+["\x{201D}] requests your input\s*$']
-all = [
-  { any = [
-    { line_regex = ['^\s*\x{276F}?\s*Accept\b'] },
-    { line_regex = ['^\s*\x{276F}?\s*Decline\b'] },
-  ] },
-]
-
-[[rules]]
 id = "live_prompt_box"
 state = "idle"
 priority = 950
@@ -146,72 +101,6 @@ contains = ["select model", "enter to set as default", "esc to cancel"]
 not = [
   { contains = ["do you want to proceed?"] },
   { contains = ["enter to select"] },
-]
-
-[[rules]]
-id = "bash_permission_prompt"
-state = "blocked"
-priority = 850
-region = "whole_recent"
-visible_blocker = true
-contains = ["do you want to proceed?"]
-any = [
-  { contains = ["bash command"] },
-  { contains = ["bash("] },
-  { contains = ["contains expansion"] },
-  { contains = ["tab to amend"] },
-  { contains = ["ctrl+e to explain"] },
-]
-# Claude marks the selected option with "❯", so every option branch has to allow
-# that prefix. Numbered branches that omit it only match options the cursor has
-# moved away from, which left the resting layout below unmatched here (#2650):
-#   ❯ 1. Yes / 2. Yes, and don't ask again for: <cmd> / 3. No
-# Cover both the two-option and "don't ask again" three-option shapes so this
-# rule, not the narrower generic_permission_prompt, claims Bash approvals.
-all = [
-  { any = [
-    { line_regex = ['(?i)^\s*❯?\s*yes\b'] },
-    { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
-    { line_regex = ['(?i)^\s*❯?\s*2\.\s*yes\b'] },
-    { line_regex = ['(?i)^\s*❯?\s*2\.\s*no\b'] },
-    { line_regex = ['(?i)^\s*❯?\s*3\.\s*no\b'] },
-  ] },
-]
-
-[[rules]]
-id = "generic_permission_prompt"
-state = "blocked"
-priority = 840
-region = "after_last_horizontal_rule"
-visible_blocker = true
-contains = ["do you want to proceed?", "esc to cancel"]
-all = [
-  { any = [
-    { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
-    { line_regex = ['(?i)^\s*2\.\s*yes\b'] },
-    { line_regex = ['(?i)^\s*2\.\s*no\b'] },
-    { line_regex = ['(?i)^\s*3\.\s*no\b'] },
-  ] },
-]
-
-[[rules]]
-id = "legacy_no_prompt_blocker"
-state = "blocked"
-priority = 300
-region = "whole_recent"
-any = [
-  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
-  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
-  { contains = ["waiting for permission"] },
-  { contains = ["do you want to allow this connection?"] },
-  { contains = ["tab to amend"] },
-  { contains = ["ctrl+e to explain"] },
-  { contains = ["do you want to proceed?", "esc to cancel"] },
-  { contains = ["review your answers"] },
-  { contains = ["skip interview and plan immediately"] },
-]
-not = [
-  { regex = ['(?m)^\s*❯\s*$'] },
 ]
 
 [[rules]]
