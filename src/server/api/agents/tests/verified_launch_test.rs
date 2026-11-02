@@ -92,7 +92,10 @@ async fn verified_launch_preserves_bash_function_and_post_exit_shell() {
     assert!(crate::platform::process_instance(prompt_runtime(&app).child_pid().unwrap()).is_some());
     wait_for_prompt(prompt_runtime(&app)).await;
     let proof = dir.join("post-exit-proof");
-    let command = format!(": > '{0}'; sleep 0.2; printf usable > '{0}'\r", proof.display());
+    let command = format!(
+        ": > '{0}'; sleep 0.2; printf usable > '{0}'\r",
+        proof.display()
+    );
     prompt_runtime(&app)
         .try_send_bytes(Bytes::from(command))
         .unwrap();
