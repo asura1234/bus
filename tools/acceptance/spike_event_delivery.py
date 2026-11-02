@@ -154,7 +154,7 @@ class Scratch:
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
             self.ok(['wait', '--text', 'fake draft bytes:', '--timeout', '20s'])
-            transcript = self.bus(['agent', 'read', 'a1', '--source', 'recent-unwrapped'])
+            transcript = self.bus(['agent', 'read', 'a1', '--source', 'recent'])
             replies = [s for s in self.strings(transcript) if 'fake draft bytes: ' in s]
             if not replies:
                 raise RuntimeError(('draft reply missing', transcript))
