@@ -54,18 +54,8 @@ impl Worker {
                 "Request ID must contain 1–128 bytes",
             );
         }
-        if let Some(receipt) = self.control_receipts.get(&request.id) {
-            return if receipt.request.method == request.method
-                && receipt.request.params == request.params
-            {
-                receipt.response.clone()
-            } else {
-                Response::failure(
-                    &request.id,
-                    "id_conflict",
-                    "Request ID already used with different parameters",
-                )
-            };
+        if let Some(response) = self.replay_control_response(request) {
+            return response;
         }
         // Only a published, process-bound restart may request normal quit in
         // a non-dev session. Ordinary `quit` retains its dev-tier contract.
@@ -151,6 +141,22 @@ impl Worker {
             );
         }
         response
+    }
+
+    fn replay_control_response(&self, request: &ControlRequest) -> Option<Response> {
+        let receipt = self.control_receipts.get(&request.id)?;
+        Some(
+            if receipt.request.method == request.method && receipt.request.params == request.params
+            {
+                receipt.response.clone()
+            } else {
+                Response::failure(
+                    &request.id,
+                    "id_conflict",
+                    "Request ID already used with different parameters",
+                )
+            },
+        )
     }
 
     fn reserve_control_receipt(
