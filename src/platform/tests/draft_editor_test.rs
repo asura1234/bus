@@ -30,6 +30,71 @@ impl Drop for Fixture {
     }
 }
 
+fn interrupted_swap(original: &str, attempt: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let root = crate::utils::test_temp::unique_temp_path("fast-pane-interrupted-swap");
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join("native.txt");
+    let directory = root.join("private");
+    fs::write(&file, original).unwrap();
+    let exchange = Exchange::begin_preserving(directory.clone(), Duration::from_secs(60)).unwrap();
+    exchange.request_swap(attempt).unwrap();
+    run_at(Some(&directory), &file, "false").unwrap();
+    assert_eq!(exchange.captured_text().unwrap(), original);
+    assert!(
+        !Exchange::has_recoverable_draft(&directory),
+        "a developer backup is not Bus withdrawal proof"
+    );
+    drop(exchange);
+    (root, file, directory)
+}
+
+#[test]
+fn fast_pane_interrupted_swap_restores_large_escaped_input() {
+    let original = "\t draft 中文\ntrailing \t \n";
+    let attempt = "\n".repeat(MAX_BYTES as usize / 2 + 10_000);
+    let (root, file, directory) = interrupted_swap(original, &attempt);
+    let restored = Exchange::begin_restoration(directory.clone(), Duration::from_secs(60)).unwrap();
+    run_at(Some(&directory), &file, "false").unwrap();
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        format!("{original}{}", restored.marker())
+    );
+    fs::write(&file, original).unwrap();
+    restored.request_verify().unwrap();
+    run_at(Some(&directory), &file, "false").unwrap();
+    restored.remove_recovery().unwrap();
+    assert!(!Exchange::has_preserved_draft(&directory));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fast_pane_repeated_restoration_accepts_maximum_draft_with_marker() {
+    let original = "x".repeat(MAX_BYTES as usize);
+    let (root, file, directory) = interrupted_swap(&original, "BUS");
+    {
+        let restored =
+            Exchange::begin_restoration(directory.clone(), Duration::from_secs(60)).unwrap();
+        run_at(Some(&directory), &file, "false").unwrap();
+        assert_eq!(
+            fs::metadata(&file).unwrap().len(),
+            MAX_BYTES + restored.marker().len() as u64
+        );
+        // Simulate loss after the native editor returned but before its marker
+        // was removed. The next restoration must be idempotent.
+    }
+    let restored = Exchange::begin_restoration(directory.clone(), Duration::from_secs(60)).unwrap();
+    run_at(Some(&directory), &file, "false").unwrap();
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        format!("{original}{}", restored.marker())
+    );
+    fs::write(&file, &original).unwrap();
+    restored.request_verify().unwrap();
+    run_at(Some(&directory), &file, "false").unwrap();
+    restored.remove_recovery().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn external_editor_preserves_unicode_and_all_trailing_whitespace_through_readback() {
     let original = "\t  中文  \n\nline two \t \n\n";
