@@ -369,11 +369,7 @@ mod tests {
 
     #[test]
     fn color_blind_mode_defaults_off_and_round_trips() {
-        let root = std::env::temp_dir().join(format!(
-            "bus-settings-{}-{}",
-            std::process::id(),
-            io::now_ns()
-        ));
+        let root = crate::utils::test_temp::unique_temp_path("bus-settings");
         let path = root.join("nested").join("settings.json");
         assert_eq!(load(&path), Ok(BusSettings::default()));
         assert!(!BusSettings::default().color_blind_mode);
@@ -395,11 +391,7 @@ mod tests {
 
     #[test]
     fn sound_choices_default_to_today_and_update_keeps_other_fields() {
-        let root = std::env::temp_dir().join(format!(
-            "bus-settings-sound-{}-{}",
-            std::process::id(),
-            io::now_ns()
-        ));
+        let root = crate::utils::test_temp::unique_temp_path("bus-settings-sound");
         let path = root.join("settings.json");
         std::fs::create_dir_all(&root).unwrap();
         // Unset sounds default: MASTER rings and new rooms start silent, both

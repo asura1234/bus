@@ -9,13 +9,7 @@ impl Transport for NoNativeInput {
 }
 
 fn fixture() -> (Worker, RoomId, AgentId, PathBuf) {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("temp")
-        .join(format!(
-            "bus-focus-{}-{}",
-            std::process::id(),
-            crate::messaging::storage::io::now_ns()
-        ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-focus");
     let mut worker = Worker::open(dir.clone(), Box::new(NoNativeInput)).unwrap();
     worker.dev_enabled = true;
     let room = worker.state.create_room("review").unwrap();

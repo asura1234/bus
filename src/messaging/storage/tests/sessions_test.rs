@@ -5,11 +5,7 @@ use super::{
 use crate::messaging::model::BusState;
 
 fn temp_root(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "bus-local-sessions-{label}-{}-{}",
-        std::process::id(),
-        super::io::now_ns()
-    ))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-local-sessions-{label}"))
 }
 
 struct Fixture(std::path::PathBuf);

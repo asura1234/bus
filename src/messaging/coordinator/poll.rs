@@ -409,11 +409,7 @@ mod detection_context_tests {
                 })
             }
         }
-        let root = std::env::temp_dir().join(format!(
-            "bus-poll-context-{}-{}",
-            std::process::id(),
-            io::now_ns()
-        ));
+        let root = crate::utils::test_temp::unique_temp_path("bus-poll-context");
         let captured = Arc::new(Mutex::new(Vec::new()));
         let mut worker = Worker::open(root.clone(), Box::new(Capture(captured.clone()))).unwrap();
         let mut state = worker.state.clone();

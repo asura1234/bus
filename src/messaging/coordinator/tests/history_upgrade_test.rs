@@ -142,11 +142,7 @@ fn real_format_2_snapshot_first_start_preserves_archive_without_old_wakes() {
         std::env::var_os("DELETE_PURGE_SNAPSHOT")
             .expect("set DELETE_PURGE_SNAPSHOT to the read-only 17:29 snapshot"),
     );
-    let dir = std::env::temp_dir().join(format!(
-        "bus-history-upgrade-{}-{}",
-        std::process::id(),
-        io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-history-upgrade");
     std::fs::create_dir(&dir).unwrap();
     for name in ["state.json", "history.jsonl"] {
         std::fs::copy(source.join(name), dir.join(name)).unwrap();
