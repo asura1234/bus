@@ -462,6 +462,14 @@ impl BusState {
             || !lead.trusted_start_bound
             || lead.pending_final.is_some()
             || lead.turn_ended_at_ms.is_some()
+            // An uncertain member may still occupy the native composer. Its
+            // receipt or turn settlement must resolve it before another write.
+            || self.requests.values().any(|member| {
+                member.group == Some(lead.id)
+                    && (member.phase == RequestPhase::Submitting || member.uncertain_outcome)
+                    && !member.trusted_start_bound
+                    && !member.settled()
+            })
         {
             return None;
         }
@@ -563,7 +571,8 @@ impl BusState {
         match outcome {
             SubmissionOutcome::Confirmed { .. } => request_state.phase = RequestPhase::Active,
             SubmissionOutcome::Uncertain { message } => {
-                request_state.phase = RequestPhase::Active;
+                // Keep the attempted group membership, but only a native
+                // receipt can promote this unconfirmed write to Active.
                 request_state.uncertain_outcome = true;
                 request_state.submission_error = Some(message);
             }
@@ -754,7 +763,7 @@ impl Request {
             return self.submission_error.clone();
         }
         let unconfirmed = self.failure_reason.as_deref() == Some("submission_unconfirmed")
-            || self.phase == RequestPhase::Submitting
+            || matches!(self.phase, RequestPhase::Submitting | RequestPhase::Active)
                 && self.uncertain_outcome
                 && !self.trusted_start_bound;
         if !unconfirmed {

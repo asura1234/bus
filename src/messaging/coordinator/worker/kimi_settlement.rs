@@ -1,5 +1,5 @@
 //! Read Kimi terminal evidence before settling a request.
-use super::{AgentId, BusState, Path};
+use super::{AgentId, BusState, Path, RuntimeStatus};
 
 pub(super) fn state_provider_is_kimi(state: &BusState, agent: AgentId) -> bool {
     state
@@ -14,7 +14,22 @@ pub(super) fn recorded_kimi_end(
     state: &mut BusState,
     agent: AgentId,
 ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
-    committed_kimi_end(data_dir, state, agent)
+    match committed_kimi_end(data_dir, state, agent) {
+        // A busy provider may be appending a partial record. Read/parse errors
+        // are not committed provider failures; keep their previous idle-only
+        // diagnostic settlement without gating an owned native error commit.
+        Err(_)
+            if !state.agent(agent).is_some_and(|owner| {
+                matches!(
+                    owner.status,
+                    RuntimeStatus::Idle | RuntimeStatus::Unavailable
+                )
+            }) =>
+        {
+            Ok(None)
+        }
+        result => result,
+    }
 }
 
 fn committed_kimi_end(

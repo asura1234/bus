@@ -42,6 +42,11 @@ impl Request {
         match self.phase {
             RequestPhase::Queued => "queued",
             RequestPhase::Submitting => "submitting",
+            // Older snapshots promoted uncertain steering to Active before
+            // any receipt. Restoring one must not claim the message joined.
+            RequestPhase::Active if self.uncertain_outcome && !self.trusted_start_bound => {
+                "submitting"
+            }
             RequestPhase::Active if self.group.is_some() => "joined",
             RequestPhase::Active if self.trusted_start_bound => "delivered",
             RequestPhase::Active => "awaiting_start",

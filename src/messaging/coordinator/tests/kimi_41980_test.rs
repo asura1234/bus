@@ -77,3 +77,147 @@ fn kimi_41980_incomplete_or_foreign_failure_keeps_the_owned_turn() {
         );
     }
 }
+
+struct TimedOutSteering(Arc<Mutex<Vec<Method>>>);
+
+impl Transport for TimedOutSteering {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        Native(self.0.clone()).request(method)?;
+        Err(TransportError {
+            code: Some("submission_unconfirmed".into()),
+            message: incident()["source"]["detail"].as_str().unwrap().into(),
+            definitely_rejected: false,
+        })
+    }
+}
+
+fn uncertain_member(f: &mut Fixture) -> RequestId {
+    f.worker.transport = Box::new(TimedOutSteering(f.native.clone()));
+    let member = f.send(incident()["followup"].as_str().unwrap(), false);
+    f.deliver();
+    member
+}
+
+#[test]
+fn kimi_41980_uncertain_steering_holds_followups_until_a_native_receipt() {
+    for legacy in [false, true] {
+        let mut f = Fixture::new(Provider::Kimi);
+        super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let member = uncertain_member(&mut f);
+        if legacy {
+            // The live 41981 snapshot persisted Active + unbound uncertainty.
+            let mut state = serde_json::to_value(&f.worker.state).unwrap();
+            state["requests"][member.0.to_string()]["phase"] = "active".into();
+            f.worker
+                .save(serde_json::from_value(state).unwrap())
+                .unwrap();
+        }
+        let waiting = f.send("next queued work", false);
+        super::kimi_steering_tests::reopen(&mut f);
+        f.status(RuntimeStatus::Working);
+        let status = f
+            .worker
+            .control_message(f.request(member).prompt.id)
+            .unwrap();
+        assert_eq!(status["requests"][0]["stage"], "submitting");
+        assert_eq!(status["requests"][0]["start_bound"], false);
+        assert_eq!(status["requests"][0]["uncertain_outcome"], true);
+        assert_eq!(status["complete"], false);
+        assert!(status["requests"][0]["reply"].is_null());
+        assert!(status["requests"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Kimi submission may have run; inspect the transcript before resending"));
+        f.now += crate::messaging::model::QUEUED_STALL_MS * 2;
+        f.expire_after_reconciliation(f.now);
+        f.deliver();
+        assert_eq!(
+            f.typed().len(),
+            2,
+            "neither retry nor another composer write"
+        );
+        assert_eq!(f.request(waiting).phase, RequestPhase::Queued);
+        assert_eq!(f.request(member).group, Some(lead));
+        f.started("0", incident()["followup"].as_str().unwrap());
+        f.consume();
+        let status = f
+            .worker
+            .control_message(f.request(member).prompt.id)
+            .unwrap();
+        assert_eq!(status["requests"][0]["stage"], "joined");
+        assert_eq!(status["requests"][0]["start_bound"], true);
+        assert_eq!(status["requests"][0]["uncertain_outcome"], false);
+        f.deliver();
+        assert_eq!(f.typed().len(), 3, "receipt releases the following message");
+        assert!(f.typed()[2].1);
+    }
+}
+
+#[test]
+fn kimi_41980_uncertain_steering_ends_with_provider_failure_without_retry() {
+    let mut f = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&f);
+    let lead = running(&mut f, "original task", "0");
+    let member = uncertain_member(&mut f);
+    let waiting = f.send("next queued work", false);
+    std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+    f.consume();
+    assert_eq!(f.request(member).phase, RequestPhase::Abandoned);
+    assert!(!f.request(member).trusted_start_bound);
+    assert!(f.reply(member).is_none());
+    assert_eq!(f.request(waiting).phase, RequestPhase::Queued);
+    f.status(RuntimeStatus::Idle);
+    f.worker.transport = Box::new(Native(f.native.clone()));
+    f.deliver();
+    assert_eq!(f.typed().len(), 3);
+    assert_eq!(f.typed_content()[2], ("next queued work".into(), false));
+}
+
+#[test]
+fn kimi_41980_restart_before_write_acknowledgment_holds_the_next_message() {
+    let mut f = Fixture::new(Provider::Kimi);
+    super::kimi_steering_tests::home(&f);
+    let lead = running(&mut f, "original task", "0");
+    let pending = f.send(incident()["followup"].as_str().unwrap(), false);
+    let mut state = f.worker.state.clone();
+    state.render_request_payload(pending).unwrap();
+    state.begin_steering(pending, lead).unwrap();
+    f.worker.save(state).unwrap();
+    let waiting = f.send("next queued work", false);
+    super::kimi_steering_tests::reopen(&mut f);
+    f.status(RuntimeStatus::Working);
+    f.deliver();
+    assert_eq!(
+        f.typed().len(),
+        1,
+        "the lost outcome does not free the composer"
+    );
+    assert_eq!(f.request(waiting).phase, RequestPhase::Queued);
+    f.started("0", incident()["followup"].as_str().unwrap());
+    f.consume();
+    f.deliver();
+    assert_eq!(f.typed().len(), 2, "a native receipt releases the queue");
+}
+
+#[test]
+fn kimi_41980_partial_busy_wire_is_not_a_committed_provider_failure() {
+    for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let open = failure_wire(&mut f, lead, 0)
+            .lines()
+            .next()
+            .unwrap()
+            .to_owned();
+        std::fs::write(wire, format!("{open}\n{{\"type\":")).unwrap();
+        f.status(status);
+        f.consume();
+        assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(lead)
+        );
+    }
+}

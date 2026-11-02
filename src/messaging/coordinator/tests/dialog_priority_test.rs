@@ -216,7 +216,7 @@ fn an_uncertain_dialog_write_escalates_without_replaying_or_closing_its_active_g
         Some(DialogNoticeTo::Developer)
     );
     assert_eq!(f.request(lead).phase, RequestPhase::Active);
-    assert_eq!(f.request(notice).phase, RequestPhase::Active);
+    assert_eq!(f.request(notice).phase, RequestPhase::Submitting);
     assert!(f.request(notice).uncertain_outcome);
     assert_eq!(f.request(notice).group, Some(lead));
     let attention = &f

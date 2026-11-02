@@ -176,6 +176,12 @@ fn guidance_case(restart: bool, uncertain: bool) {
     let first = fixture.send("first correction", false);
     let second = fixture.send("second correction", false);
     fixture.deliver();
+    if uncertain {
+        assert_eq!(fixture.typed().len(), 2);
+        assert_eq!(fixture.request(second).phase, RequestPhase::Queued);
+        fixture.started("1", "first correction");
+        fixture.consume();
+    }
     fixture.deliver();
     let typed = fixture.typed();
     assert_eq!(
