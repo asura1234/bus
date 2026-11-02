@@ -272,9 +272,15 @@ impl App {
         }
         let api_request_id = request.id.clone();
         let queued = match request.method {
-            crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false, hard_deadline, false, None)
-            }
+            crate::protocol::api::schema::Method::AgentPrompt(params) => self.queue_agent_prompt(
+                request.id,
+                params,
+                false,
+                hard_deadline,
+                false,
+                None,
+                false,
+            ),
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params)
             | crate::protocol::api::schema::Method::AgentPromptIfIdleAtGeneration(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
@@ -364,6 +370,7 @@ impl App {
             hard_deadline,
             false,
             None,
+            false,
         )
     }
 
@@ -384,7 +391,13 @@ impl App {
         let agent = self
             .agent_info_for_target(&params.target)
             .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
-        if let Err((code, message)) = check_prompt_identity_and_idle(&agent, &params) {
+        let rejection = check_prompt_identity_and_idle(&agent, &params).err();
+        #[cfg(unix)]
+        let native_only = rejection.is_some_and(|(code, _)| code == "agent_not_idle")
+            && super::codex_native::can_check_idle(&agent);
+        #[cfg(not(unix))]
+        let native_only = false;
+        if let Some((code, message)) = rejection.filter(|_| !native_only) {
             return Err(encode_error(id, code, message));
         }
         self.queue_agent_prompt(
@@ -398,6 +411,7 @@ impl App {
             hard_deadline,
             params.steer,
             params.expected_turn_id,
+            native_only,
         )
     }
 
@@ -409,6 +423,7 @@ impl App {
         hard_deadline: std::time::Instant,
         steer: bool,
         expected_turn_id: Option<String>,
+        native_only: bool,
     ) -> Result<
         (
             String,
@@ -482,19 +497,8 @@ impl App {
                 deadline.min(hard_deadline)
             }),
         );
-        if expected_agent == crate::agents::AgentKind::GithubCopilot {
-            // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
-            let focus =
-                match crate::terminal::vt::encode_focus(crate::terminal::vt::FocusEvent::Gained) {
-                    Ok(focus) => focus,
-                    Err(err) => {
-                        return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
-                    }
-                };
-            if let Err(err) = runtime.try_send_bytes(Bytes::from(focus)) {
-                return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
-            }
-        }
+        focus_copilot(runtime, expected_agent)
+            .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
@@ -514,6 +518,9 @@ impl App {
         }
         #[cfg(not(unix))]
         let _ = expected_turn_id;
+        if native_only {
+            return Err(native_idle_refused(id));
+        }
         let completion = queue_prompt_input(
             runtime,
             expected_agent,
@@ -699,4 +706,27 @@ fn complete_agent_prompt_with_timestamps(
             fail("agent_prompt_failed", "pty actor closed".into())
         }
     }
+}
+
+fn focus_copilot(
+    runtime: &crate::terminal::TerminalRuntime,
+    agent: crate::agents::AgentKind,
+) -> std::io::Result<()> {
+    if agent == crate::agents::AgentKind::GithubCopilot {
+        // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
+        let focus = crate::terminal::vt::encode_focus(crate::terminal::vt::FocusEvent::Gained)
+            .map_err(std::io::Error::other)?;
+        runtime
+            .try_send_bytes(Bytes::from(focus))
+            .map_err(std::io::Error::other)?;
+    }
+    Ok(())
+}
+
+fn native_idle_refused(id: String) -> String {
+    encode_error(
+        id,
+        "agent_not_idle",
+        "Agent is not idle; prompt was not sent",
+    )
 }
