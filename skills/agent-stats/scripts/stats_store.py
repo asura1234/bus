@@ -52,6 +52,9 @@ def append(store, records):
         if path.is_symlink():
             raise ValueError("invalid store: symlink events")
         existing = read_records(path)
+        from stats_reviews import validate_reviews
+
+        validate_reviews(existing + records)
         ids = {x["id"] for x in existing}
         briefs = {brief_key(x) for x in existing if brief_key(x) is not None}
         fresh = []

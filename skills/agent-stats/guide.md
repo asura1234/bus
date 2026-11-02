@@ -35,7 +35,9 @@ source IDs or rounds are coverage gaps. Severity is unavailable because the
 review artifact format prohibits finding-severity labels.
 
 An escaped defect requires an APPLY root, ordered Ready/detection evidence,
-Git ancestry, and unchanged cited blobs. This conservative proof deliberately
+Git ancestry, and unchanged cited blobs. Detection means the earliest fully
+proven linked discovery; later corroboration cannot move that time. Scoped Ready
+artifacts do not establish PR-wide coverage and are omitted from escape credit. This conservative proof deliberately
 omits cases where code moved or context changed. A changed-file count after
 Ready is a tree delta, not an escaped defect; rebased upstream changes may be
 present in that delta.
@@ -55,9 +57,11 @@ The store uses local POSIX advisory file locks.
 Cumulative compaction counters are per agent, as observed from Bus. They cannot
 be attributed to a past model or role from a current snapshot. Delivery stages
 and reasons are retained verbatim; repeated observations of one request do not
-increase failure counts. A gate wrapper and the runner report it explicitly
-references count as one gate; both source artifacts remain available. Phase durations are computed from paired clock
-observations; an open phase has no completed duration. Parallel lane timings
+increase failure counts. A gate wrapper and its exact runner reference (or
+unchanged native UUID report name) count as one gate; timing/head coincidences never prove a link. Unverifiable
+links retain both reports and a coverage gap. Consequently their totals describe
+observed reports and can include overlap. Both source artifacts remain available.
+Phase durations are computed from paired clock observations; an open phase has no completed duration. Parallel lane timings
 can overlap and must not be added to claim wall time.
 
 Records retain source hashes. Collection copies original input bytes into the

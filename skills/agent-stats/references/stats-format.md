@@ -12,7 +12,9 @@ same semantic identity stop collection. Atomic append holds a local file lock.
 Every record carries agent and orchestrator identities. `unknown` is the sole
 unavailable identity/model expression. Historical lane names remain names; an
 unavailable Bus ID stays `unknown`. No current identity is retroactively applied.
-Every source is a saved file with SHA-256 and a line range or JSON pointer.
+Every source is a saved file with SHA-256 and a locator: a line range, JSON
+pointer, named artifact section, or the recorded computation over referenced Git
+objects. The hash binds the complete original source bytes.
 Timestamps are UTC RFC3339 with zero or 3–6 fractional digits and `Z`; unavailable timestamps are null. A review
 with only a calendar date keeps that date separately. Empty sets use `[]`.
 
@@ -22,6 +24,12 @@ observations to the assignment. Retrying the same brief/task/role/agent keeps
 the first assignment and returns its original ID, even across clock changes or
 concurrent calls. A new nudge message remains a new assignment. Machine snapshots
 keep their original content.
+
+Canonical detailed review artifacts supply scope hashes. Review identity is
+task/lane/scope/round/head; branch reviews have null scope. Older records recover
+an explicit scope header from their checksum-verified saved source. Ambiguous
+scoped finding references omit exact review attribution with a coverage reason.
+Rendered chat summaries do not substitute for canonical detailed reviews.
 
 Root causes come from address-review-comments canonical items only. Existing
 prose source lists can be imported only when explicit and unambiguous. A

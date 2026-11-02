@@ -3,6 +3,7 @@
 import re
 from collections import defaultdict
 from datetime import datetime
+from stats_reviews import review_data, review_key, review_scope
 
 COUNTS = (
     "assignments",
@@ -38,7 +39,7 @@ def projected(rows):
         elif kind == "pr":
             key = (r["task"], kind, d["number"])
         elif kind == "review":
-            key = (r["task"], kind, r["agent"]["name"], d["round"], d["head"])
+            key = (kind, *review_key(r))
         elif kind == "run":
             key = (r["task"], kind, r["sources"][0]["sha256"])
         elif kind == "root_cause":
@@ -49,7 +50,11 @@ def projected(rows):
                 else src["path"]
             )
             key = (r["task"], kind, origin, d["claim_id"])
-        if key in facts and kind == "review" and facts[key]["data"] != d:
+        if (
+            key in facts
+            and kind == "review"
+            and review_data(facts[key]) != review_data(r)
+        ):
             raise ValueError("conflicting stored review facts")
         facts[key] = r
     wrapped = {
@@ -123,7 +128,11 @@ def report(rows):
                     for r in reviews
                     if r["task"] == row["task"]
                     and r["agent"]["name"] == lane
-                    and any(x["round"] == r["data"]["round"] for x in refs)
+                    and any(
+                        x["round"] == r["data"]["round"]
+                        and x.get("scope_hash") == review_scope(r)
+                        for x in refs
+                    )
                 ]
                 actors = {str(r["agent"]) for r in related}
                 value = entry(

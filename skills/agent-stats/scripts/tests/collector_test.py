@@ -256,7 +256,7 @@ def test_sanitized_source_lane_annotations_do_not_drop_canonical_roots_or_supply
     assert len(roots) == 1
     assert roots[0]["data"]["reviewers"] == ["kimirevc"]
     assert roots[0]["data"]["source_refs"] == [
-        {"reviewer": "kimirevc", "round": 1, "finding_id": "1"}
+        {"reviewer": "kimirevc", "round": 1, "finding_id": "1", "scope_hash": None}
     ]
     report = json.loads(call("report", "--store", tmp_path / "stats", "--json").stdout)
     assert report["leaderboard"][0]["model"] == "unknown"
@@ -346,7 +346,7 @@ def test_explicit_single_claim_legacy_ledger_uses_its_one_recorded_source(tmp_pa
     assert len(roots) == 1
     assert roots[0]["data"]["outcome"] == "APPLY"
     assert roots[0]["data"]["source_refs"] == [
-        {"reviewer": "codexrevf", "round": 1, "finding_id": "1"}
+        {"reviewer": "codexrevf", "round": 1, "finding_id": "1", "scope_hash": None}
     ]
 
 

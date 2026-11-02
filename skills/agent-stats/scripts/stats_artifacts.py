@@ -1,6 +1,7 @@
 """Read recorded review, triage and runner facts; never adjudicate findings."""
 
 import re
+from stats_reviews import source_reference
 
 
 def unfenced(text):
@@ -35,29 +36,20 @@ def field(text, name, required=True):
     return found[0].strip()
 
 
-def review(text):
-    text = unfenced(text)
-    match = re.match(r"^# Review Round (\d+) — 代码审查\s*$", text.splitlines()[0])
-    if not match:
-        raise ValueError("invalid review round header")
-    target = re.fullmatch(r"(.+?) @ ([0-9a-f]{7,64})", field(text, "分支"))
+def review(text, path):
+    from stats_reviews import canonical_review
+
+    artifact = canonical_review(path, text)
+    text = unfenced(artifact.text)
+    target = re.fullmatch(r"(.+?) @ ([0-9a-f]{7,64})", artifact.target["branch"])
     if not target:
         raise ValueError("invalid review branch/head")
-    substantive = section(text, "新问题与建议")
-    if (
-        substantive is None
-        or section(text, "同步清单（CONSISTENCY drift，非阻塞）") is None
-    ):
-        raise ValueError("invalid review: missing actionable sections")
-    verdict = re.findall(
-        r"^- \*\*判定\*\*[：:]\s*(Ready|Needs Refinement|Abandon)\b", text, re.M
-    )
-    if len(verdict) != 1:
-        raise ValueError("invalid review verdict")
+    substantive = unfenced(artifact.substantive)
     findings = []
-    for heading, body in re.findall(
-        r"^###\s+(\d+[.、].*?)\n(.*?)(?=^### |\Z)", substantive, re.M | re.S
-    ):
+    blocks = re.findall(r"^###\s+(.+?)\n(.*?)(?=^### |\Z)", substantive, re.M | re.S)
+    if len(blocks) != len(artifact.finding_ids):
+        raise ValueError("invalid review finding structure")
+    for finding_id, (heading, body) in zip(artifact.finding_ids, blocks):
 
         def item(name):
             m = re.search(r"^- \*\*" + name + r"\*\*[：:]\s*(.+)$", body, re.M)
@@ -65,22 +57,25 @@ def review(text):
 
         findings.append(
             dict(
-                id=re.match(r"\d+", heading).group(),
+                id=finding_id,
                 dimension=item("维度"),
                 location=item("位置"),
                 inherited=bool(re.search(r"承 R\d+-\d+", heading)),
             )
         )
-    if not findings and substantive not in ("无。", "无", "None.", "None"):
+    if [f["id"] for f in findings] != list(artifact.finding_ids):
         raise ValueError("invalid review finding structure")
     return (
-        field(text, "审查者"),
+        artifact.lane,
         dict(
-            round=int(match.group(1)),
+            round=artifact.round_number,
+            scope_hash=artifact.target.get("scope_hash"),
             head=target.group(2),
             branch=target.group(1),
             date=field(text, "日期"),
-            verdict=verdict[0],
+            verdict="Abandon"
+            if artifact.verdict.startswith("Abandon")
+            else artifact.verdict,
             findings=findings,
         ),
         None,
@@ -133,7 +128,7 @@ def triage(text, lanes, reviews, runs=None):
                     for r in reviews
                 ):
                     raise ValueError(f"invalid root source: {raw}")
-                refs.append(dict(reviewer=lane, round=int(round_), finding_id=finding))
+                refs.append(source_reference(lane, int(round_), finding, reviews))
             if outcome not in ("APPLY", "REJECT", "FLAG", "WITHDRAWN"):
                 raise ValueError("invalid root outcome")
             body = section(text, outcome)
@@ -167,11 +162,7 @@ def triage(text, lanes, reviews, runs=None):
                 (
                     "sole-claim",
                     "APPLY",
-                    [
-                        dict(
-                            reviewer=lane, round=int(round_), finding_id=next(iter(ids))
-                        )
-                    ],
+                    [source_reference(lane, int(round_), next(iter(ids)), reviews)],
                     [],
                     [],
                 )
@@ -218,10 +209,13 @@ def triage(text, lanes, reviews, runs=None):
                     ]
                     rounds = {r[1]["round"] for r in candidates}
                     refs.append(
-                        dict(
+                        source_reference(lane, next(iter(rounds)), finding, reviews)
+                        if len(rounds) == 1
+                        else dict(
                             reviewer=lane,
-                            round=next(iter(rounds)) if len(rounds) == 1 else None,
+                            round=None,
                             finding_id=finding,
+                            scope_hash=None,
                         )
                     )
             if refs:
@@ -386,7 +380,7 @@ def markdown_run(text):
     return None
 
 
-def wrapped_reports(text, head, candidates):
+def wrapped_reports(text, head, candidates, outcome):
     """Link only runner paths actually printed in the gate's encoded output."""
     import base64
     from pathlib import Path
@@ -402,18 +396,17 @@ def wrapped_reports(text, head, candidates):
             decoded.append(base64.b64decode(raw, validate=True).decode("utf-8"))
     output = "\n".join(decoded)
     refs = re.findall(r"Test report: (.+?\.json)\s*$", output, re.M)
-    elapsed = {
-        round(float(x) * 1000) for x in re.findall(r"Elapsed: ([0-9.]+)s", output)
-    }
-    found = []
+    found, missing = [], []
     for ref in refs:
-        matches = [(p, v) for p, v in candidates if p.name == Path(ref).name]
-        if not matches and len(refs) == 1:
-            matches = [
-                (p, v)
-                for p, v in candidates
-                if v.get("head") == head and v.get("duration_ms") in elapsed
-            ]
+        # Native runner UUID filenames survive archival copies. Other filenames
+        # need the exact reference; elapsed time and head are not run identities.
+        native_id = re.fullmatch(r"run-[0-9a-f]{32}\.json", Path(ref).name)
+        matches = [
+            (p, v)
+            for p, v in candidates
+            if p.resolve() == Path(ref).resolve()
+            or (native_id and p.name == Path(ref).name)
+        ]
         from stats_schema import digest
 
         identities = {digest(v) for _, v in matches}
@@ -423,5 +416,9 @@ def wrapped_reports(text, head, candidates):
             p, value = matches[0]
             if value.get("head") != head:
                 raise ValueError("wrapped runner head disagrees with gate")
+            if outcome == "PASS" and value.get("exit_code") != 0:
+                raise ValueError("wrapped runner outcome disagrees with passing gate")
             found.append(p)
-    return found
+        else:
+            missing.append(ref)
+    return found, missing

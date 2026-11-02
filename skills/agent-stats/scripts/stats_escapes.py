@@ -3,6 +3,7 @@
 from datetime import datetime
 import re
 import subprocess
+from stats_reviews import review_scope
 
 
 def escapes(rows, repo):
@@ -19,6 +20,7 @@ def escapes(rows, repo):
     result = []
     for root in roots:
         detected, locations = [], list(root["data"]["locations"])
+        valid = True
         for rid in root["data"]["run_ids"]:
             run = runs.get(rid)
             if (
@@ -27,7 +29,10 @@ def escapes(rows, repo):
                 and run["data"]["finished_at"]
             ):
                 detected.append(run)
-        valid = True
+            else:
+                valid = False
+        if not valid:
+            continue
         for ref in root["data"]["source_refs"]:
             candidates = [
                 r
@@ -35,6 +40,7 @@ def escapes(rows, repo):
                 if r["agent"]["name"] == ref["reviewer"]
                 and r["data"]["round"] == ref["round"]
                 and r["data"]["head"] == root["data"]["head"]
+                and review_scope(r) == ref.get("scope_hash")
             ]
             if len(candidates) != 1 or not candidates[0]["ts"]:
                 valid = False
@@ -52,7 +58,7 @@ def escapes(rows, repo):
             )
         if not valid or not detected or not locations:
             continue
-        detection_time = max(
+        detection_time = min(
             [
                 r["ts"] if r["kind"] == "review" else r["data"]["finished_at"]
                 for r in detected
@@ -63,6 +69,7 @@ def escapes(rows, repo):
         for ready in reviews:
             if (
                 ready["data"]["verdict"] != "Ready"
+                or review_scope(ready) is not None
                 or not ready["ts"]
                 or datetime.fromisoformat(ready["ts"].replace("Z", "+00:00"))
                 >= datetime.fromisoformat(detection_time.replace("Z", "+00:00"))

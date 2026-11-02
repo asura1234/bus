@@ -115,20 +115,20 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
         )
     )
     for path in paths:
-        if path.suffix != ".md":
+        if path.suffix != ".md" or path.name == "chat-response.md":
             continue
         text = read_text_checked(path)
         plain = unfenced(text)
         texts.append((path, text))
         if plain.startswith("# Review Round ") and "代码审查" in plain.splitlines()[0]:
-            lane, data, at = review(text)
+            lane, data, at = review(text, path)
             if metadata and data["branch"] != metadata["headRefName"]:
                 continue
             data["head"] = resolve(repo, data["head"])
             parsed.append((lane, data, at, path, text))
     unique = {}
     for lane, data, at, path, text in parsed:
-        key = (lane, data["round"], data["head"])
+        key = (lane, data.get("scope_hash"), data["round"], data["head"])
         if key in unique:
             if unique[key][1] != data:
                 raise ValueError(f"invalid conflicting review copies: {key}")
@@ -148,7 +148,14 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
         if len(actors) > 1:
             raise ValueError("invalid conflicting artifact identity bindings")
         actor = bindings[0]["agent"] if bindings else unknown(lane)
-        at = min(x["ts"] for x in bindings) if bindings else at
+        at = (
+            min(
+                (x["ts"] for x in bindings),
+                key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")),
+            )
+            if bindings
+            else at
+        )
         emitted = emit(
             "review",
             "reviewer",
@@ -217,20 +224,31 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
         data = markdown_run(text)
         if data and digest(text) not in seen_markdown_runs:
             seen_markdown_runs.add(digest(text))
-            linked = (
-                wrapped_reports(text, data["head"], candidate_reports)
+            linked, missing = (
+                wrapped_reports(text, data["head"], candidate_reports, data["result"])
                 if data["kind"] == "gate"
-                else []
+                else ([], [])
             )
             if linked:
                 data["wrapped_sources"] = [checked_source(p)["sha256"] for p in linked]
-                if len(data["lanes"]) == 1:
-                    data["duration_ms"] = data["lanes"][0]["duration_ms"]
+            if linked and len(data["lanes"]) == 1:
+                data["duration_ms"] = data["lanes"][0]["duration_ms"]
             emitted = emit("run", "tester", data, path, locator="runner metadata")
             emitted["sources"].extend(
                 checked_source(p, "wrapped runner") for p in linked
             )
             emitted["id"] = digest({k: v for k, v in emitted.items() if k != "id"})
+            if missing:
+                emit(
+                    "coverage",
+                    "tester",
+                    dict(
+                        field="run.wrapper_link",
+                        reason="unverifiable runner references retained separately: "
+                        + ", ".join(missing),
+                    ),
+                    path,
+                )
     seen_runs = set()
     for path in paths:
         if path.suffix != ".json":
@@ -307,7 +325,7 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                     "reviewer",
                     dict(
                         field="root_cause.source_round",
-                        reason="exact source assertion or round absent from canonical ledger",
+                        reason="exact source assertion, round or scope unavailable in canonical ledger",
                     ),
                     path,
                 )
