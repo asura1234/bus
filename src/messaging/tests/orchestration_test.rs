@@ -157,16 +157,14 @@ fn workflow_paths_use_source_detection_only_for_dev_launches() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// MASTER carries new milestones, questions, blockers and plan changes;
-/// a turn with none of those produces no status text.
-const MASTER_REPORT_PHRASES: [&str; 7] = [
-    "Report progress, questions and blockers in MASTER; keep details in your room.",
+/// Direct MASTER posts cover developer decisions; turn-final status follows the guide.
+const MASTER_REPORT_PHRASES: [&str; 6] = [
+    "Report questions and blockers in MASTER; keep details in your room.",
     "A turn no message started posts in your work room.",
-    "a progress report when a step or milestone finishes or fails (a PR merged, a task done, a gate failed);",
     "every question or decision for the developer;",
     "every blocker that waits on the developer (a dialog they must approve, a destructive action);",
     "anything that changes the plan.",
-    "A turn with none of those ends with no text at all.",
+    "A separate MASTER message is needed only for the cases above.",
 ];
 
 fn values(room: Option<(&str, u64)>, data: &Path) -> PromptValues {
@@ -305,8 +303,7 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
     // Replies appear in the request's room for developer and agent senders.
-    // Autonomous finals appear in the work room. New milestones, questions,
-    // blockers and plan changes go to MASTER with `send --to human`.
+    // The status guide owns turn-final progress; direct posts cover the cases below.
     for phrase in MASTER_REPORT_PHRASES {
         assert!(flat(&text).contains(phrase), "missing {phrase}: {text}");
     }
@@ -428,9 +425,8 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     assert!(flat(&rules).contains("`./run dev-control` is for foreground controls."));
     assert!(flat(&rules)
         .contains("For background dispatches, call the existing Bus executable directly;"));
-    assert!(flat(&rules).contains(
-        "**Report progress, questions and blockers in MASTER; keep details in your room.**"
-    ));
+    assert!(flat(&rules)
+        .contains("**Report questions and blockers in MASTER; keep details in your room.**"));
     for phrase in MASTER_REPORT_PHRASES {
         assert!(flat(&rules).contains(phrase), "missing {phrase}: {rules}");
     }
@@ -471,6 +467,12 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
         rules.contains("**Keep follow-ups in the running workflow file, not in your context.**")
     );
     assert!(rules.contains("bus send --room ROOM --as YOUR_NAME --to AGENT --async"));
+    let status_guide = flat(&std::fs::read_to_string(root.join("orchestrator-guide.md")).unwrap());
+    assert!(status_guide.contains("Report routine progress in turn-final MASTER messages"));
+    assert!(status_guide.contains(
+        "[sitrep skill](https://github.com/asura1234/bus/blob/master/skills/sitrep/SKILL.md)"
+    ));
+    assert!(rules.contains("orchestrator-guide.md#report-status"));
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
     assert_eq!(guide, WORKFLOW_CREATE);
     assert!(guide.starts_with("# workflow-create"), "{guide}");

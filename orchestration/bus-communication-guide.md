@@ -114,8 +114,8 @@ when the developer is at the computer. Keep them rare and short:
 - Workers: only something the developer must know and the orchestrator
   can't handle.
 
-Never send the developer "nothing needs you", routine progress, or worker
-chatter relayed by an orchestrator.
+Never send the developer "nothing needs you" or worker chatter relayed by an
+orchestrator.
 
 ## Replies and turn finals
 

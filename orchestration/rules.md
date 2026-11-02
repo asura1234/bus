@@ -128,7 +128,7 @@ the wrapper remains held.
   - every blocker that waits on the developer (a dialog they must approve, a
     destructive action);
   - anything that changes the plan.
-  A turn with none of those ends with no text at all.
+  A separate MASTER message is needed only for the cases above.
 
   Keep routine dialog approvals, worker hand-offs, and step-by-step details in
   your work room. Terminal-only output does not count. *Why:* the developer

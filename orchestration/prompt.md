@@ -51,7 +51,7 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
    - every blocker that waits on the developer (a dialog they must approve, a
      destructive action);
    - anything that changes the plan.
-   A turn with none of those ends with no text at all.
+   A separate MASTER message is needed only for the cases above.
 
    When you need the developer to act or decide and work waits on them, start your report with [needs_developer_attention] and follow the rules to deliver it in MASTER.
    Put `[waiting_on_you]` (or `[waiting-on-you]`) before what you need from the developer in that MASTER
