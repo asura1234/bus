@@ -300,3 +300,25 @@ def test_assignment_preserves_snapshot_bytes_when_external_input_changes(tmp_pat
         assert (
             hashlib.sha256(Path(src["path"]).read_bytes()).hexdigest() == src["sha256"]
         )
+
+
+def test_recorded_kimi_footer_reports_the_observed_model_without_name_inference():
+    sys.path.insert(0, str(CLI.parent))
+    from stats_identity import identity
+
+    state = {
+        "agents": [
+            {
+                "id": 35540,
+                "name": "anything",
+                "provider": "kimi",
+                "runtime_identity": {"launch_id": "launch-k"},
+            }
+        ]
+    }
+    pane = {
+        "agent_id": 35540,
+        "runtime": {"launch_id": "launch-k", "session_verified": True},
+        "text": " ╰──────────────────╯\n Ask When Needed plan  K3.1 Pro thinking: high  ~/work/libtv-desktop  fix/preview-event-poll…\n                                                                       context: 22% (223k/1M)\n",
+    }
+    assert identity(state, "35540", pane)["model"] == "K3.1 Pro thinking: high"

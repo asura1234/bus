@@ -26,6 +26,7 @@ def identity(state, selector, pane=None):
             tail = pane.get("text", "").splitlines()[-8:]
             patterns = {
                 "codex": r"^\s{0,4}(GPT-[A-Za-z0-9.\-]+(?: (?:xhigh|high|medium|low|minimal|none))?) · ",
+                "kimi": r"^ Ask When Needed plan  (K[0-9][A-Za-z0-9. -]* thinking: (?:high|medium|low))  ~?/",
                 "claude_code": r"^\s{0,4}\[([^\]\r\n]{1,80})\] *│",
             }
             labels = {
