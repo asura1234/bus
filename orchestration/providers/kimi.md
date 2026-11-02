@@ -28,4 +28,4 @@ An answer to a developer message in MASTER belongs in MASTER. A worker's room re
 
 ## Kimi session and permissions
 
-Bus can launch Kimi before it has a session ID. The first delivered message creates the session. The Bus agent file supplies the initial system prompt; exact `--session` resume retains it. In Bus yolo mode, Kimi runs with `--yolo`, including after resume. Routine shell commands and edits proceed without approval; Kimi may still ask for risky actions, questions, or plan review. If a dialog blocks a task, report it rather than guessing an answer.
+Bus can launch Kimi before it has a session ID. The first delivered message creates the session. The Bus agent file supplies the initial system prompt; exact `--session` resume retains it. In Bus yolo mode, Kimi runs with `--auto` (Never Ask), including after resume; legacy `--yolo` / `-y` options are replaced only in effective yolo argv and replay unchanged on a normal run. Routine shell commands and edits proceed without approval; plan review can still wait when Plan mode is active. If a dialog blocks a task, report it rather than guessing an answer.
