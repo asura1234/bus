@@ -702,7 +702,7 @@ impl DetectionTask {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        let adjusted = classify_kimi_command_screen(
+        let adjusted = super::kimi_activity::classify_command_screen(
             &self.terminal,
             home.as_deref(),
             &mut status.kimi_turn_cache,
@@ -761,47 +761,6 @@ impl DetectionTask {
             }
         }
     }
-}
-
-/// Resolve ambiguous command/tip markers against native main-turn evidence.
-/// `None` means the remaining screen is a viewer.
-pub(super) fn classify_kimi_command_screen(
-    terminal: &PaneTerminal,
-    home: Option<&std::path::Path>,
-    cache: &mut crate::agents::providers::kimi::wire::MainTurnCache,
-    content: &str,
-    screen_detection: crate::agents::AgentDetection,
-) -> Option<crate::agents::AgentDetection> {
-    use crate::agents::manifest::KimiTurnMarker;
-    let Some(marker) = crate::agents::manifest::kimi_turn_marker(content) else {
-        return Some(screen_detection);
-    };
-    let turn = crate::agents::providers::kimi::activity::refresh_running_command_turn(home, cache);
-    let live = match marker {
-        KimiTurnMarker::Tip => {
-            turn != Some(crate::agents::providers::kimi::wire::MainTurn::Settled)
-        }
-        KimiTurnMarker::Command => {
-            let has_command_suffix =
-                crate::agents::providers::kimi::activity::running_command_has_command_suffix(
-                    content,
-                );
-            let ansi = turn.is_none().then(|| terminal.visible_ansi());
-            let line_is_bold = ansi
-                .as_deref()
-                .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
-            crate::agents::providers::kimi::activity::running_command_text_is_live(
-                turn,
-                line_is_bold,
-                has_command_suffix,
-            )
-        }
-    };
-    if live {
-        return Some(screen_detection);
-    }
-    let adjusted = crate::agents::manifest::kimi_screen_without_running_command(content);
-    (!adjusted.skip_state_update).then_some(adjusted)
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ mod detection_process;
 mod detection_task;
 mod draft_input;
 mod io;
+mod kimi_activity;
 mod read;
 mod shell_integration;
 mod shell_launch;

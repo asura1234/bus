@@ -83,7 +83,7 @@ impl TerminalRuntime {
         let content = self.terminal.detection_text();
         let screen = crate::agents::detect_agent_with_osc(Some(AgentKind::Kimi), &content, "", "");
         let home = self.kimi_code_home.lock().unwrap().clone();
-        super::detection_task::classify_kimi_command_screen(
+        super::kimi_activity::classify_command_screen(
             &self.terminal,
             home.as_deref(),
             &mut Default::default(),
