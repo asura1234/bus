@@ -158,6 +158,7 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
         root.chmod(0o700)
         terminal, started, stopped, completed = None, False, False, set()
         actions, cleanup_errors = [], []
+        agents, projects = {}, {}
         support = helper("dialog_driver_acceptance_support_test.py")
         terminal_helper = helper("kimi_trust_acceptance_test.py")
 
@@ -331,7 +332,6 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 identity.append(record)
             save("build-identity", identity)
             room = str(save("room", control("room", "create", "native-driver"))["result"]["room_id"])
-            agents, projects = {}, {}
             for provider in PROVIDERS:
                 project = root / "project" / provider
                 project.mkdir(mode=0o700)
@@ -449,6 +449,12 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
         finally:
             primary = sys.exc_info()[1]
             traces = []
+            if started and primary is not None:
+                for provider, agent in agents.items():
+                    try:
+                        observe(agent, provider + "-failure")
+                    except Exception as error:
+                        save(provider + "-failure-read-error", {"error": str(error)})
             if terminal is not None:
                 try:
                     terminal.pump(0.2)
