@@ -69,12 +69,24 @@ pub(crate) fn create_bare_repo_with_linked_worktree(name: &str) -> (PathBuf, Pat
 }
 
 pub(super) fn run_git(cwd: &Path, args: &[&str]) {
+    let config = std::env::temp_dir().join(format!(
+        "bus-workspace-empty-git-config-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&config, "").unwrap();
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
+    std::fs::remove_file(config).unwrap();
     assert!(
         output.status.success(),
         "git {:?} failed: {}",

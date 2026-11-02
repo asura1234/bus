@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 SKILLS = SCRIPTS.parents[1]
@@ -27,6 +28,13 @@ class RepositoryPolicyPortabilityTest(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
+        global_config = self.root / 'global.gitconfig'
+        global_config.write_text('')
+        self.git_config = patch.dict(ENV, {
+            'GIT_CONFIG_GLOBAL': str(global_config), 'GIT_CONFIG_NOSYSTEM': '1',
+        })
+        self.git_config.start()
+        self.addCleanup(self.git_config.stop)
 
     def published_repo(self, name='repo'):
         remote = self.root / f'{name}-remote.git'

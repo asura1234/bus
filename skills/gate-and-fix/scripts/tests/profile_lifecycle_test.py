@@ -18,18 +18,26 @@ import gate_process  # noqa: E402
 
 
 def repository(root):
+    global_config = root / "temp/global.gitconfig"
+    global_config.parent.mkdir()
+    global_config.write_text("")
+    env = {
+        **os.environ, "GIT_CONFIG_GLOBAL": str(global_config), "GIT_CONFIG_NOSYSTEM": "1",
+    }
     for argv in (
         ("init", "-q", "-b", "feature"), ("config", "user.email", "fixture@example.test"),
         ("config", "user.name", "fixture"),
     ):
-        subprocess.run(("git", *argv), cwd=root, check=True)
+        subprocess.run(("git", *argv), cwd=root, env=env, check=True)
     (root / ".gitignore").write_text("target/\ntemp/\n")
     (root / "input.txt").write_text("base\n")
-    subprocess.run(("git", "add", ".gitignore", "input.txt"), cwd=root, check=True)
-    subprocess.run(("git", "commit", "-qm", "base"), cwd=root, check=True)
-    base = subprocess.check_output(("git", "rev-parse", "HEAD"), cwd=root, text=True).strip()
+    subprocess.run(("git", "add", ".gitignore", "input.txt"), cwd=root, env=env, check=True)
+    subprocess.run(("git", "commit", "-qm", "base"), cwd=root, env=env, check=True)
+    base = subprocess.check_output(
+        ("git", "rev-parse", "HEAD"), cwd=root, env=env, text=True,
+    ).strip()
     (root / "input.txt").write_text("head\n")
-    subprocess.run(("git", "commit", "-qam", "head"), cwd=root, check=True)
+    subprocess.run(("git", "commit", "-qam", "head"), cwd=root, env=env, check=True)
     return base
 
 
@@ -75,6 +83,18 @@ class InterruptProcessStateTest(unittest.TestCase):
 
 
 class ProfileLifecycleTest(unittest.TestCase):
+    def test_repository_ignores_global_commit_signing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "host.gitconfig"
+            config.write_text("[commit]\ngpgsign = true\n[gpg]\nprogram = false\n")
+            repo = root / "repo"
+            repo.mkdir()
+            with patch.dict(os.environ, {
+                "GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1",
+            }):
+                self.assertEqual(len(repository(repo)), 40)
+
     @contextlib.contextmanager
     def fixture(self):
         with tempfile.TemporaryDirectory() as directory:
