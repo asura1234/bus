@@ -76,3 +76,25 @@ fn codex_native_server_holds_the_writer_lock_after_its_bus_handle_drops() {
         "a stopped runtime must permit the validated cold resume"
     );
 }
+
+#[test]
+fn codex_native_attached_profile_retains_the_configured_tui_without_starting_a_server() {
+    let dir = crate::utils::test_temp::unique_temp_path("codex-profile");
+    fs::create_dir_all(&dir).unwrap();
+    let mut runtime = Runtime {
+        config: Some(Config {
+            env: HashMap::from([(
+                "BUS_CALLBACK_DIR".into(),
+                dir.to_string_lossy().into_owned(),
+            )]),
+            cwd: dir.clone(),
+        }),
+        session: None,
+    };
+    let argv = ["/not-a-program/codex", "-pwork", "--no-daemon"].map(str::to_owned);
+    let result = runtime.launch(&argv).unwrap();
+    let started = dir.join("codex-native.log").exists();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(result, argv);
+    assert!(!started,"a config profile must select the legacy TUI before a differently configured app-server starts");
+}
