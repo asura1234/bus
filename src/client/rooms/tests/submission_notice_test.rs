@@ -920,161 +920,8 @@ fn opening_retained_request_failures_seeds_observation_but_new_causes_still_warn
 }
 
 #[test]
-fn tui_error_text_persisted_bus_diagnostic_notice_preserves_control_notices() {
-    use crate::messaging::storage::state_store::JsonStore;
-    let (mut ui, room, _) = fixture();
-    let mut snapshot = (*ui.snapshot).clone();
-    let diagnostic = BusState::missing_binary_message(room, "codex");
-    snapshot
-        .state
-        .post_bus_notice(room, None, diagnostic.clone(), 1000)
-        .unwrap();
-    snapshot
-        .state
-        .post_bus_notice(room, None, "NORMAL_CONTROL_NOTICE".into(), 1001)
-        .unwrap();
-    // Older producers persisted diagnostics as ordinary Bus notices. Reopen the
-    // actual state store so this exercises durable history, not latest-only cache.
-    let root = crate::utils::test_temp::unique_temp_path("bus-persisted-diagnostic-notice");
-    std::fs::create_dir_all(&root).unwrap();
-    let store = JsonStore::new(root.join("state.json"));
-    store.save(&snapshot.state).unwrap();
-    snapshot.state = store.load().unwrap().unwrap();
-    assert!(snapshot
-        .state
-        .notices(room)
-        .any(|notice| notice.text == diagnostic));
-    snapshot.revision += 1;
-    ui.receive_snapshot(Arc::new(snapshot));
-    let frame = room_screen(&mut ui, 180, 60);
-    // Remove only this probe's disposable data before any red assertion.
-    std::fs::remove_dir_all(root).unwrap();
-    assert!(frame.contains("NORMAL_CONTROL_NOTICE"), "{frame}");
-    assert!(
-        !frame.contains("missing from PATH") && !frame.contains("BLOCKED:"),
-        "saved Bus diagnostics must not return as chat after reopen:\n{frame}"
-    );
-    assert_no_diagnostics(
-        &mut ui,
-        &["BLOCKED:", "missing from PATH", "Restore 'codex'"],
-    );
-}
-
-#[test]
-fn tui_error_text_retained_bus_diagnostics_are_logged_without_losing_safe_notices() {
-    let (mut ui, room, agent) = fixture();
-    let mut snapshot = (*ui.snapshot).clone();
-    let diagnostics = [
-        "Bus restart rolled back to old. new did not become healthy: LEGACY_ROLLBACK_CAUSE.",
-        "Bus restart was refused before any stop. The server is still running unchanged and still serving old. /new was not started: LEGACY_REFUSAL_CAUSE.",
-        "Bus restart failed and the session is not serving old. new did not become healthy: LEGACY_FAILED_CAUSE.",
-        "BLOCKED worker. Startup failed: LEGACY_STARTUP_CAUSE.",
-        "SAFE_RETAINED_QUESTION\nThe orchestrator did not receive this (LEGACY_DIALOG_CAUSE).",
-        "SAFE_UNCONFIRMED_QUESTION\nDelivery to the orchestrator is unconfirmed; it may already have received this (LEGACY_UNCONFIRMED_CAUSE).\nThe dialog state could not be read; the agent may still be blocked.",
-        "Restarted old -> new (by user:test). LEGACY_SUCCESS_REASON",
-    ];
-    for (i, text) in diagnostics.iter().enumerate() {
-        snapshot
-            .state
-            .post_bus_notice(room, None, (*text).into(), 1000 + i as u64)
-            .unwrap();
-    }
-    // Older orchestrator-directed diagnostics were ordinary Bus requests, too.
-    snapshot
-        .state
-        .post_bus_notice(room, Some(agent), diagnostics[0].into(), 1010)
-        .unwrap();
-    snapshot
-        .state
-        .post_bus_notice(room, None, "NORMAL_CONTROL_NOTICE".into(), 1011)
-        .unwrap();
-    snapshot
-        .state
-        .submit_message_with(
-            room,
-            Draft {
-                text: "Bus restart rolled back to QUOTED_AUTHORED_TEXT".into(),
-                files: vec![],
-                recipient_ids: [agent].into(),
-            },
-            Author::Developer,
-            1012,
-            true,
-        )
-        .unwrap();
-    let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| {
-        snapshot.revision += 1;
-        ui.receive_snapshot(Arc::new(snapshot.clone()));
-        assert_no_diagnostics(
-            &mut ui,
-            &[
-                "LEGACY_ROLLBACK_CAUSE",
-                "LEGACY_REFUSAL_CAUSE",
-                "LEGACY_FAILED_CAUSE",
-                "LEGACY_STARTUP_CAUSE",
-                "LEGACY_DIALOG_CAUSE",
-                "LEGACY_UNCONFIRMED_CAUSE",
-                "LEGACY_SUCCESS_REASON",
-            ],
-        );
-        let frame = room_screen(&mut ui, 180, 60);
-        for text in [
-            "NORMAL_CONTROL_NOTICE",
-            "SAFE_RETAINED_QUESTION",
-            "SAFE_UNCONFIRMED_QUESTION",
-            "Restarted old",
-            "QUOTED_AUTHORED_TEXT",
-        ] {
-            assert!(frame.contains(text), "missing {text}: {frame}");
-        }
-        assert!(snapshot
-            .state
-            .archive(2000 + crate::messaging::model::ARCHIVE_AFTER_MS));
-        snapshot.revision += 1;
-        ui.receive_snapshot(Arc::new(snapshot));
-        assert_no_diagnostics(
-            &mut ui,
-            &[
-                "LEGACY_ROLLBACK_CAUSE",
-                "LEGACY_REFUSAL_CAUSE",
-                "LEGACY_FAILED_CAUSE",
-                "LEGACY_STARTUP_CAUSE",
-                "LEGACY_DIALOG_CAUSE",
-                "LEGACY_UNCONFIRMED_CAUSE",
-                "LEGACY_SUCCESS_REASON",
-            ],
-        );
-    });
-    let log = capture.text();
-    assert_eq!(log.matches("bus.notice.diagnostic").count(), 8, "{log}");
-    for marker in [
-        "LEGACY_ROLLBACK_CAUSE",
-        "LEGACY_REFUSAL_CAUSE",
-        "LEGACY_FAILED_CAUSE",
-        "LEGACY_STARTUP_CAUSE",
-        "LEGACY_DIALOG_CAUSE",
-        "LEGACY_UNCONFIRMED_CAUSE",
-        "LEGACY_SUCCESS_REASON",
-    ] {
-        assert!(log.contains(marker), "missing {marker}: {log}");
-    }
-    assert!(
-        log.contains("room_id=") && log.contains("message_id="),
-        "{log}"
-    );
-}
-
-#[test]
 fn tui_error_text_hidden_envelopes_and_cache_never_enter_composer_recall() {
-    for source in [
-        "routing",
-        "report",
-        "notice",
-        "cache_only",
-        "question",
-        "normal_notice",
-    ] {
+    for source in ["routing", "report", "cache_only", "normal_notice"] {
         let (mut ui, room, agent) = fixture();
         let mut snapshot = (*ui.snapshot).clone();
         snapshot
@@ -1128,16 +975,7 @@ fn tui_error_text_hidden_envelopes_and_cache_never_enter_composer_recall() {
                     )
                     .unwrap();
             }
-            "notice" => {
-                let text = BusState::missing_binary_message(room, "RECALL_DIAGNOSTIC_SENTINEL");
-                snapshot
-                    .state
-                    .post_bus_notice(room, None, text, 1001)
-                    .unwrap();
-            }
-            "question" => {
-                snapshot.state.post_bus_notice(room,None,"SAFE_RECALL_QUESTION\nThe orchestrator did not receive this (RECALL_DIAGNOSTIC_SENTINEL).".into(),1001).unwrap();
-            }
+
             "normal_notice" => {
                 snapshot
                     .state
@@ -1158,7 +996,6 @@ fn tui_error_text_hidden_envelopes_and_cache_never_enter_composer_recall() {
         ui.receive_snapshot(Arc::new(snapshot));
         key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
         let expected = match source {
-            "question" => "SAFE_RECALL_QUESTION",
             "normal_notice" => "NORMAL_RECALL_NOTICE",
             _ => "AUTHORED_RECALL_CONTROL",
         };

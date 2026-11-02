@@ -62,10 +62,7 @@ impl BusUi {
             state
                 .notices(room)
                 .filter(|prompt| Some(prompt.id) == latest)
-                .filter_map(|prompt| {
-                    super::super::notices::retained_notice_body(prompt)
-                        .map(|text| (prompt.submitted_at_ms, text))
-                }),
+                .map(|prompt| (prompt.submitted_at_ms, prompt.text.as_str())),
         );
         // Stable, so same-millisecond entries keep local-before-persisted order.
         stamped.sort_by_key(|(at_ms, _)| *at_ms);

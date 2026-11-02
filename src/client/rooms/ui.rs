@@ -9,7 +9,7 @@ use super::{
 use crate::messaging::model::{BusState, Provider};
 use crate::messaging::{
     coordinator::{BusCommand, BusEvent, BusHandle, BusSnapshot},
-    model::{AgentId, PromptId, RequestId, RoomId, RoomKind, RuntimeStatus},
+    model::{AgentId, RequestId, RoomId, RoomKind, RuntimeStatus},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -70,7 +70,6 @@ pub(in crate::client) struct BusUi {
     pub(super) observed_agent_notices: BTreeMap<AgentId, super::notices::AgentNotices>,
     pub(super) observed_snapshot_error: Option<String>,
     pub(super) observed_request_notices: BTreeMap<RequestId, super::notices::RequestNotices>,
-    pub(super) observed_notice_diagnostics: BTreeSet<PromptId>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
@@ -193,7 +192,6 @@ impl BusUi {
             observed_agent_notices: BTreeMap::new(),
             observed_snapshot_error: None,
             observed_request_notices,
-            observed_notice_diagnostics: BTreeSet::new(),
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -248,7 +246,6 @@ impl BusUi {
             outer_focused: None,
         };
         ui.sync_snapshot_error();
-        ui.sync_notice_diagnostics();
         ui
     }
     /// Applies immediately; a failed save keeps the choice for this run only.

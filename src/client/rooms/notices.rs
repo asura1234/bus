@@ -1,7 +1,7 @@
 use super::{BusUi, Pending};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, Author, BusState, Prompt, Request, RequestId, RoomId},
+    model::{AgentId, BusState, Request, RequestId, RoomId},
 };
 use std::collections::BTreeMap;
 
@@ -17,45 +17,6 @@ pub(super) struct AgentNotices {
 pub(super) struct RequestNotices {
     reason: Option<String>,
     detail: Option<String>,
-}
-
-/// Old producers stored diagnostics as ordinary Bus prompts. Only these known
-/// Bus-owned envelopes are removed; authored text and ordinary notices stay intact.
-pub(super) fn retained_notice_body(prompt: &Prompt) -> Option<&str> {
-    if prompt.author != Author::Bus {
-        return Some(&prompt.text);
-    }
-    let text = crate::messaging::attention::text(&prompt.text).unwrap_or(&prompt.text);
-    if text.starts_with("BLOCKED: provider binary '")
-        || text.starts_with("Bus restart rolled back to ")
-        || text.starts_with("Bus restart was refused before any stop.")
-        || text.starts_with("Bus restart failed and the session is not serving ")
-        || (text.starts_with("BLOCKED ") && text.contains(". Startup failed:"))
-    {
-        return None;
-    }
-    for boundary in [
-        "\nThe orchestrator did not receive this (",
-        "\nDelivery to the orchestrator is unconfirmed; it may already have received this (",
-    ] {
-        if let Some((question, _)) = text.split_once(boundary) {
-            return Some(question);
-        }
-    }
-    if text.starts_with("Restarted ") {
-        if let Some((safe, _)) = text.split_once("). ") {
-            // Retain the original successful-restart metadata, including its period.
-            return Some(&text[..safe.len() + 2]);
-        }
-    }
-    Some(&prompt.text)
-}
-
-pub(super) fn retained_notice_diagnostic(prompt: &Prompt) -> Option<&str> {
-    match retained_notice_body(prompt) {
-        Some(body) if body == prompt.text => None,
-        _ => Some(&prompt.text),
-    }
 }
 
 impl RequestNotices {
@@ -94,7 +55,6 @@ impl BusUi {
     /// Durable request diagnostics must not borrow the agent's latest error:
     /// an intervening failure or an archived request still owns its cause.
     pub(super) fn sync_request_notices(&mut self) {
-        self.sync_notice_diagnostics();
         let mut observed = BTreeMap::new();
         for request in self.snapshot.state.requests() {
             let Some(current) = RequestNotices::from_request(request) else {
@@ -127,33 +87,6 @@ impl BusUi {
             observed.insert(request.id, current);
         }
         self.observed_request_notices = observed;
-    }
-
-    /// Historical Bus diagnostics have no renderer. Keep their original cause
-    /// in the client log without replaying them into the error-report pipe.
-    pub(super) fn sync_notice_diagnostics(&mut self) {
-        let state = &self.snapshot.state;
-        let prompts = state
-            .requests()
-            .map(|request| (request.room_id, &request.prompt))
-            .chain(
-                state
-                    .rooms()
-                    .flat_map(|room| state.notices(room.id).map(move |prompt| (room.id, prompt))),
-            );
-        for (room, prompt) in prompts {
-            if let Some(detail) = retained_notice_diagnostic(prompt) {
-                if self.observed_notice_diagnostics.insert(prompt.id) {
-                    tracing::info!(
-                        event = "bus.notice.diagnostic",
-                        message_id = prompt.id.0,
-                        room_id = room.0,
-                        author = "bus",
-                        %detail,
-                    );
-                }
-            }
-        }
     }
 
     pub(super) fn record_command_failure(
