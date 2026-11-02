@@ -56,7 +56,7 @@ that actual journal atomic-replace operation to fail. Record the fault paths.
 ### ERR-04 — Failed restart outcome
 
 Preconditions/setup: Create/select a fresh scratch room `restart-errors` and bind
-one fake Codex orchestrator in MASTER. Fixture writes may place a complete
+one fake Claude orchestrator in MASTER. Fixture writes may place a complete
 RestartLog in only this driver's `data/restarts/outcome.json`; no restart command
 or live server handoff is performed. Record old/new SHAs, binaries, actor, timestamp,
 outcome and a unique diagnostic reason.

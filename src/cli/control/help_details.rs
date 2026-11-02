@@ -225,8 +225,8 @@ Errors: command_failed carries setup/provider/validation diagnostics. Inspect th
 reported project hook path before using --consent-hooks, or setup-confirm for an
 existing pending agent. Missing provider binaries retain saved agents/tasks; fix
 the installation and use agent resume --room ROOM. Never blindly duplicate add.
-A missing provider command produces one BLOCKED notice per room/provider outage,
-naming the binary; affected agents and tasks stay saved.
+A missing provider command leaves the agent Unavailable and logs the binary
+with room/provider context; affected agents and tasks stay saved.
 
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. New Codex
