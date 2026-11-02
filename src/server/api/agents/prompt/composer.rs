@@ -7,6 +7,51 @@ mod diagnostics;
 mod ownership;
 mod preservation;
 
+/// The final submission guard asks only whether native input is available.
+/// It never compares the rendered body with the message Bus just wrote.
+fn submission_available(kind: AgentKind, screen: &str) -> bool {
+    let plain = screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detected = crate::agents::manifest::detect_with_osc(
+        kind,
+        crate::agents::manifest::DetectionInput {
+            screen: &plain,
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    !detected.visible_blocker
+        && crate::agents::dialog::parse(screen).is_none()
+        && !(kind == AgentKind::Codex && crate::agents::dialog::codex_question_pending(screen))
+        && input(kind, screen).is_some()
+}
+
+fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
+    if !submission_available(kind, screen) {
+        return false;
+    }
+    let Some(body) = input_since_launch(kind, screen, cursor, pristine) else {
+        return false;
+    };
+    body.is_empty()
+        || match kind {
+            AgentKind::Claude => {
+                preservation::default_claude_stash_binding()
+                    && !preservation::native_stash_present(screen)
+            }
+            AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi => !preservation::opaque(&body),
+            _ => false,
+        }
+}
+
 #[cfg(test)]
 pub(super) fn preserving_observer(
     kind: AgentKind,

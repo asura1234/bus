@@ -69,7 +69,7 @@ impl PreservingComposer {
                     visible_draft: body,
                 })
             }
-            AgentKind::Codex | AgentKind::Cursor if !opaque(&body) => {
+            AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi if !opaque(&body) => {
                 Some(DraftPreservation::Editor {
                     key: self.keys[1].clone(),
                     backspace: self.keys[2].clone(),
@@ -81,7 +81,7 @@ impl PreservingComposer {
     }
 }
 
-fn opaque(body: &str) -> bool {
+pub(super) fn opaque(body: &str) -> bool {
     ["[Image #", "[Pasted text #", "[Pasted Content "]
         .iter()
         .any(|marker| body.contains(marker))
@@ -92,6 +92,15 @@ fn opaque(body: &str) -> bool {
 mod tests;
 
 impl SubmissionInspector for PreservingComposer {
+    fn submission_available(&self, screen: &str) -> bool {
+        super::submission_available(self.kind, screen)
+    }
+    fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
+        super::draft_ready(self.kind, screen, cursor, pristine)
+    }
+    fn always_use_editor(&self) -> bool {
+        self.kind == AgentKind::Kimi
+    }
     fn diagnose_refusal(&self, screen: &str, phase: &'static str, cursor: Option<(u16, u16)>) {
         self.owned.diagnose_with_policy(
             screen,
@@ -131,15 +140,19 @@ impl SubmissionInspector for PreservingComposer {
     }
 
     fn editor_submission(&self) -> Option<EditorSubmission> {
-        (self.kind == AgentKind::Kimi && self.keys.len() == 3).then(|| EditorSubmission {
-            text: self.expected.replace("\r\n", "\n").replace('\r', "\n"),
-            directory: self.directory.clone(),
-            key: self.keys[1].clone(),
-            backspace: self.keys[2].clone(),
-            verification_error: Some(
-                "Kimi submission may have run; inspect the transcript before resending",
-            ),
-        })
+        (matches!(
+            self.kind,
+            AgentKind::Kimi | AgentKind::Codex | AgentKind::Cursor
+        ) && self.keys.len() == 3)
+            .then(|| EditorSubmission {
+                text: self.expected.replace("\r\n", "\n").replace('\r', "\n"),
+                directory: self.directory.clone(),
+                key: self.keys[1].clone(),
+                backspace: self.keys[2].clone(),
+                verification_error: (self.kind == AgentKind::Kimi).then_some(
+                    "Kimi submission may have run; inspect the transcript before resending",
+                ),
+            })
     }
 
     fn clipped_input_verification(&self, screen: &str) -> Option<EditorSubmission> {
@@ -284,7 +297,7 @@ fn codex_clipped(screen: &str) -> bool {
             .is_some_and(|line| line.trim_end().ends_with('↑'))
 }
 
-fn native_stash_present(screen: &str) -> bool {
+pub(super) fn native_stash_present(screen: &str) -> bool {
     let rows: Vec<String> = screen
         .lines()
         .map(|line| {

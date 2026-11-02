@@ -10,12 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// A pause longer than an ordinary inter-key gap, including short thinking
-/// pauses. Every key/text/paste sent by the TUI resets this pane-local clock.
-pub(crate) const DRAFT_QUIET_WINDOW: Duration = Duration::from_secs(3);
-
 pub(super) struct DraftInput {
-    last_key: Option<Instant>,
     buffered: Option<Vec<u8>>,
     revision: u64,
     pending: Option<PendingPaste>,
@@ -29,7 +24,6 @@ pub(super) struct DraftInput {
 impl Default for DraftInput {
     fn default() -> Self {
         Self {
-            last_key: None,
             buffered: None,
             revision: 0,
             pending: None,
@@ -75,8 +69,8 @@ impl DraftInput {
         bytes: Bytes,
     ) -> Result<(), tokio::sync::mpsc::error::TrySendError<Bytes>> {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-        // A full channel returns the bytes. They never reached the pane, so
-        // they must not start the quiet window. A buffer-only Ok does not
+        // A full channel returns bytes that never reached the pane.
+        // A buffer-only Ok does not
         // close the launch window; only a queued write does.
         let result = if let Some(buffered) = &mut state.buffered {
             buffered.extend_from_slice(&bytes);
@@ -89,7 +83,6 @@ impl DraftInput {
             result
         };
         if result.is_ok() {
-            state.last_key = Some(io.submission_clock().now());
             state.revision = state.revision.wrapping_add(1);
             state.pending = None;
         }
@@ -100,32 +93,22 @@ impl DraftInput {
         state: &SharedDraftInput,
         io: &PaneRuntimeIo,
     ) -> io::Result<DraftInputLease> {
-        Self::acquire_inner(state, io, true)
+        Self::acquire_inner(state, io)
     }
 
-    /// Launch input has its own positive prompt and empty-buffer witness. It
-    /// must not delay a shell startup answer by the provider-draft quiet window.
+    /// Launch input shares the same exclusive input buffer as a draft swap.
     pub(super) fn acquire_launch(
         state: &SharedDraftInput,
         io: &PaneRuntimeIo,
     ) -> io::Result<DraftInputLease> {
-        Self::acquire_inner(state, io, false)
+        Self::acquire_inner(state, io)
     }
 
-    fn acquire_inner(
-        state: &SharedDraftInput,
-        io: &PaneRuntimeIo,
-        require_quiet: bool,
-    ) -> io::Result<DraftInputLease> {
+    fn acquire_inner(state: &SharedDraftInput, io: &PaneRuntimeIo) -> io::Result<DraftInputLease> {
         let mut input = state
             .lock()
             .map_err(|_| io::Error::other("pane input lock poisoned"))?;
-        if input.buffered.is_some()
-            || require_quiet
-                && input.last_key.is_some_and(|at| {
-                    io.submission_clock().now().saturating_duration_since(at) < DRAFT_QUIET_WINDOW
-                })
-        {
+        if input.buffered.is_some() {
             return Err(io::Error::other(
                 super::submission::PromptNotShown::ComposerBusy,
             ));
