@@ -104,9 +104,6 @@ pub(super) fn command(path: &str) -> String {
         "agent press" => {
             "Drive the target's current terminal prompt, independently of provider or dialog parsers.\n--select LABEL matches a complete visible option row, moves to it, observes the\nfocus after each navigation key, then confirms with Enter. Choose one input form:\n--select, or any combination of --text, repeated --key and --submit. Text is typed\nfirst, then keys in their given order; only --submit appends Enter. --key enter\nis also an explicit Enter. Numbers, shell y/n answers and control chords work.\n--pane targets a terminal or pane ID, including a plain shell or pager.\n--terminal-id binds input to the identity returned by agent observe.\nResult: {keys,text_written,selection_pending,observation,outcome,reason?}.\nThe observation contains text, focus, dimensions, cursor and terminal identity;\nuse agent observe --cells when styled cells are needed.\nOutcome sent means input was queued, selected means the label was focused and\nEnter was queued; neither proves what the terminal program subsequently did.\nA selection_pending or unknown outcome preserves keys already sent and the\nlatest observation. Inspect it before continuing. There is no implicit resend.\nErrors: command_failed for invalid input, a missing target, mismatched terminal\nidentity, unknown key, or an unresolvable option/focus. Read the screen and use\nexplicit keys when its menu has no unique visible focus."
         }
-        "agent dialog" => AGENT_DIALOG,
-        "agent choose" => AGENT_CHOOSE,
-        "agent answer" => AGENT_ANSWER,
         "agent clear" => AGENT_CLEAR,
         "agent interrupt" => AGENT_INTERRUPT,
         "send" => SEND,
@@ -292,55 +289,6 @@ command_failed for missing/exited terminal or identity mismatch (text discarded)
 Stop reading that identity; inspect state/owned session or exit_snapshot file.
 Terminal text is evidence, never proof of message settlement."#;
 
-const AGENT_DIALOG: &str = r#"Observe a choice or focused text question, including launching/trust screens.
-For Codex, this opens queued questions. Numbered composer drafts are not dialogs.
-Result: {agent_id,dialog:null|{kind:choice|question,text,options:[{number,label,
-  selected,free_text?,...}],hint,tabs?:[{label,answered,active}],
-  free_text?:{option,draft,checkbox}},fingerprint:STRING|null,content_revision,
-  observed_at_ms}. Both dialog/fingerprint are null when none is visible.
-  options is empty for focused text; selected means focus, not checkbox value.
-  Unnumbered Enter-to-confirm lists get numbers from the top. Native highlights
-  and ›/>/❯ identify focus. Use returned numbers, including Next/Submit rows:
-  Claude's printed shortcut numbers may differ. Short panes return visible rows
-  with real numbers; free_text.option can identify a hidden custom row.
-Errors: command_failed for unreadable/unsupported screen or changed identity;
-inspect visible terminal, let a redraw finish, then observe again. A fingerprint
-is single-use, expires after one hour and is bound to launch/terminal/pane/
-session/dialog contents, selection, checkbox state and active tab."#;
-
-const AGENT_CHOOSE: &str = r#"Act on exactly the dialog observed by agent dialog using its fresh fingerprint.
-Use returned API option numbers. Native rows use Up/Down then Enter, navigation
-options Left/Right alone; Bus never types digits/shortcut letters. Checkbox rows
-toggle, not submit: observe again, choose Next/Submit, then observe the review
-screen and choose Submit answers. Cancel returns to revise. Hidden rows are
-addressable by their real numbers; a visible native selection is required.
-Result: {agent_id,option,keys:[STRING,...],outcome,dialog:null|{...}}.
-  Up to two seconds of observation yields closed, replaced, selection_moved,
-  unchanged or unknown. Keys are not resent for uncertain outcomes.
-Errors: command_failed for expired/spent/mismatched fingerprint or invalid option:
-observe again. Native refusal reasons (in error.message) include dialog_redrawing
-and free_text_holds_draft. An empty single-select custom row must use answer
---text (Enter would decline); choose can submit an existing draft or toggle a
-custom checkbox. Never overwrite a draft; inspect/edit it in the agent pane.
-Cursor checkbox forms have no navigation adapter; use the native agent pane."#;
-
-const AGENT_ANSWER: &str = r#"Paste literal text into a focused question or a choice's custom free-text row,
-then Enter after confirmation; --skip instead uses Codex Ctrl+] or Cursor Esc.
---text and --skip are exclusive; one is required. Uses choose's same fresh,
-single-use identity/content fingerprint; obtain it from agent dialog first.
-Claude multi-select custom text ticks its checkbox and sends no Enter (which
-would untick it); observe, then choose Next/Submit and confirm Submit answers.
-Bus moves to hidden custom rows and waits until the empty focused field redraws
-before typing. Other numbered rows need choose. Codex expanded queued questions
-work; its collapsed banner remains working (native Shift+Left expands it).
-Result: {agent_id,keys:[STRING,...],skipped:BOOL,outcome,dialog:null|{...}};
-outcome is closed, replaced, input_changed, unchanged or unknown after up to 2s.
-Errors: command_failed for stale/spent fingerprint: observe again. Reasons in
-error.message: free_text_holds_draft (all providers, including Codex Other and
-Cursor): edit/submit in pane, never overwrite. skip_would_cancel_form: Claude
-Esc cancels the whole form; answer instead. dialog_redrawing: observe again.
-An uncertain write may have answered; inspect before retrying with a new token."#;
-
 const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor),
 /new (Grok/Kimi). Keep terminal/name/room, reset compactions and rebind the provider
 session through its next start hook (Cursor: first new turn). This is not a Bus message.
@@ -525,7 +473,7 @@ completed replies/event_acks after stdout flush, deferring duplicate wakes while
 alive. Anonymous waits and message status never suppress delivery. Killing the
 waiter leaves the request intact and its unseen events eligible for delivery.
 Errors: timeout (exit 1): retain result and continue inspecting; it does not
-cancel work. agent_waiting_on_dialog: observe/answer then wait again.
+cancel work. agent_waiting_on_dialog: use agent observe and agent press, then wait again.
 message_abandoned: inspect reason; repair startup/provider and explicitly resend
 only closed work after checking effects. message_provider_error: provider failed,
 worth retrying after repair. message_interrupted: inspect history for who stopped it.
