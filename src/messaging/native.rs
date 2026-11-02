@@ -3,7 +3,110 @@ use crate::protocol::api::{
     client::{ApiClient, ApiClientError, ConnectionTarget},
     schema::{Method, Request, ResponseResult},
 };
+use std::io::{BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
+
+#[derive(Default)]
+pub(crate) struct NativeWake {
+    pending: AtomicBool,
+}
+
+impl NativeWake {
+    pub(crate) fn notify(
+        &self,
+        commands: &mpsc::SyncSender<(u64, super::coordinator::BusCommand)>,
+    ) -> bool {
+        if self.pending.swap(true, Ordering::AcqRel) {
+            return true;
+        }
+        match commands.send((0, super::coordinator::BusCommand::NativeWake)) {
+            Ok(()) => true,
+            Err(_) => {
+                self.pending.store(false, Ordering::Release);
+                false
+            }
+        }
+    }
+
+    pub(crate) fn acknowledge(&self) {
+        self.pending.store(false, Ordering::Release);
+    }
+}
+
+fn read_native_events(
+    reader: &mut impl BufRead,
+    commands: &mpsc::SyncSender<(u64, super::coordinator::BusCommand)>,
+    wake: &NativeWake,
+) -> std::io::Result<()> {
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "native event subscription closed before setup",
+        ));
+    }
+    if !wake.notify(commands) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "coordinator command channel closed",
+        ));
+    }
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "native event subscription closed",
+            ));
+        }
+        if !wake.notify(commands) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "coordinator command channel closed",
+            ));
+        }
+    }
+}
+
+pub(crate) fn spawn_event_wakes(
+    target: ConnectionTarget,
+    commands: mpsc::SyncSender<(u64, super::coordinator::BusCommand)>,
+    wake: Arc<NativeWake>,
+) {
+    std::thread::Builder::new()
+        .name("bus-native-events".into())
+        .spawn(move || {
+            let client = ApiClient::for_target(target);
+            loop {
+                let connected = (|| {
+                    let mut stream = crate::platform::ipc::connect_local_stream(&client.socket_path())?;
+                    let request = Request {
+                        id: format!("bus-events:{}", std::process::id()),
+                        method: Method::EventsSubscribe(crate::protocol::api::schema::EventsSubscribeParams {
+                            subscriptions: vec![
+                                crate::protocol::api::schema::Subscription::PaneUpdated {},
+                                crate::protocol::api::schema::Subscription::PaneAgentDetected {},
+                            ],
+                        }),
+                    };
+                    stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
+                    stream.write_all(b"\n")?;
+                    stream.flush()?;
+                    read_native_events(&mut BufReader::new(stream), &commands, &wake)
+                })();
+                if let Err(error) = connected {
+                    tracing::debug!(event = "bus.coordinator.native_events.reconnect", %error, "Native event stream disconnected; resynchronize and reconnect");
+                    if !wake.notify(&commands) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        })
+        .expect("native event wake thread must start");
+}
 
 /// Local transport evidence that the native server connection is gone.
 pub(crate) const NATIVE_SERVER_UNAVAILABLE: &str = "native_server_unavailable";
@@ -181,6 +284,38 @@ fn classify_error(error: ApiClientError) -> TransportError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_wakes_coalesce_until_the_coordinator_acknowledges() {
+        let (commands, received) = mpsc::sync_channel(1);
+        let wake = NativeWake::default();
+        assert!(wake.notify(&commands));
+        assert!(wake.notify(&commands));
+        assert!(matches!(
+            received.recv().unwrap(),
+            (0, super::super::coordinator::BusCommand::NativeWake)
+        ));
+        assert!(received.try_recv().is_err());
+        wake.acknowledge();
+        assert!(wake.notify(&commands));
+        assert!(matches!(
+            received.recv().unwrap(),
+            (0, super::super::coordinator::BusCommand::NativeWake)
+        ));
+    }
+
+    #[test]
+    fn reconnect_resynchronizes_without_replaying_a_stale_notification() {
+        let (commands, received) = mpsc::sync_channel(4);
+        let wake = NativeWake::default();
+        let mut first = std::io::Cursor::new(b"{\"result\":{}}\n{\"event\":1}\n".to_vec());
+        assert!(read_native_events(&mut first, &commands, &wake).is_err());
+        assert_eq!(received.try_iter().count(), 1);
+        wake.acknowledge();
+        let mut reconnected = std::io::Cursor::new(b"{\"result\":{}}\n{\"event\":2}\n".to_vec());
+        assert!(read_native_events(&mut reconnected, &commands, &wake).is_err());
+        assert_eq!(received.try_iter().count(), 1);
+    }
 
     #[test]
     fn shell_prompt_wait_retries_through_a_seven_second_startup() {

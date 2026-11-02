@@ -676,14 +676,21 @@ impl BusUi {
         }
     }
 
-    /// How soon the client loop should tick again. A command waiting on the
-    /// coordinator (a draft save, a send) settles only on a tick, so a 100 ms
-    /// cadence would add up to that much to every step of Enter's round trip.
+    pub(crate) fn snapshot_wake(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        self.handle
+            .as_ref()
+            .map(|handle| handle.snapshot_wake.clone())
+    }
+
+    /// Snapshot publication wakes the client directly. Timers are only for
+    /// active status animations and dispatching locally queued commands.
     pub fn tick_interval(&self) -> std::time::Duration {
-        if self.pending.is_empty() && self.send_intent.is_none() {
+        if !self.pending.is_empty() || self.send_intent.is_some() {
+            std::time::Duration::from_millis(10)
+        } else if self.status_animation_last_tick.is_some() {
             std::time::Duration::from_millis(100)
         } else {
-            std::time::Duration::from_millis(10)
+            std::time::Duration::from_secs(3600)
         }
     }
 

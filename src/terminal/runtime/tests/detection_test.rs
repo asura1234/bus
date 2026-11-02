@@ -554,6 +554,7 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         events,
         Arc::new(AtomicU64::new(0)),
         Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
         Arc::new(RenderSignal::new()),
         Arc::new(Mutex::new(None)),
     );
@@ -668,4 +669,37 @@ fn a_pending_exit_keeps_its_leader_until_the_agent_is_cleared() {
     assert_eq!(leader, named);
     track_agent_leader(&mut leader, None, false, Some(1));
     assert_eq!(leader, None);
+}
+
+#[tokio::test]
+async fn terminal_output_wakes_detection_without_a_steady_state_tick() {
+    let viewer = "• Working (4s • esc to interrupt)\r\n› transcript\r\n↑/↓ to scroll · pgup/pgdn to move · home/end to jump · q to quit · esc to edit prev\r\n";
+    let runtime = TerminalRuntime::test_with_screen_bytes(120, 24, viewer.as_bytes());
+    let (events, mut received) = mpsc::channel(8);
+    let (_, _, detector) = crate::terminal::runtime::detection_task::spawn_detection_task(
+        PaneId::from_raw(0),
+        AgentDetection::Enabled,
+        Some(AgentKind::Codex),
+        Arc::new(AtomicU32::new(0)),
+        runtime.terminal.clone(),
+        events,
+        Arc::new(AtomicU64::new(0)),
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+        Arc::new(Mutex::new(None)),
+    );
+    let detector = detector.unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_millis(200), received.recv()).await;
+    detector.abort();
+    assert!(
+        matches!(
+            result,
+            Ok(Some(TerminalEvent::StateChanged {
+                state: AgentState::Working,
+                ..
+            }))
+        ),
+        "output did not wake detection within 200ms: {result:?}"
+    );
 }

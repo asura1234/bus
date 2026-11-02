@@ -31,7 +31,7 @@ fn tick_until(ui: &mut BusUi, done: impl Fn(&BusUi) -> bool) -> Option<Duration>
         if done(ui) {
             return Some(start.elapsed());
         }
-        std::thread::sleep(ui.tick_interval());
+        std::thread::sleep(ui.tick_interval().min(Duration::from_millis(10)));
     }
     None
 }
@@ -106,4 +106,23 @@ fn enter_on_an_empty_composer_after_a_send_is_not_a_rejected_send() {
     texts.sort();
     assert_eq!(texts, ["I see", "first"]);
     assert_no_empty_rejection(&ui);
+}
+
+#[tokio::test]
+async fn snapshot_publication_wakes_the_client_without_an_idle_poll() {
+    let (ui, room, dir) = live_room();
+    let handle = ui.handle.as_ref().unwrap();
+    assert_eq!(ui.tick_interval(), Duration::from_secs(3600));
+    let wake = handle.snapshot_wake.clone();
+    let notified = tokio::spawn(async move { wake.notified().await });
+    handle
+        .try_send(42, BusCommand::SetNotes(room, "wake the room".into()))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), notified)
+        .await
+        .expect("snapshot notification did not wake the client")
+        .unwrap();
+    handle.try_send(43, BusCommand::Shutdown).unwrap();
+    drop(ui);
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -35,7 +35,7 @@ fn startup_poll_timeout_retries_without_status_or_composer_error_then_recovers()
         );
     }
     worker.poll().unwrap();
-    assert_eq!(worker.poll_interval(), Duration::from_millis(500));
+    assert_eq!(worker.poll_interval(), Duration::from_secs(5));
     assert_eq!(
         worker.state.agent(agent).unwrap().status,
         RuntimeStatus::Idle
@@ -93,7 +93,7 @@ fn recovered_poll_resets_failure_budget_so_one_later_timeout_keeps_agent_status(
         RuntimeStatus::Idle
     );
     worker.poll().unwrap();
-    assert_eq!(worker.poll_interval(), Duration::from_millis(500));
+    assert_eq!(worker.poll_interval(), Duration::from_secs(5));
     worker.tick().unwrap();
     assert_eq!(
         worker.state.agent(agent).unwrap().status,

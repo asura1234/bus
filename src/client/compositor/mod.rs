@@ -443,6 +443,12 @@ impl ClientShellState {
         repaint
     }
 
+    pub(crate) fn bus_snapshot_wake(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        self.bus
+            .as_ref()
+            .and_then(crate::client::rooms::BusUi::snapshot_wake)
+    }
+
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
         let default = self.bus.as_ref().map_or(
             std::time::Duration::from_millis(100),

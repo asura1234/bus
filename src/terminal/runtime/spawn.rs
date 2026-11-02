@@ -501,6 +501,7 @@ fn spawn_child_watcher(
     mut child: Box<dyn Child + Send + Sync>,
     child_pid: Arc<AtomicU32>,
     child_wait_completed: Arc<AtomicBool>,
+    detection_notify: Arc<Notify>,
     events: mpsc::Sender<TerminalEvent>,
 ) {
     let rt = tokio::runtime::Handle::current();
@@ -522,6 +523,7 @@ fn spawn_child_watcher(
             }
         };
         child_wait_completed.store(true, Ordering::Release);
+        detection_notify.notify_one();
         // Use blocking send — PaneDied is critical, must not be dropped
         if let Err(e) = rt.block_on(events.send(TerminalEvent::PaneDied {
             pane_id,
@@ -750,11 +752,13 @@ impl TerminalRuntime {
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let detection_notify = Arc::new(Notify::new());
         spawn_child_watcher(
             pane_id,
             spawned.child,
             child_pid.clone(),
             child_wait_completed.clone(),
+            detection_notify.clone(),
             events.clone(),
         );
 
@@ -768,6 +772,7 @@ impl TerminalRuntime {
                 content_seq: content_seq.clone(),
                 content_write_lock: content_write_lock.clone(),
                 detection_content_seq: detection_content_seq.clone(),
+                detection_notify: detection_notify.clone(),
                 child_pid: child_pid.clone(),
                 events: events.clone(),
                 reported_cwd: reported_cwd.clone(),
@@ -795,6 +800,7 @@ impl TerminalRuntime {
             terminal.clone(),
             events.clone(),
             detection_content_seq.clone(),
+            detection_notify.clone(),
             render_notify.clone(),
             render_dirty.clone(),
             kimi_code_home.clone(),
@@ -816,6 +822,7 @@ impl TerminalRuntime {
             draft_input,
             driver_state: Default::default(),
             detection_content_seq,
+            detection_notify,
             managed_launch_pending,
             detection_context,
             kimi_code_home,

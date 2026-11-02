@@ -180,6 +180,7 @@ impl TerminalRuntime {
                 draft_input,
                 driver_state: Default::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
+                detection_notify: Arc::new(Notify::new()),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
                 detection_context: Default::default(),
                 kimi_code_home: Arc::new(Mutex::new(None)),

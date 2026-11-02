@@ -34,6 +34,9 @@ pub(super) struct Worker {
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
     pub(super) transport: Box<dyn Transport>,
+    pub(super) native_wake: Arc<crate::messaging::native::NativeWake>,
+    pub(super) reconcile_interval: Duration,
+    pub(super) snapshot_wake: Arc<tokio::sync::Notify>,
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
     pub(super) error: Option<String>,
@@ -151,6 +154,9 @@ impl Worker {
             data_dir,
             _lease: lease,
             transport,
+            native_wake: Arc::new(crate::messaging::native::NativeWake::default()),
+            reconcile_interval: Duration::from_secs(5),
+            snapshot_wake: Arc::new(tokio::sync::Notify::new()),
             revision: 0,
             last_command_id: 0,
             error: None,
@@ -434,13 +440,29 @@ impl Worker {
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
+                    let mutating = control_dispatch::is_mutation(&call.request.method);
                     if self.serve_control_without_refresh(call, &events, &snapshots, next_poll) {
                         continue;
                     }
+                    if mutating {
+                        next_poll = std::time::Instant::now();
+                    }
+                }
+                Ok((_id, BusCommand::NativeWake)) => {
+                    self.native_wake.acknowledge();
+                    next_poll = std::time::Instant::now();
                 }
                 Ok((id, command)) => {
                     let submitting =
                         matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
+                    let needs_poll = submitting
+                        || matches!(
+                            command,
+                            BusCommand::AddAgent(_)
+                                | BusCommand::AddOrchestrator(..)
+                                | BusCommand::DeleteAgent(_)
+                                | BusCommand::DeleteRoom(_)
+                        );
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let name = perf::command_name(&command);
                     let started = std::time::Instant::now();
@@ -474,6 +496,9 @@ impl Worker {
                     // it; do not make that wait for this loop's poll tick.
                     busy.stage("snapshot");
                     self.publish_snapshot(&snapshots);
+                    if needs_poll {
+                        next_poll = std::time::Instant::now();
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -525,6 +550,7 @@ impl Worker {
         if let Ok(mut shared) = snapshots.lock() {
             *shared = snapshot;
         }
+        self.snapshot_wake.notify_one();
     }
 
     fn timed_snapshot(&self) -> Arc<BusSnapshot> {

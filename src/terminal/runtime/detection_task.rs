@@ -157,6 +157,7 @@ pub(super) fn spawn_detection_task(
     terminal: Arc<PaneTerminal>,
     events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    detection_notify: Arc<Notify>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
@@ -178,6 +179,7 @@ pub(super) fn spawn_detection_task(
         terminal,
         state_events: events,
         detection_content_seq,
+        detection_notify,
         managed_launch_pending: managed_launch_pending.clone(),
         render_notify,
         render_dirty,
@@ -192,8 +194,6 @@ pub(super) fn spawn_detection_task(
     )
 }
 
-const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
-const TICK_IDENTIFIED: Duration = Duration::from_millis(300);
 const TICK_TRANSIENT_COLOR_OVERRIDE: Duration = Duration::from_millis(50);
 
 struct DetectionTask {
@@ -202,6 +202,7 @@ struct DetectionTask {
     terminal: Arc<PaneTerminal>,
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    detection_notify: Arc<Notify>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
     render_notify: Arc<Notify>,
@@ -272,9 +273,8 @@ impl DetectionState {
 impl DetectionTask {
     async fn run(self, initial_agent: Option<AgentKind>) {
         let mut status = DetectionState::new(initial_agent);
-        tokio::time::sleep(Duration::from_millis(50)).await;
         loop {
-            tokio::time::sleep(self.tick_delay(&status)).await;
+            self.wait_for_change(&status).await;
             let now = Instant::now();
             let pid = self.child_pid.load(Ordering::Acquire);
             let mut agent = status.agent_presence.current_agent();
@@ -332,15 +332,21 @@ impl DetectionTask {
         }
     }
 
-    fn tick_delay(&self, status: &DetectionState) -> Duration {
-        if self.terminal.has_transient_default_color_override() {
-            TICK_TRANSIENT_COLOR_OVERRIDE
+    async fn wait_for_change(&self, status: &DetectionState) {
+        let recheck = if self.terminal.has_transient_default_color_override() {
+            Some(TICK_TRANSIENT_COLOR_OVERRIDE)
         } else if status.pending_idle.active() {
-            AGENT_PENDING_IDLE_RECHECK
-        } else if status.agent_presence.current_agent().is_none() {
-            TICK_UNIDENTIFIED
+            Some(AGENT_PENDING_IDLE_RECHECK)
         } else {
-            TICK_IDENTIFIED
+            None
+        };
+        if let Some(delay) = recheck {
+            tokio::select! {
+                _ = self.detection_notify.notified() => {}
+                _ = tokio::time::sleep(delay) => {}
+            }
+        } else {
+            self.detection_notify.notified().await;
         }
     }
 
@@ -864,6 +870,7 @@ mod blocked_tests {
                 terminal: self.terminal.clone(),
                 state_events: events,
                 detection_content_seq: self.detection_content_seq.clone(),
+                detection_notify: Arc::new(Notify::new()),
                 managed_launch_pending: self.managed_launch_pending.clone(),
                 detection_context: self.detection_context.clone(),
                 render_notify: Arc::new(Notify::new()),
@@ -986,6 +993,7 @@ mod blocked_tests {
             terminal: runtime.terminal.clone(),
             state_events: events,
             detection_content_seq: runtime.detection_content_seq.clone(),
+            detection_notify: Arc::new(Notify::new()),
             managed_launch_pending: runtime.managed_launch_pending.clone(),
             detection_context: runtime.detection_context.clone(),
             render_notify: Arc::new(Notify::new()),

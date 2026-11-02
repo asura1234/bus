@@ -346,3 +346,80 @@ fn opening_saved_stalled_work_closes_it_before_resetting_readiness() {
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+struct WakeDuringPoll {
+    wake: Arc<crate::messaging::native::NativeWake>,
+    commands: mpsc::SyncSender<(u64, BusCommand)>,
+    submitted: mpsc::Sender<()>,
+    info: schema::AgentInfo,
+    polls: usize,
+}
+
+impl Transport for WakeDuringPoll {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                self.polls += 1;
+                assert!(self.wake.notify(&self.commands));
+                Ok(ResponseResult::AgentList {
+                    agents: vec![self.info.clone()],
+                })
+            }
+            Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_) => {
+                self.submitted.send(()).unwrap();
+                Ok(ResponseResult::AgentPrompted {
+                    agent: self.info.clone(),
+                })
+            }
+            _ => panic!("unexpected terminal operation"),
+        }
+    }
+}
+
+#[test]
+fn native_wake_received_during_a_poll_is_not_lost() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    queue(&mut worker, room, agent, "work arriving with native wake");
+    worker.reconcile_interval = Duration::from_secs(60);
+    let wake = worker.native_wake.clone();
+    let (commands, receiver) = mpsc::sync_channel(16);
+    let (submitted, observed) = mpsc::channel();
+    let mut info = native_info("pane", "codex", "session");
+    info.interactive_ready = true;
+    worker.transport = Box::new(WakeDuringPoll {
+        wake: wake.clone(),
+        commands: commands.clone(),
+        submitted,
+        info,
+        polls: 0,
+    });
+    let snapshot = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let (events, _) = mpsc::channel();
+    commands.send((1, BusCommand::NativeWake)).unwrap();
+    let thread = std::thread::spawn(move || worker.run(receiver, events, snapshot));
+    observed
+        .recv_timeout(Duration::from_secs(2))
+        .expect("native work must not wait for the injected 60-second watchdog");
+    commands.send((2, BusCommand::Shutdown)).unwrap();
+    thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_idle_coordinator_sleeps_instead_of_polling() {
+    let (mut worker, _agent, _room, dir, calls) = fixture(Provider::Codex, vec![]);
+    worker.reconcile_interval = Duration::from_secs(60);
+    let (commands, receiver) = mpsc::channel();
+    let snapshot = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let (events, _) = mpsc::channel();
+    let thread = std::thread::spawn(move || worker.run(receiver, events, snapshot));
+    std::thread::sleep(Duration::from_millis(50));
+    commands.send((1, BusCommand::Shutdown)).unwrap();
+    thread.join().unwrap();
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        1,
+        "only the initial resync is allowed"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

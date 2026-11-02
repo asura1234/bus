@@ -57,7 +57,7 @@ fn poll_status(
     }
 }
 
-/// The client loop ticks Bus on its timer whether or not keys arrive.
+/// Drive updates without relying on the event-loop notification used in production.
 fn tick_until(
     ui: &mut BusUi,
     deadline: Duration,
@@ -69,7 +69,7 @@ fn tick_until(
         if done(ui) {
             return Some(start.elapsed());
         }
-        std::thread::sleep(ui.tick_interval());
+        std::thread::sleep(ui.tick_interval().min(Duration::from_millis(10)));
     }
     None
 }

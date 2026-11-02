@@ -213,6 +213,7 @@ impl TerminalRuntime {
         drop(_content_write_guard);
         self.compression.wake();
         mark_detection_content_changed(&self.detection_content_seq);
+        self.detection_notify.notify_one();
         self.io.resize(
             rows,
             cols,

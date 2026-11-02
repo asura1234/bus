@@ -418,6 +418,7 @@ fn stream_subscriptions(
             return Ok(());
         }
 
+        let observed_sequence = event_hub.current_sequence();
         for subscription in &mut subscriptions {
             if let Some(event) = subscription.poll(api_tx, event_hub) {
                 if let Err(err) = write_json_line(&mut stream, &event) {
@@ -428,7 +429,7 @@ fn stream_subscriptions(
                 }
             }
         }
-        std::thread::sleep(CONNECTION_POLL_INTERVAL);
+        event_hub.wait_for_change(observed_sequence, CONNECTION_POLL_INTERVAL);
     }
 }
 

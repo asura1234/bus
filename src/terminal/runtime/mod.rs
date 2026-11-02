@@ -133,7 +133,6 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::watch;
-#[cfg(all(test, unix))]
 use tokio::sync::Notify;
 
 mod detection_context;
@@ -167,6 +166,7 @@ pub struct TerminalRuntime {
     /// Semantic navigation state is owned exclusively by the terminal driver.
     driver_state: crate::terminal::driver::DriverState,
     detection_content_seq: Arc<AtomicU64>,
+    detection_notify: Arc<Notify>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,

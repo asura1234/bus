@@ -110,8 +110,11 @@ impl Worker {
     }
 
     pub(super) fn poll_interval(&self) -> Duration {
-        // Do not sleep inside the transport or replay any mutating request.
-        // The coordinator can still accept commands between failed polls.
+        // Event notifications and accepted work schedule delivery immediately.
+        // This is only a housekeeping reconciliation watchdog, not a delivery poll.
+        if self.poll_failures == 0 {
+            return self.reconcile_interval;
+        }
         Duration::from_millis(500 << self.poll_failures.saturating_sub(1).min(2))
     }
 
