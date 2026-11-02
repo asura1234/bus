@@ -226,6 +226,37 @@ fn kimi_silent_internal_iteration_does_not_reuse_an_earlier_answer() {
 }
 
 #[test]
+fn noise_kimi_empty_final_is_distinct_from_a_committed_turn_without_text() {
+    for text in ["", " \t\n"] {
+        let mut rows: Vec<Value> = ITERATIONS
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let lead = rows[0]["input"][0]["text"].as_str().unwrap().to_owned();
+        rows.iter_mut()
+            .rev()
+            .find(|row| row["type"] == "agent.message.appended")
+            .unwrap()["message"]["message"]["content"] =
+            serde_json::json!([{"type":"text","text":text}]);
+        let wire = rows
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>();
+        assert_eq!(
+            committed_outcome(&wire, 1, &lead),
+            Some(Outcome::Final(text.into()))
+        );
+        let open = rows
+            .iter()
+            .filter(|row| row["type"] != "prompt.completed")
+            .map(|row| format!("{row}\n"))
+            .collect::<String>();
+        assert_eq!(committed_outcome(&open, 1, &lead), None);
+        assert_eq!(committed_outcome(&wire, 1, "foreign prompt"), None);
+    }
+}
+
+#[test]
 fn kimi_latest_internal_output_requires_its_own_iteration_end_before_outer_commit() {
     let mut rows: Vec<Value> = ITERATIONS
         .lines()

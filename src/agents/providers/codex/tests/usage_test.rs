@@ -358,6 +358,48 @@ fn rollout_0164_reads_completed_message_items_and_preserves_text_parts() {
 }
 
 #[test]
+fn noise_rollout_empty_final_preserves_text_from_each_committed_codex_shape() {
+    let dir = rollout_dir("empty-final");
+    let path = dir.join("rollout-recorded.jsonl");
+    let turn = "01a19a4c-21df-7ba1-93ea-4e073e8af0e0";
+    for text in ["", " \t\n"] {
+        for source in ["task_complete", "item_completed", "response_item"] {
+            let mut lines = final_0164_records();
+            match source {
+                "task_complete" => {
+                    lines[3]["payload"]["last_agent_message"] = json!(text);
+                    lines.drain(1..3);
+                }
+                "item_completed" => {
+                    lines[1]["payload"]["item"]["content"] = json!([{"type":"Text","text":text}]);
+                    lines.remove(2);
+                }
+                "response_item" => {
+                    lines[2]["payload"]["content"] = json!([{"type":"output_text","text":text}]);
+                    lines.remove(1);
+                }
+                _ => unreachable!(),
+            }
+            std::fs::write(
+                &path,
+                lines
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                read_codex_turn_end(&path, turn).unwrap(),
+                Some(CodexTurnEnd::Final(text.into())),
+                "{source}: {text:?}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn rollout_0164_requires_a_completed_final_for_the_same_turn_before_its_end() {
     let dir = rollout_dir("0164-boundaries");
     let path = dir.join("rollout-recorded.jsonl");

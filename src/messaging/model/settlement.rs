@@ -498,22 +498,15 @@ impl BusState {
         id: RequestId,
         now_ms: u64,
     ) -> Option<RequestId> {
-        let mut completed = self.group_members(id);
-        completed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
-        if self.request(id).is_some_and(|request| !request.settled()) {
-            completed.push(id);
-        }
-        self.abandon_current_request(id, now_ms).ok()?;
-        for member in completed {
-            if let Some(request) = self.requests.get_mut(&member) {
-                request.phase = RequestPhase::Completed;
-                request.failure_reason = None;
-                request.pending_final = None;
-            }
-        }
-        if let Some(owner) = self.agents.get_mut(&agent) {
-            owner.actionable_error = None;
-        }
+        let request = self.requests.get_mut(&id)?;
+        request.pending_final = Some(super::PendingFinal {
+            callback_id: format!("silent:{}", id.0),
+            text: String::new(),
+            received_at_ms: now_ms,
+            provider_session_id: request.provider_session_id.clone(),
+            provider_turn_id: request.provider_turn_id.clone(),
+        });
+        self.complete_pending_final(agent, now_ms).ok()?;
         Some(id)
     }
 

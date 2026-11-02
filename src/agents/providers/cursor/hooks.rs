@@ -2,6 +2,18 @@
 use super::super::spool::{field, Parsed};
 use serde_json::Value;
 
+/// Response text must be present, but an explicit empty string is a reply.
+pub(super) fn response_text(value: &Value) -> Result<String, String> {
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "Hook missing text; update the CLI and verify Bus hooks. No prompt will be retried."
+                .to_owned()
+        })
+}
+
 pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
     let event = field(value, "hook_event_name")?;
     if value.get("agent_id").is_some_and(|v| !v.is_null()) || event.starts_with("Subagent") {
@@ -27,7 +39,7 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
         "afterAgentResponse" => Ok(Parsed::Response {
             session,
             turn,
-            text: field(value, "text")?,
+            text: response_text(value)?,
         }),
         "stop" => match field(value, "status")?.as_str() {
             "completed" => Ok(Parsed::Completed { session, turn }),

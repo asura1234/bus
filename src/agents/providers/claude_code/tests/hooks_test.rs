@@ -29,7 +29,12 @@ fn missing_field(key: &str) -> String {
 
 #[test]
 fn claude_empty_stop_keeps_the_turn_with_null_missing_or_empty_text() {
-    for text in [None, Some(Value::Null), Some(json!(""))] {
+    for (text, expected) in [
+        (None, ""),
+        (Some(Value::Null), ""),
+        (Some(json!("")), ""),
+        (Some(json!(" \t\n")), " \t\n"),
+    ] {
         let mut value = json!({"hook_event_name":"Stop","session_id":"s","prompt_id":"p"});
         if let Some(text) = text {
             value["last_assistant_message"] = text;
@@ -39,7 +44,7 @@ fn claude_empty_stop_keeps_the_turn_with_null_missing_or_empty_text() {
             Parsed::Final {
                 session: "s".into(),
                 turn: "p".into(),
-                text: String::new(),
+                text: expected.into(),
             }
         );
     }

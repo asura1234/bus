@@ -61,6 +61,30 @@ fn cursor_hooks_separate_response_completion_and_start_observations() {
 }
 
 #[test]
+fn noise_cursor_empty_final_response_is_distinct_from_missing_text() {
+    for text in ["", " \t\n"] {
+        let mut response = hook("afterAgentResponse");
+        response["text"] = json!(text);
+        assert_eq!(
+            parse(&response).unwrap(),
+            Parsed::Response {
+                session: "s".into(),
+                turn: "g".into(),
+                text: text.into(),
+            }
+        );
+    }
+    for text in [None, Some(Value::Null), Some(json!(false)), Some(json!([]))] {
+        let mut response = hook("afterAgentResponse");
+        response.as_object_mut().unwrap().remove("text");
+        if let Some(text) = text {
+            response["text"] = text;
+        }
+        assert!(parse(&response).is_err(), "{response}");
+    }
+}
+
+#[test]
 fn cursor_missing_generation_and_unsupported_events_preserve_field_order() {
     let mut missing = hook("stop");
     missing.as_object_mut().unwrap().remove("generation_id");
