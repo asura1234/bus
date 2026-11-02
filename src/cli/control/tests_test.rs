@@ -18,6 +18,19 @@ fn command_help(args: &[&str]) -> String {
 }
 
 #[test]
+fn retired_room_notes_is_absent_from_cli_and_help() {
+    assert!(command(&["room", "notes", "work", "--text", "status"]).is_err());
+    for dev in [false, true] {
+        let tree = command_tree(dev);
+        let room = tree.find_subcommand("room").unwrap();
+        assert!(room.find_subcommand("notes").is_none());
+        let args = ["room", "--help"].map(String::from);
+        let help = help_for(tree, &args).unwrap();
+        assert!(!help.contains("notes"), "{help}");
+    }
+}
+
+#[test]
 fn reply_to_infers_the_conversation_and_requires_an_explicit_recipient_identity() {
     let parsed = command(&[
         "send",
@@ -168,7 +181,6 @@ const SAMPLES: &[&[&str]] = &[
     &["settings"],
     &["room", "create", "r"],
     &["room", "rename", "r", "s"],
-    &["room", "notes", "r", "--text", "t"],
     &["room", "delete", "r", "--confirm"],
     &["history", "--room", "r"],
     &[
@@ -362,16 +374,6 @@ fn commands_route_to_exact_methods_with_string_selectors() {
             &["room", "rename", "7", "Planning"],
             "room.rename",
             json!({"room": "7", "name": "Planning"}),
-        ),
-        (
-            &["room", "notes", "Planning", "--text", "Goal\n- ship notes"],
-            "room.notes",
-            json!({"room": "Planning", "text": "Goal\n- ship notes"}),
-        ),
-        (
-            &["room", "notes", "7", "--text", ""],
-            "room.notes",
-            json!({"room": "7", "text": ""}),
         ),
         (
             &["room", "delete", "planning", "--confirm"],
@@ -664,7 +666,6 @@ fn invalid_or_ambiguous_commands_do_not_create_requests() {
         &["state", "extra"],
         &["room", "create"],
         &["room", "rename", "7"],
-        &["room", "notes", "7"],
         &["room", "delete", "7"],
         &["agent", "delete", "9"],
         &["agent", "setup-confirm", "9"],

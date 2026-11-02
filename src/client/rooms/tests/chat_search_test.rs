@@ -149,41 +149,24 @@ fn the_selected_match_is_highlighted_brighter_than_the_others() {
 }
 
 #[test]
-fn esc_closes_the_search_and_returns_focus_where_it_was() {
-    for notes in [false, true] {
-        let (mut ui, room, agent) = fixture();
-        history_with(&mut ui, room, agent, 2, &[1]);
-        ui.open_room(room);
-        if notes {
-            key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-        }
-        assert_eq!(ui.notes_focus, notes);
-        key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
-        assert!(!ui.notes_focus, "the search bar takes focus");
-        type_text(&mut ui, "needle");
-        room_screen(&mut ui, 100, 30);
-        assert_eq!(
-            ui.view.cursor.as_ref().map(|cursor| cursor.y),
-            Some(ui.view.search_field.y + 1),
-            "the cursor is in the search panel"
-        );
-        key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
-        assert!(ui.chat_search.is_none());
-        assert_eq!(ui.notes_focus, notes, "focus is back where it was");
-        let screen = room_screen(&mut ui, 100, 30);
-        assert!(!screen.contains("Find: "), "{screen}");
-        // Keys reach the composer or notes again.
-        type_text(&mut ui, "x");
-        let local = &ui.locals[&room];
-        assert_eq!(
-            if notes {
-                &local.notes.text
-            } else {
-                &local.text.text
-            },
-            "x"
-        );
-    }
+fn esc_closes_the_search_and_returns_focus_to_the_composer() {
+    let (mut ui, room, agent) = fixture();
+    history_with(&mut ui, room, agent, 2, &[1]);
+    ui.open_room(room);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    type_text(&mut ui, "needle");
+    room_screen(&mut ui, 100, 30);
+    assert_eq!(
+        ui.view.cursor.as_ref().map(|cursor| cursor.y),
+        Some(ui.view.search_field.y + 1),
+        "the cursor is in the search panel"
+    );
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.chat_search.is_none());
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("Find: "), "{screen}");
+    type_text(&mut ui, "x");
+    assert_eq!(ui.locals[&room].text.text, "x");
 }
 
 #[test]
@@ -271,7 +254,7 @@ fn the_panel_sits_directly_above_the_history_and_gives_its_rows_back() {
         key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
         let screen: Vec<char> = room_screen(&mut ui, 100, 30).chars().collect();
         let panel = ui.view.search_box;
-        // Where the history began, across the chat pane like the notes box.
+        // Where the history began, across the chat pane.
         assert_eq!(panel.y, top, "master: {master}");
         assert_eq!(
             (panel.x, panel.width),

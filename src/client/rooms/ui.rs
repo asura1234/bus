@@ -36,7 +36,6 @@ pub(super) struct ViewKey {
 pub(super) enum Effect {
     None,
     Text(RoomId, u64),
-    Notes(RoomId, u64),
     Recipients(RoomId, u64),
     Files(RoomId),
     Submit(RoomId, u64),
@@ -83,7 +82,6 @@ pub(in crate::client) struct BusUi {
     pub(super) form: Option<Form>,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
-    pub(super) notes_focus: bool,
     pub(super) recipient_menu: bool,
     pub(super) recipient_index: usize,
     pub(super) suggestions: Suggestions,
@@ -205,7 +203,6 @@ impl BusUi {
             form: None,
             deletion: None,
             rename: None,
-            notes_focus: false,
             recipient_menu: false,
             recipient_index: 0,
             suggestions: Suggestions::default(),
@@ -347,7 +344,7 @@ impl BusUi {
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
         self.pending.retain(|p|p.enqueued || !matches!((&p.effect,&effect),
-            (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Notes(a,_),Effect::Notes(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
+            (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
         if let BusCommand::Submit(room) | BusCommand::SubmitQueued(room) = &command {
@@ -431,10 +428,6 @@ impl BusUi {
             }
             BusEvent::RoomCreated(room) => {
                 self.open_room(room);
-                if self.seed_first_room {
-                    self.seed_first_room = false;
-                    self.queue(BusCommand::SetNotes(room, "Goal: stay in the room to coordinate selected agents.\nNon-goals: automatic handoffs or permission approval.".into()), Effect::None);
-                }
             }
             BusEvent::AgentAdded(agent) => {
                 self.form = None;
@@ -523,7 +516,6 @@ impl BusUi {
     fn retry_storage_failure(&mut self, pending: Pending) {
         match pending.effect {
             Effect::Text(room, _) => self.text_changed(room),
-            Effect::Notes(room, _) => self.notes_changed(room),
             Effect::Recipients(room, _) => self.recipients_changed(room),
             effect => {
                 self.queue(pending.command, effect);
@@ -541,12 +533,6 @@ impl BusUi {
             self.locals
                 .entry(room.id)
                 .or_insert_with(|| LocalRoom::from(room));
-            if let Some(local) = self.locals.get_mut(&room.id) {
-                // Rebuilding unchanged notes would drop their caret and selection.
-                if local.notes_generation == 0 && local.notes.text != room.notes {
-                    local.notes = Editor::new(room.notes.clone());
-                }
-            }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         self.sync_snapshot_error();
@@ -593,10 +579,7 @@ impl BusUi {
                     let keep =
                         matches!(
                             pending.effect,
-                            Effect::Text(..)
-                                | Effect::Notes(..)
-                                | Effect::Recipients(..)
-                                | Effect::Files(..)
+                            Effect::Text(..) | Effect::Recipients(..) | Effect::Files(..)
                         ) && super::deletion::target_exists(&pending.command, &self.snapshot.state);
                     self.record_command_failure(&pending, error, recovered, keep);
                     self.send_intent = None;
@@ -614,11 +597,6 @@ impl BusUi {
                         Effect::Text(room, generation) => {
                             if let Some(local) = self.locals.get_mut(&room) {
                                 local.saved_text_generation = generation;
-                            }
-                        }
-                        Effect::Notes(room, generation) => {
-                            if let Some(local) = self.locals.get_mut(&room) {
-                                local.saved_notes_generation = generation;
                             }
                         }
                         Effect::Recipients(room, generation) => {

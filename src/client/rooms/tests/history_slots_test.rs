@@ -838,7 +838,8 @@ fn recipient_picker_hides_history_thumbnails_that_cover_its_rows() {
     let image = png(&dir, "shot.png", (200, 80));
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
-    for index in 0..10 {
+    // Fill enough picker rows to cover the thumbnail even with history at row 3.
+    for index in 0..20 {
         snapshot
             .state
             .create_agent(

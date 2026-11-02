@@ -45,7 +45,7 @@ fn confirmed_delete_reaches_worker_before_prior_submit_snapshot_arrives() {
     assert!(matches!(commands.try_recv(), Ok((id, BusCommand::Submit(_))) if id == submit));
     // Worker is polling after Submit; no new snapshot or ack has reached the UI.
     ui.queue(
-        BusCommand::SetNotes(room, "keep notes".into()),
+        BusCommand::SetDraftText(room, "keep draft".into()),
         Effect::None,
     );
     ui.start_delete(deletion::DeleteTarget::Agent(agent));
@@ -54,7 +54,7 @@ fn confirmed_delete_reaches_worker_before_prior_submit_snapshot_arrives() {
     ui.tick();
     assert!(matches!(
         commands.try_recv(),
-        Ok((_, BusCommand::SetNotes(_, _)))
+        Ok((_, BusCommand::SetDraftText(_, _)))
     ));
     assert!(
         matches!(commands.try_recv(), Ok((id, BusCommand::DeleteAgent(target))) if id == delete && target == agent)

@@ -1,4 +1,4 @@
-//! Room history, composer, notes, search and recipient views.
+//! Room history, composer, search and recipient views.
 use super::super::{
     chat_search::{find_matches, ChatSearch},
     history::{Line, Tone},
@@ -11,7 +11,7 @@ use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::message_name_color;
 use super::text::{display, wrap};
 use super::{Action, Hit, View, ACCENT, GREY};
-use crate::messaging::model::{Room, RoomId, RoomKind};
+use crate::messaging::model::{Room, RoomId};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -23,7 +23,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const SEARCH_MATCH: Color = Color::Rgb(150, 125, 60);
 const SEARCH_CURRENT: Color = Color::Rgb(240, 190, 70);
 
-/// Geometry reserved before painting the room's notes, history and draft.
+/// Geometry reserved before painting the room's history and draft.
 #[derive(Clone, Copy)]
 struct RoomLayout {
     x: u16,
@@ -65,8 +65,7 @@ impl BusUi {
         let chat_search = self.chat_search.clone();
         let layout = self.composer_layout(view, main, local, &recipients);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
-        let history_y = self.room_header(view, main, room, local, layout);
-        self.notes_view(view, local);
+        let history_y = self.room_header(view, main, room, layout);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
@@ -161,10 +160,10 @@ impl BusUi {
         let width = main.width.saturating_sub(4);
         // The composer box always ends on the last row; none is reserved.
         let composer_bottom = main.bottom();
-        // Preserve the eight-row room header/notes, at least three history
-        // rows, a three-row draft, and its four chrome rows. The logical chip
+        // Preserve the three-row room header, at least three history rows,
+        // a three-row draft, and its four chrome rows. The logical chip
         // list still wraps without a row limit and scrolls in this viewport.
-        let bar_budget = composer_bottom.saturating_sub(18);
+        let bar_budget = composer_bottom.saturating_sub(13);
         let bar_height = if recipients.chips.is_empty() {
             1
         } else {
@@ -173,19 +172,13 @@ impl BusUi {
         view.recipient_max_scroll = recipients.height.saturating_sub(bar_height);
         // One active draft per frame, independent of agent/pane cardinality.
         let max_height = composer_bottom.saturating_sub(bar_height + 4);
-        let text_height = if self.notes_focus {
-            // In short terminals, notes need a visible row and caret before
-            // reserving space for the temporarily inactive draft editor.
-            3.min(composer_bottom.saturating_sub(bar_height + 9))
-        } else {
-            match local.composer_size {
-                ComposerSize::Auto => wrap(&local.text.text, width)
-                    .len()
-                    .max(3)
-                    .min(usize::from(max_height)) as u16,
-                ComposerSize::Full => max_height,
-                ComposerSize::Compact => 3,
-            }
+        let text_height = match local.composer_size {
+            ComposerSize::Auto => wrap(&local.text.text, width)
+                .len()
+                .max(3)
+                .min(usize::from(max_height)) as u16,
+            ComposerSize::Full => max_height,
+            ComposerSize::Compact => 3,
         }
         .min(max_height);
         let composer_y = composer_bottom.saturating_sub(text_height + bar_height + 3);
@@ -214,14 +207,7 @@ impl BusUi {
         }
     }
 
-    fn room_header(
-        &self,
-        view: &mut View,
-        main: Rect,
-        room: &Room,
-        local: &LocalRoom,
-        layout: RoomLayout,
-    ) -> u16 {
+    fn room_header(&self, view: &mut View, main: Rect, room: &Room, layout: RoomLayout) -> u16 {
         let RoomLayout {
             x,
             width,
@@ -237,26 +223,9 @@ impl BusUi {
                 false,
             );
         }
-        // The notes box grows with its text up to a quarter of the window,
-        // keeps one row for the F3 prompt, and scrolls beyond that. History
-        // takes the rows below it. MASTER has no notes (the developer talks to
-        // orchestrators there; status boards live in work rooms), so its
-        // history starts right under the room name.
-        let has_notes = room.kind != RoomKind::Master;
-        let note_lines = wrap(&local.notes.text, width).len().max(1);
-        let note_height = if has_notes {
-            (note_lines.min(usize::from((main.height / 4).max(1))) as u16)
-                .min(composer_y.saturating_sub(5))
-        } else {
-            0
-        };
-        if note_height > 0 {
-            view.notes_box =
-                Rect::new(main.x + 1, 2, main.width.saturating_sub(2), note_height + 2);
-        }
-        // The expanded draft may hide the top section. Never paint a history
-        // separator over its editor or reserve rows from full-screen editing.
-        let mut history_y = if has_notes { 5 + note_height.max(1) } else { 3 };
+        // The expanded draft may hide the header. Every room gives the
+        // remaining rows below its name/divider to history or chat search.
+        let mut history_y = 3;
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
@@ -272,53 +241,7 @@ impl BusUi {
             );
             history_y += SEARCH_BOX_HEIGHT;
         }
-        view.notes = Rect::new(x, 3, width, note_height);
         history_y
-    }
-
-    fn notes_view(&self, view: &mut View, local: &LocalRoom) {
-        let note_height = view.notes.height;
-        (view.notes_scroll, view.notes_rows) = view.editor_scrolled(
-            view.notes,
-            &local.notes,
-            Some(Action::Notes),
-            self.notes_focus,
-            // Read unfocused notes from the top unless the wheel moved them.
-            local.notes_scroll.or((!self.notes_focus).then_some(0)),
-            self.view.notes_scroll,
-        );
-        // Mark hidden notes on the box's top and bottom borders.
-        let notes_box = view.notes_box;
-        if note_height > 0 && notes_box.width > 12 {
-            let more_x = notes_box.right().saturating_sub(9);
-            if view.notes_scroll > 0 {
-                view.row(
-                    Rect::new(more_x, notes_box.y, 7, 1),
-                    "↑ more",
-                    None,
-                    false,
-                    true,
-                );
-            }
-            if view.notes_scroll + usize::from(note_height) < view.notes_rows {
-                view.row(
-                    Rect::new(more_x, notes_box.bottom() - 1, 7, 1),
-                    "↓ more",
-                    None,
-                    false,
-                    true,
-                );
-            }
-        }
-        if note_height > 0 && local.notes.text.is_empty() {
-            view.row(
-                Rect::new(view.notes.x, 3, view.notes.width, 1),
-                "Add notes… (F3)",
-                Some(Action::Notes),
-                false,
-                true,
-            );
-        }
     }
 
     fn history_rows(&self, view: &mut View, content: &[Line], links: &[Vec<Candidate>]) {
@@ -519,10 +442,7 @@ impl BusUi {
             view.composer,
             &local.text,
             Some(Action::Composer),
-            !self.notes_focus
-                && !self.recipient_menu
-                && self.rename.is_none()
-                && self.chat_search.is_none(),
+            !self.recipient_menu && self.rename.is_none() && self.chat_search.is_none(),
             local.composer_scroll,
             self.view.composer_scroll,
         );

@@ -162,8 +162,8 @@ do not add a new per-PR merge OK.
   authorization. No out-of-goal repairs, no unresolved FLAG/developer decision,
   and re-measure against its 3000-line split threshold before merge. Send
   follow-ups, flags and decisions to the orchestrator in finals.
-- Report a missing or replaced peer to the orchestrator, which owns room notes,
-  the roster and verifier allocation. Workers do not edit the notes or roster.
+- Report a missing or replaced peer to the orchestrator, which owns
+  the roster and verifier allocation. Workers do not edit the roster.
   Milestone finals follow the same result-routing rule. Send only the message
   body; Bus adds the header, so do not sign messages.
 

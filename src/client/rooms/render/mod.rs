@@ -43,7 +43,6 @@ pub(super) enum Action {
     NewRoom,
     NewAgent,
     ScrollFiles(bool),
-    Notes,
     Composer,
     Search(super::chat_search::SearchFocus),
     Recipients,
@@ -120,7 +119,6 @@ pub(super) struct View {
     pub composer_rows: usize,
     composer_box: Rect,
     composer_divider: Rect,
-    pub notes_box: Rect,
     history_divider: Rect,
     dialog: Rect,
     dialog_rows_start: usize,
@@ -132,10 +130,6 @@ pub(super) struct View {
     pub settings_max_scroll: usize,
     rows: Vec<Row>,
     pub cursor: Option<crate::protocol::wire::CursorState>,
-    pub notes: Rect,
-    pub notes_scroll: usize,
-    /// Wrapped rows of the room notes, of which `notes` shows a window.
-    pub notes_rows: usize,
     /// Text columns of the visible history rows.
     pub history_text: Rect,
     /// Clickable URLs and paths in the visible history rows.

@@ -838,7 +838,7 @@ fn visited_room_markdown_stays_warm_after_five_rooms_and_a_revision() {
         );
     }
     state
-        .set_room_notes(rooms[0], "new global revision without a history change")
+        .rename_room(rooms[0], "renamed without a history change")
         .unwrap();
     let updated = snapshot(state, 2);
     await_layout(

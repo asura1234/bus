@@ -91,7 +91,6 @@ pub(super) fn command(path: &str) -> String {
         "state" => STATE,
         "room create" => ROOM_CREATE,
         "room rename" => ROOM_RENAME,
-        "room notes" => ROOM_NOTES,
         "room delete" => ROOM_DELETE,
         "agent delete" => AGENT_DELETE,
         "agent add" => AGENT_ADD,
@@ -158,7 +157,7 @@ pub(super) fn command(path: &str) -> String {
 const STATE: &str = r#"Read the current session snapshot without acknowledging replies.
 Result: {revision,master_room,visible_room,rooms:[...],agents:[...],usage,settings,build,launch}.
   master_room is MASTER's ID; visible_room is null while a terminal/form is open.
-  rooms: {id,name,kind,notes,unread_count,unseen_to_developer,status,sound,sound_name,
+  rooms: {id,name,kind,unread_count,unseen_to_developer,status,sound,sound_name,
     deletion_pending,orchestrator}. kind is master/work; orchestrator is ID/null.
     status is blocked (including unavailable/dialog), else working, else idle.
     unread_count counts hidden-room peer messages/replies/notices; the persisted
@@ -188,12 +187,6 @@ const ROOM_RENAME: &str = r#"Rename a work room; IDs and history remain stable. 
 Result: {updated:true}.
 Errors: command_failed for unknown/ambiguous room or reserved name; inspect state,
 use a numeric ID and choose a work-room name other than MASTER."#;
-
-const ROOM_NOTES: &str = r#"Replace the complete work-room notes field; --text '' clears it. Multiline text
-is literal. Read the current notes first with state if preserving existing content.
-Result: {updated:true}; state returns rooms[].notes for readback.
-Errors: command_failed for unknown room or "The MASTER room has no notes";
-select a work room. No merge/append operation is implied."#;
 
 const ROOM_DELETE: &str =
     "Delete a work room and its MASTER orchestrator. MASTER cannot be deleted.

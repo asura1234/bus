@@ -255,11 +255,6 @@ fn settings_footer_advertises_enter_as_the_action_key() {
 fn help_enter_is_local_and_preserves_room_context() {
     let (mut ui, room, agent) = fixture();
     ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
-    ui.locals
-        .get_mut(&room)
-        .unwrap()
-        .notes
-        .insert("remember this");
     let before = serde_json::to_value(&ui.snapshot.state).unwrap();
     ui.input(
         &RawInputEvent::Paste("/help".into()),
@@ -271,7 +266,6 @@ fn help_enter_is_local_and_preserves_room_context() {
     assert!(room_screen(&mut ui, 120, 40).contains("Keyboard shortcuts"));
     assert!(ui.locals[&room].text.text.is_empty());
     assert_eq!(ui.locals[&room].recipients, [agent].into());
-    assert_eq!(ui.locals[&room].notes.text, "remember this");
     assert_eq!(serde_json::to_value(&ui.snapshot.state).unwrap(), before);
     assert!(ui.send_intent.is_none());
     assert!(ui
@@ -317,16 +311,6 @@ fn help_only_intercepts_the_whole_composer_command() {
         assert!(ui.form.is_none());
         assert_eq!(ui.locals[&room].text.text, text);
     }
-    let (mut ui, room, _) = fixture();
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    ui.input(
-        &RawInputEvent::Paste("/help".into()),
-        false,
-        &mut Default::default(),
-    );
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(ui.locals[&room].notes.text, "/help\n");
-    assert!(ui.form.is_none());
 }
 
 #[test]

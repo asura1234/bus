@@ -53,12 +53,10 @@ fn dragging_the_draft_copies_and_typing_replaces_the_selection() {
         .unwrap()
         .text
         .insert("hello brave world");
-    ui.notes_focus = true;
     ui.compute_view(100, 30);
     let rect = composer_rect(&ui);
     let copied = drag_copy(&mut ui, (rect.x + 6, rect.y), (rect.x + 10, rect.y));
     assert_eq!(copied.as_deref(), Some("brave"));
-    assert!(!ui.notes_focus, "pressing the draft focuses it");
     ui.input(
         &RawInputEvent::Paste("bold".into()),
         false,
@@ -67,34 +65,6 @@ fn dragging_the_draft_copies_and_typing_replaces_the_selection() {
     assert_eq!(ui.locals[&room].text.text, "hello bold world");
     assert!(ui.pending.iter().any(|p| matches!(&p.command,
         BusCommand::SetDraftText(id, text) if *id == room && text == "hello bold world")));
-}
-
-#[test]
-fn dragging_notes_copies_and_a_plain_click_only_moves_the_caret() {
-    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
-    let (mut ui, room, _) = fixture();
-    let mut snapshot = (*ui.snapshot).clone();
-    snapshot
-        .state
-        .set_room_notes(room, "goal: ship it")
-        .unwrap();
-    ui.receive_snapshot(Arc::new(snapshot));
-    ui.compute_view(100, 30);
-    let notes = ui.view.notes;
-    assert_eq!(pointer(&mut ui, Down(Left), notes.x + 6, notes.y), None);
-    assert_eq!(pointer(&mut ui, Drag(Left), notes.x + 8, notes.y), None);
-    // Routine coordinator snapshots must not reset notes mid-selection.
-    let mut snapshot = (*ui.snapshot).clone();
-    snapshot.revision += 1;
-    ui.receive_snapshot(Arc::new(snapshot));
-    let copied = pointer(&mut ui, Up(Left), notes.x + 8, notes.y);
-    assert_eq!(copied.as_deref(), Some("shi"));
-    assert!(ui.notes_focus);
-    assert_eq!(pointer(&mut ui, Down(Left), notes.x + 2, notes.y), None);
-    assert_eq!(pointer(&mut ui, Up(Left), notes.x + 2, notes.y), None);
-    let local = &ui.locals[&room];
-    assert_eq!((local.notes.cursor, local.notes.selection()), (2, None));
-    assert_eq!(local.notes.text, "goal: ship it");
 }
 
 #[test]
@@ -122,14 +92,12 @@ fn quote_preserves_newer_local_text_recipients_and_escaped_multiline_content() {
     ui.receive_snapshot(Arc::new(snapshot));
     ui.locals.get_mut(&room).unwrap().text.insert("new local");
     ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
-    ui.notes_focus = true;
     ui.quote(request);
     assert_eq!(
         ui.locals[&room].text.text,
         "new local\nauthor: \"a\n\\\"quoted\\\" \\\\ @author\"\n"
     );
     assert!(ui.locals[&room].recipients.contains(&agent));
-    assert!(!ui.notes_focus);
     assert!(ui.send_intent.is_none());
 }
 
@@ -171,11 +139,6 @@ fn typed_text_in_inputs_has_no_highlight_background() {
         cells.iter().all(|bg| *bg != highlight),
         "composer: {cells:?}"
     );
-
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    type_text(&mut ui, "notesline");
-    let cells = typed_cells(&mut ui, "notesline");
-    assert!(cells.iter().all(|bg| *bg != highlight), "notes: {cells:?}");
 
     let (mut ui, room, _) = fixture();
     ui.open_room(room);

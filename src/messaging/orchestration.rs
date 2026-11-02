@@ -170,8 +170,8 @@ pub(crate) fn agent_onboarding(
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
          Deliverable messages start with [Bus message N from NAME]. For other request replies, use bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\" before claiming delivery. If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
-         The orchestrator owns staffing and recovery, room notes, the roster, verifier allocation, dialogs, \
-         product decisions and replacement announcements; workers do not edit room notes or the roster. \
+         The orchestrator owns staffing and recovery, the roster, verifier allocation, dialogs, \
+         product decisions and replacement announcements; workers do not edit the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
          Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER; IDs appear only for numeric or historical names. \
          Send only the body; do not add a 'from X', 'X here' or signature line.",

@@ -28,7 +28,7 @@ any shared files or related work.>
 
 **PR peers and replacements:** <For each PR, give owner, verifier and every
 reviewer by name/ID, current head and pending verdicts; name shared-file owners
-and outstanding grants. The orchestrator updates the room-notes roster and
+and outstanding grants. The orchestrator updates the workflow roster and
 affected briefs and announces your replacement to these peers before it resumes.>
 
 **Running or half-done work:** <Describe unfinished edits, partial results,
@@ -93,8 +93,8 @@ room's bound orchestrator, and names or IDs can reach agents in any room.
 
 PR peers: `<PR/task> → owner <name/ID> → verifier <name/ID> → reviewer(s) <name/ID>`.
 Use these peers from your brief. If one is missing or replaced, message the
-orchestrator; it owns staffing, room notes, the roster and verifier allocation.
-Workers do not edit room notes or the roster. The brief carries the exact head,
+orchestrator; it owns staffing, the roster and verifier allocation.
+Workers do not edit the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
 recorded merge authority and explicit holds.
 

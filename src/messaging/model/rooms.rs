@@ -23,7 +23,6 @@ impl BusState {
                 id,
                 name,
                 notices: Vec::new(),
-                notes: String::new(),
                 missing_provider_binaries: BTreeSet::new(),
                 draft: Draft::default(),
                 unread_count: 0,
@@ -74,7 +73,6 @@ impl BusState {
                         id: MASTER_ROOM_ID,
                         name: MASTER_ROOM_NAME.into(),
                         notices: Vec::new(),
-                        notes: String::new(),
                         missing_provider_binaries: BTreeSet::new(),
                         draft: Draft::default(),
                         unread_count: 0,
@@ -292,17 +290,6 @@ impl BusState {
                 self.mark_room_seen(fallback)?;
             }
         }
-        Ok(())
-    }
-
-    pub(crate) fn set_room_notes(&mut self, id: RoomId, notes: &str) -> Result<(), ModelError> {
-        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
-        // Notes are a work room's status board; MASTER is where the developer talks to
-        // orchestrators and has no board of its own.
-        if room.kind == RoomKind::Master {
-            return Err(ModelError::MasterRoomHasNoNotes);
-        }
-        room.notes = notes.to_owned();
         Ok(())
     }
 

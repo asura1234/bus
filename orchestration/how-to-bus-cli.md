@@ -228,8 +228,8 @@ A failed or five-second save shows an unsaved warning: Ctrl+Q again within five 
 potentially losing edits. Wait out that window to retry saving; presses before a warning keep waiting.
 
 Sessions from pre-control builds answer control only if launched in developer mode; after restart every
-session does. Older orchestrator-build sessions gain MASTER (a conflicting old room becomes Master (old));
-brief goal/non-goals append once to notes. Obsolete orchestrator transcripts/workflow drafts/capability
+session does. Older orchestrator-build sessions gain MASTER (a conflicting old room becomes Master (old)).
+Obsolete orchestrator transcripts/workflow drafts/capability
 grants are dropped. private/orchestrator-credentials.json is no longer read; delete it yourself if its old API key is no longer needed.
 
 ## Developer restart for orchestrators

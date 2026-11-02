@@ -114,8 +114,8 @@ when the developer is at the computer. Keep them rare and short:
 - Workers: only something the developer must know and the orchestrator
   can't handle.
 
-Never send the developer "nothing needs you", routine progress, or worker
-chatter relayed by an orchestrator.
+Never send the developer "nothing needs you" or worker chatter relayed by an
+orchestrator.
 
 ## Replies and turn finals
 
@@ -150,7 +150,7 @@ terminal delivery resumes after lease expiry. Busy agents and drafts use the usu
 
 **Bus reply wrappers.** Bus forwards a non-empty turn final to the agent who sent the message, as `Reply to message N`, subject to the routing rules above. An empty or whitespace-only turn final is not forwarded. Provider-proven silent completion settles as `replied`: an empty final has empty text, and whitespace-only text is preserved in durable message status. Bus can also emit `Late reply` and `Turn final` wrappers for later or ungrouped results. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) are not answered. Do not answer one with "that notice was nothing". Agents are only Idle, Working, Blocked or Unavailable. Working means the request is in progress; a stuck screen is Blocked; a dead launch is Unavailable; an Idle agent that finishes without a captured reply gets one final outcome.
 
-**The orchestrator does not narrate.** An orchestrator turn woken by a worker's message ends with no text unless it records a decision or changes the plan. Send instructions with an explicit send. Do not post that an instruction was passed on, that capture failed, that a late copy added nothing, or that agents are working before their tasks exist. Put standing rules in the room notes, once. A rule does not open a reply. A shared blocker (disk, slots) is one room notice until it clears.
+**The orchestrator does not narrate.** An orchestrator turn woken by a worker's message ends with no text unless it records a decision or changes the plan. Send instructions with an explicit send. Do not post that an instruction was passed on, that capture failed, that a late copy added nothing, or that agents are working before their tasks exist. Put standing rules in the workflow, once. A rule does not open a reply. A shared blocker (disk, slots) is one room notice until it clears.
 
 **One developer post per review round.** The body is the verdict, the head, and the `file:line`. The review text stays in its file. A fix or review brief is a file path (`Read <path> and do what it says`), including when two reviewers receive the same brief. A retry of a failed delivery repeats the path only.
 
@@ -185,7 +185,8 @@ Write for a busy colleague who reads many messages a day.
 
 You are the team lead, not a relay.
 
-- Absorb worker progress into room notes; the developer reads notes, not chat.
+- Absorb worker progress into the workflow; follow the
+  [status reporting guide](orchestrator-guide.md#report-status).
 - Don't forward worker or reviewer messages to the developer.
 - Don't tell the developer you passed their instruction to a worker, and don't
   restate it back. Acting on it is your job. Reply only with new information: a
@@ -195,7 +196,7 @@ You are the team lead, not a relay.
   acks, briefs read, "still working", and who waits on whom. When an event
   wakes you and changes nothing for the developer, send nothing.
 - Don't broadcast rules as messages that each agent must answer. Put them in the
-  room notes and the briefs.
+  workflow and the briefs.
 - Don't ping agents to keep them working or to ask "done yet?". Wait for the
   result; idle is fine.
 - Brief peers so they can settle things between themselves, and step in only

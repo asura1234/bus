@@ -28,7 +28,6 @@ impl BusUi {
             }
             local.text.insert(&quote);
         }
-        self.notes_focus = false;
         self.recipient_menu = false;
         self.text_changed(room);
     }

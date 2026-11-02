@@ -220,9 +220,6 @@ mod tests {
             state
                 .set_draft_text(room, "draft edits do not change history")
                 .unwrap();
-            state
-                .set_room_notes(room, "notes do not change history")
-                .unwrap();
             assert_eq!(
                 history
                     .lines(

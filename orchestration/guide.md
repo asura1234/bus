@@ -50,16 +50,16 @@ there is no reassignment, and deleting the room deletes you with it.
 On your first turn:
 
 1. Run `bus state` and find your room, its agents, and your own agent ID.
-2. Read the room's notes and history: `bus history --room "$room_id"`.
+2. Read the room history: `bus history --room "$room_id"`.
 3. Read the agreed workflow and its authorizations (next section); resolve only
    missing goal or authority decisions before the affected work starts.
 
 After a restart, reconcile `bus state` and GitHub before any other work. Match
 each owned PR or dependency to its current head, reviews, checks, acceptance and
 merge state; read pending replies with `bus message status`. Reconstruct the
-next owners, live waits, dependencies and explicit holds in the workflow and
-room notes. A dead waiter or deleted worker is not a live wait. Treat an unrelated
-GitHub merge as informational until it matches this room's ownership or dependency.
+next owners, live waits, dependencies and explicit holds in the workflow. A dead
+waiter or deleted worker is not a live wait. Treat an unrelated GitHub merge as
+informational until it matches this room's ownership or dependency.
 
 Send every message to the room's agents as yourself, so the history shows who
 asked:
@@ -90,8 +90,8 @@ the resolved directory and shipped names, follow the
 - **Draft from the agreed goal and authorizations.** Reuse existing decisions;
   take goal changes and unresolved product decisions to the developer. The graph
   is a reference, not a script, and its recorded checkpoints still apply.
-- **Keep it where the developer can open it.** Put its path on the first line of the
-  room notes.
+- **Keep it where the developer can open it.** Include its absolute path in the
+  kickoff and worker briefs.
 - **Rewrite it whenever it stops matching reality.** The usual reasons are a
   failure that needs a different route (every spike misses a hard benchmark
   gate, so go back to research or change technology), and the developer changing
@@ -100,47 +100,12 @@ the resolved directory and shipped names, follow the
 - **Mark the current node** with `:::current` so the developer can see where the
   room is.
 
-## Keep the room readable at a glance
+## Report status
 
-The room notes are the developer's status board. They watch many rooms and must
-never need to ask an orchestrator for a status update, so keeping the notes
-current is a standing duty, not something done on request. Rewrite them on
-every state change:
-
-- a task assigned, finished or failed,
-- an agent waiting at a dialog (permission, trust, question),
-- a decision made, by you or the developer.
-
-Make anything waiting on the developer easy to spot. The notes are free text and Bus
-checks no structure; shape them however reads best for the room. One layout
-that works, with short lines:
-
-1. `Workflow: <path>`, the room's workflow file.
-2. `WAITING ON YOU:` with one item per decision, keypress or approval the
-   developer must give, at the top; left out when nothing waits on the developer.
-3. `Now:` what is running, and which agent runs it.
-4. `DONE / OPEN:` a checklist of the workflow's steps, `[x]` done, `[ ]` open.
-5. `PR peers:` the live `PR → owner → verifier → reviewer` roster, using agent
-   names and IDs. Update it and affected briefs whenever an agent is replaced.
-
-```sh
-bus room notes "$room_id" --text "Workflow: ~/bus-data/workflows/pr-123.md
-WAITING ON YOU:
-- Approve claude-dev's push of feat/gallery (bus agent observe claude-dev)
-- Pick a gallery list: native list or RN lib (both pass benchmarks)
-Now: review round 2 (claude-review, codex-review)
-PR peers: #123 → claude-dev (11) → codex-verify (12) → claude-review (13), codex-review (14)
-DONE / OPEN:
-[x] Spec agreed
-[x] Implement gallery (claude-dev)
-[x] CI green
-[ ] Review, verification and bots (continue until every reviewer is Ready)
-[ ] Manual test (if the workflow holds for it)
-[ ] Merge (auto-merge-pr / recorded hold)"
-```
-
-`room notes` replaces the whole field, so always send the full board. Update it
-when the state changes, not on every message.
+Report routine progress in turn-final MASTER messages, with only new information
+and the next action. Keep details and decisions in the workflow log. When the
+developer asks for status, use the [sitrep skill](https://github.com/asura1234/bus/blob/master/skills/sitrep/SKILL.md)
+(`skills/sitrep`, installed with `./run install-skills`); follow its format there.
 
 ## Open peer messaging
 
@@ -153,7 +118,7 @@ The PR owner is its author; these are the same role throughout this SOP.
 Before work starts, put the PR's **owner, verifier and reviewer** names and IDs
 in every worker brief, with the PR (or task key until it exists), worktree,
 branch, acceptance checklist and current head. List every required reviewer.
-Keep the same `PR → owner → verifier → reviewer` roster in the room notes.
+Keep the same `PR → owner → verifier → reviewer` roster in the workflow.
 Assign **one verifier per 1–2 PRs**; distribute more PRs across additional
 verifiers instead of making one verifier the room's hub.
 
@@ -189,13 +154,13 @@ verifiers instead of making one verifier the room's hub.
    Send only the body; Bus adds the header, so never sign messages.
 
 The orchestrator retains **staffing and recovery, dialogs, product decisions,
-and announcing replacements**, including room notes, the roster and verifier
-allocation. Workers use the peers in their brief and message the orchestrator
-when a peer is missing or replaced; they do not edit room notes or the roster,
-or assign verifiers. The orchestrator resolves staffing gaps, unavailable agents
-and escalations, handles dialogs under existing authority, and takes unresolved
-product decisions to the developer. Whenever an agent is replaced, it updates
-the room-notes roster and affected briefs and announces the new name/ID to all
+and announcing replacements**, including the roster and verifier allocation.
+Workers use the peers in their brief and message the orchestrator when a peer is
+missing or replaced; they do not edit the roster or assign verifiers. The
+orchestrator resolves staffing gaps, unavailable agents and escalations, handles
+dialogs under existing authority, and takes unresolved product decisions to the
+developer. Whenever an agent is replaced, it updates
+the workflow roster and affected briefs and announces the new name/ID to all
 of that agent's PR peers and shared-file owners before work resumes. Peers then
 message the replacement directly. Do not route routine technical exchanges
 through the orchestrator or one room-wide verifier.
@@ -239,8 +204,8 @@ For example:
 | Device task / build | Prepared | named device dependency / explicit hold | Resume when access is available |
 
 Never delete a worker until every required follow-up it carried has another
-executing owner or a secured continuation of the kinds above. Update both room
-notes and the workflow log, and report milestones in MASTER.
+executing owner or a secured continuation of the kinds above. Update the workflow
+log, and report milestones in MASTER.
 
 ## Coordinate parallel work
 
@@ -267,7 +232,7 @@ Write the choice in the workflow's Coordination section.
 Record which worktrees must remain until each checkpoint in the workflow.
 Use the resource protocol below for disk, builds and devices. A resource hold
 blocks the operation that needs that resource; keep light reviews, investigation,
-notes and other independent work moving.
+workflow updates and other independent work moving.
 
 ## Resource leases and build slots
 
@@ -478,9 +443,9 @@ job back to the developer and leave workers idle while a reply is unavailable.
 
 Advance in-scope work yourself: assign a newly found bug for evidence-based
 root-cause analysis and a fix, start the next workflow step, dispatch review
-fixes, and execute follow-ups. Log your decision in both room notes and the
-workflow log, report that new information in MASTER, and keep workers busy. A
-new bug inside the agreed goal does not need a new permission question; an
+fixes, and execute follow-ups. Log your decision in the workflow log, report
+that new information in MASTER, and keep workers busy. A new bug inside the
+agreed goal does not need a new permission question; an
 unrelated bug does not silently widen the goal.
 
 Check existing instructions, kickoff approval and workflow decisions before

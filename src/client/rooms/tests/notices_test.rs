@@ -310,9 +310,9 @@ fn initial_snapshot_errors_are_logged_once_and_observed_again_after_recovery() {
 #[test]
 fn snapshot_error_waits_for_its_command_acknowledgement() {
     let (mut ui, room, _) = fixture();
-    ui.queue(BusCommand::SetNotes(room, "notes".into()), Effect::None);
+    ui.queue(BusCommand::RenameRoom(room, "renamed".into()), Effect::None);
     let command_id = ui.pending.back().unwrap().id;
-    let error = "Notes save rejected";
+    let error = "Room rename rejected";
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         let mut snapshot = (*ui.snapshot).clone();
@@ -342,13 +342,13 @@ fn snapshot_error_waits_for_its_command_acknowledgement() {
 #[test]
 fn independent_snapshot_error_survives_a_different_command_failure() {
     let (mut ui, room, _) = fixture();
-    ui.queue(BusCommand::SetNotes(room, "notes".into()), Effect::None);
+    ui.queue(BusCommand::RenameRoom(room, "renamed".into()), Effect::None);
     let command_id = ui.pending.back().unwrap().id;
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         ui.receive_event(BusEvent::CommandFinished {
             command_id,
-            result: Err("Notes command rejected".into()),
+            result: Err("Room rename command rejected".into()),
         });
         let mut snapshot = (*ui.snapshot).clone();
         snapshot.last_command_id = command_id;
@@ -359,7 +359,7 @@ fn independent_snapshot_error_survives_a_different_command_failure() {
     });
     let logs = capture.text();
     for error in [
-        "Notes command rejected",
+        "Room rename command rejected",
         "Independent coordinator refresh failed",
     ] {
         assert_eq!(logs.matches(error).count(), 1, "{logs}");
@@ -452,9 +452,9 @@ fn legacy_unassigned_master_is_unavailable_but_ordinary_workers_are_not() {
 #[test]
 fn coalesced_snapshot_keeps_the_original_command_error_single() {
     let (mut ui, room, _) = fixture();
-    let rejected = ui.queue(BusCommand::SetNotes(room, "notes".into()), Effect::None);
+    let rejected = ui.queue(BusCommand::RenameRoom(room, "renamed".into()), Effect::None);
     let following = ui.queue(BusCommand::SetDraftText(room, "draft".into()), Effect::None);
-    let error = "Earlier notes command rejected";
+    let error = "Earlier room rename command rejected";
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         ui.receive_event(BusEvent::CommandFinished {

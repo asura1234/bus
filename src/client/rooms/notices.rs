@@ -242,7 +242,6 @@ pub(super) fn command_room(command: &BusCommand) -> Option<RoomId> {
         | BusCommand::DeleteRoom(room)
         | BusCommand::SelectRoom(room)
         | BusCommand::MarkRoomSeen(room)
-        | BusCommand::SetNotes(room, _)
         | BusCommand::SetDraftText(room, _)
         | BusCommand::SetRecipients(room, _)
         | BusCommand::AttachFile(room, _)

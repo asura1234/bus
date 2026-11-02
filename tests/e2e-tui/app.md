@@ -25,8 +25,8 @@ driver documentation was used. Results are tracked separately for each run.
 - UI actions create/change test data. Read-only scratch Bus state/history may
   corroborate room/agent IDs, names, membership, accepted messages, attachments and
   settings; state alone cannot prove visible layout, colours or images. Judge live
-  draft/notes edits from visible text: saved-state files may lag in-progress edits.
-  Compare persisted draft/notes only after a completed save boundary (room switch
+  draft edits from visible text: saved-state files may lag in-progress edits.
+  Compare persisted draft only after a completed save boundary (room switch
   or quit); stale saved text mid-edit is not a failed visible-draft assertion.
 - Fixed incoming-message fixtures may be arranged through the supported scratch
   developer CLI described by `bus --help`, with a named agent author. They are
@@ -73,7 +73,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** pristine scratch data/settings; no pre-created workers.
 
 1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `# bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
-2. Inspect room notes → seeded text includes `Goal: stay in the room to coordinate selected agents.` and `Non-goals: automatic handoffs or permission approval.`
+2. Inspect the work-room header → the conversation starts directly below the room name/divider, matching MASTER; no status editor is present.
 3. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
 
@@ -200,7 +200,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 1. Inspect history → both actual pictures appear in attachment order under their message, recognisable against references; no blank placeholders, swapped or duplicated image, text overlap, or stretching that changes their shapes.
 2. Open Ctrl+O → pictures disappear under the file form; press Esc → both return. Switch to agent terminal, then F6 → pictures return without stale copies elsewhere.
-3. Scroll history until pictures leave view, then back → pictures draw in history only; no remnants cover sidebar, notes, composer or other messages.
+3. Scroll history until pictures leave view, then back → pictures draw in history only; no remnants cover sidebar, composer or other messages.
 
 **Evidence:** steps 1–3: screenshot judged by the runner at each transition against reference PNGs, with terminal dimensions; state paths corroborate identity only. SKIP with reason if the runner cannot capture this evidence; text alone cannot judge pixels.
 
@@ -330,18 +330,18 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 ## Remaining whole-app cases
 
-### APP-12 — Notes, isolated drafts, recall and stash
+### APP-12 — Isolated drafts, recall and stash
 
-**Preconditions/setup:** R(`qa-notes-a`), A with alpha, P(alpha); R(`qa-notes-b`).
+**Preconditions/setup:** R(`qa-draft-a`), A with alpha, P(alpha); R(`qa-draft-b`).
 
-1. Click qa-notes-a, press F3, type `status board`, press Enter, type `second row`, press F3 → notes have two lines; no chat message was sent.
-2. Click qa-notes-a's composer, type `draft-a`; switch to qa-notes-b, click its composer, type `draft-b`, return → draft-a and qa-notes-a notes restored. Return to qa-notes-b → only draft-b, its own notes.
-3. Click qa-notes-a and its composer, press Ctrl+S → draft clears; Ctrl+S again → draft-a restored. Send it; press Up on empty draft → draft-a recalled; append ` edited` → unsent draft is exactly `draft-a edited`.
+1. Click qa-draft-a and its composer → the draft is empty and no message has been sent.
+2. Click qa-draft-a's composer, type `draft-a`; switch to qa-draft-b, click its composer, type `draft-b`, return → draft-a restored. Return to qa-draft-b → only draft-b.
+3. Click qa-draft-a and its composer, press Ctrl+S → draft clears; Ctrl+S again → draft-a restored. Send it; press Up on empty draft → draft-a recalled; append ` edited` → unsent draft is exactly `draft-a edited`.
 4. With the composer focused, press Esc twice less than 800 ms apart → draft clears; the first Up restores the archived draft `draft-a edited`, rather than the older sent `draft-a`. No message is sent.
 
-**Evidence:** visible notes/draft text per room and each stash/recall transition; history count and exact first-Up text `draft-a edited`. Saved scratch state may corroborate completed saves; it is not required to reflect each live edit.
+**Evidence:** visible draft text per room and each stash/recall transition; history count and exact first-Up text `draft-a edited`. Saved scratch state may corroborate completed saves; it is not required to reflect each live edit.
 
-**Pass criteria:** edits stay in their room; notes/stash/recall do not silently send messages; the first Up after archival restores the newer archived draft.
+**Pass criteria:** edits stay in their room; stash/recall do not silently send messages; the first Up after archival restores the newer archived draft.
 
 ### APP-13 — Empty recipients open the picker
 
@@ -395,10 +395,10 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 ### APP-17 — Rename a room, including cancellation
 
-**Preconditions/setup:** R(`qa-rename-room`), A with alpha; notes/draft/message fixtures.
+**Preconditions/setup:** R(`qa-rename-room`), A with alpha; draft/message fixtures.
 
 1. Click room, press F2, replace name with `cancel-name`, Esc → old name retained.
-2. Press F2, Ctrl+A then Ctrl+K, type `renamed-room`, Enter → sidebar/main header update; same room ID, workers, notes, draft and history remain.
+2. Press F2, Ctrl+A then Ctrl+K, type `renamed-room`, Enter → sidebar/main header update; same room ID, workers, draft and history remain.
 3. Double-click its room name, replace with `mouse-renamed`, Enter → same room renamed again; navigating away and back retains it.
 
 **Evidence:** editable/committed labels and scratch ID/data before/after.
@@ -431,7 +431,7 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 ### APP-20 — Delete a room and its agents after confirmation
 
-**Preconditions/setup:** R(`qa-delete-room`) with two workers; R(`qa-keep-room`) with one worker. Also create a MASTER orchestrator for qa-delete-room using APP-04's UI recipe; no case dependency. Add identifiable room notes/history/draft.
+**Preconditions/setup:** R(`qa-delete-room`) with two workers; R(`qa-keep-room`) with one worker. Also create a MASTER orchestrator for qa-delete-room using APP-04's UI recipe; no case dependency. Add identifiable history/draft.
 
 1. Click qa-delete-room, click its × → warning names room, worker count and its MASTER orchestrator. Click Cancel → room and all associated agents remain.
 2. Reopen warning, click OK → room, its workers and its orchestrator disappear from UI/state; qa-keep-room and its worker remain selectable; no stale deleted view.
@@ -443,22 +443,22 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 ### APP-21 — Resize with draft, history, images and forms
 
-**Preconditions/setup:** create eight extra work rooms `qa-extra-1` through `qa-extra-8` using R, then R(`qa-resize`), A with alpha/beta, P(both). With default MASTER and bus, there are exactly 11 rooms total and two workers in qa-resize; keep worker PWD details collapsed. Add short history, notes, an unsent draft and both sent PNGs. This count forces sidebar scrolling at 80×24. Graphics host required for image assertions.
+**Preconditions/setup:** create eight extra work rooms `qa-extra-1` through `qa-extra-8` using R, then R(`qa-resize`), A with alpha/beta, P(both). With default MASTER and bus, there are exactly 11 rooms total and two workers in qa-resize; keep worker PWD details collapsed. Add short history, an unsent draft and both sent PNGs. This count forces sidebar scrolling at 80×24. Graphics host required for image assertions.
 
 1. Resize 120×40 → 80×24 → 160×50 → layout reflows within terminal bounds; names may truncate/wrap, but controls do not overlap; draft/selection/data stay intact.
 2. At each size scroll sidebar/history as needed, click a visible worker then F6 → hit targets follow current positions; images appear only when fully in view, redraw on return, and leave no stale pixels over other regions.
 3. Open Ctrl+N, resize 80×24 then 120×40, cancel → fields/buttons remain usable; no unintended agent. Toggle Ctrl+Shift+E twice in room → full-height then compact composer, preserving draft; normal layout returns and images do not cover it.
 
-**Evidence:** steps 1–3: current-size text/cell geometry, visible draft/notes/recipient text, state room/agent identities (11 rooms, two workers), and click outcomes before/after sidebar scrolling; image/layout screenshots judged by the runner. SKIP with reason for visual assertions if unavailable; live draft proof comes from the screen, with saved state only corroborating completed saves.
+**Evidence:** steps 1–3: current-size text/cell geometry, visible draft/recipient text, state room/agent identities (11 rooms, two workers), and click outcomes before/after sidebar scrolling; image/layout screenshots judged by the runner. SKIP with reason for visual assertions if unavailable; live draft proof comes from the screen, with saved state only corroborating completed saves.
 
 **Pass criteria:** resized UI remains operable, preserves data and redraws text/images cleanly.
 
 ### APP-22 — Save and quit
 
-**Preconditions/setup:** R(`qa-quit`), A with alpha; notes and unsent draft markers; record scratch session/server/agent process identities for lifecycle observation.
+**Preconditions/setup:** R(`qa-quit`), A with alpha; unsent draft markers; record scratch session/server/agent process identities for lifecycle observation.
 
-1. Edit notes and draft, press Ctrl+Q, wait for the Bus process to exit → Bus saves, emits its terminal-restore sequence, prints `Stopping Bus and its agents...`, stops its scratch server/agent panes, and exits with code 0 (no terminating signal). `Saving before exit…` may be brief. A shell prompt is not required when Bus runs directly in a terminal/PTY.
-2. After exit and terminal-output capture finalization, inspect the complete captured output and saved scratch state → restore output disables enabled mouse/focus/bracketed-paste modes and keyboard enhancements, leaves the alternate screen (`ESC[?1049l` on VT hosts), shows the cursor (`ESC[?25h`) and resets its shape (`ESC[0 q`); no Bus image remnants on a captured terminal view. Latest notes/draft/room/agent identities are saved exactly; markers were not sent. The named scratch server is unreachable and its managed fake panes/processes have stopped; allow the product's 15-second stop wait after saving. A stop error is a failure. Do not judge restore bytes from a capture still being written.
+1. Edit the draft, press Ctrl+Q, wait for the Bus process to exit → Bus saves, emits its terminal-restore sequence, prints `Stopping Bus and its agents...`, stops its scratch server/agent panes, and exits with code 0 (no terminating signal). `Saving before exit…` may be brief. A shell prompt is not required when Bus runs directly in a terminal/PTY.
+2. After exit and terminal-output capture finalization, inspect the complete captured output and saved scratch state → restore output disables enabled mouse/focus/bracketed-paste modes and keyboard enhancements, leaves the alternate screen (`ESC[?1049l` on VT hosts), shows the cursor (`ESC[?25h`) and resets its shape (`ESC[0 q`); no Bus image remnants on a captured terminal view. Latest draft/room/agent identities are saved exactly; markers were not sent. The named scratch server is unreachable and its managed fake panes/processes have stopped; allow the product's 15-second stop wait after saving. A stop error is a failure. Do not judge restore bytes from a capture still being written.
 
 **Evidence:** step 1: recorded Bus process exit status 0 with no signal and final status text; step 2: finalized raw terminal output containing the platform's restore sequence, saved scratch data and lifecycle outcome for the pre-identified server/agents; screenshot judged by the runner for cursor/image cleanup. SKIP with reason for unavailable evidence; neither a shell prompt nor shutdown text substitutes for process/restore/lifecycle evidence.
 

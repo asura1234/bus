@@ -292,16 +292,6 @@ fn room_cli() -> Command {
                 .arg(value_arg("name").required(true)),
         )
         .subcommand(
-            subcommand("notes")
-                .arg(value_arg("room").required(true))
-                .arg(
-                    Arg::new("text")
-                        .long("text")
-                        .required(true)
-                        .allow_hyphen_values(true),
-                ),
-        )
-        .subcommand(
             subcommand("delete")
                 .arg(value_arg("room").required(true))
                 .arg(flag("confirm")),
@@ -526,14 +516,6 @@ fn parse_room(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         Some(("rename", args)) => (
             "room.rename",
             json!({"room": required(args, "room")?, "name": required(args, "name")?}),
-        ),
-        Some(("notes", args)) => (
-            "room.notes",
-            json!({
-                "room": required(args, "room")?,
-                "text": args.get_one::<String>("text").map(String::as_str)
-                        .ok_or_else(|| "missing required argument: text".to_owned())?,
-            }),
         ),
         Some(("delete", args)) => (
             "room.delete",

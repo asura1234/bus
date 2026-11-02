@@ -13,6 +13,38 @@ fn temp_dir(label: &str) -> PathBuf {
 }
 
 #[test]
+fn retired_room_notes_load_and_are_not_serialized_again() {
+    let dir = temp_dir("retired-room-field");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    let mut state = BusState::new();
+    let master = state.ensure_master_room();
+    let room = state.create_room("work").unwrap();
+    state.set_draft_text(room, "keep this draft").unwrap();
+    store.save(&state).unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for id in [master, room] {
+        document["state"]["rooms"][id.0.to_string()]["notes"] =
+            serde_json::json!("discard this retired field");
+    }
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+    let loaded = store.load().unwrap().unwrap();
+    assert_eq!(loaded.room(master).unwrap().id, master);
+    assert_eq!(loaded.room(room).unwrap().name, "work");
+    assert_eq!(loaded.room(room).unwrap().draft.text, "keep this draft");
+    store.save(&loaded).unwrap();
+    let rewritten: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for id in [master, room] {
+        assert!(rewritten["state"]["rooms"][id.0.to_string()]
+            .get("notes")
+            .is_none());
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn atomic_store_round_trips_versioned_state_and_ignores_interrupted_temp_file() {
     let dir = temp_dir("roundtrip");
     let path = dir.join("state.json");
@@ -201,7 +233,7 @@ fn reload_preserves_uncertain_ownership_queue_and_consumed_callbacks() {
 }
 
 #[test]
-fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
+fn saved_sound_orchestrator_compactions_and_draft_reload() {
     use crate::messaging::model::RoomKind;
 
     let dir = temp_dir("compat-fields");
@@ -209,7 +241,6 @@ fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();
     let work = state.create_room("work").expect("room");
-    state.set_room_notes(work, "keep-notes").expect("notes");
     state.set_draft_text(work, "keep-draft").expect("draft");
     state.set_room_sound(master, false).expect("master sound");
     state.set_room_sound(work, true).expect("work sound");
@@ -227,7 +258,6 @@ fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
     store.save(&state).expect("save");
 
     let mut loaded = store.load().expect("load").expect("state");
-    assert_eq!(loaded.room(work).expect("work").notes, "keep-notes");
     assert_eq!(loaded.room(work).expect("work").draft.text, "keep-draft");
     assert!(!loaded.room(master).expect("master").sound_enabled());
     assert!(loaded.room(work).expect("work").sound_enabled());

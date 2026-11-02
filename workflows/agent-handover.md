@@ -32,7 +32,7 @@ flowchart TD
     reply --> explain
     questions -- no --> acknowledge["Fresh agent: acknowledge the handover; wait for ownership transfer"]
     acknowledge --> delete["Orchestrator: delete old agent"]
-    delete --> log["Orchestrator: log replacement; update participants, room notes, roster and affected briefs"]
+    delete --> log["Orchestrator: log replacement; update participants, roster and affected briefs"]
     log --> announce["Orchestrator: announce replacement name/ID to PR peers and shared-file owners"]
     announce --> resume["Orchestrator: tell fresh agent to continue"]
     resume --> done(["Worker replaced"]):::success
@@ -78,7 +78,7 @@ After the fresh agent understands the handover, run
 `bus agent delete OLD --confirm`. Deleting the agent does not authorize deleting
 worktrees, branches, files, or uncommitted changes. Log the date, compaction
 notice, old → new agent names, provider, role, PWD, and absolute note path in the
-room's running workflow log. Update its participants, room notes, PR peer roster
+room's running workflow log. Update its participants, PR peer roster
 and affected briefs. **Announce the replacement's name/ID to every PR peer and
 shared-file owner before telling the fresh agent to continue** from the recorded
 current step. The orchestrator owns these updates; the worker reports peer gaps
@@ -121,8 +121,8 @@ room's bound orchestrator, and names or IDs can reach agents in any room.
 
 PR peers: `<PR/task> → owner <name/ID> → verifier <name/ID> → reviewer(s) <name/ID>`.
 Use these peers from your brief. If one is missing or replaced, message the
-orchestrator; it owns staffing, room notes, the roster and verifier allocation.
-Workers do not edit room notes or the roster. The brief carries the exact head,
+orchestrator; it owns staffing, the roster and verifier allocation.
+Workers do not edit the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
 recorded merge authority and explicit holds.
 
