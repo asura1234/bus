@@ -25,6 +25,17 @@ pub(super) use render::layout;
 pub(super) use state::*;
 
 impl crate::client::compositor::ClientShellState {
+    pub(crate) fn set_bus_server_build(
+        &mut self,
+        server: Option<&crate::utils::restart_record::BuildStamp>,
+    ) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.server_build_sha = server
+                .filter(|stamp| crate::utils::restart_record::valid_build_sha(&stamp.sha))
+                .map(|stamp| stamp.sha.clone());
+        }
+    }
+
     /// `enabled` is whether this client presents graphics at all; the host
     /// terminal must also be one known to draw images (Kitty or iTerm2).
     pub(crate) fn set_bus_kitty_graphics(&mut self, enabled: bool) {

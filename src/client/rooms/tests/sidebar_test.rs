@@ -366,12 +366,13 @@ fn sidebar_pins_green_divider_and_settings_button_to_lower_left() {
 #[test]
 fn sidebar_build_hash_is_dev_only_directly_above_settings() {
     let (mut ui, _, _) = fixture();
+    ui.server_build_sha = Some(env!("BUS_BUILD_SHA").into());
     let (buffer, y, right) = settings_row(&mut ui, 100, 30);
     let above = (1..right)
         .map(|x| buffer[(x, y - 1)].symbol())
         .collect::<String>();
     if cfg!(feature = "dev-tools") {
-        let hash = option_env!("BUS_BUILD_SHORT_SHA").unwrap_or("missing-build-hash");
+        let hash = env!("BUS_BUILD_SHA").get(..8).unwrap_or("unknown");
         assert_eq!(above.trim_end(), hash);
         for x in 1..=hash.len() as u16 {
             assert_eq!(

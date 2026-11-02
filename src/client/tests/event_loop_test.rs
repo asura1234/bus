@@ -6,6 +6,10 @@ use crate::messaging::{
 };
 use std::sync::Mutex;
 
+#[cfg(feature = "dev-tools")]
+#[path = "footer_version_test.rs"]
+mod footer_version;
+
 struct RecordingTransport(Arc<Mutex<Vec<ClientMessage>>>);
 
 impl endpoint::EndpointTransport for RecordingTransport {

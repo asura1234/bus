@@ -207,7 +207,7 @@ fn start_client_loop(
     stdin_tx: crate::utils::perf::queue::Sender<ClientLoopEvent>,
 ) -> Result<ClientLoopDriver, ClientError> {
     let pixel_geometry_fallback = config.pixel_geometry_fallback;
-    let (state, stdin_quit) = initial_client_state(config, input_lifecycle, geometry)?;
+    let (mut state, stdin_quit) = initial_client_state(config, input_lifecycle, geometry)?;
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
     // Cell size reported by the host terminal, packed as width<<32 | height.
     // Zero means the host has not reported one.
@@ -229,6 +229,9 @@ fn start_client_loop(
     #[cfg(windows)]
     let _ = cell_size_query; // Windows parses host geometry in its stdin reader.
     let (stream, handshake) = initial.expect("connected client");
+    if let Some(shell) = state.shell.as_mut() {
+        shell.set_bus_server_build(handshake.server.as_ref());
+    }
     let max_frame_size = if state.kitty_graphics_enabled {
         MAX_GRAPHICS_FRAME_SIZE
     } else {
@@ -510,6 +513,10 @@ impl ClientLoopDriver {
                 closed_early: false,
             });
         }
+        if let Some(shell) = self.state.shell.as_mut() {
+            shell.set_bus_server_build(handshake.server.as_ref());
+        }
+        self.state.request_repaint();
         self.attached_server = handshake.server;
         Ok(())
     }

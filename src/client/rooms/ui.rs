@@ -54,6 +54,8 @@ pub(super) struct Pending {
 
 pub(in crate::client) struct BusUi {
     pub handle: Option<BusHandle>,
+    /// Identity read after the attached server's validated welcome.
+    pub(super) server_build_sha: Option<String>,
     pub snapshot: Arc<BusSnapshot>,
     pub room: Option<RoomId>,
     pub(super) clipboard_image_reader: fn(usize) -> Option<crate::platform::ClipboardImage>,
@@ -180,6 +182,7 @@ impl BusUi {
         let observed_request_notices = super::notices::RequestNotices::seed(&snapshot.state);
         let mut ui = Self {
             handle: None,
+            server_build_sha: None,
             clipboard_image_reader,
             snapshot,
             room,

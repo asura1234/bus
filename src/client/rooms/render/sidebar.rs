@@ -661,7 +661,10 @@ impl BusUi {
         #[cfg(feature = "dev-tools")]
         view.row(
             Rect::new(1, rows.saturating_sub(2), sw, 1),
-            env!("BUS_BUILD_SHORT_SHA"),
+            self.server_build_sha
+                .as_deref()
+                .and_then(|sha| sha.get(..8))
+                .unwrap_or("unknown"),
             None,
             false,
             true,
