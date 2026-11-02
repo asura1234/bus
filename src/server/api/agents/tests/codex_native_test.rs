@@ -368,6 +368,7 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
                     "id":"session", "status":{"type":"active","activeFlags":[]},
                     "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
                 }}),
+                "thread/turns/list" => serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null}),
                 "turn/interrupt" => serde_json::json!({}),
                 other => panic!("unexpected interrupt operation {other}"),
             };

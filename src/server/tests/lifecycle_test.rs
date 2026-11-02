@@ -497,6 +497,7 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
                     "id":"session", "status":{"type":"active","activeFlags":[]},
                     "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
                 }}),
+                "thread/turns/list" => serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null}),
                 "turn/interrupt" => serde_json::json!({}),
                 other => panic!("unexpected interrupt operation {other}"),
             };
