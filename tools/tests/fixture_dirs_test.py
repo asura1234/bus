@@ -265,9 +265,11 @@ class FixtureSource:
                 elif name != f"Self::{leaf}":
                     continue
             if scope[0] < offset < scope[1]:
-                functions.append((scope[0], function))
+                functions.append((bool(associated), scope[0], function))
         if functions:
-            function = max(functions, key=lambda candidate: candidate[0])[1]
+            # An explicit type/Self match wins over an unrelated free function,
+            # even when that free function has a nearer lexical scope.
+            function = max(functions, key=lambda candidate: candidate[:2])[2]
             def returned():
                 previous = self.parameters
                 self.parameters = [*previous, *((function[3], function[4], parameter, argument)
@@ -870,6 +872,25 @@ fn test() {{ let root = Fixture::at(std::time::SystemTime::now()); std::fs::crea
 struct Fixture;
 impl Fixture {{ fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {{ {outer} }} }}'''
     assert len(fixture_directory_violations({"src/fixture_test.rs": source})) == expected
+
+
+@pytest.mark.parametrize("free_scope", ("global", "caller"))
+@pytest.mark.parametrize("safe_associated, expected", ((True, 0), (False, 1)))
+def test_qualified_associated_helper_ignores_same_named_free_function(free_scope, safe_associated, expected):
+    safe = 'crate::utils::test_temp::unique_temp_path("safe")'
+    unsafe = ('std::env::temp_dir().join(format!("p-{}-{}", std::process::id(), '
+              'timestamp.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))')
+    associated, free = (safe, unsafe) if safe_associated else (unsafe, safe)
+    free_function = f'fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {{ {free} }}'
+    source = f'''{free_function if free_scope == "global" else ""}
+struct Fixture;
+impl Fixture {{ fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {{ {associated} }} }}
+fn test() {{
+    {free_function if free_scope == "caller" else ""}
+    let root = Fixture::at(std::time::SystemTime::now());
+    std::fs::create_dir_all(root);
+}}'''
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == expected
 
 
 def test_associated_self_call_keeps_clock_parameter_provenance():
