@@ -3,6 +3,8 @@ use crate::messaging::model::{BusState, Request, RequestPhase};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+pub(super) const PROVIDERS: [&str; 5] = ["claude", "codex", "kimi", "grok", "cursor"];
+
 #[derive(Debug, Default, Serialize)]
 struct Counts {
     attempts: u64,
@@ -109,11 +111,14 @@ struct Rates {
     bus_reliability: Metric,
 }
 #[derive(Default, Serialize)]
-struct Metric {
+pub(super) struct Metric {
     numerator: u64,
     denominator: u64,
     percent: Option<f64>,
     /// Conclusive fraction plus the attempts that fraction leaves out.
+    /// Launch rates leave this empty, and an empty caption is omitted so their
+    /// JSON stays numerator, denominator, and percent.
+    #[serde(skip_serializing_if = "String::is_empty")]
     caption: String,
 }
 fn pending_attempts(counts: &Counts) -> u64 {
@@ -195,6 +200,16 @@ fn conclusive_metric(numerator: u64, denominator: u64, excluded: &[(&str, u64)])
         caption,
     }
 }
+impl Metric {
+    pub(super) fn new(numerator: u64, denominator: u64) -> Self {
+        Self {
+            numerator,
+            denominator,
+            percent: rate(numerator, denominator),
+            caption: String::new(),
+        }
+    }
+}
 impl From<&Counts> for Rates {
     fn from(counts: &Counts) -> Self {
         Self {
@@ -272,7 +287,7 @@ impl GroupBuilder {
 }
 #[derive(Clone)]
 pub(super) struct HourKey {
-    start_ms: i64,
+    pub(super) start_ms: i64,
     pub(super) label: String,
 }
 struct Outcome {
@@ -368,7 +383,7 @@ impl SeriesBuilder {
 }
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
     let mut all = SeriesBuilder::default();
-    let mut providers: BTreeMap<_, _> = ["claude", "codex", "kimi", "grok", "cursor"]
+    let mut providers: BTreeMap<_, _> = PROVIDERS
         .into_iter()
         .map(|p| (p.to_owned(), SeriesBuilder::default()))
         .collect();
