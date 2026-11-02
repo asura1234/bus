@@ -13,6 +13,53 @@ and runs `--dev tui` from there, never touching a `debug` binary that
 dev-variant build other than the developer's `target/debug/bus`, which
 `start` refuses (cargo's own tests opt in with `BUS_TUI_ALLOW_TARGET_DEBUG=1`).
 
+The production commands `bus agent observe` and `bus agent press` use the same
+styled Grid and input driver as this scratch UI tooling. Use them for every
+blocked provider or shell screen:
+
+```sh
+bus agent observe worker
+bus agent press worker --select 'Complete visible option label'
+bus agent press worker --key down
+bus agent press worker --text 'Typed answer' --submit
+bus agent observe w1:p2 --pane
+bus agent press w1:p2 --pane --key n
+```
+
+`--select` observes focus after each navigation key and confirms the selected
+label. `--key` sends an explicit key; `--text` types without Enter unless
+`--submit` is present. Use the terminal identity from observe with
+`--terminal-id` when continuing a particular pane. Inspect pending or uncertain
+results before another input. The former `agent dialog`, `agent choose` and
+`agent answer` commands have been removed.
+
+Native provider acceptance is separately opt-in and never builds Bus:
+
+```sh
+BUS_UNIVERSAL_DIALOG_LIVE=1 \
+BUS_UNIVERSAL_DIALOG_BINARY=/absolute/path/to/copied/bus \
+BUS_UNIVERSAL_DIALOG_SHA="$(git rev-parse HEAD)" \
+python3 tests/universal_dialog_live_acceptance_test.py -v
+```
+
+Supply an exact committed-head binary copied outside shared Cargo targets.
+The harness verifies its version, private paths, capabilities, and fresh
+client/server perf identities before creating agents. It reads existing logins
+through real HOME and exposes only approved Claude, Codex, Kimi and Node
+executables on a private PATH. It creates a mode-0700 Bus root and fresh
+per-provider projects, selects each first-launch trust list through the driver,
+then selects actual Claude and Codex command approvals and types a custom
+answer into a native Codex Plan-mode question. Unexpected layouts fail with
+saved observations; no update prompts are triggered. Provider CLI defaults,
+available models and login readiness remain live prerequisites.
+
+Evidence, receipts and correlated `bus.terminal.driver.result` records go under
+`temp/universal-dialog/live/<head>/<attempt>/`. Missing routes, incomplete
+messages or unconfirmed cleanup fail the run. The private root is deleted only
+after its logs are saved and stop is confirmed; otherwise its path is retained
+in the evidence. This native acceptance complements the #285 fake-dialog and
+real-zsh suite rather than replacing it.
+
 Every session is a new Bus the driver starts itself. That Bus gets its own
 generated data directory under `/tmp/bus-tui/NAME/` (`$BUS_TUI_ROOT/NAME/`
 when that is set to an absolute path, as the driver's own tests do), its own
@@ -75,7 +122,8 @@ alternate screen with Codex 0.162's collapsed queued question (`? 1 question`,
 (`Which design should the worker use?`: Alpha, Beta, Other), Up/Down move, and
 Enter on Alpha or Beta answers it; the turn then replies as usual.
 `fake:question-text` shows an expanded Chinese free-text question with no
-options. `bus agent answer --text` submits it and lets the turn reply.
+options. `bus agent press TARGET --text 'answer' --submit` submits it and lets
+the turn reply.
 The fake Codex also writes a rollout (`rollout-fake-SESSION.jsonl` in the
 temp dir, named in every hook's `transcript_path`) with each turn's
 `task_started`, `UserMessage` and `task_complete` answer, as Codex 0.163.0

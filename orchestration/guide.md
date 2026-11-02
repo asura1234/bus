@@ -126,7 +126,7 @@ that works, with short lines:
 ```sh
 bus room notes "$room_id" --text "Workflow: ~/bus-data/workflows/pr-123.md
 WAITING ON YOU:
-- Approve claude-dev's push of feat/gallery (bus agent dialog claude-dev)
+- Approve claude-dev's push of feat/gallery (bus agent observe claude-dev)
 - Pick a gallery list: native list or RN lib (both pass benchmarks)
 Now: review round 2 (claude-review, codex-review)
 PR peers: #123 → claude-dev (11) → codex-verify (12) → claude-review (13), codex-review (14)
@@ -448,18 +448,19 @@ its context.
 
 ## Unblock agents
 
-- **Dialogs:** agents stop at permission, trust and question dialogs and
-  other screens they cannot pass alone. Bus sends you one notice about the
+- **Blocked screens:** agents stop at permission, trust and question dialogs,
+  shell prompts, pagers and other screens they cannot pass alone. Bus sends you one notice about the
   blocked worker, "Blocked, needs help to continue.", the same for every blocker and
   once per episode; `bus wait` also stops early with
-  `agent_waiting_on_dialog`. Look at its terminal: `bus agent dialog AGENT`
-  shows the question or full command, the options and a fresh fingerprint
-  (`bus agent read AGENT --source visible` for any other screen). Then `bus
-  agent choose AGENT --option N --fingerprint F`, or for a free-text question
-  `bus agent answer AGENT --text "..." --fingerprint F` (`--skip` instead of
-  `--text`, except on Claude questions, where Esc cancels the form); `--text`
-  also answers a choice's `free_text` option. Decide, answer, and check the reported `outcome`; nothing follows
-  when the dialog closes.
+  `agent_waiting_on_dialog`. Look at its terminal with `bus agent observe AGENT`
+  (`--cells` includes styled cells). Use `bus agent press AGENT --select "LABEL"`
+  for a complete visible option label, `--key KEY` for a shortcut or navigation,
+  or `--text "..." --submit` for a typed answer followed by Enter. Text alone
+  does not submit, and `--key` can be repeated. Use a terminal or pane ID with
+  `--pane` on both commands for a shell or pager. Bind input with `--terminal-id
+  ID` from the observation. Inspect a pending or uncertain outcome before the
+  next action, then observe the resulting screen to verify what happened.
+  Nothing follows when the blocker closes.
   Ask the developer about destructive or outward-facing actions only when
   existing workflow or developer authorization does not cover them.
 - **Stuck requests:** check `bus message status` (each request's `stage` and

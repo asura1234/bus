@@ -174,7 +174,9 @@ Files are split by ownership, not by helper.
     - `mod.rs` (struct, I/O wiring, drop), `spawn.rs` (shell resolution, launch env, PTY spawn), `io.rs` (input, resize, scroll)
     - `read.rs` (snapshots, render, cwd, PTY callback), `detection_task.rs` (agent probe loop),
       `detection_process.rs` (process observation), `detection_policy.rs` (debounce, publish rules)
-    - `compression.rs` (idle scrollback), `shutdown.rs` (close and release), `dialog.rs` (answer agent dialogs)
+    - `compression.rs` (idle scrollback), `shutdown.rs` (close and release)
+  - `driver/`: provider-independent styled Grid observation, coherent-frame guarded input, key/paste codecs and selection navigation;
+    shared by `agent observe` / `agent press` and the dev TUI driver
     - `tests/{support_test,spawn_test,detection_test,compression_test,shutdown_test,io_test}.rs`
   - `state/`: `TerminalState`, the arbiter of effective agent state
     - `mod.rs` (struct, labels, title, queries, recompute), `detection.rs` (screen and process input)

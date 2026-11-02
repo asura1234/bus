@@ -51,3 +51,32 @@ No provider-specific dialog parser is planned to survive. Provider prompt-compos
 ## Verification contract
 
 Preserve exact terminal/pane/session identity and signed fingerprint checks, coherent redraw refusal, draft protection, and no unobserved automatic Enter. TDD for behavior moved to driver. #285 acceptance must use a copied binary whose embedded SHA equals the final HEAD, all 15 fake dialogs, real zsh, a real Kimi and complete per-prompt driver-route proof. Final `./run test --full`; evidence copied to main checkout temp/pr-N before report. Builds use only an authorized slot and its matching shared target, with mandatory package clean and free-space check before each Cargo invocation.
+
+## Implementation outcome
+
+The later orchestration scope update retires the legacy compatibility API rather
+than projecting the old numbered-dialog schema. All modules in `agents/dialog/`,
+`agents/dialog.rs`, `terminal/runtime/dialog.rs`, the native dialog handlers and
+coordinator dialog input implementation are removed. The CLI commands `agent
+dialog`, `agent choose` and `agent answer` and their socket schema variants are
+removed with their callers. No provider-specific dialog parser is retained.
+
+`terminal/driver/blocker.rs` shares generic visible control evidence between
+styled driver observations, blocked-state publication and existing composer
+inspectors. It handles menu hints, visible shortcut rows, shell yes/no controls
+and pending-question controls without provider vocabulary or synthetic actions.
+Observation is read-only; orchestrators open panels with explicit visible keys.
+The native press guard holds the PTY content lock through revision verification
+and enqueue, refusing incomplete or changed frames without input. Selection still
+advances one arrow per observed focus change. Existing prompt ownership readers
+continue to protect drafts before Bus submits a message.
+
+Provider lifecycle manifests and native composer ownership remain: their callers
+identify activity/authentication and prove exact message ownership, rather than
+parse answer options. Captured manifest/composer fixtures remain their regression
+proof. The old parser-hash automatic latency choice is retired; orchestrators use
+the same observe/press path for it as any other blocker. Historical persisted
+metadata is a separate storage compatibility boundary and never supplies input.
+
+Author evidence and acceptance are recorded under `temp/universal-dialog/` and
+will be archived with the final head under the main checkout's PR evidence folder.
