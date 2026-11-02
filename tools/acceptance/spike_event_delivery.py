@@ -141,9 +141,8 @@ class Scratch:
 
     def s2(self):
         for i in range(3):
-            image = ROOT / self.name / 'work' / 'shot.png'
-            image.write_bytes(b'fake image')
-            draft = f'"{image}"\nfake:draft-bytes S2-{self.name}-{i}\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
+            self.ok(['resize', '500x60'])
+            draft = f'fake:draft-bytes S2-{self.name}-{i}\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
             self.ok(['click', '--hit', 'agent:a1'])
             self.ok(['paste', draft])
             record = self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2', wait=False)
@@ -153,14 +152,15 @@ class Scratch:
             record['initial_reason'] = initial.get('reason')
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
-            self.ok(['wait', '--text', 'fake draft bytes:', '--timeout', '20s'])
+            self.ok(['wait', '--text', f'fake draft bytes: "fake:draft-bytes S2-{self.name}-{i}', '--timeout', '20s'])
             transcript = self.bus(['agent', 'read', 'a1', '--source', 'recent', '--lines', '200'])
             replies = [s for s in self.strings(transcript) if 'fake draft bytes: ' in s]
             if not replies:
                 raise RuntimeError(('draft reply missing', transcript))
-            restored = json.loads(replies[-1].split('fake draft bytes: ', 1)[1].replace('\n', ''))
+            restored = json.JSONDecoder().raw_decode(replies[-1].rsplit('fake draft bytes: ', 1)[1].replace('\n', ''))[0]
             if restored != draft + '-END':
                 raise RuntimeError(('draft mismatch', repr(restored), repr(draft + '-END')))
+            self.ok(['resize', '140x40'])
             record['draft_exact'] = True
             self.wait_reply(record)
             record['correct'] = record['correct'] and record['status'].get('stage') == 'replied'
@@ -175,23 +175,23 @@ class Scratch:
 
     def s4(self):
         for i in range(2):
-            lead = self.send('cdlg', 'fake:dialog-settle redraw', 'S4-lead', wait=False)
+            lead = self.send('a1', f'fake:dialog 30 S4-lead-{self.name}-{i}', 'S4-lead', wait=False)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                dialog = self.bus(['agent', 'dialog', 'cdlg'])['result']
+                dialog = self.bus(['agent', 'dialog', 'a1'])['result']
                 if dialog.get('dialog'):
                     break
                 time.sleep(.05)
             else:
                 raise RuntimeError('dialog did not appear')
-            blocked = self.send('cdlg', f'S4-{self.name}-{i} must not enter', 'S4', wait=False)
+            blocked = self.send('a1', f'S4-{self.name}-{i} must not enter', 'S4', wait=False)
             time.sleep(1)
             status = self.bus(['message', 'status', blocked['id']])['result']
-            screen = self.bus(['agent', 'read', 'cdlg', '--source', 'visible'])
-            blocked['dialog_safe'] = not any(r.get('stage') == 'replied' for r in status['requests']) and 'You approved' not in json.dumps(screen)
+            screen = self.bus(['agent', 'read', 'a1', '--source', 'visible'])
+            blocked['dialog_safe'] = not any(r.get('stage') == 'replied' for r in status['requests']) and 'Do you want to proceed?' in json.dumps(screen)
             blocked['correct'] = blocked['dialog_safe']
-            dialog = self.bus(['agent', 'dialog', 'cdlg'])['result']
-            self.bus(['agent', 'choose', 'cdlg', '--option', '1', '--fingerprint', dialog['fingerprint']])
+            dialog = self.bus(['agent', 'dialog', 'a1'])['result']
+            self.bus(['agent', 'choose', 'a1', '--option', '1', '--fingerprint', dialog['fingerprint']])
             self.wait_reply(lead)
             self.wait_reply(blocked)
             blocked['correct'] = blocked['dialog_safe'] and blocked.get('status', {}).get('stage') == 'replied'
