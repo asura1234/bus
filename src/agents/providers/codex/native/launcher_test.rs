@@ -148,13 +148,13 @@ printf '%s\n' "$@" > "$BUS_CODEX_HELPER_TEST_ROOT/tui-argv"
     assert!(!tui.lines().any(|v| v == "--no-daemon"));
     let lock_path = root.join("capture/codex-native-writer.lock");
     assert!(
-        matches!(runtime::acquire_launch_lock(&lock_path),Err(e) if e.kind()==io::ErrorKind::WouldBlock),
+        matches!(acquire_writer_lock(&lock_path),Err(e) if e.kind()==io::ErrorKind::WouldBlock),
         "backend must retain the launch lock after TUI exec/exit"
     );
     drop(runtime);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if runtime::acquire_launch_lock(&lock_path).is_ok() {
+        if acquire_writer_lock(&lock_path).is_ok() {
             break;
         }
         assert!(
