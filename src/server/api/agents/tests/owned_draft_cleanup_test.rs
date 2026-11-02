@@ -575,6 +575,7 @@ fn native_method_budget_reserves_line_edit_cost_for_long_drafts() {
             expected_agent: "claude".into(),
             expected_session_id: "session".into(),
             steer: false,
+            expected_turn_id: None,
         });
         let budget = crate::protocol::api::submission::method_budget(&method).unwrap();
         assert!(

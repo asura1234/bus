@@ -264,7 +264,7 @@ impl App {
         let api_request_id = request.id.clone();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false, hard_deadline, false)
+                self.queue_agent_prompt(request.id, params, false, hard_deadline, false, None)
             }
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
@@ -344,6 +344,7 @@ impl App {
             true,
             hard_deadline,
             false,
+            None,
         )
     }
 
@@ -377,6 +378,7 @@ impl App {
             true,
             hard_deadline,
             params.steer,
+            params.expected_turn_id,
         )
     }
 
@@ -387,6 +389,7 @@ impl App {
         observe: bool,
         hard_deadline: std::time::Instant,
         steer: bool,
+        expected_turn_id: Option<String>,
     ) -> Result<
         (
             String,
@@ -478,6 +481,20 @@ impl App {
         };
         let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
         let _entered = span.enter();
+        #[cfg(unix)]
+        if let Some(completion) = super::codex_native::queue(
+            runtime,
+            &agent,
+            &params.text,
+            steer,
+            expected_turn_id,
+            &id,
+            hard_deadline,
+        ) {
+            return Ok((id, agent, completion));
+        }
+        #[cfg(not(unix))]
+        let _ = expected_turn_id;
         let completion = queue_prompt_input(
             runtime,
             expected_agent,

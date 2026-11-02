@@ -737,6 +737,10 @@ impl TerminalRuntime {
         let content_write_lock = Arc::new(Mutex::new(()));
 
         let kimi_code_home = Arc::new(Mutex::new(absolute_kimi_code_home(&cmd)));
+        #[cfg(unix)]
+        let codex_native = Arc::new(Mutex::new(
+            crate::agents::providers::codex::native::Runtime::from_builder(&cmd),
+        ));
         let spawned = spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
 
@@ -815,6 +819,8 @@ impl TerminalRuntime {
             managed_launch_pending,
             detection_context,
             kimi_code_home,
+            #[cfg(unix)]
+            codex_native,
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_prompt_generation: Arc::new(AtomicU64::new(0)),

@@ -191,6 +191,8 @@ async fn focus_events_are_forwarded_when_enabled() {
         managed_launch_pending: Arc::new(AtomicBool::new(false)),
         detection_context: Default::default(),
         kimi_code_home: Arc::new(Mutex::new(None)),
+        #[cfg(unix)]
+        codex_native: Default::default(),
         preserve_processes_on_drop: true,
         shell_integration: None,
         launch_prompt_generation: Arc::new(AtomicU64::new(0)),
@@ -238,6 +240,8 @@ async fn focus_events_are_suppressed_when_disabled() {
         managed_launch_pending: Arc::new(AtomicBool::new(false)),
         detection_context: Default::default(),
         kimi_code_home: Arc::new(Mutex::new(None)),
+        #[cfg(unix)]
+        codex_native: Default::default(),
         preserve_processes_on_drop: true,
         shell_integration: None,
         launch_prompt_generation: Arc::new(AtomicU64::new(0)),

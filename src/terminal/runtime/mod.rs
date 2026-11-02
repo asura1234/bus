@@ -167,6 +167,8 @@ pub struct TerminalRuntime {
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
+    #[cfg(unix)]
+    codex_native: Arc<Mutex<crate::agents::providers::codex::native::Runtime>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_prompt_generation: Arc<AtomicU64>,
@@ -288,5 +290,14 @@ impl TerminalRuntime {
 
     pub(crate) fn content_seq(&self) -> u64 {
         self.content_seq.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(unix)]
+impl TerminalRuntime {
+    pub(crate) fn codex_native(
+        &self,
+    ) -> Arc<Mutex<crate::agents::providers::codex::native::Runtime>> {
+        self.codex_native.clone()
     }
 }

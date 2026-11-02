@@ -268,6 +268,7 @@ mod grok_captured_composer_prompt {
                     expected_agent: "grok".into(),
                     expected_session_id: "grok-session".into(),
                     steer: false,
+                    expected_turn_id: None,
                 }),
             },
             tx,

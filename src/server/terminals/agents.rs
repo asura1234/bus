@@ -35,12 +35,16 @@ fn agent_start_argv(
         );
     }
     let executable = match (kind, selected_executable) {
-        (crate::agents::AgentKind::Grok | crate::agents::AgentKind::Kimi, Some(path))
-            if std::path::Path::new(&path).is_absolute()
-                && std::path::Path::new(&path)
-                    .file_name()
-                    .is_some_and(|name| name == crate::agents::agent_label(kind))
-                && !path.chars().any(char::is_control) =>
+        (
+            crate::agents::AgentKind::Grok
+            | crate::agents::AgentKind::Kimi
+            | crate::agents::AgentKind::Codex,
+            Some(path),
+        ) if std::path::Path::new(&path).is_absolute()
+            && std::path::Path::new(&path)
+                .file_name()
+                .is_some_and(|name| name == crate::agents::agent_label(kind))
+            && !path.chars().any(char::is_control) =>
         {
             path
         }
