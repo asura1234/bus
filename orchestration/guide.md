@@ -104,7 +104,7 @@ the resolved directory and shipped names, follow the
 
 Report routine progress in turn-final MASTER messages, with only new information
 and the next action. Keep details and decisions in the workflow log. When the
-developer asks for status, use the [sitrep skill](../skills/sitrep/SKILL.md)
+developer asks for status, use the [sitrep skill](https://github.com/asura1234/bus/blob/master/skills/sitrep/SKILL.md)
 (`skills/sitrep`, installed with `./run install-skills`); follow its format there.
 
 ## Open peer messaging
