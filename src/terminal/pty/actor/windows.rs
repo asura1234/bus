@@ -7,6 +7,8 @@ use portable_pty::{MasterPty, PtySize};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+use super::{InputCompletion, InputScope, SharedSubmissionTimestamps};
+
 pub(crate) struct PtyReadResult {
     pub terminal_responses: Vec<Bytes>,
 }
@@ -41,6 +43,7 @@ enum PtyIoDataCommand {
         delay: Duration,
         deadline: Option<Instant>,
         reply: std_mpsc::Sender<std::io::Result<()>>,
+        timestamps: SharedSubmissionTimestamps,
     },
 }
 
@@ -97,13 +100,31 @@ impl PtyIoActorHandle {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_user_input_submission(
         &self,
         text: Bytes,
         enter: Bytes,
         delay: Duration,
         deadline: Option<Instant>,
-    ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+    ) -> std::io::Result<InputCompletion> {
+        self.queue_user_input_submission_scoped(
+            text,
+            enter,
+            delay,
+            deadline,
+            &InputScope::default(),
+        )
+    }
+
+    pub(crate) fn queue_user_input_submission_scoped(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+        deadline: Option<Instant>,
+        scope: &InputScope,
+    ) -> std::io::Result<InputCompletion> {
         let accepting = self
             .accepting
             .lock()
@@ -122,6 +143,7 @@ impl PtyIoActorHandle {
                 delay,
                 deadline,
                 reply: reply_tx,
+                timestamps: scope.timestamps(),
             })
             .map_err(|err| match err {
                 mpsc::error::TrySendError::Full(_) => {
@@ -131,7 +153,7 @@ impl PtyIoActorHandle {
                     std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed")
                 }
             })?;
-        Ok(reply_rx)
+        Ok(InputCompletion::from(reply_rx).with_timestamps(scope.timestamps()))
     }
 
     pub(crate) fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
@@ -327,6 +349,7 @@ fn run_input_forwarder(
                 delay,
                 deadline,
                 reply,
+                timestamps,
             } => {
                 let result = if deadline.is_some_and(|deadline| {
                     deadline.saturating_duration_since(Instant::now()) <= delay
@@ -335,6 +358,11 @@ fn run_input_forwarder(
                 } else {
                     let text_deadline = deadline.and_then(|deadline| deadline.checked_sub(delay));
                     write_submission_part(&write_tx, text, text_deadline).and_then(|()| {
+                        timestamps
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .text_written_at_ms
+                            .get_or_insert(crate::utils::time::now_ms());
                         // A started text write is committed. Finish Enter even if the caller
                         // stops waiting so a timeout cannot leave a partial prompt.
                         std::thread::sleep(delay);
@@ -349,7 +377,13 @@ fn run_input_forwarder(
                             }
                             send_submission_part(&write_tx, enter, None)?
                         };
-                        wait_submission_part(completion)
+                        wait_submission_part(completion).map(|()| {
+                            timestamps
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .enter_written_at_ms
+                                .get_or_insert(crate::utils::time::now_ms());
+                        })
                     })
                 };
                 let failed = result

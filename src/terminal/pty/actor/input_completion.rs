@@ -1,10 +1,18 @@
 //! Cancellation stays owned until the submission's outcome is published.
-use std::{io, sync::mpsc, time::Duration};
+use crate::protocol::api::schema::NativeSubmissionTimestamps;
+use std::{
+    io,
+    sync::{mpsc, Arc, Mutex},
+    time::Duration,
+};
+
+pub(crate) type SharedSubmissionTimestamps = Arc<Mutex<NativeSubmissionTimestamps>>;
 
 #[derive(Debug)]
 pub(crate) struct InputCompletion {
     receiver: mpsc::Receiver<io::Result<()>>,
     enter_delay_allowance: Duration,
+    timestamps: SharedSubmissionTimestamps,
     #[cfg(unix)]
     cancellation: Option<Cancellation>,
 }
@@ -14,6 +22,7 @@ impl From<mpsc::Receiver<io::Result<()>>> for InputCompletion {
         Self {
             receiver,
             enter_delay_allowance: Duration::ZERO,
+            timestamps: Default::default(),
             #[cfg(unix)]
             cancellation: None,
         }
@@ -61,6 +70,27 @@ impl InputCompletion {
         self
     }
 
+    pub(crate) fn with_timestamps(mut self, timestamps: SharedSubmissionTimestamps) -> Self {
+        self.timestamps = timestamps;
+        self
+    }
+
+    pub(crate) fn submission_timestamps(&self) -> NativeSubmissionTimestamps {
+        *self
+            .timestamps
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(crate) fn update_timestamps(&self, update: impl FnOnce(&mut NativeSubmissionTimestamps)) {
+        update(
+            &mut self
+                .timestamps
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
+
     pub(crate) fn enter_delay_allowance(&self) -> Duration {
         self.enter_delay_allowance
     }
@@ -85,6 +115,7 @@ impl InputCompletion {
         Self {
             receiver,
             enter_delay_allowance: Duration::ZERO,
+            timestamps: Default::default(),
             cancellation: Some(Cancellation {
                 permit,
                 armed: true,
@@ -99,30 +130,34 @@ impl InputCompletion {
 pub(crate) struct InputScope {
     #[cfg(unix)]
     permit: Option<WritePermit>,
+    timestamps: SharedSubmissionTimestamps,
 }
 
 impl InputScope {
     pub(crate) fn completion(&self, receiver: mpsc::Receiver<io::Result<()>>) -> InputCompletion {
         #[cfg(unix)]
         if let Some(permit) = &self.permit {
-            return InputCompletion::tracked(receiver, permit.clone());
+            return InputCompletion::tracked(receiver, permit.clone())
+                .with_timestamps(self.timestamps.clone());
         }
-        receiver.into()
+        InputCompletion::from(receiver).with_timestamps(self.timestamps.clone())
+    }
+
+    pub(crate) fn timestamps(&self) -> SharedSubmissionTimestamps {
+        self.timestamps.clone()
     }
 
     #[cfg(unix)]
     pub(super) fn new(wake: crate::terminal::pty::fd::WakeWriter) -> Self {
         Self {
             permit: Some(WritePermit::new(None, wake)),
+            timestamps: Default::default(),
         }
     }
 }
 
 #[cfg(unix)]
-use std::{
-    sync::{Arc, Mutex, MutexGuard},
-    time::Instant,
-};
+use std::{sync::MutexGuard, time::Instant};
 
 #[cfg(unix)]
 #[derive(Default)]

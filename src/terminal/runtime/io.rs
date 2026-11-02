@@ -130,34 +130,45 @@ impl PaneRuntimeIo {
         };
         match self {
             PaneRuntimeIo::Actor(actor) => {
-                #[cfg(windows)]
-                {
-                    let _ = scope;
-                    actor
-                        .queue_user_input_submission(text, enter, delay, deadline)
-                        .map(InputCompletion::from)
-                }
-                #[cfg(unix)]
                 actor.queue_user_input_submission_scoped(text, enter, delay, deadline, scope)
             }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, clock, .. } => {
                 let failure = clock.take_write_failure();
-                let _ = (deadline, scope);
+                let _ = deadline;
                 let sender = sender.clone();
+                let timestamps = scope.timestamps();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let result = (if text.is_empty() {
                         Ok(())
                     } else {
-                        sender.try_send(text).map_err(std::io::Error::other)
+                        sender
+                            .try_send(text)
+                            .map_err(std::io::Error::other)
+                            .map(|()| {
+                                timestamps
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .text_written_at_ms
+                                    .get_or_insert(crate::utils::time::now_ms());
+                            })
                     })
                     .and_then(|()| {
                         std::thread::sleep(delay);
                         if enter.is_empty() {
                             Ok(())
                         } else {
-                            sender.try_send(enter).map_err(std::io::Error::other)
+                            sender
+                                .try_send(enter)
+                                .map_err(std::io::Error::other)
+                                .map(|()| {
+                                    timestamps
+                                        .lock()
+                                        .unwrap_or_else(|error| error.into_inner())
+                                        .enter_written_at_ms
+                                        .get_or_insert(crate::utils::time::now_ms());
+                                })
                         }
                     });
                     let result = match failure {
@@ -169,7 +180,11 @@ impl PaneRuntimeIo {
                 Ok(InputCompletion::from(reply_rx))
             }
         }
-        .map(|completion| completion.with_enter_delay_allowance(allowance))
+        .map(|completion| {
+            completion
+                .with_enter_delay_allowance(allowance)
+                .with_timestamps(scope.timestamps())
+        })
     }
 }
 

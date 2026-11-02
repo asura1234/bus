@@ -1,6 +1,7 @@
 use super::{
     Author, BusState, Draft, ModelError, Prompt, PromptId, Request, RequestId, RequestPhase, RoomId,
 };
+use crate::messaging::model::DeliveryLatency;
 
 impl BusState {
     /// Queue an automation prompt without changing the room's developer-owned draft.
@@ -185,6 +186,13 @@ impl BusState {
                     pending_final: None,
                     completed_reply: None,
                     completed_at_ms: None,
+                    latency: DeliveryLatency {
+                        accepted_at_ms: Some(now_ms),
+                        ready_at_enqueue: self.agents.get(&agent_id).is_some_and(|agent| {
+                            agent.status == crate::messaging::model::RuntimeStatus::Idle
+                        }),
+                        ..Default::default()
+                    },
                     queue_only: queue_only || independent,
                     bus_generated,
                     group: None,

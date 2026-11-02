@@ -528,7 +528,10 @@ fn agent_clear_types_each_providers_reset_command_outside_bus_messages() {
                 "focused":false, "interactive_ready":true, "revision":1
             }))
             .unwrap();
-            Ok(ResponseResult::AgentPrompted { agent })
+            Ok(ResponseResult::AgentPrompted {
+                agent,
+                timestamps: Default::default(),
+            })
         }
     }
     for (provider, command) in [
@@ -614,7 +617,10 @@ fn agent_clear_restores_reply_instructions_for_first_message_providers() {
                 "focused":false, "interactive_ready":true, "revision":1
             }))
             .unwrap();
-            Ok(ResponseResult::AgentPrompted { agent })
+            Ok(ResponseResult::AgentPrompted {
+                agent,
+                timestamps: Default::default(),
+            })
         }
     }
     for (provider, command) in [(Provider::Cursor, "/new-chat"), (Provider::Grok, "/new")] {
@@ -689,7 +695,10 @@ fn agent_clear_restores_reply_instructions_for_an_adopted_codex_session() {
                 "focused":false, "interactive_ready":true, "revision":1
             }))
             .unwrap();
-            Ok(ResponseResult::AgentPrompted { agent })
+            Ok(ResponseResult::AgentPrompted {
+                agent,
+                timestamps: Default::default(),
+            })
         }
     }
     let dir = crate::utils::test_temp::unique_temp_path("bus-control-clear-adopted-codex");
@@ -813,6 +822,7 @@ fn agent_clear_does_not_reset_provider_when_reset_intent_cannot_be_saved() {
             self.0.lock().unwrap().push(params.text);
             Ok(ResponseResult::AgentPrompted {
                 agent: owned_agent_info(&params.target, "bus-r1-a2", Some("old-session")),
+                timestamps: Default::default(),
             })
         }
     }

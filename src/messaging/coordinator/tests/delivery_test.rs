@@ -11,6 +11,7 @@ fn composer_busy() -> Result<ResponseResult, TransportError> {
 fn composer_available() -> Result<ResponseResult, TransportError> {
     Ok(ResponseResult::AgentPrompted {
         agent: native_info("pane", "codex", "session"),
+        timestamps: Default::default(),
     })
 }
 
@@ -23,6 +24,7 @@ impl Transport for LaunchPromptTransport {
                 self.0.lock().unwrap().push(params.text);
                 Ok(ResponseResult::AgentPrompted {
                     agent: native_info("pane", "provider", "session"),
+                    timestamps: Default::default(),
                 })
             }
             other => panic!("unexpected launch-prompt call: {other:?}"),
@@ -288,6 +290,7 @@ fn rejected_launch_prompt_is_visible_and_retries_once_after_recovery() {
                     }),
                     Ok(ResponseResult::AgentPrompted {
                         agent: native_info("pane", "provider", "session"),
+                        timestamps: Default::default(),
                     }),
                 ]
                 .into(),
@@ -871,6 +874,7 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
                     "focused":false, "revision":1
                 }))
                 .unwrap(),
+                timestamps: Default::default(),
             }),
         ],
     );

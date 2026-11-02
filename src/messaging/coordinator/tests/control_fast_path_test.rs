@@ -46,6 +46,7 @@ impl Transport for FloodNative {
                 self.submitted.send(()).unwrap();
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
+                    timestamps: Default::default(),
                 })
             }
             _ => Ok(ResponseResult::Ok {}),

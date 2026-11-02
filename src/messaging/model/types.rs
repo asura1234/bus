@@ -578,6 +578,27 @@ pub(crate) struct QueuedRejection {
     pub(crate) reason: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct DeliveryLatency {
+    pub(crate) accepted_at_ms: Option<u64>,
+    pub(crate) queued_at_ms: Option<u64>,
+    pub(crate) picked_at_ms: Option<u64>,
+    pub(crate) native_requested_at_ms: Option<u64>,
+    pub(crate) native: crate::protocol::api::schema::NativeSubmissionTimestamps,
+    pub(crate) provider_started_at_ms: Option<u64>,
+    pub(crate) reply_captured_at_ms: Option<u64>,
+    pub(crate) reply_delivered_at_ms: Option<u64>,
+    pub(crate) ready_at_enqueue: bool,
+    pub(crate) agent_waited: bool,
+}
+
+impl DeliveryLatency {
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
@@ -620,6 +641,8 @@ pub(crate) struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) completed_reply: Option<CompletedReply>,
     pub(crate) completed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "DeliveryLatency::is_empty")]
+    pub(crate) latency: DeliveryLatency,
     /// Independent turn: explicit `--queue` or an ordinary agent-authored
     /// orchestrator request. Waits for idle and never coalesces.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

@@ -236,6 +236,20 @@ impl BusState {
     }
 
     /// Live and archived requests, in id order.
+    pub(crate) fn mark_new_replies_delivered(&mut self, previous: &Self, at_ms: u64) {
+        for (id, request) in &mut self.requests {
+            if request.completed_reply.is_some()
+                && previous
+                    .requests
+                    .get(id)
+                    .and_then(|old| old.completed_reply.as_ref())
+                    .is_none()
+            {
+                request.latency.reply_delivered_at_ms.get_or_insert(at_ms);
+            }
+        }
+    }
+
     pub(crate) fn requests(&self) -> impl Iterator<Item = &Request> {
         MergeById {
             newest_first: false,

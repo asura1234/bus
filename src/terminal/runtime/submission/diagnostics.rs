@@ -4,6 +4,7 @@ use std::{cell::Cell, io, time::Instant};
 
 #[derive(Default)]
 pub(super) struct Diagnostics {
+    timestamps: crate::terminal::pty::actor::SharedSubmissionTimestamps,
     refusal_recorded: Cell<bool>,
     started: Cell<Option<Instant>>,
     confirmation_ms: Cell<u64>,
@@ -20,6 +21,27 @@ pub(super) struct Diagnostics {
 }
 
 impl Diagnostics {
+    pub(super) fn with_timestamps(
+        timestamps: crate::terminal::pty::actor::SharedSubmissionTimestamps,
+    ) -> Self {
+        Self {
+            timestamps,
+            ..Default::default()
+        }
+    }
+
+    fn record(
+        &self,
+        update: impl FnOnce(&mut crate::protocol::api::schema::NativeSubmissionTimestamps),
+    ) {
+        update(
+            &mut self
+                .timestamps
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
+
     pub(super) fn claim_refusal(&self) -> bool {
         !self.refusal_recorded.replace(true)
     }
@@ -47,8 +69,14 @@ impl Diagnostics {
         now: Instant,
     ) {
         self.observations.set(self.observations.get() + 1);
-        self.owned_seen
-            .set(self.owned_seen.get() || observed == InputObservation::Pending);
+        if observed == InputObservation::Pending {
+            self.owned_seen.set(true);
+            self.record(|timestamps| {
+                timestamps
+                    .composer_owned_at_ms
+                    .get_or_insert(crate::utils::time::now_ms());
+            });
+        }
         let changed = self.last.replace(Some(observed)) != Some(observed);
         if changed {
             tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.observed", phase, observation = ?observed, screen_bytes, elapsed_ms = self.elapsed(now));
@@ -58,6 +86,11 @@ impl Diagnostics {
     pub(super) fn paste(&self, bytes: usize, delay_ms: u64, now: Instant) {
         self.paste_bytes.set(bytes);
         self.paste_at.set(Some(now));
+        self.record(|timestamps| {
+            timestamps
+                .paste_started_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+        });
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.paste", bytes, delay_ms, elapsed_ms = self.elapsed(now));
     }
 
@@ -65,18 +98,35 @@ impl Diagnostics {
         self.paste_flushed.set(result.is_ok());
         if result.is_ok() {
             self.paste_at.set(Some(now));
+            self.record(|timestamps| {
+                timestamps
+                    .paste_completed_at_ms
+                    .get_or_insert(crate::utils::time::now_ms());
+            });
         }
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.paste_flushed", flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
     }
 
     pub(super) fn enter(&self, bytes: &bytes::Bytes, now: Instant) {
         self.enter_attempts.set(self.enter_attempts.get() + 1);
+        self.record(|timestamps| {
+            timestamps
+                .enter_sent_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+        });
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter", attempt = self.enter_attempts.get(), key = ?bytes, elapsed_ms = self.elapsed(now));
     }
 
     pub(super) fn entered(&self, result: &io::Result<()>, now: Instant) {
         self.enter_flushed
             .set(self.enter_flushed.get() + usize::from(result.is_ok()));
+        if result.is_ok() {
+            self.record(|timestamps| {
+                timestamps
+                    .enter_written_at_ms
+                    .get_or_insert(crate::utils::time::now_ms());
+            });
+        }
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter_flushed", attempt = self.enter_attempts.get(), flushed = result.is_ok(), error_kind = ?result.as_ref().err().map(io::Error::kind), elapsed_ms = self.elapsed(now));
     }
 
@@ -102,6 +152,13 @@ impl Diagnostics {
             Err(error) if PromptNotShown::is(error) => "not_submitted",
             Err(_) => "uncertain",
         };
+        if result.is_ok() {
+            self.record(|timestamps| {
+                timestamps
+                    .native_confirmed_at_ms
+                    .get_or_insert(crate::utils::time::now_ms());
+            });
+        }
         tracing::info!(target: "bus::terminal::submission", event = "bus.terminal.submission.summary", outcome,
             paste_bytes = self.paste_bytes.get(), paste_flushed = self.paste_flushed.get(),
             owned_seen = self.owned_seen.get(), enter_attempts = self.enter_attempts.get(), enter_flushed = self.enter_flushed.get(),
