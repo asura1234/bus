@@ -366,6 +366,7 @@ fn sidebar_pins_green_divider_and_settings_button_to_lower_left() {
 #[test]
 fn sidebar_build_hash_is_dev_only_directly_above_settings() {
     let (mut ui, _, _) = fixture();
+    ui.server_build_sha = Some(env!("BUS_BUILD_SHA").into());
     let (buffer, y, right) = settings_row(&mut ui, 100, 30);
     let above = (1..right)
         .map(|x| buffer[(x, y - 1)].symbol())

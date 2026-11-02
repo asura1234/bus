@@ -661,7 +661,7 @@ impl BusUi {
         #[cfg(feature = "dev-tools")]
         view.row(
             Rect::new(1, rows.saturating_sub(2), sw, 1),
-            env!("BUS_BUILD_SHORT_SHA"),
+            self.sidebar_build_label(sw),
             None,
             false,
             true,
@@ -689,6 +689,27 @@ impl BusUi {
             view.row(badge, YOLO_BADGE, None, false, false);
             view.style_last_row(badge, Style::default().fg(Color::Black).bg(YOLO_BADGE_RED));
         }
+    }
+
+    #[cfg(feature = "dev-tools")]
+    fn sidebar_build_label(&self, width: u16) -> String {
+        let client = env!("BUS_BUILD_SHA");
+        if self.server_build_sha.as_deref() == Some(client) {
+            return env!("BUS_BUILD_SHORT_SHA").into();
+        }
+        // Leave room for both identities even at the minimum sidebar width.
+        let available = usize::from(width).saturating_sub(" · TUI ".chars().count());
+        let server = self.server_build_sha.as_deref().unwrap_or("unknown");
+        let server_len = if self.server_build_sha.is_some() {
+            (available / 2).min(8)
+        } else {
+            server.len().min(available)
+        };
+        let client_len = available
+            .saturating_sub(server_len)
+            .min(8)
+            .min(client.len());
+        format!("{} · TUI {}", &server[..server_len], &client[..client_len])
     }
 }
 pub(super) fn status_name(value: RuntimeStatus) -> &'static str {
