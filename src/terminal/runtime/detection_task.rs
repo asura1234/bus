@@ -3,6 +3,7 @@ use crate::agents::AgentKind;
 use crate::agents::AgentState;
 use crate::terminal::emulator::PaneTerminal;
 use crate::terminal::events::TerminalEvent;
+use crate::terminal::runtime::detection_policy::apply_driver_controls;
 use crate::terminal::runtime::detection_policy::decide_detection_screen_read;
 use crate::terminal::runtime::detection_policy::decide_screen_detection_publish;
 use crate::terminal::runtime::detection_policy::detection_update_for_publish_with_osc;
@@ -628,17 +629,7 @@ impl DetectionTask {
             status.pending_idle.clear();
             return;
         };
-        if !process_exited
-            && crate::terminal::driver::has_blocking_input_controls(
-                &content,
-                screen_detection.visible_working,
-            )
-        {
-            screen_detection.state = AgentState::Blocked;
-            screen_detection.visible_blocker = true;
-            screen_detection.visible_idle = false;
-            screen_detection.visible_working = false;
-        }
+        screen_detection = apply_driver_controls(&content, screen_detection, process_exited);
         if agent == Some(AgentKind::Kimi) && !process_exited {
             let Some(adjusted) = self.kimi_command_screen(status, &content, screen_detection)
             else {
@@ -850,6 +841,22 @@ mod blocked_tests {
             kind: Option<AgentKind>,
             previous: AgentState,
         ) -> (AgentState, bool) {
+            let (state, event) = self.test_scan_detection_event(kind, previous).await;
+            let published_blocked = matches!(
+                event,
+                Some(TerminalEvent::StateChanged {
+                    state: AgentState::Blocked,
+                    ..
+                })
+            );
+            (state, published_blocked)
+        }
+
+        pub(crate) async fn test_scan_detection_event(
+            &self,
+            kind: Option<AgentKind>,
+            previous: AgentState,
+        ) -> (AgentState, Option<TerminalEvent>) {
             let (events, mut received) = mpsc::channel(16);
             let task = DetectionTask {
                 pane_id: self.pane_id,
@@ -868,16 +875,7 @@ mod blocked_tests {
             status.last_visible_idle = false;
             task.scan_screen(&mut status, kind, false, false, false, Instant::now())
                 .await;
-            let published = received.try_recv().ok().is_some_and(|event| {
-                matches!(
-                    event,
-                    TerminalEvent::StateChanged {
-                        state: AgentState::Blocked,
-                        ..
-                    }
-                )
-            });
-            (status.state, published)
+            (status.state, received.try_recv().ok())
         }
     }
 
