@@ -286,12 +286,7 @@ impl Worker {
                 .state
                 .agents()
                 .filter(|a| a.room_id == room && Some(a.id) != author && !a.deletion_pending)
-                .filter(|a| {
-                    matches!(
-                        a.shown_status(),
-                        RuntimeStatus::Working | RuntimeStatus::Blocked
-                    )
-                })
+                .filter(|a| needs_stop(&self.state, a))
                 .map(|a| a.id)
                 .collect(),
         };
@@ -325,7 +320,7 @@ impl Worker {
         let mut row = json!({"agent_id": id, "name": agent.name});
         let status = agent.shown_status();
         match status {
-            RuntimeStatus::Idle => {
+            RuntimeStatus::Idle if !needs_stop(state, agent) => {
                 // Nothing to stop. A turn Bus still holds (settling, or
                 // waiting on background shells) and the queue close.
                 let closed = state
@@ -339,7 +334,7 @@ impl Worker {
                 }
                 row["outcome"] = json!("already_idle");
             }
-            RuntimeStatus::Working | RuntimeStatus::Blocked => {
+            RuntimeStatus::Idle | RuntimeStatus::Working | RuntimeStatus::Blocked => {
                 let key = interrupt_key(agent.provider);
                 let Some(pane) = agent.runtime_identity.pane_id.clone() else {
                     row["outcome"] = json!("failed");
@@ -395,6 +390,29 @@ impl Worker {
             }
         }
         Ok(row)
+    }
+}
+
+/// Screen status is a presentation observation, not proof that a bound turn
+/// stopped. An empty composer can be visible while foreground tools still run.
+/// A native final releases the current request; a background-pending Stop has
+/// already ended foreground work and needs only the ordinary request cleanup.
+fn needs_stop(
+    state: &crate::messaging::model::BusState,
+    agent: &crate::messaging::model::RoomAgent,
+) -> bool {
+    match agent.shown_status() {
+        RuntimeStatus::Working | RuntimeStatus::Blocked => true,
+        RuntimeStatus::Idle => agent
+            .current_request
+            .and_then(|id| state.request(id))
+            .is_some_and(|request| {
+                request.trusted_start_bound
+                    && request.phase != crate::messaging::model::RequestPhase::Abandoned
+                    && request.pending_final.is_none()
+                    && !request.awaiting_background
+            }),
+        _ => false,
     }
 }
 

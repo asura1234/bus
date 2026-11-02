@@ -232,10 +232,8 @@ impl Fixture {
             Provider::Kimi => {
                 json!({"hook_event_name":"TurnStarted","session_id":"session","turn_id":turn.parse::<u64>().unwrap(),"origin_kind":"user","prompt":prompt})
             }
-            crate::agents::providers::ProviderKind::Grok => {
-                panic!(
-                    "This fixture covers the original providers; use dedicated Grok provider tests"
-                )
+            Provider::Grok => {
+                json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":turn,"prompt":prompt})
             }
             Provider::ClaudeCode => {
                 json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":turn,"prompt":prompt})

@@ -481,7 +481,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   stop and ask for a verified procedure rather than substituting a preview.
 - [ ] Interrupt, then deliver. Start a long turn and run
   `sbus agent interrupt AGENT`, without Bus `--yolo`. That command sends Esc
-  for Claude and Codex, and Ctrl+C for Cursor and Grok (`Ctrl+c:cancel`). On
+  for Claude, Codex and Kimi, and Ctrl+C for Cursor and Grok (`Ctrl+c:cancel`). On
   success, interrupt `outcome` is `stopped`. Read `sbus message status
   MESSAGE_ID` (`ok: true`). When no final was captured before the stop, expect
   `complete: true`, `requests[].stage` `abandoned`, `reason` `interrupted`,
@@ -961,3 +961,17 @@ idle then deliver, and an approval card without `--yolo`.
   login shell before the final `/bin/sh` fallback. An unsupported agent shell
   must return a named, logged error before spawning; ordinary terminal panes
   may still use that shell.
+
+- **2026-11-02 — interruption cannot trust presentation Idle:** A private Bus
+  running `1b226754` showed Idle while real Kimi 2.4.1 ran foreground `sleep 120`.
+  Interrupt returned `already_idle`, sent no key, and abandoned the request
+  without stopping the command. The current detector recognizes that screen,
+  but interruption must independently honor a bound open native turn, for both
+  single-agent and room controls across providers. A native foreground Stop
+  awaiting background work still needs only request cleanup. Test a fresh Idle
+  observation after native start, then the stop key and settlement. For live
+  acceptance, wait for a marker written by the foreground command before
+  interrupting; record the key, interrupted request, Idle, and a captured reply
+  to the next message. A model merely preparing to run the command is not proof
+  that foreground execution was interrupted. Archive logs without following
+  credential or OAuth links in private provider homes.
