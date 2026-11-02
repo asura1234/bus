@@ -1,0 +1,31 @@
+# Statistics artifact contract
+
+`stats.schema.json` is the field/type/enum source of truth. Python uses that schema
+for every input and output record. Unknown keys, duplicate JSON keys, invalid
+identities/timestamps, and unknown enum values fail closed. No ratings exist.
+
+The store contains append-only `events.jsonl`, one UTF-8 record per line. An event
+ID is SHA-256 of canonical JSON excluding `id` (sorted keys, compact separators,
+Unicode preserved). Identical re-imports are idempotent; conflicting facts at the
+same semantic identity stop collection. Atomic append holds a local file lock.
+
+Every record carries agent and orchestrator identities. `unknown` is the sole
+unavailable identity/model expression. Historical lane names remain names; an
+unavailable Bus ID stays `unknown`. No current identity is retroactively applied.
+Every source is a saved file with SHA-256 and a line range or JSON pointer.
+Timestamps are UTC RFC3339 seconds; unavailable timestamps are null. A review
+with only a calendar date keeps that date separately. Empty sets use `[]`.
+
+Assignments record observed identity at append time. A handover names the old
+agent and the orchestrator's reason. A message ID is optional; it links delivery
+observations to the assignment. Machine snapshots keep their original content.
+
+Root causes come from address-review-comments canonical items only. Existing
+prose source lists can be imported only when explicit and unambiguous. A
+structured table under `## Root cause provenance` may serialize the existing
+canonical decisions: `claim_id | outcome | sources`, where each source is
+`lane@round:finding-id`, separated by commas. Outcome is the existing triage
+section decision, never a new rating. The collector verifies referenced reviews
+and claim outcomes; it does not decide which assertions share a root cause.
+Missing source/round mappings are coverage omissions. Copies and unresolved
+carry-forward assertions never create new roots.
