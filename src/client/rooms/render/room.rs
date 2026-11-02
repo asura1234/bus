@@ -543,7 +543,7 @@ impl BusUi {
     }
 }
 
-fn update_chat_search(
+pub(in crate::client::rooms) fn update_chat_search(
     chat_search: &mut Option<ChatSearch>,
     view: &mut View,
     x: u16,
@@ -554,7 +554,11 @@ fn update_chat_search(
 ) {
     if let Some(search) = chat_search.as_mut() {
         let count = view.search_matches.len();
-        if search.jump_to_newest && filters_current {
+        if !filters_current {
+            search_panel(view, search, x, width, count);
+            return;
+        }
+        if search.jump_to_newest {
             // A new query starts from the newest match, nearest the bottom.
             search.jump_to_newest = false;
             search.current = count.saturating_sub(1);

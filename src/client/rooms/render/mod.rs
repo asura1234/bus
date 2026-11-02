@@ -7,7 +7,7 @@ mod history_links;
 mod hits;
 mod paint;
 mod recipient_menu;
-mod room;
+pub(super) mod room;
 mod settings;
 mod sidebar;
 mod text;

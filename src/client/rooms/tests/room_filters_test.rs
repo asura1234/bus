@@ -549,3 +549,40 @@ fn filter_acknowledgment_keeps_find_selection_visible_after_an_old_frame() {
         ui.main_scroll + usize::from(ui.view.history.height)
     );
 }
+
+#[test]
+fn stale_filter_frame_does_not_move_find_selection() {
+    let mut search = Some(super::super::chat_search::ChatSearch {
+        query: "needle".into(),
+        current: 5,
+        jump_to_newest: true,
+    });
+    let mut view = render::View::default();
+    view.search_matches = vec![(0, 0..1)];
+    let (mut scroll, mut follow_tail) = (0, true);
+    super::super::render::room::update_chat_search(
+        &mut search,
+        &mut view,
+        0,
+        100,
+        &mut scroll,
+        &mut follow_tail,
+        false,
+    );
+    let state = search.as_ref().unwrap();
+    assert_eq!(state.current, 5);
+    assert!(state.jump_to_newest);
+
+    view.search_matches.push((1, 0..1));
+    super::super::render::room::update_chat_search(
+        &mut search,
+        &mut view,
+        0,
+        100,
+        &mut scroll,
+        &mut follow_tail,
+        true,
+    );
+    assert_eq!(search.as_ref().unwrap().current, 1);
+    assert!(!search.as_ref().unwrap().jump_to_newest);
+}
