@@ -57,7 +57,7 @@ impl Worker {
                         }
                         _ => error.to_string(),
                     })?;
-                self.save(state)?;
+                self.save_without_reply_timestamps(state)?;
                 crate::messaging::diagnostics::request(
                     &self.state,
                     request,
