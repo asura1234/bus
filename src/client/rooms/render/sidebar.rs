@@ -126,8 +126,8 @@ fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
     }
 }
 
-/// Rows taken by the MASTER room entry, its agent count and the gap before ROOMS.
-const MASTER_SECTION_ROWS: usize = 3;
+/// Rows taken by the MASTER room entry and the gap before ROOMS.
+const MASTER_SECTION_ROWS: usize = 2;
 
 /// Rows of a MASTER agent: name, provider, orchestrated room and a gap.
 const MASTER_AGENT_ROWS: usize = 4;
@@ -314,14 +314,11 @@ impl BusUi {
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
         let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
-        // Both MASTER rows are already included in rooms.len() * 2.
-        let master_gap_rows = usize::from(self.snapshot.state.master_room().is_some());
+        // Work rooms have a name and count; MASTER has a name and section gap.
         // Leading gap, ROOMS header, gap, divider, `# room` agents header,
         // gap: six fixed rows around the room and agent entries.
-        let content_height = 6
-            + master_gap_rows
-            + rooms.len() * 2
-            + agents.iter().map(|entry| entry.height).sum::<usize>();
+        let content_height =
+            6 + rooms.len() * 2 + agents.iter().map(|entry| entry.height).sum::<usize>();
         let notices = u16::from(self.quitting.is_some());
         // The footer stays pinned below any exit notices.
         let footer_rows = 2 + u16::from(cfg!(feature = "dev-tools"));
@@ -476,6 +473,9 @@ impl BusUi {
                         true,
                     );
                 }
+            }
+            if room.kind == RoomKind::Master {
+                continue;
             }
             let (active, total) = sidebar_agent_counts(&self.snapshot.state, room.id);
             let count = format!("{active}/{total}");

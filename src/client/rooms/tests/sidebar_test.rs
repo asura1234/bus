@@ -888,6 +888,84 @@ fn sidebar_build_hash_never_shares_its_footer_with_save_failure_text() {
 }
 
 #[test]
+fn master_omits_agent_count_and_reclaims_its_row_without_changing_work_rooms() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let master = snapshot.state.ensure_master_room();
+    snapshot.state.confirm_hook_setup(agent).unwrap();
+    snapshot
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 1)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    for selected in [master, room] {
+        ui.open_room(selected);
+        ui.sidebar_scroll = 0;
+        ui.compute_view(100, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        let line = |row| {
+            (0..ui.view.sidebar.width - 1)
+                .map(|x| buffer[(x, row)].symbol())
+                .collect::<String>()
+        };
+        assert!(line(1).contains("# MASTER"));
+        assert!(
+            line(2).trim().is_empty(),
+            "MASTER has no count: {}",
+            line(2)
+        );
+        assert!(line(3).contains("ROOMS"), "reclaim the removed count row");
+        assert!(line(5).contains("# room"));
+        assert!(line(6).trim_start().starts_with("Agents"));
+        assert!(line(6).trim_end().ends_with("1/1"));
+        assert_eq!(ui.view.hit_at(3, 1), Some(&render::Action::Room(master)));
+        assert_eq!(ui.view.hit_at(3, 2), None);
+        for row in [5, 6] {
+            assert_eq!(ui.view.hit_at(3, row), Some(&render::Action::Room(room)));
+        }
+        assert!(ui
+            .view
+            .hits
+            .iter()
+            .filter(|hit| hit.action == render::Action::Room(master))
+            .all(|hit| hit.rect.y == 1));
+    }
+    ui.open_room(master);
+    ui.compute_view(100, 30);
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        3,
+        6,
+    );
+    assert_eq!(ui.room, Some(room), "work room count remains clickable");
+}
+
+#[test]
+fn master_without_agent_count_does_not_add_a_phantom_scroll_row() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.ensure_master_room();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    // Six fixed rows, two for MASTER plus its gap, two for the work room,
+    // and three for its collapsed agent.
+    for capacity in [13, 7] {
+        let rows = capacity + 2 + u16::from(cfg!(feature = "dev-tools"));
+        ui.sidebar_scroll = usize::MAX;
+        ui.compute_view(100, rows);
+        assert_eq!(ui.view.sidebar_max_scroll, usize::from(13 - capacity));
+        assert_eq!(ui.sidebar_scroll, ui.view.sidebar_max_scroll);
+        assert!(ui
+            .view
+            .hits
+            .iter()
+            .any(|hit| hit.action == render::Action::Agent(agent)));
+    }
+}
+
+#[test]
 fn each_room_counts_working_and_blocked_but_not_unavailable_agents() {
     let (mut ui, room, first) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
@@ -933,25 +1011,23 @@ fn room_count_remains_visible_and_clickable_when_its_name_scrolls_out() {
             .create_room(&format!("extra-{index}"))
             .unwrap();
     }
-    let master = snapshot.state.ensure_master_room();
+    snapshot.state.ensure_master_room();
     ui.receive_snapshot(Arc::new(snapshot));
-    for (room, count) in [(master, "0/0"), (room, "0/1")] {
-        ui.sidebar_scroll =
-            render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() + 1;
-        ui.compute_view(100, 20);
-        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 20));
-        ui.render(&mut buffer);
-        let line = (0..ui.view.sidebar.width - 1)
-            .map(|x| buffer[(x, 0)].symbol())
-            .collect::<String>();
-        assert!(line.starts_with(" Agents"), "{line}");
-        assert!(line.trim_end().ends_with(count), "{line}");
-        assert!(ui
-            .view
-            .hits
-            .iter()
-            .any(|hit| hit.rect.y == 0 && hit.action == render::Action::Room(room)));
-    }
+    let count = "0/1";
+    ui.sidebar_scroll = render::sidebar_room_row(&ui.snapshot.state, room, ui.room).unwrap() + 1;
+    ui.compute_view(100, 20);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 20));
+    ui.render(&mut buffer);
+    let line = (0..ui.view.sidebar.width - 1)
+        .map(|x| buffer[(x, 0)].symbol())
+        .collect::<String>();
+    assert!(line.starts_with(" Agents"), "{line}");
+    assert!(line.trim_end().ends_with(count), "{line}");
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.rect.y == 0 && hit.action == render::Action::Room(room)));
 }
 
 #[test]
