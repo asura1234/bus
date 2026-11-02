@@ -68,7 +68,7 @@ pub(crate) fn remote_reattach_program(program: &str) -> String {
     shell_quote(if program.is_empty() { "bus" } else { program })
 }
 
-fn shell_quote(value: &str) -> String {
+pub(in crate::platform) fn shell_quote(value: &str) -> String {
     if !value.is_empty()
         && value.chars().all(|ch| {
             ch.is_ascii_alphanumeric()
@@ -80,6 +80,7 @@ fn shell_quote(value: &str) -> String {
     {
         return value.to_string();
     }
+
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 

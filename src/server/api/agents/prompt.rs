@@ -88,6 +88,19 @@ fn styled_chars(line: &str) -> Vec<StyledChar> {
     out
 }
 
+fn plain_screen(screen: &str) -> String {
+    screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn apply_sgr(params: &str, dim: &mut bool, inverse: &mut bool, background: &mut bool) {
     let params: Vec<&str> = params.split(';').collect();
     let mut index = 0;

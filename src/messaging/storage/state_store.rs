@@ -208,7 +208,14 @@ impl JsonStore {
         let history = self.history_lock().clone();
         let bytes = history_lines(history.items())?;
         let path = self.history_path();
-        crate::platform::fs::atomic_write_detailed_with_checkpoint(&path, &bytes, |stage| {
+        self.write_checkpointed(&path, &bytes)?;
+        self.history_stale
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(true)
+    }
+
+    fn write_checkpointed(&self, path: &std::path::Path, bytes: &[u8]) -> Result<(), StoreError> {
+        crate::platform::fs::atomic_write_detailed_with_checkpoint(path, bytes, |stage| {
             self.injected_failure(stage)
         })
         .map_err(|error| StoreError::SaveIo {
@@ -216,10 +223,7 @@ impl JsonStore {
             stage: error.stage,
             bytes: bytes.len(),
             source: error.source,
-        })?;
-        self.history_stale
-            .store(false, std::sync::atomic::Ordering::Release);
-        Ok(true)
+        })
     }
 
     fn history_lock(&self) -> std::sync::MutexGuard<'_, Arc<History>> {
@@ -599,15 +603,7 @@ impl JsonStore {
                     source,
                 }
             })?;
-        crate::platform::fs::atomic_write_detailed_with_checkpoint(&path, &bytes, |stage| {
-            self.injected_failure(stage)
-        })
-        .map_err(|error| StoreError::SaveIo {
-            path: error.path,
-            stage: error.stage,
-            bytes: bytes.len(),
-            source: error.source,
-        })?;
+        self.write_checkpointed(&path, &bytes)?;
         journal.seq += 1;
         journal.entries = entries;
         Ok(())

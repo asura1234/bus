@@ -1,6 +1,7 @@
 use crate::agents::AgentState;
 use crate::protocol;
 use crate::server::app_state::AppState;
+use crate::server::main_loop::sanitize_notification_text as sanitized_notification_text;
 use crate::terminal::TerminalRuntimeRegistry;
 use crate::utils::config;
 use crate::utils::ids::PaneId;
@@ -229,38 +230,6 @@ impl App {
     pub(crate) fn mark_api_notification_shown(&mut self, now: Instant) {
         self.last_api_notification_at = Some(now);
     }
-}
-
-fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> {
-    let mut sanitized = String::new();
-    let mut previous_space = false;
-    for ch in value.chars() {
-        let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
-            Some(' ')
-        } else if ch.is_control() {
-            None
-        } else {
-            Some(ch)
-        };
-        let Some(ch) = replacement else {
-            continue;
-        };
-        if ch.is_whitespace() {
-            if previous_space {
-                continue;
-            }
-            previous_space = true;
-            sanitized.push(' ');
-        } else {
-            previous_space = false;
-            sanitized.push(ch);
-        }
-        if sanitized.chars().count() >= max_chars {
-            break;
-        }
-    }
-    let sanitized = sanitized.trim().to_string();
-    (!sanitized.is_empty()).then_some(sanitized)
 }
 
 #[cfg(test)]

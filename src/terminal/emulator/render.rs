@@ -1,3 +1,4 @@
+use crate::protocol::ansi::is_halfwidth_katakana_voiced_grapheme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::{layout::Rect, Frame};
 use unicode_width::UnicodeWidthStr;
@@ -306,19 +307,6 @@ pub(super) fn ghostty_symbol_fits_cell(symbol: &str, wide: crate::terminal::vt::
         || (wide == crate::terminal::vt::CellWide::Narrow && actual_width == 2)
         || (wide == crate::terminal::vt::CellWide::Wide
             && is_halfwidth_katakana_voiced_grapheme(symbol))
-}
-
-fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
-    let mut chars = symbol.chars();
-    let Some(base) = chars.next() else {
-        return false;
-    };
-    let Some(mark) = chars.next() else {
-        return false;
-    };
-    chars.next().is_none()
-        && ('\u{ff66}'..='\u{ff9d}').contains(&base)
-        && matches!(mark, '\u{ff9e}' | '\u{ff9f}')
 }
 
 pub(super) fn ghostty_buffer_symbol_into<'a>(

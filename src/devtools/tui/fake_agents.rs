@@ -176,6 +176,21 @@ enum Typed {
 }
 
 impl FakeAgent {
+    fn receive_pending(&mut self) -> Result<bool, i32> {
+        match self
+            .input
+            .as_ref()
+            .map(|rx| rx.recv_timeout(std::time::Duration::from_millis(100)))
+        {
+            Some(Ok(bytes)) => {
+                self.pending.extend(bytes);
+                Ok(true)
+            }
+            Some(Err(mpsc::RecvTimeoutError::Timeout)) => Ok(false),
+            _ => Err(0),
+        }
+    }
+
     fn new(provider: &str, hooks: Value) -> Self {
         Self {
             provider: provider.to_owned(),

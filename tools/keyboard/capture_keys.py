@@ -20,36 +20,12 @@ import select
 import sys
 
 if __package__:
-    from .rawtty import saved_mode, enter_raw, restore_mode
+    from .rawtty import saved_mode, enter_raw, restore_mode, to_hex, escaped
 else:
-    from rawtty import saved_mode, enter_raw, restore_mode
+    from rawtty import saved_mode, enter_raw, restore_mode, to_hex, escaped
 
 IDLE_TIMEOUT_S = 0.020
 EXIT_BYTE = b"\x07"  # Ctrl+G
-
-
-def to_hex(data: bytes) -> str:
-    return data.hex()
-
-
-def escaped(data: bytes) -> str:
-    parts: list[str] = []
-    for byte in data:
-        if byte == 0x1B:
-            parts.append("\\x1b")
-        elif byte == 0x7F:
-            parts.append("\\x7f")
-        elif byte == 0x0D:
-            parts.append("\\r")
-        elif byte == 0x0A:
-            parts.append("\\n")
-        elif byte == 0x09:
-            parts.append("\\t")
-        elif 0x20 <= byte <= 0x7E:
-            parts.append(chr(byte))
-        else:
-            parts.append(f"\\x{byte:02x}")
-    return "".join(parts)
 
 
 def read_sequence() -> bytes:

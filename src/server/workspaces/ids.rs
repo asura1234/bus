@@ -171,6 +171,19 @@ pub(crate) struct TerminalTargetCandidate {
     pub agent_status: crate::protocol::api::schema::AgentStatus,
 }
 
+impl From<crate::protocol::api::schema::AgentInfo> for TerminalTargetCandidate {
+    fn from(agent: crate::protocol::api::schema::AgentInfo) -> Self {
+        Self {
+            terminal_id: agent.terminal_id,
+            pane_id: agent.pane_id,
+            workspace_id: agent.workspace_id,
+            tab_id: agent.tab_id,
+            cwd: agent.cwd,
+            agent_status: agent.agent_status,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TerminalTargetError {
     NotFound {

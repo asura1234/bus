@@ -736,25 +736,10 @@ fn push_prompt_files(
         });
     }
     if gap.is_empty() {
-        lines.push(Line {
-            text: String::new(),
-            action: None,
-            tone: Tone::Text,
-            spans: Vec::new(),
-            styles: Vec::new(),
-            links: None,
-            thumbnail: None,
-            raw_markdown: None,
-            to_developer: false,
-            from_developer: false,
-            continued: false,
-            rejoin_space: false,
-            copy_from: 0,
-            anchor: RowAnchor {
-                position: prompt.files.len(),
-                ..RowAnchor::new(prompt.id, None, RowKind::File)
-            },
-        });
+        lines.push(blank_row(RowAnchor {
+            position: prompt.files.len(),
+            ..RowAnchor::new(prompt.id, None, RowKind::File)
+        }));
     }
     lines.extend(gap);
 }

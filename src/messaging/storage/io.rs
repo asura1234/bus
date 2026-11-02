@@ -1,4 +1,5 @@
 //! Durable private files and OS-released exclusive ownership, outside all UI paths.
+pub(crate) use crate::platform::fs::guarded_atomic_write as atomic_write;
 // Preserve existing messaging call sites until the S12 import rewrite.
 pub(crate) use crate::platform::fs::private_dir;
 use crate::platform::fs::FileLock;
@@ -42,18 +43,6 @@ pub(crate) fn append_lock(path: &Path) -> io::Result<FileLock> {
             Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
         }
     }
-}
-
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            return Err(io::Error::other("Bus refuses to replace a symlink"));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    crate::platform::fs::atomic_write(path, bytes)
 }
 
 #[cfg(test)]

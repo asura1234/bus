@@ -66,16 +66,7 @@ pub(super) fn observe_since_launch(
     if kind == AgentKind::Kimi {
         return super::kimi::observe(screen, expected);
     }
-    let plain = screen
-        .lines()
-        .map(|line| {
-            styled_chars(line)
-                .iter()
-                .map(|c| c.character)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = super::plain_screen(screen);
     let detection = crate::agents::manifest::detect_with_osc(
         kind,
         crate::agents::manifest::DetectionInput {

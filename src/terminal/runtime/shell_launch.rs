@@ -122,11 +122,8 @@ impl ShellWriter {
             ));
         }
         let text = crate::platform::prepare_paste_text_for_pty(command.to_owned());
-        let paste = if terminal.bracketed_paste_enabled() {
-            format!("\x1b[200~{text}\x1b[201~")
-        } else {
-            text
-        };
+        let paste =
+            crate::terminal::driver::input::paste(&text, terminal.bracketed_paste_enabled());
         self.write(Bytes::from(paste))?;
         if probe.capture(self)? != command.as_bytes() {
             // The first paste was transformed (e.g. a ZLE bracketed-paste

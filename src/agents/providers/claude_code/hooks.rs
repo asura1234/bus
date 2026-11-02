@@ -1,6 +1,7 @@
 //! Claude observation hooks and provider-input normalization.
 
 use super::statusline;
+use crate::agents::providers::launch::project_root;
 use crate::agents::providers::{
     hook_json::{self, HookContext, HookContract},
     spool::{field, optional_text, Parsed},
@@ -21,20 +22,6 @@ pub(crate) fn install(context: &HookContext, cwd: &Path) -> Result<PathBuf, Stri
     statusline::install(&context.spool, &project_root(cwd), &context.binary)
         .map_err(|e| e.to_string())?;
     Ok(settings)
-}
-
-fn project_root(cwd: &Path) -> PathBuf {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--show-toplevel"])
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
-        }
-        _ => cwd.to_path_buf(),
-    }
 }
 
 /// Decode facts only; session ownership and reply settlement remain callers'

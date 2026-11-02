@@ -373,19 +373,7 @@ impl App {
                 code: "agent_name_taken".into(),
                 message: format!(
                     "agent name {name} is already used; candidates: {}",
-                    candidates
-                        .into_iter()
-                        .map(|candidate| format!(
-                            "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                            candidate.terminal_id,
-                            candidate.pane_id,
-                            candidate.workspace_id,
-                            candidate.tab_id,
-                            candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                            candidate.agent_status,
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                    format_agent_candidates(candidates)
                 ),
             },
         }
@@ -436,19 +424,7 @@ impl App {
                     code: "agent_target_ambiguous".into(),
                     message: format!(
                         "agent target {target} is ambiguous; candidates: {}",
-                        candidates
-                            .into_iter()
-                            .map(|candidate| format!(
-                                "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                                candidate.terminal_id,
-                                candidate.pane_id,
-                                candidate.workspace_id,
-                                candidate.tab_id,
-                                candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                                candidate.agent_status,
-                            ))
-                            .collect::<Vec<_>>()
-                            .join("; ")
+                        format_agent_candidates(candidates)
                     ),
                 }
             }
@@ -473,25 +449,15 @@ impl App {
                 code: "agent_launch_pending".into(),
                 message: "agent name cannot change while startup is pending".into(),
             },
-            AgentRenameError::DuplicateName { name, candidates } => crate::protocol::api::schema::ErrorBody {
-                code: "agent_name_taken".into(),
-                message: format!(
-                    "agent name {name} is already used; candidates: {}",
-                    candidates
-                        .into_iter()
-                        .map(|candidate| format!(
-                            "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                            candidate.terminal_id,
-                            candidate.pane_id,
-                            candidate.workspace_id,
-                            candidate.tab_id,
-                            candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                            candidate.agent_status,
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            },
+            AgentRenameError::DuplicateName { name, candidates } => {
+                crate::protocol::api::schema::ErrorBody {
+                    code: "agent_name_taken".into(),
+                    message: format!(
+                        "agent name {name} is already used; candidates: {}",
+                        format_agent_candidates(candidates)
+                    ),
+                }
+            }
         }
     }
 
@@ -583,6 +549,7 @@ pub(in crate::server) fn available_shell_name(
     if runtime.waiting_for_shell_prompt() {
         return None;
     }
+
     #[cfg(test)]
     if runtime.child_pid().is_none() {
         return Some("sh".into());
@@ -655,6 +622,29 @@ pub(in crate::server) enum AgentRenameError {
         name: String,
         candidates: Vec<crate::protocol::api::schema::AgentInfo>,
     },
+}
+
+fn format_agent_candidates(
+    candidates: impl IntoIterator<
+        Item = impl Into<crate::server::workspaces::ids::TerminalTargetCandidate>,
+    >,
+) -> String {
+    candidates
+        .into_iter()
+        .map(Into::into)
+        .map(|candidate| {
+            format!(
+                "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
+                candidate.terminal_id,
+                candidate.pane_id,
+                candidate.workspace_id,
+                candidate.tab_id,
+                candidate.cwd.unwrap_or_else(|| "unknown".into()),
+                candidate.agent_status,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]

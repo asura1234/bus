@@ -106,16 +106,9 @@ impl FakeAgent {
     fn hold_text_question(&mut self) -> Result<(), i32> {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(600) {
-            let bytes = match self
-                .input
-                .as_ref()
-                .map(|rx| rx.recv_timeout(Duration::from_millis(100)))
-            {
-                Some(Ok(bytes)) => bytes,
-                Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => continue,
-                _ => return Err(0),
-            };
-            self.pending.extend(bytes);
+            if !self.receive_pending()? {
+                continue;
+            }
             for input in drain_input(&mut self.pending) {
                 match input {
                     Input::Enter => return Ok(()),
@@ -135,16 +128,9 @@ impl FakeAgent {
         let started = Instant::now();
         let mut selected: Option<usize> = None;
         while started.elapsed() < Duration::from_secs(600) {
-            let bytes = match self
-                .input
-                .as_ref()
-                .map(|rx| rx.recv_timeout(Duration::from_millis(100)))
-            {
-                Some(Ok(bytes)) => bytes,
-                Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => continue,
-                _ => return Err(0),
-            };
-            self.pending.extend(bytes);
+            if !self.receive_pending()? {
+                continue;
+            }
             for key in keys(&mut self.pending) {
                 match (key, selected) {
                     (Key::Interrupt, _) => return Err(0),

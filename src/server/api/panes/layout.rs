@@ -248,9 +248,8 @@ impl App {
         target_pane_id: Option<PaneId>,
         params: PaneSwapParams,
     ) -> (String, Option<String>) {
-        let source_public_id = match params.source_pane_id {
-            Some(raw) => self
-                .parse_pane_id(&raw)
+        let normalize = |raw: String| {
+            self.parse_pane_id(&raw)
                 .and_then(|(idx, pane_id)| {
                     self.state
                         .workspaces
@@ -258,22 +257,16 @@ impl App {
                         .find_tab_index_for_pane(pane_id)?;
                     self.public_pane_id(idx, pane_id)
                 })
-                .unwrap_or(raw),
+                .unwrap_or(raw)
+        };
+        let source_public_id = match params.source_pane_id {
+            Some(raw) => normalize(raw),
             None => self
                 .public_pane_id(ws_idx, source_pane_id)
                 .unwrap_or_default(),
         };
         let target_public_id = match params.target_pane_id {
-            Some(raw) => self
-                .parse_pane_id(&raw)
-                .and_then(|(idx, pane_id)| {
-                    self.state
-                        .workspaces
-                        .get(idx)?
-                        .find_tab_index_for_pane(pane_id)?;
-                    self.public_pane_id(idx, pane_id)
-                })
-                .or(Some(raw)),
+            Some(raw) => Some(normalize(raw)),
             None => target_pane_id.and_then(|pane_id| self.public_pane_id(ws_idx, pane_id)),
         };
         (source_public_id, target_public_id)

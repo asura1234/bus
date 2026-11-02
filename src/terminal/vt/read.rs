@@ -467,6 +467,10 @@ fn grid_ref_wide(grid_ref: &ffi::GhosttyGridRef) -> Result<CellWide, Error> {
         ffi::ghostty_grid_ref_cell(grid_ref, &mut raw).into_result()?;
     }
 
+    raw_cell_wide(raw)
+}
+
+fn raw_cell_wide(raw: ffi::GhosttyCell) -> Result<CellWide, Error> {
     let mut wide = ffi::GhosttyCellWide_GHOSTTY_CELL_WIDE_NARROW;
     unsafe {
         ffi::ghostty_cell_get(
