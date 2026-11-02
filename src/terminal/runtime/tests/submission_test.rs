@@ -215,7 +215,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         diagnostics: Default::default(),
         startup_suggestion_open: runtime.startup_suggestion_open.clone(),
     };
-    let result = submission.run(Bytes::from_static(b"hello"), Duration::ZERO, None);
+    let result = submission.run(Bytes::from_static(b"hello"), Duration::ZERO, None, None);
     assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"hello"));
     assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
     assert!(writes.try_recv().is_err(), "one paste and one Enter only");

@@ -583,6 +583,7 @@ impl ObservedSubmission {
         text: Bytes,
         delay: Duration,
         lease: Option<&super::draft_input::DraftInputLease>,
+        exchange: Option<&crate::platform::draft_editor::Exchange>,
     ) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
@@ -615,7 +616,12 @@ impl ObservedSubmission {
             }
             if observation == InputObservation::Other {
                 if let Some(lease) = lease {
-                    if self.verify_clipped_input(delay, lease)? {
+                    let verified = self.verify_clipped_input(delay, lease, exchange).map_err(|error| {
+                        io::Error::other(format!(
+                            "Full draft verification failed after paste; no Enter was sent. Inspect the composer before resending: {error}"
+                        ))
+                    })?;
+                    if verified {
                         verified_lease = Some(lease);
                         break;
                     }

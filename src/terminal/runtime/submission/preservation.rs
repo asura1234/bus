@@ -69,7 +69,7 @@ impl ObservedSubmission {
                 if let Some(editor) = self.inspect.editor_submission() {
                     return self.submit_through_editor(editor, delay, lease);
                 }
-                let result = self.run(text, delay, Some(lease));
+                let result = self.run(text, delay, Some(lease), None);
                 if self
                     .inspect
                     .native_draft_restored(&self.terminal.visible_ansi())
@@ -85,7 +85,7 @@ impl ObservedSubmission {
             InputObservation::Empty | InputObservation::Other | InputObservation::Pending => {}
             _ => {
                 lease.restored();
-                return self.run(text, delay, Some(lease));
+                return self.run(text, delay, Some(lease), None);
             }
         }
         let Some(preservation) = preservation else {
@@ -205,7 +205,7 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, Some(lease));
+        let result = self.run(text, delay, Some(lease), None);
         // Native stash pops at the next submit. On an unsubmitted attempt,
         // restore only into an empty composer; never toggle over another draft.
         if !self
@@ -253,6 +253,7 @@ impl ObservedSubmission {
         &self,
         delay: Duration,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        active: Option<&Exchange>,
     ) -> io::Result<bool> {
         let Some(screen) = self.terminal.visible_ansi_if_complete() else {
             return Ok(false);
@@ -260,25 +261,32 @@ impl ObservedSubmission {
         let Some(editor) = self.inspect.clipped_input_verification(&screen) else {
             return Ok(false);
         };
-        let exchange = self.exchange(editor.directory)?;
+        let owned = if active.is_none() {
+            let exchange = self.exchange(editor.directory)?;
+            exchange.save_recovery(&editor.text)?;
+            Some(exchange)
+        } else {
+            None
+        };
+        let exchange = active
+            .or(owned.as_ref())
+            .ok_or_else(|| io::Error::other("Draft verification exchange is unavailable"))?;
         // Verify reads the complete existing native draft. It does not restore,
         // replace or clear it, and a mismatch leaves the native file untouched.
-        exchange.save_recovery(&editor.text)?;
-        exchange.request_verify()?;
+        exchange.request_verify_text(&editor.text)?;
         self.guarded_editor_key(editor.key, lease, false, |current| {
             self.inspect.editor_frame_unchanged(&screen, current)
         })?;
         self.wait_transfer(|| exchange.acknowledged())?;
         let verified = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
-        if !self
-            .inspect
-            .verified_input(&verified, &exchange.captured_text()?)
-        {
+        if !self.inspect.verified_input(&verified, &editor.text) {
             return Err(io::Error::other(
                 "Native composer ownership could not be verified",
             ));
         }
-        exchange.remove_recovery()?;
+        if owned.is_some() {
+            exchange.remove_recovery()?;
+        }
         self.reset_confirmation(delay);
         Ok(true)
     }
@@ -562,7 +570,7 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, Some(lease));
+        let result = self.run(text, delay, Some(lease), Some(&exchange));
         match self.restore_editor(&exchange, &key, &backspace) {
             Ok(()) => lease.restored(),
             Err(error) => self.recovery_log(&exchange, &error),

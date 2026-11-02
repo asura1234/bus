@@ -7,6 +7,9 @@ const TEXT: &str = include_str!("../../../../tests/fixtures/codex-composer/revie
 const BEFORE: &str = include_str!("../../../../tests/fixtures/codex-composer/before.txt");
 const CLIPPED: &str = include_str!("../../../../tests/fixtures/codex-composer/clipped.txt");
 
+#[path = "codex_clipped_existing_draft_test.rs"]
+mod existing_draft;
+
 fn inspector(directory: std::path::PathBuf) -> Box<dyn SubmissionInspector> {
     Box::new(crate::server::api::preserving_observer(
         AgentKind::Codex,
@@ -154,5 +157,45 @@ async fn codex_clipped_foreign_prefix_receives_no_enter_or_destructive_cleanup()
         "no Enter, clear, marker deletion or repaste"
     );
     assert!(runtime.terminal.visible_ansi().contains("**基线**"));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn codex_verification_busy_after_paste_is_uncertain_and_never_replayed() {
+    let directory = crate::utils::test_temp::unique_temp_path("codex-clipped-busy");
+    let exchange = directory.join("exchange");
+    let occupied =
+        crate::platform::draft_editor::Exchange::begin(exchange.clone(), Duration::from_secs(6))
+            .unwrap();
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(95, 44, 16);
+    runtime.test_submission_clock().unwrap().pause();
+    render(&runtime, BEFORE);
+    let paste = Bytes::from(format!("\x1b[200~{TEXT}\x1b[201~"));
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            paste.clone(),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+            Duration::ZERO,
+            None,
+            inspector(exchange),
+        )
+        .unwrap();
+    assert_eq!(next(&mut writes).await, paste);
+    render(&runtime, CLIPPED);
+    let error = completion
+        .recv_timeout(NATIVE_TEST_TIMEOUT)
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        !PromptNotShown::is(&error),
+        "an already-pasted draft must never become a definite non-delivery: {error}"
+    );
+    assert!(error.to_string().contains("after paste"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no Enter, cleanup or second paste"
+    );
+    drop(occupied);
     std::fs::remove_dir_all(directory).unwrap();
 }
