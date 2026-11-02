@@ -372,3 +372,27 @@ async fn universal_driver_description_redraw_cannot_repeat_pending_navigation() 
         "description text is not a new focused option"
     );
 }
+
+#[tokio::test]
+async fn driver_agent_metadata_marks_an_incomplete_frame_unreadable() {
+    let (mut app, _, mut writes) = shell(b"A coherent screen");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(
+            Some(crate::agents::AgentKind::Claude),
+            crate::agents::AgentState::Idle,
+        );
+    assert!(!app.agent_info(0, pane).unwrap().screen_detection_skipped);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2026hpartial redraw");
+    assert!(
+        app.agent_info(0, pane).unwrap().screen_detection_skipped,
+        "an incomplete driver read cannot attest that a blocker closed"
+    );
+    assert!(writes.try_recv().is_err());
+}

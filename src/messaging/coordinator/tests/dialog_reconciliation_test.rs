@@ -384,7 +384,7 @@ fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_un
     impl Transport for Unreadable {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             assert!(
-                matches!(method, Method::AgentObserve(_)),
+                matches!(method, Method::AgentGet(_)),
                 "must not replay a native write"
             );
             Err(TransportError {
