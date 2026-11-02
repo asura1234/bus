@@ -612,14 +612,7 @@ fn large_room_ui_profile() {
 
 #[test]
 fn background_thumbnails_match_and_do_not_overflow_during_resize() {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-history-image-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-history-image");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("attachment.png");
     image::RgbaImage::new(480, 80).save(&file).unwrap();

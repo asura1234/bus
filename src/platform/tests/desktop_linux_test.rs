@@ -24,7 +24,7 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::mpsc;
-    use std::time::{Duration, Instant, SystemTime};
+    use std::time::{Duration, Instant};
 
     struct Cleanup {
         temp_dir: PathBuf,
@@ -48,12 +48,7 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
     }
 
     let _guard = env_lock().lock().unwrap();
-    let unique = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("system time should follow unix epoch")
-        .as_nanos();
-    let temp_dir =
-        std::env::temp_dir().join(format!("bus-fake-wl-copy-{}-{unique}", std::process::id()));
+    let temp_dir = crate::utils::test_temp::unique_temp_path("bus-fake-wl-copy");
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let mut cleanup = Cleanup {
         temp_dir: temp_dir.clone(),
@@ -144,7 +139,6 @@ fn failed_wl_copy_uses_x11_fallback() {
     use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct Cleanup {
         old_wayland_display: Option<OsString>,
@@ -170,14 +164,7 @@ fn failed_wl_copy_uses_x11_fallback() {
     }
 
     let _guard = env_lock().lock().unwrap();
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should follow unix epoch")
-        .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!(
-        "bus-failed-wl-copy-{}-{unique}",
-        std::process::id()
-    ));
+    let temp_dir = crate::utils::test_temp::unique_temp_path("bus-failed-wl-copy");
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let cleanup = Cleanup {
         old_wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
