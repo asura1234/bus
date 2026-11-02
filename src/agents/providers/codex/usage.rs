@@ -60,7 +60,7 @@ fn read_rollout_tail(path: &Path) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&tail).into_owned())
 }
 
-/// How a Codex turn ended, from its rollout `task_complete` event.
+/// How a completed Codex turn ended, from its rollout.
 #[derive(Debug, PartialEq)]
 pub(crate) enum CodexTurnEnd {
     /// The error that ended the turn. Codex fires no Stop hook for it.
@@ -77,26 +77,71 @@ pub(crate) fn read_codex_turn_end(
     turn_id: &str,
 ) -> std::io::Result<Option<CodexTurnEnd>> {
     let tail = read_rollout_tail(path)?;
-    Ok(tail.lines().rev().find_map(|line| {
-        let event: Value = serde_json::from_str(line).ok()?;
-        let payload = &event["payload"];
-        if event["type"] != "event_msg"
-            || payload["type"] != "task_complete"
-            || payload["turn_id"] != turn_id
-        {
-            return None;
-        }
-        if let Some(message) = payload["error"]["message"].as_str() {
-            return Some(CodexTurnEnd::Error(
-                match payload["error"]["codex_error_info"].as_str() {
-                    Some(code) => format!("{message} ({code})"),
-                    None => message.to_owned(),
-                },
-            ));
-        }
-        let answer = payload["last_agent_message"].as_str()?;
-        Some(CodexTurnEnd::Final(answer.to_owned()))
-    }))
+    let events: Vec<Value> = tail
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let Some(end) = events.iter().rposition(|event| {
+        event["type"] == "event_msg"
+            && event["payload"]["type"] == "task_complete"
+            && event["payload"]["turn_id"] == turn_id
+    }) else {
+        return Ok(None);
+    };
+    let payload = &events[end]["payload"];
+    if let Some(message) = payload["error"]["message"].as_str() {
+        return Ok(Some(CodexTurnEnd::Error(
+            match payload["error"]["codex_error_info"].as_str() {
+                Some(code) => format!("{message} ({code})"),
+                None => message.to_owned(),
+            },
+        )));
+    }
+    let answer = payload["last_agent_message"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            events[..end]
+                .iter()
+                .rev()
+                .find_map(|event| completed_final_text(event, turn_id))
+        });
+    Ok(answer.map(CodexTurnEnd::Final))
+}
+
+/// Codex 0.164.0 writes final text separately from `task_complete`. The
+/// completed response preserves rendered text (including memory citations),
+/// whereas the preceding AgentMessage can have empty text plus structured
+/// citations. Prefer that newer response when both representations exist.
+fn completed_final_text(event: &Value, turn_id: &str) -> Option<String> {
+    let payload = &event["payload"];
+    let (message, text_type) = if event["type"] == "response_item"
+        && payload["type"] == "message"
+        && payload["role"] == "assistant"
+        && payload["status"] == "completed"
+        && payload["internal_chat_message_metadata_passthrough"]["turn_id"] == turn_id
+    {
+        (payload, "output_text")
+    } else if event["type"] == "event_msg"
+        && payload["type"] == "item_completed"
+        && payload["turn_id"] == turn_id
+        && payload["item"]["type"] == "AgentMessage"
+    {
+        (&payload["item"], "Text")
+    } else {
+        return None;
+    };
+    if message["phase"] != "final_answer" {
+        return None;
+    }
+    let parts: Vec<_> = message["content"]
+        .as_array()?
+        .iter()
+        .filter(|part| part["type"] == text_type)
+        .filter_map(|part| part["text"].as_str())
+        .collect();
+    // An explicitly empty text is a final; absent text is not one.
+    (!parts.is_empty()).then(|| parts.concat())
 }
 
 /// Where the prompt of a message Bus typed but never saw start ran, per

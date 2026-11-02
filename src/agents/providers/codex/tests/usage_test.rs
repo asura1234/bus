@@ -310,3 +310,144 @@ fn rollout_prompt_search_says_why_it_attributes_nothing() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+const FINAL_0164: &str = include_str!("fixtures/final-answer-0.164.0.jsonl");
+
+#[test]
+fn rollout_0164_recovers_the_actual_four_lost_finals() {
+    let dir = rollout_dir("0164-lost-finals");
+    let path = dir.join("rollout-recorded.jsonl");
+    std::fs::write(&path, FINAL_0164).unwrap();
+    for (turn, expected) in [
+        ("01a19a4c-21df-7ba1-93ea-4e073e8af0e0", concat!(
+            "<oai-mem-citation>\n<citation_entries>\n",
+            "MEMORY.md:276-277|note=[review convergence and reuse of unchanged evidence]\n",
+            "</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>")),
+        ("01a19a5b-fdfc-7682-955d-bb17d87142ff", concat!(
+            "<oai-mem-citation>\n<citation_entries>\n",
+            "MEMORY.md:276-277|note=[closed-world review convergence and bounded evidence claims]\n",
+            "</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>")),
+        ("01a19a71-3f41-7a62-aba0-76c60d69c99c", concat!(
+            "<oai-mem-citation>\n<citation_entries>\n",
+            "MEMORY.md:276-277|note=[carry-forward review bound to unchanged source evidence]\n",
+            "</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>")),
+        ("01a19a73-1b61-7ca1-83c3-106c97f20b45", ""),
+    ] {
+        assert_eq!(read_codex_turn_end(&path, turn).unwrap(),
+            Some(CodexTurnEnd::Final(expected.into())), "{turn}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn final_0164_records() -> Vec<Value> {
+    FINAL_0164
+        .lines()
+        .take(4)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn rollout_0164_reads_completed_message_items_and_preserves_text_parts() {
+    let dir = rollout_dir("0164-items");
+    let path = dir.join("rollout-recorded.jsonl");
+    let turn = "01a19a4c-21df-7ba1-93ea-4e073e8af0e0";
+    for response in [false, true] {
+        let mut lines = final_0164_records();
+        lines[1]["payload"]["item"]["content"] = json!([
+            {"type":"Text","text":"exact "}, {"type":"Text","text":"answer"}]);
+        lines[2]["payload"]["content"] = json!([
+            {"type":"output_text","text":"exact "}, {"type":"output_text","text":"answer"}]);
+        lines.remove(if response { 1 } else { 2 });
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_codex_turn_end(&path, turn).unwrap(),
+            Some(CodexTurnEnd::Final("exact answer".into()))
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rollout_0164_requires_a_completed_final_for_the_same_turn_before_its_end() {
+    let dir = rollout_dir("0164-boundaries");
+    let path = dir.join("rollout-recorded.jsonl");
+    let turn = "01a19a4c-21df-7ba1-93ea-4e073e8af0e0";
+    for case in [
+        "running",
+        "foreign",
+        "commentary",
+        "unfinished",
+        "no-text",
+        "after-end",
+        "user",
+    ] {
+        let mut lines = final_0164_records();
+        match case {
+            "running" => {
+                lines.pop();
+            }
+            "foreign" => {
+                lines[1]["payload"]["turn_id"] = json!("other");
+                lines[2]["payload"]["internal_chat_message_metadata_passthrough"]["turn_id"] =
+                    json!("other");
+                lines[2]["metadata"]["retained_source"]["id"]["turn_id"] = json!("other");
+            }
+            "commentary" => {
+                lines[1]["payload"]["item"]["phase"] = json!("commentary");
+                lines[2]["payload"]["phase"] = json!("commentary");
+            }
+            "unfinished" => {
+                lines[1]["payload"]["type"] = json!("item_started");
+                lines[2]["payload"]["status"] = json!("in_progress");
+            }
+            "no-text" => {
+                lines[1]["payload"]["item"]["content"] = json!([]);
+                lines[2]["payload"]["content"] = json!([]);
+            }
+            "after-end" => {
+                let end = lines.pop().unwrap();
+                lines.insert(1, end);
+            }
+            "user" => {
+                lines[1]["payload"]["item"]["type"] = json!("UserMessage");
+                lines[2]["payload"]["role"] = json!("user");
+            }
+            _ => unreachable!(),
+        }
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(read_codex_turn_end(&path, turn).unwrap(), None, "{case}");
+    }
+    let mut lines = final_0164_records();
+    lines[3]["payload"]["error"] = json!({"message":"failed", "codex_error_info":"provider_error"});
+    std::fs::write(
+        &path,
+        lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        read_codex_turn_end(&path, turn).unwrap(),
+        Some(CodexTurnEnd::Error("failed (provider_error)".into()))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
