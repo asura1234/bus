@@ -9,25 +9,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-static NEXT_FIXTURE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+use std::time::{Duration, Instant, SystemTime};
 
 pub(super) fn unique_test_dir() -> PathBuf {
-    unique_test_dir_at(SystemTime::now())
+    crate::fixture_dirs::unique_test_dir("bus-room-screen")
 }
 
 pub(super) fn unique_test_dir_at(timestamp: SystemTime) -> PathBuf {
-    #[cfg(unix)]
-    let root = PathBuf::from("/tmp"); // Keep private socket paths below sockaddr_un limits.
-    #[cfg(windows)]
-    let root = std::env::temp_dir();
-    root.join(format!(
-        "bus-room-screen-{}-{}-{}",
-        std::process::id(),
-        timestamp.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-        NEXT_FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ))
+    crate::fixture_dirs::unique_test_dir_at("bus-room-screen", timestamp)
 }
 
 fn control_stream(root: &Path) -> std::io::Result<Stream> {

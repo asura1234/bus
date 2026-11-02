@@ -1,5 +1,8 @@
 //! Built-binary callback and isolated CLI-path checks.
 
+#[path = "../support/fixture_dir_test.rs"]
+mod fixture_dirs;
+
 #[path = "callbacks_test.rs"]
 mod callbacks;
 #[path = "help_test.rs"]

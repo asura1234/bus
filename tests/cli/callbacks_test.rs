@@ -6,14 +6,7 @@ use std::{
 
 #[test]
 fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
-    let root = std::env::temp_dir().join(format!(
-        "bus-hook-shape-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::fixture_dirs::unique_test_dir("bus-hook-shape");
     for (index, (text, transcript, expected, parsed)) in [
         (None, true, "missing", "parsed"),
         (Some(serde_json::Value::Null), true, "null", "parsed"),
@@ -96,11 +89,7 @@ fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
 
 #[test]
 fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bus-cli-callback-{}-{nonce}", std::process::id()));
+    let dir = crate::fixture_dirs::unique_test_dir("bus-cli-callback");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
@@ -157,14 +146,7 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
 
 #[test]
 fn callback_cli_continues_existing_launch_spool_without_reset_or_replay() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "bus-cli-saved-spool-{}-{nonce}",
-        std::process::id()
-    ));
+    let root = crate::fixture_dirs::unique_test_dir("bus-cli-saved-spool");
     let dir = root.join("callbacks/saved-launch");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = br#"{"agent_id":7,"provider":"codex","launch_id":"saved-launch"}"#;
@@ -252,11 +234,7 @@ fn project_hook_is_inert_without_bus_launch_environment() {
 
 #[test]
 fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bus-cli-rejected-{}-{nonce}", std::process::id()));
+    let dir = crate::fixture_dirs::unique_test_dir("bus-cli-rejected");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
@@ -313,12 +291,7 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
 
 #[test]
 fn held_spool_and_diagnostics_locks_leave_a_durable_hook_before_success() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir =
-        std::env::temp_dir().join(format!("bus-cli-held-spool-{}-{nonce}", std::process::id()));
+    let dir = crate::fixture_dirs::unique_test_dir("bus-cli-held-spool");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),

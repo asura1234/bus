@@ -20,14 +20,7 @@ use support::{
 };
 
 fn unique_test_dir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    PathBuf::from(format!(
-        "/tmp/bus-multi-client-{}-{nanos}",
-        std::process::id()
-    ))
+    crate::fixture_dirs::unique_test_dir("bus-multi-client")
 }
 
 struct SpawnedBus {
