@@ -103,6 +103,7 @@ fn claude_agent_with_input(
         expected_session_id: "session".into(),
         steer: false,
         expected_generation: None,
+        expected_turn_id: None,
     };
     (app, params, writes)
 }
@@ -169,6 +170,7 @@ async fn agent_send_keys_validates_every_key_before_writing() {
         AgentSendKeysParams {
             target: "reviewer".into(),
             keys: vec!["enter".into(), "not-a-key".into()],
+            native_interrupt: None,
         },
     );
     let error: crate::protocol::api::schema::ErrorResponse =
@@ -181,6 +183,7 @@ async fn agent_send_keys_validates_every_key_before_writing() {
         AgentSendKeysParams {
             target: "reviewer".into(),
             keys: vec!["up".into(), "enter".into()],
+            native_interrupt: None,
         },
     );
     let success: SuccessResponse = serde_json::from_str(&sent).unwrap();

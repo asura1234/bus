@@ -193,7 +193,7 @@ async fn focus_events_are_forwarded_when_enabled() {
         detection_context: Default::default(),
         kimi_code_home: Arc::new(Mutex::new(None)),
         #[cfg(unix)]
-        shared_codex: Mutex::new(None),
+        shared_codex: Arc::new(Mutex::new(None)),
         preserve_processes_on_drop: true,
         shell_integration: None,
         launch_transaction: Default::default(),
@@ -243,7 +243,7 @@ async fn focus_events_are_suppressed_when_disabled() {
         detection_context: Default::default(),
         kimi_code_home: Arc::new(Mutex::new(None)),
         #[cfg(unix)]
-        shared_codex: Mutex::new(None),
+        shared_codex: Arc::new(Mutex::new(None)),
         preserve_processes_on_drop: true,
         shell_integration: None,
         launch_transaction: Default::default(),

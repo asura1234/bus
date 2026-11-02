@@ -87,6 +87,27 @@ impl App {
         if !crate::server::terminals::agents::runtime_hosts_agent(runtime, expected_agent) {
             return agent_not_ready(id, &params.target);
         }
+        if let Some(expected) = &params.native_interrupt {
+            let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
+                return agent_not_ready(id, &params.target);
+            };
+            if agent.terminal_id != expected.expected_terminal_id
+                || agent.agent_session.as_ref().map(|s| s.value.as_str())
+                    != Some(expected.expected_session_id.as_str())
+                || expected.expected_session_id.is_empty()
+                || agent.agent.as_deref() != Some("codex")
+                || params.keys != ["esc"]
+            {
+                return agent_not_ready(id, &params.target);
+            }
+            #[cfg(unix)]
+            if let Some(result) = super::codex_native::interrupt(runtime, &agent) {
+                return match result {
+                    Ok(()) => encode_success(id, ResponseResult::Ok {}),
+                    Err(error) => encode_error(id, "agent_send_keys_failed", error.to_string()),
+                };
+            }
+        }
         let encoded =
             match crate::server::api::input_encoding::encode_api_keys(runtime, &params.keys) {
                 Ok(encoded) => encoded,

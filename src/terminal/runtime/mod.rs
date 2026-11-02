@@ -171,9 +171,13 @@ pub struct TerminalRuntime {
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
-    /// Pane-owned Codex runtime. Dropping it closes the helper lifetime channel.
+    /// Pane-owned Codex runtime. One `Option` created by `from_environment`.
+    /// Admission clones this handle onto its worker so the app thread does not
+    /// wait on the socket. Dropping the last handle closes the helper lifetime
+    /// channel: immediately when no admission call is in flight, and after that
+    /// call when one is.
     #[cfg(unix)]
-    shared_codex: Mutex<Option<crate::agents::providers::codex::native::Runtime>>,
+    shared_codex: Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_transaction: launch_transaction::LaunchTransaction,
@@ -360,5 +364,14 @@ impl TerminalRuntime {
             .unwrap_or_else(|error| error.into_inner())
             .as_ref()
             .is_some_and(|runtime| runtime.has_session())
+    }
+
+    /// Clone of the pane runtime handle. The worker may lock it; it is not a
+    /// second runtime.
+    #[cfg(unix)]
+    pub(crate) fn shared_codex_handle(
+        &self,
+    ) -> Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>> {
+        Arc::clone(&self.shared_codex)
     }
 }

@@ -830,7 +830,7 @@ impl TerminalRuntime {
             detection_context,
             kimi_code_home,
             #[cfg(unix)]
-            shared_codex: Mutex::new(None),
+            shared_codex: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_transaction: Default::default(),

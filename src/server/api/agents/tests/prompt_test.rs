@@ -235,6 +235,7 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
         expected_session_id: "session".into(),
         steer: false,
         expected_generation: None,
+        expected_turn_id: None,
     };
     let run = |app: &mut App, params: AgentPromptIfIdleParams| {
         let method = Method::AgentPromptIfIdle(params);
@@ -520,6 +521,7 @@ async fn guarded_cursor_background_multiline_quote_is_submitted_as_the_complete_
             expected_session_id: "cursor-session".into(),
             steer: false,
             expected_generation: None,
+            expected_turn_id: None,
         }),
     );
     let paste = tokio::time::timeout(submission_tests::WAIT, writes.recv())
