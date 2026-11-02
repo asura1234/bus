@@ -141,10 +141,10 @@ class Scratch:
 
     def s2(self):
         for i in range(3):
-            draft = f'  fake:draft-bytes S2-{self.name}-{i}\t中 文\nsecond  line\n\n  tail\t  \n'
-            self.ok(['click', '--hit', 'agent:cdlg'])
-            self.ok(['type', draft])
-            self.send('cdlg', f'S2-{self.name}-{i} preserve draft', 'S2')
+            draft = f'fake:draft-bytes S2-{self.name}-{i}\t中 文\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
+            self.ok(['click', '--hit', 'agent:a1'])
+            self.ok(['paste', draft])
+            self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2')
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
             self.ok(['wait', '--text', 'fake draft bytes', '--timeout', '20s'])
