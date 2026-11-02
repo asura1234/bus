@@ -1044,6 +1044,13 @@
             "expected_terminal_id": {
               "type": "string"
             },
+            "expected_turn_id": {
+              "description": "Bind native steering to the Bus lead's turn, never a newer TUI turn.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "steer": {
               "description": "Also type into a working agent, as a person types while it works, so\nthe provider takes the text into its running turn. A blocked agent is\nstill refused.",
               "type": "boolean"
@@ -1192,6 +1199,17 @@
                 "type": "string"
               },
               "type": "array"
+            },
+            "native_interrupt": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/NativeInterruptIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only the bound agent interrupt operation requests native cancellation."
             },
             "target": {
               "type": "string"
@@ -1823,6 +1841,21 @@
           "required": [
             "path",
             "ratio"
+          ],
+          "type": "object"
+        },
+        "NativeInterruptIdentity": {
+          "properties": {
+            "expected_session_id": {
+              "type": "string"
+            },
+            "expected_terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expected_terminal_id",
+            "expected_session_id"
           ],
           "type": "object"
         },
