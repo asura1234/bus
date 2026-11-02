@@ -41,3 +41,23 @@ fn dashboard_service_reuses_one_verified_endpoint_and_recovers_a_stopped_owner()
     drop(replacement);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn dashboard_endpoint_discovery_retains_the_record_path_and_parse_cause() {
+    let root = crate::utils::test_temp::unique_temp_path("dashboard-discovery");
+    std::fs::create_dir_all(&root).unwrap();
+    let Started::Owned(owner) = start(&root).unwrap() else {
+        panic!("owns service")
+    };
+    std::fs::write(root.join("dashboard-runtime/endpoint.json"), "not json").unwrap();
+    let error = match start(&root) {
+        Err(error) => error,
+        Ok(_) => panic!("corrupt discovery must not be reused"),
+    };
+    assert!(
+        error.to_string().contains("endpoint.json") && error.to_string().contains("JSON"),
+        "{error}"
+    );
+    drop(owner);
+    std::fs::remove_dir_all(root).unwrap();
+}

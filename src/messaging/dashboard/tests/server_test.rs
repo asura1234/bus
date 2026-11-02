@@ -4,7 +4,7 @@ use crate::messaging::storage::state_store::JsonStore;
 use serde_json::{json, Value};
 
 fn persisted_fixture(root: &Path) {
-    let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/requests.json")).unwrap();
+    let cases = super::fixtures::cases();
     let mut doc = serde_json::to_value(BusState::new()).unwrap();
     for (index, case) in cases.iter().enumerate().take(5) {
         doc["requests"][(100 + index).to_string()] = case["record"].clone();
@@ -149,4 +149,60 @@ fn http_rejects_rebinding_cross_origin_and_duplicate_hosts() {
         "200 OK"
     );
     assert_eq!(check("broken\r\n\r\n"), "400 Bad Request");
+}
+
+#[test]
+fn idle_preconnect_does_not_delay_another_dashboard_request() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (accepted, ready) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        for n in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            if n == 0 {
+                accepted.send(()).unwrap();
+            }
+            dispatch_connection(
+                stream,
+                "/nonexistent-dashboard-test".into(),
+                address.to_string(),
+                "nonce".into(),
+            );
+        }
+    });
+    let idle = TcpStream::connect(address).unwrap();
+    ready.recv_timeout(Duration::from_secs(1)).unwrap();
+    let mut active = TcpStream::connect(address).unwrap();
+    active
+        .set_read_timeout(Some(Duration::from_millis(400)))
+        .unwrap();
+    active
+        .write_all(format!("GET /health HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes())
+        .unwrap();
+    let mut response = String::new();
+    let result = active.read_to_string(&mut response);
+    drop(idle);
+    server.join().unwrap();
+    assert!(
+        result.is_ok(),
+        "an idle connection blocked a real request: {result:?}"
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+}
+
+#[test]
+fn ordinary_browser_disconnects_and_header_timeouts_never_enter_warning_pipe() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        for kind in [
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::ConnectionReset,
+        ] {
+            log_http_error(&io::Error::new(kind, "ordinary browser connection"));
+        }
+    });
+    assert!(!capture.text().contains("WARN"), "{}", capture.text());
 }

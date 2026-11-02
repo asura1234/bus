@@ -29,11 +29,14 @@ fn serve(root: &Path) -> io::Result<()> {
     writeln!(io::stdout().lock(), "{}", server.endpoint.url)?;
     io::stdout().flush()?;
     for connection in server.listener.incoming() {
-        let result = connection.and_then(|mut stream| {
-            serve_connection(&mut stream, root, &authority, &server.endpoint.token)
-        });
-        if let Err(error) = result {
-            tracing::warn!(event = "bus.dashboard.http_failed", %error);
+        match connection {
+            Ok(stream) => dispatch_connection(
+                stream,
+                root.to_owned(),
+                authority.clone(),
+                server.endpoint.token.clone(),
+            ),
+            Err(error) => log_http_error(&error),
         }
     }
     Ok(())
@@ -191,3 +194,59 @@ fn serve_connection(
 #[cfg(test)]
 #[path = "tests/server_test.rs"]
 mod tests;
+
+static ACTIVE_CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct ConnectionPermit;
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        ACTIVE_CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+fn dispatch_connection(
+    mut stream: TcpStream,
+    root: std::path::PathBuf,
+    authority: String,
+    token: String,
+) {
+    use std::sync::atomic::Ordering;
+    if ACTIVE_CONNECTIONS
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            (count < 16).then_some(count + 1)
+        })
+        .is_err()
+    {
+        tracing::debug!(event = "bus.dashboard.connection_limit");
+        return;
+    }
+    let permit = ConnectionPermit;
+    if let Err(error) = std::thread::Builder::new()
+        .name("bus-dashboard-http".into())
+        .spawn(move || {
+            let _permit = permit;
+            if let Err(error) = serve_connection(&mut stream, &root, &authority, &token) {
+                log_http_error(&error);
+            }
+        })
+    {
+        log_http_error(&error);
+    }
+}
+fn log_http_error(error: &io::Error) {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+    ) {
+        tracing::debug!(event = "bus.dashboard.connection_closed", %error);
+    } else {
+        tracing::warn!(event = "bus.dashboard.http_failed", %error);
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/fixtures_test.rs"]
+mod fixtures;

@@ -85,19 +85,27 @@ pub(super) fn start(root: &Path) -> io::Result<Started> {
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
             let deadline = Instant::now() + Duration::from_secs(3);
             loop {
-                let endpoint = std::fs::read(&endpoint_path)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<Endpoint>(&bytes).ok());
-                if let Some(endpoint) = endpoint {
-                    match endpoint.healthy() {
+                let discovered = std::fs::read(&endpoint_path)
+                    .map_err(|error| format!("read {}: {error}", endpoint_path.display()))
+                    .and_then(|bytes| {
+                        serde_json::from_slice::<Endpoint>(&bytes)
+                            .map_err(|error| format!("JSON {}: {error}", endpoint_path.display()))
+                    });
+                let problem = match discovered {
+                    Ok(endpoint) => match endpoint.healthy() {
                         Ok(true) => return Ok(Started::Existing(endpoint)),
-                        result => tracing::debug!(event = "bus.dashboard.health_failed", ?result),
-                    }
-                }
+                        Ok(false) => format!(
+                            "{}: endpoint identity did not match",
+                            endpoint_path.display()
+                        ),
+                        Err(error) => format!("{}: {error}", endpoint_path.display()),
+                    },
+                    Err(problem) => problem,
+                };
                 if Instant::now() >= deadline {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "Dashboard owner did not publish a healthy endpoint",
+                        format!("Dashboard discovery failed: {problem}"),
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(25));

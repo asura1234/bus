@@ -14,7 +14,8 @@ struct Case {
 fn cases() -> Vec<Case> {
     {
         let mut cases: Vec<Case> =
-            serde_json::from_str(include_str!("fixtures/requests.json")).unwrap();
+            serde_json::from_value(serde_json::Value::Array(super::super::fixtures::cases()))
+                .unwrap();
         cases.extend(
             serde_json::from_str::<Vec<Case>>(include_str!("fixtures/recorded.json")).unwrap(),
         );
@@ -80,9 +81,9 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
         (1, 1, 1)
     );
     assert_eq!((c.bus_failures, c.external), (2, 1));
-    assert_eq!(c.delivery_rate(), Some(60.0));
-    assert_eq!(c.reply_rate(), Some(50.0));
-    assert!((c.bus_rate().unwrap() - 100.0 / 3.0).abs() < 0.001);
+    assert_eq!(report.all.rates.delivery.percent, Some(60.0));
+    assert_eq!(report.all.rates.reply_capture.percent, Some(50.0));
+    assert!((report.all.rates.bus_reliability.percent.unwrap() - 100.0 / 3.0).abs() < 0.001);
     assert_eq!(c.failure_reasons["submission_unconfirmed"], 1);
     assert_eq!(c.bus_reasons["reply_not_captured"], 1);
     assert_eq!(c.external_reasons["provider_error: quota"], 1);
@@ -122,9 +123,9 @@ fn local_hour_boundary_and_repeated_dst_hours_stay_distinct() {
 #[test]
 fn empty_denominators_are_absent_and_missing_reasons_are_bus_caused() {
     let report = snapshot(&BusState::new(), singapore_hour);
-    assert_eq!(report.all.counts.delivery_rate(), None);
-    assert_eq!(report.all.counts.reply_rate(), None);
-    assert_eq!(report.all.counts.bus_rate(), None);
+    assert_eq!(report.all.rates.delivery.percent, None);
+    assert_eq!(report.all.rates.reply_capture.percent, None);
+    assert_eq!(report.all.rates.bus_reliability.percent, None);
     assert!(report.all.hours.is_empty());
     let state = fixture_state(
         cases()
@@ -193,4 +194,43 @@ fn recipient_room_and_failure_views_preserve_auditable_request_metadata() {
     assert_eq!(lost["reason"], "reply_not_captured");
     assert_eq!(lost["cause"], "bus");
     assert_eq!(lost["delivery"], "delivered");
+}
+
+#[test]
+fn abandoned_steering_never_borrows_a_leads_binding_before_its_own_paste() {
+    use crate::messaging::model::SubmissionOutcome;
+    for confirmed in [false, true] {
+        let cases = cases();
+        let state = fixture_state([cases[0].record.clone(), cases[3].record.clone()]);
+        let mut doc = serde_json::to_value(state).unwrap();
+        doc["agents"]["2"]["status"] = serde_json::json!("working");
+        doc["agents"]["2"]["current_request"] = serde_json::json!(103);
+        doc["queues"]["2"] = serde_json::json!([100]);
+        let mut state: BusState = serde_json::from_value(doc).unwrap();
+        state
+            .begin_steering(RequestId(100), RequestId(103))
+            .unwrap();
+        if confirmed {
+            state
+                .record_steering(
+                    RequestId(100),
+                    SubmissionOutcome::Confirmed {
+                        provider_session_id: None,
+                        provider_turn_id: None,
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            classify(&state, state.request(RequestId(100)).unwrap()).delivery,
+            if confirmed { "delivered" } else { "open" }
+        );
+        state.delete_agent(AgentId(2), 1793581201000).unwrap();
+        // Abandonment erases the Active/Submitting distinction. Without a
+        // request-specific start receipt, legacy steered records are unconfirmed.
+        assert_eq!(
+            classify(&state, state.request(RequestId(100)).unwrap()).delivery,
+            "failed"
+        );
+    }
 }
