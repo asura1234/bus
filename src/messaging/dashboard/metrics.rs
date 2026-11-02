@@ -170,31 +170,10 @@ struct Outcome {
     cause: &'static str,
 }
 fn pre_start_failure(request: &Request) -> bool {
-    matches!(
-        reason(request),
-        "submission_unconfirmed"
-            | "prompt_not_shown"
-            | "delivery_error"
-            | "prior_request_active"
-            | "not_submitted"
-            | "session_hook_missing"
-    )
+    crate::messaging::model::request_pre_start_failure(request)
 }
 fn bound(state: &BusState, request: &Request) -> bool {
-    request.trusted_start_bound
-        || (!request.uncertain_outcome
-            && (request.phase == RequestPhase::Active
-                || request.phase == RequestPhase::Abandoned && !request.steered)
-            && request
-                .group
-                .and_then(|id| state.request(id))
-                .is_some_and(|lead| {
-                    lead.agent_id == request.agent_id
-                        && !pre_start_failure(lead)
-                        && (lead.trusted_start_bound
-                            || lead.reply().is_some()
-                            || lead.phase == RequestPhase::Completed)
-                }))
+    crate::messaging::model::request_start_bound(state, request)
 }
 fn classify(state: &BusState, request: &Request) -> Outcome {
     if request.reply().is_some() || request.phase == RequestPhase::Completed {
