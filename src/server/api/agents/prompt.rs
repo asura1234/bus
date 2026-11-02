@@ -526,12 +526,19 @@ impl App {
             submit_delay,
             submit_deadline,
             steer,
-            expected_turn_id,
+            NativePromptOptions {
+                expected_turn_id,
+                native_only,
+            },
             hard_deadline,
-            native_only,
             id,
         )
     }
+}
+
+struct NativePromptOptions {
+    expected_turn_id: Option<String>,
+    native_only: bool,
 }
 
 fn queue_prompt_submission(
@@ -543,9 +550,8 @@ fn queue_prompt_submission(
     submit_delay: Duration,
     submit_deadline: Option<std::time::Instant>,
     steer: bool,
-    expected_turn_id: Option<String>,
+    native: NativePromptOptions,
     hard_deadline: std::time::Instant,
-    native_only: bool,
     id: String,
 ) -> Result<
     (
@@ -563,10 +569,10 @@ fn queue_prompt_submission(
         &agent,
         &params.text,
         steer,
-        expected_turn_id,
+        native.expected_turn_id,
         &id,
         hard_deadline,
-        native_only,
+        native.native_only,
         || {
             prepare_prompt_input(
                 runtime,
@@ -584,7 +590,7 @@ fn queue_prompt_submission(
         return Ok((id, agent, completion));
     }
     #[cfg(not(unix))]
-    let _ = (expected_turn_id, native_only);
+    let _ = (native.expected_turn_id, native.native_only);
     let completion = queue_prompt_input(
         runtime,
         expected_agent,
