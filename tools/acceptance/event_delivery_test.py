@@ -163,23 +163,17 @@ class Scratch:
 
     def s4(self):
         for i in range(2):
-            lead = self.send('a1', f'fake:dialog 30 S4-lead-{self.name}-{i}', 'S4-lead', wait=False)
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline:
-                observed = self.bus(['agent', 'observe', 'a1'])['result']
-                if 'Do you want to proceed?' in observed.get('text', ''):
-                    break
-                time.sleep(.05)
-            else:
-                raise RuntimeError('dialog did not appear')
+            self.ok(['click', '--hit', 'agent:a1'])
+            self.ok(['type', 'fake:dialog 30'])
+            self.ok(['press', 'enter'])
+            self.ok(['wait', '--text', 'Do you want to proceed?', '--timeout', '60s'])
             blocked = self.send('a1', f'S4-{self.name}-{i} must not enter', 'S4', wait=False)
             time.sleep(1)
             status = self.bus(['message', 'status', blocked['id']])['result']
-            screen = self.bus(['agent', 'observe', 'a1'])['result']
+            screen = self.bus(['agent', 'read', 'a1', '--source', 'visible'])['result']
             blocked['dialog_safe'] = not any(r.get('stage') == 'replied' for r in status['requests']) and 'Do you want to proceed?' in screen.get('text', '')
             blocked['correct'] = blocked['dialog_safe']
             self.bus(['agent', 'press', 'a1', '--key', '1'])
-            self.wait_reply(lead)
             self.wait_reply(blocked)
             blocked['correct'] = blocked['dialog_safe'] and blocked.get('status', {}).get('stage') == 'replied'
 
