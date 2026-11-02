@@ -57,8 +57,8 @@ use crate::messaging::{
     model::{
         AgentId, AgentRecipients, AgentRuntimeIdentity, Author, BusState, CallbackDisposition,
         CallbackEventKind, CallbackRejection, Draft, ModelError, PromptId, Provider,
-        ProviderCallback, Request, RequestId, RequestPhase, Room, RoomAgent, RoomId, RoomKind,
-        RuntimeStatus, SubmissionOutcome,
+        ProviderCallback, Request, RequestId, RequestPhase, Room, RoomAgent, RoomHistoryFilters,
+        RoomId, RoomKind, RuntimeStatus, SubmissionOutcome,
     },
     native::{BusTransport, Transport},
     orchestration as orchestrator,
@@ -83,6 +83,7 @@ pub(crate) enum BusCommand {
     SetRoomSound(RoomId, bool),
     /// A system sound name, or None for Bus's own ding.
     SetRoomSoundName(RoomId, Option<String>),
+    SetRoomHistoryFilters(RoomId, RoomHistoryFilters),
     /// Every work room's sound on or off, also what new work rooms start with.
     SetAllRoomsSound(bool),
     /// Every work room's sound name (None is Bus's own ding), also saved for new rooms.

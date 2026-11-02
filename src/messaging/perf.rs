@@ -33,6 +33,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::RenameRoom(..) => "rename_room",
         C::SetRoomSound(..) => "set_room_sound",
         C::SetRoomSoundName(..) => "set_room_sound_name",
+        C::SetRoomHistoryFilters(..) => "set_room_history_filters",
         C::SetAllRoomsSound(_) => "set_all_rooms_sound",
         C::SetAllRoomsSoundName(_) => "set_all_rooms_sound_name",
         C::SetMaxCompactionsPerAgent(_) => "set_max_compactions_per_agent",

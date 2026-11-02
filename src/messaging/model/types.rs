@@ -219,6 +219,12 @@ pub(crate) struct Reply {
     pub(crate) received_at_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct RoomHistoryFilters {
+    pub(crate) to_you: bool,
+    pub(crate) from_you: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Room {
     pub(crate) id: RoomId,
@@ -248,6 +254,8 @@ pub(crate) struct Room {
     /// The system sound this room rings with, by name; None is Bus's own ding.
     #[serde(default)]
     pub(crate) sound_name: Option<String>,
+    #[serde(default)]
+    pub(crate) history_filters: RoomHistoryFilters,
     /// Per MASTER agent, the provider turn its last final ended, so a report
     /// is compared only with the messages its own turn sent.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
