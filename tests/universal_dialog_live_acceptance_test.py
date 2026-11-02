@@ -62,10 +62,8 @@ def menu_rows(observation):
 
 
 def owned_bus_followup(text, message, agent, token):
-    """Read-only-sandbox setup can require approval for the agent's own reply CLI."""
-    if "Would you like to run the following command?" not in text:
-        return None
-    commands = re.findall(r"(?m)^[ \t]+\$ ([^\n]+)", text)
+    """Native setup can require approval for the agent's own reply CLI."""
+    commands = re.findall(r"(?m)^[ \t]+(?:\$ )?(bus [^\n]+)", text)
     if not commands:
         return None
     try:
@@ -123,6 +121,15 @@ def route_proof(traces, actions):
 
 
 class RouteProofTests(unittest.TestCase):
+    def test_native_bus_followup_reads_the_captured_plain_command_frame(self):
+        # Reduced from the actual Claude 2.1.316 followup approval capture.
+        text = ("Bash command\nReply to bus message 6 with token\n╌╌╌╌\n"
+                " bus send --reply-to 6 --as 3 --text 'APPROVED_6035d0cfbc84'\n╌╌╌╌\n"
+                "This command requires approval\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel")
+        self.assertEqual(owned_bus_followup(text, "6", "3", "APPROVED_6035d0cfbc84"),
+                         ("bus", "send", "--reply-to", "6", "--as", "3", "--text", "APPROVED_6035d0cfbc84"))
+        self.assertFalse(owned_bus_followup(text, "7", "3", "APPROVED_6035d0cfbc84"))
+
     def test_native_bus_followup_is_for_this_message_and_reply_only(self):
         policy = globals().get("owned_bus_followup")
         self.assertTrue(callable(policy), "native settlement needs its own Bus command policy")
