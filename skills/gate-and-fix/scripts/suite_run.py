@@ -27,7 +27,15 @@ SCRIPT = str(Path(__file__).with_name("bus_quality.py"))
 def needs_profiles(selection: Selection) -> bool:
     # The feature build overwrites normal-target binaries. Keep default and
     # dev-tools in different Cargo outputs whenever both variants are selected.
-    return selection.full or (selection.dev_tools and (selection.rust_filter != "none()" or selection.binary))
+    return (selection.full and selection.rust_filter != "none()") or (selection.dev_tools and (selection.rust_filter != "none()" or selection.binary))
+
+
+def lane_plan(selection: Selection, base: str) -> dict:
+    return {name: {"status": "RUN" if enabled else "SKIPPED",
+                   "reason": reason or "selected tests" if enabled else f"no {label} changes vs {base}"}
+            for name, label, enabled, reason in (
+                ("python", "Python", bool(selection.python), selection.python_reason),
+                ("rust", "Rust", selection.rust_filter != "none()" or selection.dev_tools, selection.rust_reason))}
 
 
 def nextest(*targets: str, coverage: bool = False, expression: str | None = None) -> tuple[str, ...]:
@@ -48,7 +56,8 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         env[EXTERNAL_RUN] = os.environ[PROFILE_DIR]
     target = quality.llvm_cov_target(env) if instrumented else quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
     if selection.full:
-        build.append(Gate("lint", (sys.executable, SCRIPT, "lint"), env=env))
+        build.append(Gate("lint", (sys.executable, SCRIPT, "lint", *(("--skip-clippy",) if not rust else ())), env=env))
+        build.append(Gate("docs", (sys.executable, "-m", "pytest", "-q", "scripts/skill_migration_contract_test.py"), env=env))
     if rust:
         # Explicit empty preflight compiles every default artifact once, including the
         # CLI used by Python, before the test lanes run.
@@ -75,9 +84,9 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         build.append(Gate("cli-build", argv, env=quality.child_env(
             LLVM_PROFILE_FILE_NAME=quality.profile_file_name("cli")) if instrumented else env))
     if selection.python:
-        files = sorted({path.relative_to(quality.ROOT).as_posix()
-                        for name in selection.python for path in (quality.ROOT / name).rglob('*_test.py')
-                        if path.is_file()})
+        files = sorted({path.relative_to(quality.ROOT).as_posix() for name in selection.python
+                        for path in ([quality.ROOT / name] if (quality.ROOT / name).is_file()
+                                     else (quality.ROOT / name).rglob('*_test.py')) if path.is_file()})
         if files:
             python_env = quality.child_env()
             if rust or selection.binary:
@@ -89,7 +98,7 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         tests.append(Gate("dev-tools", nextest("--features", "dev-tools", "--bin", "bus",
                           "--test", "cli", "--test", "tui-driver",
                           expression="binary(cli) | binary(tui-driver) | test(/^devtools::/)"), env=env))
-    if selection.full:
+    if selection.full and rust:
         tests.insert(0, Gate("cli-smoke", (str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus")), "--help"),
                           env=quality.child_env(LLVM_PROFILE_FILE=str(target / quality.profile_file_name("cli")))))
     normal = quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
@@ -125,20 +134,25 @@ def batch(gates: list[Gate], *, nested: bool = False) -> list[GateResult]:
     return results
 
 
-def execute(selection: Selection, *, nested: bool = False) -> int:
+def execute(selection: Selection, *, nested: bool = False, base: str = "origin/master") -> int:
     started = time.monotonic()
+    lanes = lane_plan(selection, base)
+    for name, lane in lanes.items():
+        if lane["status"] == "SKIPPED":
+            print(f"{name}: SKIPPED ({lane['reason']})", flush=True)
     if selection.coverage_floor:
         for name in ("state.json", "rust.lcov", "summary.json"):
             (quality.OUTPUT / name).unlink(missing_ok=True)
     build, tests = commands(selection)
     results = batch(build, nested=nested)
-    failed_build = any(not result.passed and result.name != "lint" for result in results)
+    failed_build = any(not result.passed and result.name not in {"lint", "docs"} for result in results)
     # A failed instrumented build must not let Python use yesterday's binary.
     if failed_build:
         tests = [gate for gate in tests if gate.name == "dev-tools"]
     results.extend(batch(tests, nested=nested))
     result = int(any(not entry.passed for entry in results))
     coverage_ms = None
+    coverage_status = {"status": "SKIPPED", "reason": f"no Rust changes vs {base}" if selection.rust_filter == "none()" else "affected mode"}
     if selection.coverage_floor and not result:
         target = quality.llvm_cov_target(os.environ)
         quality.OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -155,12 +169,22 @@ def execute(selection: Selection, *, nested: bool = False) -> int:
             print(f"Coverage floor: FAIL ({error})", file=sys.stderr, flush=True)
             result = 1
         coverage_ms = round((time.monotonic() - before) * 1000)
+        coverage_status = {"status": "FAIL" if result else "PASS", "reason": "fresh Rust coverage floor"}
     elif selection.coverage_floor:
         print("Coverage floor: FAIL (build, lint or test prerequisites failed)", flush=True)
+        coverage_status = {"status": "FAIL", "reason": "build, lint or test prerequisites failed"}
     else:
-        print("Affected mode: coverage floor skipped; full gate required before merge", flush=True)
+        print(f"Coverage floor: SKIPPED ({coverage_status['reason']})", flush=True)
+    for name, lane in lanes.items():
+        if lane["status"] == "RUN":
+            entries = [entry for entry in results if entry.name == name or (
+                name == "rust" and entry.name in {"unit", "integration", "affected-rust", "dev-tools"})]
+            lane["status"] = ("FAIL" if any(not entry.passed for entry in entries) else "PASS") if entries else "NOT_RUN"
+            if failed_build:
+                lane["status"] = "FAIL" if name == "rust" else "NOT_RUN"
     report = {
-        "head": quality.head(), "selection": asdict(selection), "exit_code": result,
+        "head": quality.head(), "base": base, "selection": asdict(selection), "lanes": lanes,
+        "coverage": coverage_status, "exit_code": result,
         "duration_ms": round((time.monotonic() - started) * 1000),
         "coverage_ms": coverage_ms, "results": [asdict(entry) for entry in results],
     }
@@ -177,18 +201,18 @@ def main(argv: list[str] | None = None) -> int:
         "Python uses up to four file workers and runs single-file selections serially; "
         "set PYTEST_WORKERS=0 for serial diagnosis, "
         "or a positive integer to set the worker count.")
-    parser.add_argument("--full", action="store_true", help="all tests, lint and fresh coverage floor")
+    parser.add_argument("--full", action="store_true", help="all applicable tests, lint, docs and fresh Rust coverage floor")
     parser.add_argument("--base", default="origin/master", help="affected merge-base (default: origin/master)")
     parser.add_argument("--plan", action="store_true", help="print selection without building or running tests")
     args = parser.parse_args(argv)
     try:
-        paths = [] if args.full else changed_paths(quality.ROOT, args.base)
+        paths = changed_paths(quality.ROOT, args.base)
         selection = select(paths, full=args.full, root=quality.ROOT)
         if args.plan:
             print(json.dumps({**asdict(selection), "head": quality.head(), "paths": paths,
-                              "coverage_floor": args.full}, indent=2))
+                              "base": args.base, "lanes": lane_plan(selection, args.base)}, indent=2))
             return 0
-        if not shutil.which("cargo-nextest") and (selection.full or selection.rust_filter != "none()" or selection.dev_tools):
+        if not shutil.which("cargo-nextest") and (selection.rust_filter != "none()" or selection.dev_tools):
             raise ValueError("install cargo-nextest to run Rust tests")
         if needs_profiles(selection) and not shutil.which("cargo-llvm-cov"):
             raise ValueError("install cargo-llvm-cov and llvm-tools-preview for full mode")
@@ -196,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         # only --full can publish a coverage floor verdict.
         coverage = Run(quality.ROOT, quality.OUTPUT, "ci") if needs_profiles(selection) else nullcontext()
         with interrupt_signals(), coverage as profiles:
-            return execute(selection, nested=bool(profiles and profiles.external))
+            return execute(selection, nested=bool(profiles and profiles.external), base=args.base)
     except Interrupted as error:
         print("Test run interrupted; children stopped and run profiles removed", file=sys.stderr)
         return 128 + error.signum

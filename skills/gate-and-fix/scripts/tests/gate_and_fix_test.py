@@ -66,7 +66,7 @@ class GateAndFixTest(unittest.TestCase):
         direct = select_gates(["src/main.rs"], base="base", available_tools=frozenset())
         wrapped = select_gates(["src/main.rs"], base="base", available_tools=_CI_TOOLS)
         self.assertEqual(direct[0].argv, wrapped[0].argv)
-        self.assertEqual(direct[0].argv, (sys.executable, str(repo / "skills/gate-and-fix/scripts/suite_run.py"), "--full"))
+        self.assertEqual(direct[0].argv, (sys.executable, str(repo / "skills/gate-and-fix/scripts/suite_run.py"), "--full", "--base", "base"))
 
     def test_gate_wrapper_does_not_depend_on_optional_just(self) -> None:
         for available in (

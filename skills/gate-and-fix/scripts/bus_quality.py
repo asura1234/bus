@@ -271,15 +271,15 @@ def file_lengths() -> int:
     return int(bool(failures))
 
 
-def lint() -> int:
+def lint(*, skip_clippy: bool = False) -> int:
     roots = python_roots()
     if not roots:
         raise ValueError("no Python source roots found")
     policy = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
     results = [
         run("cargo", "fmt", "--check"),
-        *(run(*argv) for argv in clippy_commands(policy)),
-        *(run(*argv) for argv in clippy_commands(policy, features=DEV_TOOLS_FEATURES)),
+        *(run(*argv) for argv in clippy_commands(policy) if not skip_clippy),
+        *(run(*argv) for argv in clippy_commands(policy, features=DEV_TOOLS_FEATURES) if not skip_clippy),
         run(
             sys.executable,
             "-m",
@@ -563,7 +563,7 @@ def coverage() -> int:
     return int(not summary["rust"]["pass"])
 
 
-def run_lane(lane: str) -> int:
+def run_lane(lane: str, *, skip_clippy: bool = False) -> int:
     if lane in ("unit", "ci"):
         python_test_command([])  # Reject missing tools/settings before any Rust build.
     required = ("ruff", "pytest") if lane == "lint" else ("pytest",)
@@ -575,17 +575,22 @@ def run_lane(lane: str) -> int:
         "lint": lint, "unit": unit, "integration": integration,
         "coverage": coverage, "windows-lint": windows_lint,
     }
+    if lane == "lint":
+        return lint(skip_clippy=skip_clippy)
     return int(any([checks[name]() for name in LANES])) if lane == "ci" else checks[lane]()
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lane", choices=(*LANES, "ci", "windows-lint"))
+    parser.add_argument("--skip-clippy", action="store_true", help="planner found no Rust inputs")
     args = parser.parse_args(argv)
+    if args.skip_clippy and args.lane != "lint":
+        parser.error("--skip-clippy is only valid for lint")
     try:
         with interrupt_signals():
             if args.lane not in ("unit", "integration", "coverage", "ci"):
-                return run_lane(args.lane)
+                return run_lane(args.lane, skip_clippy=args.skip_clippy)
             with Run(ROOT, OUTPUT, args.lane) as profiles:
                 result = run_lane(args.lane)
                 profiles.finish(result)

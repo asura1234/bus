@@ -27,7 +27,7 @@ def wait_for(path):
 def test_default_target_rebuild_waits_for_executable_consumers(tmp_path, consumer_name):
     normal, coverage = tmp_path / 'normal', tmp_path / 'coverage'
     full = consumer_name != 'affected-python'
-    selection = select([], full=True) if full else Selection(False, 'all()', ('tools',), False, 'mixed affected')
+    selection = select(['run'], full=True) if full else Selection(False, 'all()', ('tools',), False, 'mixed affected')
     with patch.dict(os.environ, CARGO_TARGET_DIR=str(normal), CARGO_LLVM_COV_TARGET_DIR=str(coverage)):
         _, commands = runner.commands(selection)
     gates = {gate.name: gate for gate in commands}
