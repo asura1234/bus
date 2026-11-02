@@ -205,10 +205,6 @@ impl RoomClient {
         child.wait_with_output().unwrap()
     }
 
-    pub(super) fn observe(&mut self, needle: &str) {
-        self.observe_matching(needle, |screen| screen.text().contains(needle));
-    }
-
     pub(super) fn observe_room(&mut self, name: &str) {
         let needle = format!("# {name}");
         // The selected room appears in its room row, agents header and pane

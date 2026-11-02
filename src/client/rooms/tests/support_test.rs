@@ -189,22 +189,6 @@ pub(super) fn mouse(ui: &mut BusUi, kind: crossterm::event::MouseEventKind, colu
     );
 }
 
-pub(super) fn screen_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
-    ui.compute_view(cols, rows);
-    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
-    ui.render(&mut buffer);
-    (0..rows)
-        .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect()
-}
-
-pub(super) fn checklist(lines: usize) -> String {
-    (1..=lines)
-        .map(|line| format!("- [ ] item {line:02}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 // Persisted history and image fixtures shared by the history areas.
 // Persisted request fixtures: all prompts and finals already exist in this
 // format, even though the original UI only displayed the latest caches.
