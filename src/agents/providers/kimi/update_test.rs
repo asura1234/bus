@@ -2,6 +2,9 @@
 use super::*;
 use std::{ffi::OsString, os::unix::fs::PermissionsExt, sync::MutexGuard};
 
+#[path = "resume_home_test.rs"]
+mod resume_home_test;
+
 struct Fixture {
     root: PathBuf,
     source: PathBuf,

@@ -11,6 +11,9 @@ use std::{
     time::SystemTime,
 };
 
+#[cfg(target_os = "macos")]
+#[path = "identity.rs"]
+mod identity;
 #[path = "trust.rs"]
 mod trust;
 
@@ -30,6 +33,9 @@ struct Stamp {
     inode: u64,
     #[cfg(unix)]
     changed: (i64, i64),
+    #[cfg(target_os = "macos")]
+    #[serde(default)]
+    volume_uuid: Option<[u8; 16]>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -40,6 +46,9 @@ struct HomeRecord {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(target_os = "macos")]
+    #[serde(default)]
+    volume_uuid: Option<[u8; 16]>,
 }
 
 fn home_record(path: &Path, source: &Path) -> Result<HomeRecord, String> {
@@ -62,6 +71,8 @@ fn home_record(path: &Path, source: &Path) -> Result<HomeRecord, String> {
         device: meta.dev(),
         #[cfg(unix)]
         inode: meta.ino(),
+        #[cfg(target_os = "macos")]
+        volume_uuid: Some(identity::volume_uuid(path)?),
     })
 }
 
@@ -74,6 +85,8 @@ fn stamp(path: &Path) -> Result<Stamp, String> {
     if !meta.is_file() {
         return Err("Kimi executable is not a file".into());
     }
+    #[cfg(target_os = "macos")]
+    let volume_uuid = Some(identity::volume_uuid(&canonical)?);
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     #[cfg(unix)]
@@ -90,6 +103,8 @@ fn stamp(path: &Path) -> Result<Stamp, String> {
         inode: meta.ino(),
         #[cfg(unix)]
         changed: (meta.ctime(), meta.ctime_nsec()),
+        #[cfg(target_os = "macos")]
+        volume_uuid,
     })
 }
 
@@ -482,10 +497,19 @@ fn checked_home_record(hooks: &HookContext) -> Result<HomeRecord, String> {
     if saved.path != hooks.spool.join("kimi-home") {
         return Err("Saved Kimi home is outside its callback root".into());
     }
-    if home_record(&saved.path, &saved.source)? != saved {
+    let current = home_record(&saved.path, &saved.source)?;
+    #[cfg(target_os = "macos")]
+    let matches = identity::home_matches(&saved, &current);
+    #[cfg(not(target_os = "macos"))]
+    let matches = saved == current;
+    if !matches {
         return Err("Saved Kimi home changed; relaunch required".into());
     }
+    #[cfg(target_os = "macos")]
+    identity::verify_legacy_mount(hooks, &saved, &current)?;
     verify_shared_auth(&saved.path, &saved.source)?;
+    #[cfg(target_os = "macos")]
+    let saved = identity::upgrade_home(hooks, saved, current)?;
     Ok(saved)
 }
 
@@ -493,14 +517,25 @@ pub(crate) fn saved_home(hooks: &HookContext) -> Result<PathBuf, String> {
     Ok(checked_home_record(hooks)?.path)
 }
 
-pub(crate) fn saved_executable(hooks: &HookContext) -> Result<PathBuf, String> {
-    let (path, saved): (PathBuf, Stamp) = serde_json::from_value(hook_json::read_resume_json(
+fn executable_record(hooks: &HookContext) -> Result<(PathBuf, Stamp), String> {
+    serde_json::from_value(hook_json::read_resume_json(
         &hooks.spool.join(EXECUTABLE_FILE),
     )?)
-    .map_err(|_| "Saved Kimi executable is invalid")?;
-    if stamp(&path)? != saved {
+    .map_err(|_| "Saved Kimi executable is invalid".into())
+}
+
+pub(crate) fn saved_executable(hooks: &HookContext) -> Result<PathBuf, String> {
+    let (path, saved) = executable_record(hooks)?;
+    let current = stamp(&path)?;
+    #[cfg(target_os = "macos")]
+    let matches = identity::stamp_matches(&saved, &current);
+    #[cfg(not(target_os = "macos"))]
+    let matches = saved == current;
+    if !matches {
         return Err("Saved Kimi executable changed; relaunch required".into());
     }
+    #[cfg(target_os = "macos")]
+    identity::upgrade_executable(hooks, &path, saved, current)?;
     Ok(path)
 }
 
