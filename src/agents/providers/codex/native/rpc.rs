@@ -73,7 +73,9 @@ impl Rpc {
                 continue;
             };
             let value: Value = serde_json::from_str(&text)?;
-            if value.get("id") != Some(&json!(id)) {
+            // Server requests use an independent ID namespace. The TUI handles
+            // approvals; only a response may settle this client's admission.
+            if value.get("method").is_some() || value.get("id") != Some(&json!(id)) {
                 continue;
             }
             if value.get("error").is_some() {
@@ -231,6 +233,15 @@ pub(crate) mod tests {
         active: bool,
         lost_ack: bool,
     ) -> (std::path::PathBuf, std::thread::JoinHandle<Vec<Value>>) {
+        server_interleaved(thread, active, lost_ack, false)
+    }
+
+    fn server_interleaved(
+        thread: &'static str,
+        active: bool,
+        lost_ack: bool,
+        interleaved: bool,
+    ) -> (std::path::PathBuf, std::thread::JoinHandle<Vec<Value>>) {
         let dir = crate::utils::test_temp::unique_temp_path("codex-native-rpc");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("s");
@@ -269,6 +280,11 @@ pub(crate) mod tests {
                     }
                     other => panic!("unexpected mutating/attach operation {other}"),
                 };
+                if interleaved && method == "thread/queue/add" {
+                    ws.send(tungstenite::Message::Text(
+                        json!({"id":id,"method":"item/commandExecution/requestApproval","params":{"threadId":thread,"turnId":"native-turn","itemId":"fixture-command","command":"fixture-command","cwd":"/fixture"}}).to_string().into(),
+                    )).unwrap();
+                }
                 ws.send(tungstenite::Message::Text(
                     json!({"id":id,"result":result}).to_string().into(),
                 ))
@@ -328,6 +344,25 @@ pub(crate) mod tests {
         assert!(!calls
             .iter()
             .any(|call| call["method"] == "thread/turns/list"));
+    }
+
+    #[test]
+    fn codex_native_server_request_id_collision_does_not_consume_our_admission_ack() {
+        let (path, handle) = server_interleaved("owned-thread", false, false, true);
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        let result = rpc.prompt("owned-thread", "once", false, "interleaved", None);
+        let calls = handle.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "a server request is not our response: {result:?}"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call["method"] == "thread/queue/add")
+                .count(),
+            1
+        );
     }
 
     #[test]
