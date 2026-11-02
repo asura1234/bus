@@ -152,6 +152,8 @@ def pick_option(observation, purpose):
             raise AssertionError(f"unexpected {purpose} screen: {observation}")
         accept = r"(yes|trust|continue)\b" if purpose == "trust" else r"(yes|allow|run|proceed|approve)\b"
         deny = re.compile(r"\bno\b|always|don.t ask|session|every|skip|exit|update|install", re.I)
+        if purpose == "trust":
+            deny = re.compile(deny.pattern + r"|\bwithout trust(?:ing)?\b", re.I)
         wanted = [label for label in labels
                   if re.match(accept, re.sub(r"^\[[ xX✓A-Za-z]\]\s*", "", label), re.I)
                   and not deny.search(label)]

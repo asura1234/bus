@@ -400,6 +400,27 @@ class EndToEndDialogTests(unittest.TestCase):
         observed = dialog("Allow this command to edit the scratch file.", "Approve once", "No, cancel")
         self.assertEqual(e2e.pick_option(observed, "allow"), "Approve once")
 
+    def test_hook_trust_selects_the_authorized_positive_choice(self):
+        # Captured own Bus-hook setup; trusting those hooks was explicitly authorized.
+        observation = {
+            "cols": 121, "content_revision": 138,
+            "cursor": {"col": 1, "row": 43, "visible": False},
+            "focus": [6, "Review hooks"], "focus_occurrence": 0,
+            "pane_id": "w1:p3", "rows": 46, "terminal_id": "term_65f476a89591a3",
+            "text": "\n  Hooks need review\n  3 hooks are new or changed.\n"
+                    "  Hooks can run outside the sandbox after you trust them.\n\n\n"
+                    "› 1. Review hooks\n  2. Trust all and continue\n"
+                    "  3. Continue without trusting (hooks won't run)\n\n"
+                    "  enter confirm · esc skip" + "\n" * 35,
+        }
+        self.assertEqual(e2e.pick_option(observation, "trust"), "Trust all and continue")
+
+    def test_non_trust_choice_does_not_resolve_multiple_positive_trust_choices(self):
+        observed = dialog("Trust this directory?", "Trust without changing settings", "Yes, continue",
+                          "Continue without trusting")
+        with self.assertRaisesRegex(AssertionError, "ambiguous"):
+            e2e.pick_option(observed, "trust")
+
     def test_multiple_trust_options_remain_ambiguous_with_or_without_numbers(self):
         for observed in (
             dialog("Trust this directory?", "Trust and continue", "Yes, continue", "Quit"),
