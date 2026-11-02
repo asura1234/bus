@@ -1,6 +1,9 @@
 //! Provider turn facts read beyond the hook's own verdict: background shells
 //! for wake ownership, and Codex usage from its rollout.
-use super::{callbacks, AgentId, Parsed, Path, Provider, ProviderCallback, Worker};
+use super::{
+    callbacks, AgentId, CallbackEventKind, Parsed, Path, Provider, ProviderCallback, ProviderKind,
+    Worker,
+};
 
 impl Worker {
     pub(super) fn mark_scheduled_turn(
@@ -142,5 +145,28 @@ impl Worker {
                 "Codex rollout unreadable"
             ),
         }
+    }
+}
+
+/// Map an observation only after the coordinator has validated its routing facts.
+pub(super) fn callback(
+    record: &callbacks::Record,
+    id: AgentId,
+    session: String,
+    turn: String,
+    prompt: Option<String>,
+    kind: CallbackEventKind,
+) -> ProviderCallback {
+    ProviderCallback {
+        callback_id: record.id.clone(),
+        sequence: record.sequence,
+        occurred_at_ms: record.at_ms,
+        agent_id: id,
+        launch_id: record.manifest.launch_id.clone(),
+        provider_session_id: Some(session),
+        provider_turn_id: Some(turn.clone()),
+        provider_prompt_id: (record.manifest.provider == ProviderKind::ClaudeCode).then_some(turn),
+        prompt_payload: prompt,
+        kind,
     }
 }

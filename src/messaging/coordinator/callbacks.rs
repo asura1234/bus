@@ -5,6 +5,7 @@ use super::{
     ResponseResult, RoomId, RuntimeStatus, Worker,
 };
 
+use self::provider_turns::callback;
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
 use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
@@ -768,29 +769,6 @@ fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
         (*rank != 0, turn_began, *rank, record.sequence)
     });
     records.extend(keyed.into_iter().map(|(_, _, entry)| entry));
-}
-
-/// Map an observation only after the coordinator has validated its routing facts.
-fn callback(
-    record: &callbacks::Record,
-    id: AgentId,
-    session: String,
-    turn: String,
-    prompt: Option<String>,
-    kind: CallbackEventKind,
-) -> ProviderCallback {
-    ProviderCallback {
-        callback_id: record.id.clone(),
-        sequence: record.sequence,
-        occurred_at_ms: record.at_ms,
-        agent_id: id,
-        launch_id: record.manifest.launch_id.clone(),
-        provider_session_id: Some(session),
-        provider_turn_id: Some(turn.clone()),
-        provider_prompt_id: (record.manifest.provider == ProviderKind::ClaudeCode).then_some(turn),
-        prompt_payload: prompt,
-        kind,
-    }
 }
 
 #[cfg(test)]
