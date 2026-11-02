@@ -729,7 +729,7 @@ fn an_orchestrators_room_line_opens_its_room_and_never_reassigns() {
         .view
         .hits
         .iter()
-        .any(|hit| hit.action == render::Action::Room(pr) && hit.rect.y == 15));
+        .any(|hit| hit.action == render::Action::Room(pr) && hit.rect.y == 14));
     assert!(ui
         .view
         .hits
