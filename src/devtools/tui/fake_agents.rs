@@ -267,6 +267,9 @@ impl FakeAgent {
         for command in commands {
             run_hook(command, &payload);
         }
+        if event == "UserPromptSubmit" {
+            work::hold_after_submit_hook();
+        }
     }
 
     fn session_start(&self) {
