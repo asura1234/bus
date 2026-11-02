@@ -32,7 +32,7 @@ fn kimi_quota_queued_message_is_probed_once_after_backoff_and_recovers() {
         .state
         .observe_status(agent, RuntimeStatus::Unavailable, now)
         .unwrap();
-    worker.test_kimi_quota_now_ms = Some(now);
+    worker.kimi_quota.now_ms = Some(now);
     worker.observe_kimi_quotas(&[limited_info()]);
     let request = queue(&mut worker, room, agent, "deliver once after quota reset");
 
@@ -41,7 +41,7 @@ fn kimi_quota_queued_message_is_probed_once_after_backoff_and_recovers() {
         calls.lock().unwrap().is_empty(),
         "a quota observation starts a backoff"
     );
-    worker.test_kimi_quota_now_ms = Some(now + RETRY_AFTER_MS - 1);
+    worker.kimi_quota.now_ms = Some(now + RETRY_AFTER_MS - 1);
     worker.observe_kimi_quotas(&[limited_info()]);
     worker.submit_ready().unwrap();
     assert!(calls.lock().unwrap().is_empty());
@@ -50,7 +50,7 @@ fn kimi_quota_queued_message_is_probed_once_after_backoff_and_recovers() {
         super::super::RequestPhase::Queued
     );
 
-    worker.test_kimi_quota_now_ms = Some(now + RETRY_AFTER_MS);
+    worker.kimi_quota.now_ms = Some(now + RETRY_AFTER_MS);
     worker.expire_queued_requests(now + RETRY_AFTER_MS).unwrap();
     worker.submit_ready().unwrap();
     assert_eq!(
@@ -68,7 +68,7 @@ fn kimi_quota_queued_message_is_probed_once_after_backoff_and_recovers() {
     );
     assert!(worker.state.queued_requests(agent).is_empty());
 
-    worker.test_kimi_quota_now_ms = Some(now + 3 * RETRY_AFTER_MS);
+    worker.kimi_quota.now_ms = Some(now + 3 * RETRY_AFTER_MS);
     worker.observe_kimi_quotas(&[limited_info()]);
     worker.submit_ready().unwrap();
     assert_eq!(
@@ -87,7 +87,7 @@ fn kimi_quota_queued_message_is_probed_once_after_backoff_and_recovers() {
         RuntimeStatus::Idle
     );
     assert!(
-        worker.kimi_quota_retries.is_empty(),
+        worker.kimi_quota.retries.is_empty(),
         "fresh healthy native evidence clears the hold"
     );
     assert_eq!(
@@ -129,10 +129,10 @@ fn kimi_quota_probe_does_not_bypass_other_unavailability_or_foreign_identity() {
         info.provider_error = Some(error.into());
         info.terminal_id = terminal.into();
         info.interactive_ready = true;
-        worker.test_kimi_quota_now_ms = Some(now);
+        worker.kimi_quota.now_ms = Some(now);
         worker.observe_kimi_quotas(&[info]);
         let request = queue(&mut worker, room, agent, "retain while unavailable");
-        worker.test_kimi_quota_now_ms = Some(now + RETRY_AFTER_MS);
+        worker.kimi_quota.now_ms = Some(now + RETRY_AFTER_MS);
         worker.submit_ready().unwrap();
         assert!(
             calls.lock().unwrap().is_empty(),

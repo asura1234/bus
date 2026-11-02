@@ -1,5 +1,5 @@
 //! A known native quota failure pauses delivery, but must leave a guarded recovery probe.
-use super::{io, schema, Provider, RoomAgent, RuntimeStatus, Worker};
+use super::{io, schema, AgentId, Provider, RoomAgent, RuntimeStatus, Worker};
 use crate::agents::providers::kimi::usage;
 use crate::messaging::model::AgentRuntimeIdentity;
 use std::collections::BTreeMap;
@@ -8,7 +8,14 @@ use std::collections::BTreeMap;
 // delivery backoff, not an inferred reset time for Kimi's five-hour window.
 const RETRY_AFTER_MS: u64 = 60_000;
 
-pub(super) struct Retry {
+#[derive(Default)]
+pub(super) struct ProbeState {
+    retries: BTreeMap<AgentId, Retry>,
+    #[cfg(test)]
+    now_ms: Option<u64>,
+}
+
+struct Retry {
     identity: AgentRuntimeIdentity,
     next_attempt_ms: u64,
 }
@@ -16,7 +23,7 @@ pub(super) struct Retry {
 impl Worker {
     fn kimi_quota_now_ms(&self) -> u64 {
         #[cfg(test)]
-        if let Some(now) = self.test_kimi_quota_now_ms {
+        if let Some(now) = self.kimi_quota.now_ms {
             return now;
         }
         io::now_ms()
@@ -31,10 +38,11 @@ impl Worker {
             .filter(|agent| infos.iter().any(|info| matches_quota(agent, info)))
             .map(|agent| (agent.id, agent.runtime_identity.clone()))
             .collect();
-        self.kimi_quota_retries
+        self.kimi_quota
+            .retries
             .retain(|id, retry| limited.get(id) == Some(&retry.identity));
         for (id, identity) in limited {
-            self.kimi_quota_retries.entry(id).or_insert_with(|| {
+            self.kimi_quota.retries.entry(id).or_insert_with(|| {
                 tracing::info!(
                     event = "bus.kimi.quota_limited",
                     agent_id = id.0,
@@ -58,7 +66,7 @@ impl Worker {
             return false;
         }
         let now = self.kimi_quota_now_ms();
-        let Some(retry) = self.kimi_quota_retries.get_mut(&agent.id).filter(|retry| {
+        let Some(retry) = self.kimi_quota.retries.get_mut(&agent.id).filter(|retry| {
             retry.identity == agent.runtime_identity && now >= retry.next_attempt_ms
         }) else {
             return false;
