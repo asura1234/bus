@@ -9,6 +9,20 @@ const DRAFT: &str =
 const EMPTY: &str =
     "╭────────────────────────╮\n│ >                      │\n╰────────────────────────╯";
 
+#[tokio::test]
+async fn fast_pane_preservable_draft_reaches_swap_without_marking_blocked() {
+    assert_eq!(
+        detect(AgentKind::Kimi, DRAFT, true, None, false).await,
+        AgentState::Idle,
+        "queued work must reach native draft preservation"
+    );
+    assert_eq!(
+        detect(AgentKind::Kimi, UPDATE, true, None, false).await,
+        AgentState::Blocked,
+        "a native chooser remains a blocker"
+    );
+}
+
 async fn detect(
     kind: AgentKind,
     screen: &str,
@@ -70,21 +84,17 @@ async fn detect(
 }
 
 #[tokio::test]
-async fn native_controls_block_without_obligation_and_busy_drafts_require_one() {
-    for screen in [UPDATE, DRAFT] {
+async fn native_controls_block_without_a_delivery_obligation() {
+    for obligation in [false, true] {
         assert_eq!(
-            detect(AgentKind::Kimi, screen, true, None, false).await,
+            detect(AgentKind::Kimi, UPDATE, obligation, None, false).await,
             AgentState::Blocked
         );
-        assert_eq!(
-            detect(AgentKind::Kimi, screen, false, None, false).await,
-            if screen == UPDATE {
-                AgentState::Blocked
-            } else {
-                AgentState::Idle
-            }
-        );
     }
+    assert_eq!(
+        detect(AgentKind::Kimi, DRAFT, false, None, false).await,
+        AgentState::Idle
+    );
     assert_eq!(
         detect(AgentKind::Kimi, EMPTY, true, None, false).await,
         AgentState::Idle
@@ -156,12 +166,12 @@ async fn captured_claude_idle_composer_stays_idle_when_viewport_is_scrolled() {
 }
 
 #[tokio::test]
-async fn scrolled_history_empty_composer_does_not_hide_live_claude_draft() {
+async fn scrolled_history_does_not_block_preservable_live_claude_draft() {
     let draft = CLAUDE_IDLE.replacen("\n❯\n", "\n❯ developer draft\n", 1);
     assert_ne!(draft, CLAUDE_IDLE);
     assert_eq!(
         detect_scrolled_claude(&draft, CLAUDE_IDLE).await,
-        AgentState::Blocked
+        AgentState::Idle
     );
 }
 
@@ -199,7 +209,7 @@ async fn unavailable_composer_with_idle_title_remains_guarded() {
 }
 
 #[tokio::test]
-async fn codex_and_kimi_empty_composers_and_drafts_keep_their_states() {
+async fn codex_and_kimi_empty_composers_and_preservable_drafts_are_ready() {
     for (kind, empty, draft) in [
         (
             AgentKind::Codex,
@@ -215,7 +225,7 @@ async fn codex_and_kimi_empty_composers_and_drafts_keep_their_states() {
         );
         assert_eq!(
             detect(kind, draft, true, None, false).await,
-            AgentState::Blocked,
+            AgentState::Idle,
             "{kind:?}"
         );
     }

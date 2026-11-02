@@ -94,6 +94,12 @@ impl OwnedComposer {
 }
 
 impl SubmissionInspector for OwnedComposer {
+    fn submission_available(&self, screen: &str) -> bool {
+        super::submission_available(self.kind, screen)
+    }
+    fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
+        super::draft_ready(self.kind, screen, cursor, pristine)
+    }
     fn diagnose_refusal(&self, screen: &str, phase: &'static str, cursor: Option<(u16, u16)>) {
         self.diagnose_with_policy(screen, phase, cursor, None);
     }
