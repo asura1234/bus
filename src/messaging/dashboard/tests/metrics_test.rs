@@ -285,3 +285,152 @@ fn manual_recovery_is_counted_as_a_bus_failure_with_its_own_reason() {
     assert_eq!(report.failures[0].reason, "manual_recovery");
     assert_eq!(report.failures[0].cause, "bus");
 }
+
+#[test]
+fn dashboard_provider_hold_and_retry_remain_pending_without_failure_counters() {
+    use crate::messaging::model::{
+        AgentRuntimeIdentity, CallbackDisposition, CallbackEventKind, ProviderCallback,
+        RuntimeStatus, SubmissionOutcome,
+    };
+    let mut state = BusState::new();
+    let room = state.create_room("retry-dashboard").unwrap();
+    let agent = state
+        .create_agent(room, "codex", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                session_id: Some("session".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 10)
+        .unwrap();
+    state.set_draft_text(room, "retain this delivery").unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, 10).unwrap()[0];
+    state.begin_submission(request, "launch", 10).unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn-1".into()),
+            },
+        )
+        .unwrap();
+    let started = ProviderCallback {
+        callback_id: "dashboard-start".into(),
+        sequence: 11,
+        occurred_at_ms: 11,
+        agent_id: agent,
+        launch_id: "launch".into(),
+        provider_session_id: Some("session".into()),
+        provider_turn_id: Some("turn-1".into()),
+        provider_prompt_id: None,
+        prompt_payload: Some(state.request(request).unwrap().prompt.rendered_payload()),
+        kind: CallbackEventKind::PromptStarted,
+    };
+    assert_eq!(
+        state.accept_callback(started.clone()),
+        CallbackDisposition::AcceptedBinding
+    );
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "dashboard-overload".into(),
+            sequence: 12,
+            occurred_at_ms: 100,
+            prompt_payload: None,
+            kind: CallbackEventKind::Error {
+                message: "Provider failed".into(),
+                provider_error: Some("Selected model is at capacity (server_overloaded)".into())
+            },
+            ..started.clone()
+        }),
+        CallbackDisposition::AcceptedError
+    );
+    let due = state
+        .agent(agent)
+        .unwrap()
+        .provider_retry
+        .as_ref()
+        .unwrap()
+        .retry_at_ms;
+    for (phase, delivery, stage) in [
+        (0, "delivered", "delivered"),
+        (1, "open", "queued"),
+        (2, "open", "submitting"),
+        (3, "delivered", "delivered"),
+    ] {
+        match phase {
+            1 => {
+                assert!(state.retry_provider_requests(due));
+            }
+            2 => {
+                state.begin_submission(request, "launch", due).unwrap();
+            }
+            3 => {
+                state
+                    .record_submission(
+                        request,
+                        SubmissionOutcome::Confirmed {
+                            provider_session_id: Some("session".into()),
+                            provider_turn_id: Some("turn-2".into()),
+                        },
+                    )
+                    .unwrap();
+                let payload = state.request(request).unwrap().submitted_payload.clone();
+                assert_eq!(
+                    state.accept_callback(ProviderCallback {
+                        callback_id: "dashboard-retry-start".into(),
+                        sequence: 20,
+                        occurred_at_ms: due + 1,
+                        provider_turn_id: Some("turn-2".into()),
+                        prompt_payload: payload,
+                        ..started.clone()
+                    }),
+                    CallbackDisposition::AcceptedBinding
+                );
+            }
+            _ => {}
+        }
+        let record = state.request(request).unwrap();
+        assert!(!record.settled(), "phase {phase}");
+        assert!(record.failure_reason.is_none());
+        assert_eq!(record.delivery_stage(), stage);
+        let outcome = classify(&state, record);
+        assert_eq!(
+            (outcome.delivery, outcome.capture, outcome.cause),
+            (delivery, "pending", "pending")
+        );
+        let report = snapshot(&state, singapore_hour);
+        let c = &report.all.counts;
+        assert_eq!(c.attempts, 1, "one original request across retries");
+        assert_eq!(
+            (c.failed, c.reply_not_captured, c.bus_failures, c.external),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(
+            (c.delivered, c.open, c.reply_pending),
+            if delivery == "delivered" {
+                (1, 0, 1)
+            } else {
+                (0, 1, 0)
+            }
+        );
+        assert!(report.failures.is_empty());
+        assert_eq!(report.all.rates.reply_capture.denominator, 0);
+        assert_eq!(report.all.rates.bus_reliability.denominator, 0);
+        if phase <= 1 {
+            assert_eq!(
+                state.agent(agent).unwrap().shown_status(),
+                RuntimeStatus::Working
+            );
+        }
+    }
+}
