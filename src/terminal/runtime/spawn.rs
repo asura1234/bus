@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use crate::agents::providers::codex::native::Runtime as CodexNativeRuntime;
 use crate::agents::AgentKind;
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::terminal::emulator::PaneTerminal;
@@ -742,9 +744,7 @@ impl TerminalRuntime {
 
         let kimi_code_home = Arc::new(Mutex::new(absolute_kimi_code_home(&cmd)));
         #[cfg(unix)]
-        let codex_native = Arc::new(Mutex::new(
-            crate::agents::providers::codex::native::Runtime::from_builder(&cmd),
-        ));
+        let codex_native = CodexNativeRuntime::shared_from_builder(&cmd);
         let spawned = spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
 
