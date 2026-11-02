@@ -391,3 +391,6 @@ fn kimi_queued_native_turn_can_start_after_an_old_final_poll() {
 
 #[path = "kimi_boundary_test.rs"]
 mod boundary_tests;
+
+#[path = "kimi_incident_replay_test.rs"]
+mod incident_replays;
