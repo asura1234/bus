@@ -572,6 +572,6 @@ mod tests {
 
     #[cfg(windows)]
     fn temp_socket_marker_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("bus-{name}-{}.sock", std::process::id()))
+        crate::utils::test_temp::unique_temp_path(&format!("bus-{name}.sock"))
     }
 }

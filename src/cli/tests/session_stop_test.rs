@@ -3,11 +3,7 @@ use interprocess::local_socket::traits::Listener as _;
 
 #[cfg(unix)]
 fn unique_test_path(name: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("bus-{name}-{}-{nanos}", std::process::id()))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-{name}.sock"))
 }
 
 #[cfg(unix)]

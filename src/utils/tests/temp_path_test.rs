@@ -108,6 +108,30 @@ mod tests {
         assert!(listener.is_ok(), "cannot bind {socket:?}: {listener:?}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn same_tick_socket_paths_are_distinct_and_bind_together() {
+        use std::os::unix::net::UnixListener;
+
+        let timestamp = UNIX_EPOCH + std::time::Duration::from_secs(4_102_444_800);
+        let first = unique_temp_path_at("bus-writer.sock", timestamp);
+        let second = unique_temp_path_at("bus-writer.sock", timestamp);
+        assert_ne!(first, second, "same-tick socket allocations collided");
+
+        let first_listener = UnixListener::bind(&first);
+        let second_listener = UnixListener::bind(&second);
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+        assert!(
+            first_listener.is_ok(),
+            "cannot bind {first:?}: {first_listener:?}"
+        );
+        assert!(
+            second_listener.is_ok(),
+            "cannot bind {second:?}: {second_listener:?}"
+        );
+    }
+
     #[test]
     fn concurrent_fixtures_with_one_clock_value_get_distinct_roots() {
         let timestamp = UNIX_EPOCH + std::time::Duration::from_secs(1);
