@@ -1188,7 +1188,11 @@ fn soak_fixture() -> Delivery {
             }
         })
         .collect();
-    Delivery::new(&providers, false)
+    let mut fixture = Delivery::new(&providers, false);
+    // Freeze before the first Idle observation: freezing after a persisted
+    // save would capture any scheduling gap into the settlement clock.
+    fixture.pause_clock();
+    fixture
 }
 
 fn delivery_cycle(f: &mut Delivery, round: usize) {
@@ -1278,7 +1282,6 @@ fn idle_cycle(f: &mut Delivery, round: usize) {
     f.status(agent, AgentState::Idle);
     f.tick();
     f.age_request_progress(600_000);
-    f.pause_clock();
     f.reopen();
     f.stop(
         agent,
@@ -1645,4 +1648,30 @@ async fn orchestrator_inbox_unclaimed_steering_is_uncertain_without_blocking_the
     f.stop(orch, "new", "new answer", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(next, "new answer");
+}
+
+#[tokio::test]
+async fn paused_idle_cycle_preserves_reply_across_scheduling_gap_before_freeze() {
+    let mut f = soak_fixture();
+    let agent = f.agents[0];
+    let prompt = "idle-gap-probe";
+    let turn = "idle-gap-turn";
+    let request = f.send(agent, f.work, prompt, false, None);
+    f.tick();
+    f.start(agent, turn, prompt);
+    f.status(agent, AgentState::Idle);
+    f.tick();
+    f.age_request_progress(600_000);
+    f.tick();
+    f.status(agent, AgentState::Working);
+    f.tick();
+    f.status(agent, AgentState::Idle);
+    f.tick();
+    f.age_request_progress(600_000);
+    // Stand in for host descheduling during the save above, before pause_clock.
+    std::thread::sleep(std::time::Duration::from_millis(6_100));
+    f.pause_clock();
+    f.reopen();
+    f.stop(agent, turn, "late-gap-reply", json!([]), json!([]));
+    f.assert_reply(request, "late-gap-reply");
 }
