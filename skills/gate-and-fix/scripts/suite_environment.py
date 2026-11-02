@@ -55,7 +55,10 @@ def setup_lock(path: Path):
 
 
 def command(argv: list[str], root: Path, log) -> str:
-    env = {name: value for name, value in os.environ.items() if not name.startswith(('BUS_', 'HERDR_'))}
+    env = {name: value for name, value in os.environ.items() if not name.startswith(('BUS_', 'HERDR_', 'PIP_'))}
+    # --isolated alone still reads explicit, global and site pip configuration.
+    # The null config disables every config file before installation can write.
+    env['PIP_CONFIG_FILE'] = os.devnull
     children = Children(private_groups=not bool(os.environ.get(EXTERNAL_RUN)))
     log.write('+ ' + subprocess.list2cmdline(argv) + '\n')
     log.flush()

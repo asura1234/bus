@@ -82,6 +82,22 @@ def test_environment_path_cannot_escape_the_checkout(tmp_path):
     assert list(outside.iterdir())==[]
 
 
+def test_inherited_pip_configuration_cannot_redirect_private_installation(tmp_path, monkeypatch):
+    repo=tmp_path/'repo';repo.mkdir()
+    outside=tmp_path/'outside';outside.mkdir()
+    config=tmp_path/'pip.conf'
+    config.write_text('[install]\ntarget = '+str(outside)+'\n')
+    monkeypatch.setenv('PIP_CONFIG_FILE',str(config))
+    monkeypatch.setenv('PIP_TARGET',str(outside))
+    python=None
+    try:
+        python=environment.ensure_environment(repo,requirements=requirements(tmp_path))
+    finally:
+        assert list(outside.iterdir())==[], 'setup must not write outside the private environment'
+    info=inspect(python)
+    assert all(Path(name).resolve().is_relative_to((repo/'temp/gate-tools/python').resolve()) for name in info['files'])
+
+
 def test_bootstrap_reexecs_the_private_interpreter_and_preserves_arguments(tmp_path):
     req=requirements(tmp_path)
     entry=tmp_path/'entry.py'
