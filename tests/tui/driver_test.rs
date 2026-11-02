@@ -1723,7 +1723,14 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
         ],
     ));
     assert_eq!(code, 0, "{added}");
-    wait_for_scripted_screen(&session, "dialog-worker", "Bootstrap gate");
+    let bootstrap = wait_for_scripted_screen(&session, "dialog-worker", "Bootstrap gate");
+    assert!(
+        bootstrap["text"]
+            .as_str()
+            .unwrap()
+            .contains("Continue bootstrap"),
+        "{bootstrap}"
+    );
     let (code, sent) = parse(scratch_bus(
         &session,
         &[
@@ -1738,25 +1745,59 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     ));
     assert_eq!(code, 0, "{sent}");
     let id = sent["result"]["message_id"].to_string();
-    session.ok(&[
-        "wait",
-        "--state",
-        "agents.*.status == blocked",
-        "--timeout",
-        "20s",
-    ]);
-    let (code, status) = parse(scratch_bus(&session, &["message", "status", &id]));
-    assert_eq!(code, 0, "{status}");
-    let (code, blocked_screen) = parse(scratch_bus(
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    // The target is queued behind bootstrap. Release that setup choice, then
+    // correlate the target's trusted turn with this agent's actual chooser.
+    let (code, continued) = parse(scratch_bus(
         &session,
-        &["agent", "observe", "dialog-worker"],
+        &[
+            "agent",
+            "press",
+            "dialog-worker",
+            "--select",
+            "Continue bootstrap",
+            "--terminal-id",
+            bootstrap["terminal_id"].as_str().unwrap(),
+        ],
     ));
-    assert_eq!(code, 0, "{blocked_screen}");
+    assert_eq!(code, 0, "{continued}");
+    assert_eq!(continued["result"]["outcome"], "selected", "{continued}");
+    let (status, observed) = loop {
+        let (code, status) = parse(scratch_bus(&session, &["message", "status", &id]));
+        assert_eq!(code, 0, "{status}");
+        let (code, observed) = parse(scratch_bus(
+            &session,
+            &["agent", "observe", "dialog-worker"],
+        ));
+        // A redraw has no coherent screen yet. Keep waiting for a fresh one
+        // within this deadline, but fail immediately on every other read error.
+        let redrawing = observed["error"]["code"] == "command_failed"
+            && observed["error"]["message"] == "Terminal is redrawing; observe it again";
+        assert!(code == 0 || redrawing, "{observed}");
+        let request = &status["result"]["requests"][0];
+        if code == 0
+            && request["start_bound"] == true
+            && request["turn_id"]
+                .as_str()
+                .is_some_and(|turn| !turn.is_empty())
+            && request["dialog"] == true
+            && observed["result"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Choose a path"))
+        {
+            break (status, observed);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "target request never reached its dialog: {status}; observation: {observed}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
     let request = &status["result"]["requests"][0];
     assert_eq!(
         request["start_bound"], true,
         "{status}; observed screen: {}",
-        blocked_screen["result"]["text"]
+        observed["result"]["text"]
     );
     assert!(
         request["turn_id"]
@@ -1764,11 +1805,6 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
             .is_some_and(|turn| !turn.is_empty()),
         "{status}"
     );
-    let (code, observed) = parse(scratch_bus(
-        &session,
-        &["agent", "observe", "dialog-worker"],
-    ));
-    assert_eq!(code, 0, "{observed}");
     let observation = &observed["result"];
     assert!(
         observation["text"]
