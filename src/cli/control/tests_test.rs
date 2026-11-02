@@ -215,6 +215,7 @@ const SAMPLES: &[&[&str]] = &[
     &["settings", "color-blind", "--on"],
     &["settings", "feishu-notifications", "--on"],
     &["settings", "room-sound", "--on"],
+    &["settings", "--error-orchestrator", "lead"],
     &["sounds"],
     &["quit"],
     &["diagnostics"],
@@ -238,7 +239,9 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
             .take_while(|part| !part.starts_with("--"))
             .collect();
         let line = format!("\n  {}", words.join(" "));
-        let help = command_help(&words);
+        let mut help_args: Vec<_> = words.iter().map(|word| (*word).to_owned()).collect();
+        help_args.push("--help".into());
+        let help = help_for(command_tree(spec.tier == Tier::Dev), &help_args).unwrap();
         for flag in spec
             .command
             .split_whitespace()
@@ -252,6 +255,19 @@ fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() 
                 "{} missing from bus --help",
                 spec.command
             ),
+            Tier::Dev if spec.command.contains(" --") => {
+                assert!(DEV_HELP.contains(&format!("\n  {}", spec.command)));
+                for flag in spec
+                    .command
+                    .split_whitespace()
+                    .filter(|part| part.starts_with("--"))
+                {
+                    assert!(
+                        !command_help(&words).contains(flag),
+                        "dev setting leaked into normal help"
+                    );
+                }
+            }
             Tier::Dev => {
                 assert!(
                     DEV_HELP.contains(&line),

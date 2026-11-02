@@ -65,3 +65,21 @@ fn each_fixture_kind_takes_only_its_own_flags() {
         "docs/tui-driver.md fixture line"
     );
 }
+
+#[test]
+fn error_pipe_fixture_queues_real_errors_instead_of_creating_a_message() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-error-pipe-fixture");
+    let paths = super::super::session::SessionPaths::new(&root, "s1");
+    std::fs::create_dir_all(paths.data_dir()).unwrap();
+    let response = create(&paths, "error", None, Some("bus.dev.test".into()), None).unwrap();
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        std::fs::read_to_string(paths.data_dir().join("error-pipe-fixture")).unwrap(),
+        "bus.dev.test\n"
+    );
+    assert!(
+        !paths.data_dir().join("state.json").exists(),
+        "only the real logger/coordinator may create a report"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -190,6 +190,7 @@ impl BusUi {
                 super::super::render::SoundSettingsLine::Sound { field, .. }
                 | super::super::render::SoundSettingsLine::Stepper { field, .. }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
+                | super::super::render::SoundSettingsLine::ErrorOrchestrator { field }
                 | super::super::render::SoundSettingsLine::FeishuRecipient { field }
                 | super::super::render::SoundSettingsLine::FeishuCli { field }
                 | super::super::render::SoundSettingsLine::Feishu { field }
@@ -240,4 +241,80 @@ fn next_sound_choice(current: Option<&str>, sounds: &[String], forward: bool) ->
         (index + len - 1) % len
     };
     next.checked_sub(1).map(|index| sounds[index].clone())
+}
+
+impl BusUi {
+    pub(in crate::client::rooms) fn error_orchestrator_choices(
+        &self,
+    ) -> Vec<(Option<crate::messaging::model::AgentId>, String)> {
+        let state = &self.snapshot.state;
+        std::iter::once((None, "Off".to_owned()))
+            .chain(
+                state
+                    .agents()
+                    .filter(|agent| {
+                        !agent.deletion_pending
+                            && agent.orchestrates.is_some()
+                            && state.room(agent.room_id).is_some_and(|room| {
+                                room.kind == crate::messaging::model::RoomKind::Master
+                            })
+                    })
+                    .map(|agent| (Some(agent.id), agent.name.clone())),
+            )
+            .collect()
+    }
+    pub(super) fn open_error_orchestrator(&mut self) {
+        let Some(field) = self.error_orchestrator_field() else {
+            return;
+        };
+        self.settings_field = field;
+        self.reveal_settings_field();
+        let selected = self
+            .error_orchestrator_choices()
+            .iter()
+            .position(|(id, name)| {
+                id.is_some() && Some(name.as_str()) == self.settings.error_orchestrator.as_deref()
+            })
+            .unwrap_or(0);
+        self.form = Some(Form::ErrorOrchestrator { selected });
+    }
+    pub(super) fn choose_error_orchestrator(
+        &mut self,
+        id: Option<crate::messaging::model::AgentId>,
+    ) {
+        if !self.dev_settings {
+            return;
+        }
+        let Some((_, name)) = self
+            .error_orchestrator_choices()
+            .into_iter()
+            .find(|(choice, _)| *choice == id)
+        else {
+            return;
+        };
+        let name = id.map(|_| name);
+        self.settings.error_orchestrator = name.clone();
+        self.queue(BusCommand::SetErrorOrchestrator(name), Effect::None);
+        self.form = Some(Form::Settings);
+    }
+    pub(super) fn error_orchestrator_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        let choices = self.error_orchestrator_choices();
+        if let Some(Form::ErrorOrchestrator { selected }) = &mut self.form {
+            *selected = (*selected).min(choices.len() - 1);
+            match code {
+                KeyCode::Up | KeyCode::Left => *selected = selected.saturating_sub(1),
+                KeyCode::Down | KeyCode::Right => {
+                    *selected = (*selected + 1).min(choices.len() - 1)
+                }
+                KeyCode::Home => *selected = 0,
+                KeyCode::End => *selected = choices.len() - 1,
+                KeyCode::Enter => {
+                    let id = choices[*selected].0;
+                    self.choose_error_orchestrator(id);
+                }
+                _ => {}
+            }
+        }
+    }
 }

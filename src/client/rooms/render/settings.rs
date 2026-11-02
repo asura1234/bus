@@ -110,6 +110,7 @@ impl BusUi {
         if let Some(field) = self.perf_overlay_field() {
             lines.push(SoundSettingsLine::Empty(""));
             lines.push(SoundSettingsLine::Heading("DEVELOPER"));
+            lines.push(SoundSettingsLine::ErrorOrchestrator { field: field - 1 });
             lines.push(SoundSettingsLine::PerfOverlay { field });
         }
         lines
@@ -276,6 +277,24 @@ impl BusUi {
                 value,
                 adjust,
             } => self.stepper_settings_row(view, rect, *field, label, value, *adjust),
+            SoundSettingsLine::ErrorOrchestrator { field } => {
+                let selected = self.settings.error_orchestrator.as_deref().unwrap_or("Off");
+                let available = self
+                    .error_orchestrator_choices()
+                    .iter()
+                    .any(|(_, name)| name == selected);
+                view.row(
+                    rect,
+                    format!(
+                        "Bus errors: {}{} ▾",
+                        display(selected),
+                        if available { "" } else { " (unavailable)" }
+                    ),
+                    Some(Action::OpenErrorOrchestrator),
+                    self.settings_field == *field,
+                    false,
+                );
+            }
             SoundSettingsLine::PerfOverlay { field } => {
                 let on = crate::client::perf::OVERLAY.is_on();
                 view.row(
@@ -419,5 +438,39 @@ impl BusUi {
             selected,
             false,
         );
+    }
+}
+
+impl BusUi {
+    pub(super) fn error_orchestrator_dropdown(&self, view: &mut View, main: Rect, selected: usize) {
+        self.settings_view(view, main);
+        let choices = self.error_orchestrator_choices();
+        let selected = selected.min(choices.len().saturating_sub(1));
+        let anchor = view
+            .hits
+            .iter()
+            .find(|hit| hit.action == Action::OpenErrorOrchestrator)
+            .map(|hit| hit.rect.y)
+            .unwrap_or(main.y + 3);
+        let height = choices
+            .len()
+            .min(usize::from(main.height.saturating_sub(4).max(1)));
+        let first = selected.saturating_sub(height.saturating_sub(1));
+        let y = (anchor + 1).min(main.bottom().saturating_sub(height as u16 + 2));
+        let width = main.width.saturating_sub(6);
+        for (row, (index, (id, name))) in choices
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(height)
+            .enumerate()
+        {
+            view.overlay_row(
+                Rect::new(main.x + 3, y + row as u16, width, 1),
+                format!("  {}", display(name)),
+                Some(Action::ChooseErrorOrchestrator(*id)),
+                index == selected,
+            );
+        }
     }
 }

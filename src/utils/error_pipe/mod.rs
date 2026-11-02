@@ -234,18 +234,32 @@ pub(crate) struct Runtime {
 }
 impl Runtime {
     pub(crate) fn configure(&mut self, dir: &Path, selected: Option<&str>) {
-        if self.configured && self.selected.as_deref() == selected {
+        if self.configured
+            && self.selected.as_deref() == selected
+            && (selected.is_none() || self.generation.is_some())
+        {
             return;
         }
         let _guard = suppress(true);
+        let existing = (!self.configured)
+            .then(|| std::fs::read_to_string(dir.join(ENABLED)).ok())
+            .flatten();
         self.configured = true;
         self.selected = selected.map(str::to_owned);
         self.generation = None;
         self.batches = Batches::default();
+        if let Some(name) = selected {
+            if let Some(generation) =
+                existing.filter(|generation| generation.starts_with(&format!("{name}:")))
+            {
+                self.generation = Some(generation);
+                return;
+            }
+        }
         let _ = std::fs::remove_file(dir.join(ENABLED));
         let _ = drain(dir);
-        if selected.is_some() {
-            let generation = crate::utils::time::now_ns().to_string();
+        if let Some(name) = selected {
+            let generation = format!("{name}:{}", crate::utils::time::now_ns());
             if crate::platform::fs::atomic_write(&dir.join(ENABLED), generation.as_bytes()).is_ok()
             {
                 self.generation = Some(generation);

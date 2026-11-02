@@ -134,3 +134,35 @@ fn error_pipe_report_rpc_scope_stays_suppressed_on_the_async_submission_thread()
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn error_pipe_enabled_restart_keeps_unconsumed_startup_errors_but_off_never_replays_them() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-error-pipe-restart");
+    let log = root.join("client.log");
+    let mut first = Runtime::default();
+    first.configure(&root, Some("lead"));
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(CaptureLayer::new(log.clone())),
+        emit_error,
+    );
+    let mut resumed = Runtime::default();
+    resumed.configure(&root, Some("lead"));
+    assert!(resumed.collect(&root, 0).is_empty());
+    assert_eq!(
+        resumed.collect(&root, 1000).len(),
+        1,
+        "an enabled restart must keep its startup evidence"
+    );
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(CaptureLayer::new(log)),
+        emit_error,
+    );
+    resumed.configure(&root, None);
+    resumed.configure(&root, Some("lead"));
+    assert!(resumed.collect(&root, 2000).is_empty());
+    assert!(
+        resumed.collect(&root, 3000).is_empty(),
+        "Off discarded the old error"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
