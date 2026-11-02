@@ -34,6 +34,10 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    #[cfg(unix)]
+    if raw_args.get(1).map(String::as_str) == Some("--bus-codex-runtime") {
+        return agents::providers::codex::native::launcher::run(&raw_args[2..]);
+    }
     // A driver session's fake provider CLIs and effect recorders are this
     // binary under another command's name.
     #[cfg(feature = "dev-tools")]
