@@ -129,6 +129,9 @@ fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
 /// Rows taken by the MASTER room entry and the gap before ROOMS.
 const MASTER_SECTION_ROWS: usize = 2;
 
+/// Name and count, then one blank row before the next work room.
+const WORK_ROOM_STRIDE: usize = 3;
+
 /// Rows of a MASTER agent: name, provider, orchestrated room and a gap.
 const MASTER_AGENT_ROWS: usize = 4;
 
@@ -169,7 +172,7 @@ pub(in crate::client::rooms) fn sidebar_room_row(
         .rooms()
         .filter(|candidate| candidate.kind == RoomKind::Work)
         .position(|candidate| candidate.id == room)
-        .map(|index| first + index * 2)
+        .map(|index| first + index * WORK_ROOM_STRIDE)
 }
 
 /// A room's sidebar label, its name truncated to fit in `width` cells.
@@ -314,11 +317,20 @@ impl BusUi {
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
         let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
-        // Work rooms have a name and count; MASTER has a name and section gap.
+        let work_rooms = rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Work)
+            .count();
+        // The last work room has no trailing spacer before the divider.
+        let work_room_rows = (work_rooms * WORK_ROOM_STRIDE).saturating_sub(1);
+        let master_rows =
+            usize::from(self.snapshot.state.master_room().is_some()) * MASTER_SECTION_ROWS;
         // Leading gap, ROOMS header, gap, divider, `# room` agents header,
         // gap: six fixed rows around the room and agent entries.
-        let content_height =
-            6 + rooms.len() * 2 + agents.iter().map(|entry| entry.height).sum::<usize>();
+        let content_height = 6
+            + master_rows
+            + work_room_rows
+            + agents.iter().map(|entry| entry.height).sum::<usize>();
         let notices = u16::from(self.quitting.is_some());
         // The footer stays pinned below any exit notices.
         let footer_rows = 2 + u16::from(cfg!(feature = "dev-tools"));
@@ -339,11 +351,7 @@ impl BusUi {
             visible_end,
         };
         let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
-        let work_rooms = rooms
-            .iter()
-            .filter(|room| room.kind == RoomKind::Work)
-            .count();
-        let divider_row = rooms_header + 2 + work_rooms * 2;
+        let divider_row = rooms_header + 2 + work_room_rows;
         let agents_header = divider_row + 1;
         self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
         view.sidebar_divider = viewport.at(1, divider_row, sw);

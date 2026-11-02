@@ -966,6 +966,79 @@ fn master_without_agent_count_does_not_add_a_phantom_scroll_row() {
 }
 
 #[test]
+fn work_room_blocks_have_one_gap_between_them_and_none_after_the_last() {
+    let (mut ui, first, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.ensure_master_room();
+    let second = snapshot.state.create_room("second").unwrap();
+    let third = snapshot.state.create_room("third").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(first);
+    ui.compute_view(100, 30);
+    let first_row = render::sidebar_room_row(&ui.snapshot.state, first, ui.room).unwrap() as u16;
+    let line = |buffer: &ratatui::buffer::Buffer, width, row| {
+        (0..width - 1)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>()
+    };
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    for (index, (room, name)) in [(first, "# room"), (second, "# second"), (third, "# third")]
+        .into_iter()
+        .enumerate()
+    {
+        let row = first_row + index as u16 * 3;
+        assert!(line(&buffer, ui.view.sidebar.width, row).contains(name));
+        assert!(line(&buffer, ui.view.sidebar.width, row + 1).contains("Agents"));
+        for y in [row, row + 1] {
+            assert_eq!(ui.view.hit_at(3, y), Some(&render::Action::Room(room)));
+        }
+        if index < 2 {
+            assert!(
+                line(&buffer, ui.view.sidebar.width, row + 2)
+                    .trim()
+                    .is_empty(),
+                "one empty row separates room blocks"
+            );
+            assert_eq!(ui.view.hit_at(3, row + 2), None);
+        }
+    }
+    assert!(
+        line(&buffer, ui.view.sidebar.width, first_row + 8)
+            .trim_start()
+            .starts_with('─'),
+        "divider immediately follows the last count"
+    );
+
+    // Scroll the first gap to the top: following name/count targets must keep
+    // their positions even when earlier blocks are outside the viewport.
+    let rows = 10 + u16::from(cfg!(feature = "dev-tools"));
+    ui.sidebar_scroll = usize::from(first_row + 2);
+    ui.compute_view(100, rows);
+    assert_eq!(ui.view.sidebar_max_scroll, 19 - 8);
+    assert_eq!(ui.view.hit_at(3, 0), None);
+    for (room, row) in [(second, 1), (third, 4)] {
+        for y in [row, row + 1] {
+            assert_eq!(ui.view.hit_at(3, y), Some(&render::Action::Room(room)));
+        }
+    }
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        3,
+        0,
+    );
+    assert_eq!(ui.room, Some(first), "a spacer has no room target");
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        3,
+        2,
+    );
+    assert_eq!(ui.room, Some(second), "scrolled count opens its own room");
+}
+
+#[test]
 fn each_room_counts_working_and_blocked_but_not_unavailable_agents() {
     let (mut ui, room, first) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
