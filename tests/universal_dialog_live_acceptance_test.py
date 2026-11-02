@@ -469,13 +469,18 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 completed.add(case)
 
             agent, case = agents["codex"], "codex-question"
+            # The explicit Bus reply can precede the provider's native Stop.
+            # Share the existing mode-change budget with that native-idle wait.
+            plan_deadline = time.monotonic() + 30
+            wait("Codex native idle before plan mode", lambda: ready(agent),
+                 max(0, plan_deadline - time.monotonic()))
             before = observe(agent, case + "-plan-mode")
             press(case, agent, before, "--text", "/plan", "--submit")
             def plan_mode():
                 screen = observe(agent, case + "-plan-mode")
                 return screen if "plan mode" in screen["text"].lower() else None
 
-            wait("Codex plan mode", plan_mode, 30)
+            wait("Codex plan mode", plan_mode, max(0, plan_deadline - time.monotonic()))
             token = "TYPED_" + secrets.token_hex(6)
             title = "Which token should this scratch acceptance use?"
             message = send(agent, "Stay in Plan mode. Do not use skills, delegate, run commands or edit files. "
