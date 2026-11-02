@@ -6,6 +6,25 @@ fn captured_grid(screen: &str) -> Grid {
     observe(&runtime).expect("complete captured screen").0
 }
 
+#[test]
+fn driver_numbered_draft_with_context_footer_is_not_a_foreground_menu() {
+    // Reduced native composer frames from the server's draft-edit regression.
+    // Numbered editable text has no current action hint or enclosing menu rule.
+    for draft in [
+        "1. Confirm the bug\n  2. Add",
+        "1. Confirm the bug\n  2. Add a regression test",
+        "1. Confirm the bug\n  2. Add a regression test\n  3. Run the gates",
+        "",
+    ] {
+        let screen = format!(
+            "• Done. The parser is fixed.\n\n› {draft}\n\n  gpt-5.4 · minimal · ~/work/bus"
+        );
+        let grid = menu(&screen);
+        assert!(blocker(&grid, false).is_none(), "{screen}");
+        assert!(!has_input_controls(&grid.text()), "{screen}");
+    }
+}
+
 #[tokio::test]
 async fn driver_blocker_recognizes_saved_foreground_and_pending_controls() {
     // The six non-native Grok files are synthetic hypotheses, explicitly
