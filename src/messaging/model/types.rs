@@ -370,6 +370,9 @@ pub(crate) struct RoomAgent {
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,
+    /// Current durable launch attempt; earlier attempts remain in the ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) launch_attempt_id: Option<u64>,
     /// Observed shell boundary for this launch/session, saved with callbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) claude_shells: Option<ClaudeShells>,
