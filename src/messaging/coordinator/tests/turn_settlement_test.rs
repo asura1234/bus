@@ -3,6 +3,178 @@ use super::*;
 // The callback spool gets a bounded grace period after the first settled poll.
 const CALLBACK_GRACE_MS: u64 = crate::messaging::model::TURN_SETTLE_MS;
 
+fn restart(fixture: &mut Fixture) {
+    let placeholder = Worker::open(
+        fixture.dir.join("restart-placeholder"),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_every_provider_queue()
+{
+    let mut failures = Vec::new();
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for start_bound in [false, true] {
+            let mut fixture = Fixture::new(provider);
+            if provider == Provider::Kimi {
+                super::kimi_steering_tests::home(&fixture);
+            }
+            let interrupted = if start_bound {
+                running(&mut fixture, "interrupted delivered request", "1")
+            } else {
+                let request = fixture.send("interrupted awaiting-start request", false);
+                fixture.deliver();
+                request
+            };
+            let queued = fixture.send("queued behind the restart", true);
+            restart(&mut fixture);
+            fixture.status(RuntimeStatus::Idle);
+            fixture.worker.settle_requests().unwrap();
+            let request = fixture.request(interrupted);
+            if request.phase != RequestPhase::Abandoned
+                || request.failure_reason.as_deref() != Some("reply_not_captured")
+                || fixture
+                    .worker
+                    .state
+                    .agent(fixture.agent)
+                    .unwrap()
+                    .current_request
+                    .is_some()
+            {
+                failures.push(format!(
+                    "{provider:?}/start_bound={start_bound}: old request remained {:?}/{:?}",
+                    request.phase, request.failure_reason
+                ));
+            }
+            fixture.deliver();
+            if fixture.request(queued).phase == RequestPhase::Queued {
+                failures.push(format!(
+                    "{provider:?}/start_bound={start_bound}: queued message stayed blocked"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_final() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        let mut fixture = Fixture::new(provider);
+        let lead = running(&mut fixture, "lead before restart", "turn-1");
+        let steering = fixture.send("steering before restart", false);
+        fixture.deliver();
+        let queued = fixture.send("after the interrupted group", true);
+        restart(&mut fixture);
+        fixture.status(RuntimeStatus::Idle);
+        fixture.worker.settle_requests().unwrap();
+        for request in [lead, steering] {
+            assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
+            assert_eq!(
+                fixture.request(request).failure_reason.as_deref(),
+                Some("reply_not_captured")
+            );
+        }
+        fixture.deliver();
+        assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+
+        let mut completed = Fixture::new(provider);
+        let answered = running(&mut completed, "finish just before restart", "turn-1");
+        completed.stopped("turn-1", "finished before the stop");
+        completed.consume();
+        let next = completed.send("next after the completed turn", true);
+        restart(&mut completed);
+        completed.status(RuntimeStatus::Idle);
+        completed.worker.settle_requests().unwrap();
+        assert_eq!(
+            completed.reply(answered).as_deref(),
+            Some("finished before the stop")
+        );
+        completed.deliver();
+        assert_ne!(completed.request(next).phase, RequestPhase::Queued);
+    }
+}
+
+#[test]
+fn restart_request_recovers_a_completed_codex_turn_from_its_rollout_before_releasing_the_queue() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout.jsonl");
+    let lead = running(&mut fixture, "finish without a Stop hook", "turn-1");
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&fixture, 1),
+            "turn-1",
+            &typed,
+            Some("recovered after restart"),
+        ),
+    );
+    let queued = fixture.send("queued after recovered final", true);
+    restart(&mut fixture);
+    fixture.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume","transcript_path":rollout}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("recovered after restart")
+    );
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_request_recovers_a_completed_kimi_turn_from_its_wire_before_releasing_the_queue() {
+    let mut fixture = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&fixture);
+    let lead = running(&mut fixture, "finish on the committed Kimi wire", "1");
+    let prompt = fixture.worker.state.render_request_payload(lead).unwrap();
+    let rows = [
+        json!({"type":"turn.prompt","agentId":"main","turnId":1,"promptId":"p1","input":[{"type":"text","text":prompt}]}),
+        json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"text","text":"Kimi final recovered after restart"}]}}}),
+        json!({"type":"agent.turn.ended","turnId":1,"outcome":"done"}),
+        json!({"type":"turn.ended","agentId":"main","turnId":1,"reason":"completed"}),
+        json!({"type":"prompt.completed","agentId":"main","promptId":"p1","reason":"completed"}),
+    ];
+    std::fs::write(
+        wire,
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let queued = fixture.send("queued after the Kimi final", true);
+    restart(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Kimi final recovered after restart")
+    );
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
 #[test]
 fn reply_capture_diagnostics_identify_every_abandoned_group_member() {
     let capture = crate::utils::logging::test_capture::Capture::default();

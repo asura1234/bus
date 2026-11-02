@@ -30,6 +30,8 @@ pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
+    /// Current requests loaded when this coordinator process opened.
+    pub(super) restart_requests: BTreeMap<AgentId, RequestId>,
     pub(super) store: JsonStore,
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
@@ -124,6 +126,10 @@ impl Worker {
             .expire_stalled_queued_requests(io::now_ms())
             .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
+        let restart_requests = state
+            .agents()
+            .filter_map(|agent| agent.current_request.map(|request| (agent.id, request)))
+            .collect();
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
             super::recovery::check_saved_project_hooks(&mut state, id)?;
@@ -146,6 +152,7 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
+            restart_requests,
             state,
             store,
             data_dir,
@@ -634,9 +641,15 @@ impl Worker {
                 }
             };
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
-            changed |= state
-                .settle_ended_request(agent, observed_at_ms, recorded_end)
-                .is_some();
+            let settled = self
+                .restart_requests
+                .get(&agent)
+                .copied()
+                .and_then(|request| {
+                    state.settle_restarted_request(agent, request, observed_at_ms, recorded_end)
+                })
+                .or_else(|| state.settle_ended_request(agent, observed_at_ms, recorded_end));
+            changed |= settled.is_some();
         }
         if changed {
             self.save(state)?;
