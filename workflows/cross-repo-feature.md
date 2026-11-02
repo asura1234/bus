@@ -109,8 +109,8 @@ room's bound orchestrator, and names or IDs can reach agents in any room.
 
 PR peers: `<PR/task> → owner <name/ID> → verifier <name/ID> → reviewer(s) <name/ID>`.
 Use these peers from your brief. If one is missing or replaced, message the
-orchestrator; it owns staffing, room notes, the roster and verifier allocation.
-Workers do not edit room notes or the roster. The brief carries the exact head,
+orchestrator; it owns staffing, the roster and verifier allocation.
+Workers do not edit the roster. The brief carries the exact head,
 worktree, acceptance checklist, locked goal/non-goals, pinned PR base,
 recorded merge authority and explicit holds.
 

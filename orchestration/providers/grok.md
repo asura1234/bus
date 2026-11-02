@@ -44,7 +44,7 @@ and possibly a dialog answer; resolving it does not itself finish the task.
 Delivery is not completion. Require `complete: true` from `bus message status`
 and read the worker's reply before declaring the task done. Status/history reads
 do not consume the retained reply as an author waiter does. Update the workflow
-and room notes on state changes; when no immediate action remains, end the turn
+on state changes; when no immediate action remains, end the turn
 and return to idle again.
 
 After a restart, delayed notice or failed delivery, reconcile durable state

@@ -82,5 +82,5 @@ Orchestrators drive Bus
 through the control CLI (`bus <cmd> --help`), following `how-to-bus-cli.md` for workflows; they do not edit
 room state files or use the server API directly. Send work as the orchestrator
 with `bus send --room ROOM --as AGENT --to WORKER --async --text TEXT`, and
-maintain the workflow path and progress in the room notes. The binding rules
+maintain the workflow file. The binding rules
 and working guide are in `rules.md` and `guide.md`.

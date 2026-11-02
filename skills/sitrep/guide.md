@@ -2,7 +2,7 @@
 
 A sitrep describes the room's actual work, not the agent roster. Use the most
 recent reliable evidence and distinguish a task from its PR when linking them.
-Room notes and workflow files may lag; reconcile them with recent history and
+Workflow files may lag; reconcile them with recent history and
 computed repository state. Do not turn an idle agent, a queued request, an
 absent PR, a draft, or a green focused test into an inferred project status.
 When evidence is missing or conflicting, say what is known and what is

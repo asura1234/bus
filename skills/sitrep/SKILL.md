@@ -22,13 +22,12 @@ derive one only from explicit evidence. Rerun with --start FULL_SHA; never guess
 a starting point. For any other failure, stop and report it. Serialize sitrep
 runs for the repository. Preserve the state JSON unchanged for rendering.
 
-Run `bus state`, identify the room and read its `notes` field. `bus room notes`
-is a write command in current Bus: never invoke it to read. Read recent
+Run `bus state` and identify the room. Read recent
 `bus history --room <room_id> --limit 100`; paginate with --before when needed.
-Read only the orchestrator workflow files explicitly named by room notes.
-Record unavailable sources; do not write room notes or workflow files.
+Read only the orchestrator workflow files explicitly named in the task context
+or room history. Record unavailable sources; do not write workflow files.
 
-Reconcile current room notes, workflow, recent history, and current Git state
+Reconcile the workflow, recent history, and current Git state
 with the computed state. Finished names and landed SHAs come only from the
 state's ordered Git log; supply TLDR and context for exactly those entries.
 Open PR links come only from the state's ordered open_prs list; supply their

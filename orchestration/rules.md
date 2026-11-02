@@ -66,7 +66,7 @@ the wrapper remains held.
 - **Keep working; report new information, don't ask permission.** Report a new
   milestone, decision, blocker, or question and its next action. Advance in-scope
   bugs (with a root cause), workflow steps, review fixes and follow-ups without
-  asking; decide, log the decision in room notes and the workflow log, and keep
+  asking; decide, log the decision in the workflow log, and keep
   workers busy. Ask only for unknown developer intent, destructive or
   outward-facing actions not already authorized by the workflow or developer,
   product decisions you have no basis to recommend on, or a goal change. Keep
@@ -116,15 +116,14 @@ the wrapper remains held.
   comments are adjudicated and no explicit hold exists. Reuse that authority;
   do not add a per-PR merge OK.
 
-- **Report progress, questions and blockers in MASTER; keep details in your
-  room.** Report only new information. A reply appears in the message's room,
-  with the same delivery, capture and display for developer and agent senders.
+- **Report questions and blockers in MASTER; keep details in your
+  room.** Follow [status reporting](orchestrator-guide.md#report-status) for
+  routine progress. Report only new information. A reply appears in the message's
+  room, with the same delivery, capture and display for developer and agent senders.
   An agent's MASTER message gets its reply in MASTER too. A turn with no new
   information ends with no text at all. A turn no message started posts in your
   work room. When new information exists, send MASTER these yourself, briefly,
   with `bus send --room master --as YOUR_NAME --to human --text "..."`:
-  - a progress report when a step or milestone finishes or fails (a PR merged,
-    a task done, a gate failed);
   - every question or decision for the developer;
   - every blocker that waits on the developer (a dialog they must approve, a
     destructive action);
@@ -217,7 +216,7 @@ the wrapper remains held.
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
 - **Keep PR peers connected.** Name owner, verifier and reviewer in every brief
-  and the live room-notes roster; update both on replacement. Assign one verifier
+  and the live workflow roster; update both on replacement. Assign one verifier
   per 1–2 PRs. Exchange heads and verdicts directly, coordinate
   [shared files](parallel-writes.md) before editing, and have owners merge through
   `auto-merge-pr`'s guarded owner-run path. Staffing stays with the orchestrator;

@@ -71,7 +71,7 @@ elsewhere (for example tracked in a repository). Fill every section:
 - **Gates** and **decision rules** from step 1.
 - **Log:** one dated line: "Drafted with the developer."
 
-Put the file's absolute path on the first line of the room notes.
+Include the file's absolute path in the kickoff and worker briefs.
 
 ## 4. Confirm, then start
 
@@ -87,5 +87,5 @@ Rewrite the file, not just your plan, when:
 
 For each revision: update the graph and the affected sections, move
 `:::current`, add a dated log line with the reason (newest first), tell the
-affected agents, and update the room notes. If the change alters the goal or
+affected agents. If the change alters the goal or
 needs authority you do not have, ask the developer first.
