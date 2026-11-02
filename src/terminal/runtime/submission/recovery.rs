@@ -57,7 +57,7 @@ impl ObservedSubmission {
             // draft. Its chip counts can happen to match our old paste.
             if self
                 .terminal
-                .visible_ansi_if_complete()
+                .screen_ansi_if_complete()
                 .is_some_and(|screen| self.inspect.native_draft_restored(&screen))
             {
                 return Ok(());

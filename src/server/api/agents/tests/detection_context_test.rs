@@ -108,6 +108,116 @@ async fn native_context_keeps_recent_hook_activity_working_but_expires_it() {
     );
 }
 
+const CLAUDE_IDLE: &str = include_str!("fixtures/claude_2_1_310_idle_88cols.txt");
+
+async fn detect_scrolled_claude(live: &str, history: &str) -> AgentState {
+    let (runtime, mut writes) =
+        crate::terminal::runtime::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            88, 40, 100_000, b"", 16,
+        );
+    let text = format!(
+        "\x1b]0;✳ Claude Code\x07{history}\n{}\n{live}",
+        "captured transcript\n".repeat(60)
+    );
+    runtime.test_process_pty_bytes(text.replace('\n', "\r\n").as_bytes());
+    runtime.set_scroll_offset_from_bottom(60);
+    assert!(runtime.visible_text().contains("captured transcript"));
+    let viewport = runtime.visible_text();
+    runtime.set_detection_context(
+        AgentKind::Claude,
+        true,
+        None,
+        crate::server::api::agents::prompt::detection_composer(AgentKind::Claude),
+    );
+    let state = runtime
+        .test_scan_detection_context(AgentKind::Claude, AgentState::Unknown)
+        .await
+        .0;
+    assert!(writes.try_recv().is_err(), "detection must send no keys");
+    assert_eq!(
+        runtime.visible_text(),
+        viewport,
+        "preserve the reading position"
+    );
+    state
+}
+
+#[tokio::test]
+async fn captured_claude_idle_composer_stays_idle_when_viewport_is_scrolled() {
+    // Real 2.1.310, 88 columns: the composer is on the active screen while
+    // the developer reads transcript scrollback. OSC still signals idle.
+    assert_eq!(
+        detect_scrolled_claude(CLAUDE_IDLE, "historical response").await,
+        AgentState::Idle
+    );
+}
+
+#[tokio::test]
+async fn scrolled_history_empty_composer_does_not_hide_live_claude_draft() {
+    let draft = CLAUDE_IDLE.replacen("\n❯\n", "\n❯ developer draft\n", 1);
+    assert_ne!(draft, CLAUDE_IDLE);
+    assert_eq!(
+        detect_scrolled_claude(&draft, CLAUDE_IDLE).await,
+        AgentState::Blocked
+    );
+}
+
+#[tokio::test]
+async fn claude_idle_title_does_not_hide_a_permission_dialog() {
+    assert_eq!(
+        detect(
+            AgentKind::Claude,
+            "\x1b]0;✳ Claude Code\x07do you want to proceed?\nbash command: echo test\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend · ctrl+e to explain",
+            true,
+            None,
+            false,
+        )
+        .await,
+        AgentState::Blocked
+    );
+}
+
+#[tokio::test]
+async fn unavailable_composer_with_idle_title_remains_guarded() {
+    for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Kimi] {
+        assert_eq!(
+            detect(
+                kind,
+                "\x1b]0;✳ Claude Code\x07No composer",
+                true,
+                None,
+                false
+            )
+            .await,
+            AgentState::Blocked,
+            "{kind:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn codex_and_kimi_empty_composers_and_drafts_keep_their_states() {
+    for (kind, empty, draft) in [
+        (
+            AgentKind::Codex,
+            "›\nGPT-6 · /repo\n? for shortcuts",
+            "› developer draft\nGPT-6 · /repo\n? for shortcuts",
+        ),
+        (AgentKind::Kimi, EMPTY, DRAFT),
+    ] {
+        assert_eq!(
+            detect(kind, empty, true, None, false).await,
+            AgentState::Idle,
+            "{kind:?}"
+        );
+        assert_eq!(
+            detect(kind, draft, true, None, false).await,
+            AgentState::Blocked,
+            "{kind:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn grok_welcome_without_composer_blocks_but_empty_native_composer_is_ready() {
     let welcome =

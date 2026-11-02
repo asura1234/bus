@@ -303,7 +303,7 @@ impl ObservedSubmission {
     }
 
     fn observe_frame(&self, phase: &'static str) -> Option<InputObservation> {
-        let Some(screen) = self.terminal.visible_ansi_if_complete() else {
+        let Some(screen) = self.terminal.screen_ansi_if_complete() else {
             self.diagnostics
                 .observe(phase, InputObservation::Unavailable, 0, self.clock.now());
             return None;
@@ -342,7 +342,7 @@ impl ObservedSubmission {
     }
 
     fn diagnose_refusal(&self, phase: &'static str) {
-        let screen = self.terminal.visible_ansi();
+        let screen = self.terminal.screen_ansi();
         let cursor = self
             .terminal
             .cursor_state()
@@ -534,7 +534,7 @@ impl ObservedSubmission {
     /// unchanged owned draft, rechecking ownership under the render lock before
     /// every editing key. Clearing cannot prove the provider never ran it.
     fn withdraw_pending(&self, timeout: io::Error) -> io::Result<()> {
-        let screen = self.terminal.visible_ansi();
+        let screen = self.terminal.screen_ansi();
         let cursor = self
             .terminal
             .cursor_state()
@@ -657,7 +657,7 @@ impl ObservedSubmission {
             if last_enter.is_some()
                 && self
                     .inspect
-                    .native_draft_restored(&self.terminal.visible_ansi())
+                    .native_draft_restored(&self.terminal.screen_ansi())
             {
                 return Ok(());
             }
