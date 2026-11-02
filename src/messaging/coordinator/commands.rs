@@ -101,7 +101,7 @@ impl Worker {
                 self.focus_terminal(&mut state, id, events)?;
                 Ok(())
             }
-            C::Control(_) | C::Shutdown => return Ok(()),
+            C::Control(_) | C::NativeWake | C::Shutdown => return Ok(()),
         };
         result.map_err(|e| e.to_string())?;
         self.save(state)

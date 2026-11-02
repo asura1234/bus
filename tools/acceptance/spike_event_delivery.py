@@ -154,7 +154,7 @@ class Scratch:
             self.ok(['type', '-END'])
             self.ok(['press', 'enter'])
             self.ok(['wait', '--text', 'fake draft bytes:', '--timeout', '20s'])
-            transcript = self.bus(['agent', 'read', 'a1', '--source', 'recent'])
+            transcript = self.bus(['agent', 'read', 'a1', '--source', 'recent', '--lines', '200'])
             replies = [s for s in self.strings(transcript) if 'fake draft bytes: ' in s]
             if not replies:
                 raise RuntimeError(('draft reply missing', transcript))
@@ -214,7 +214,7 @@ class Scratch:
 
     def attach_metrics(self):
         events = {}
-        for log in self.run_dir.joinpath('logs').rglob('server.log*'):
+        for log in self.run_dir.joinpath('logs').rglob('*server.log*'):
             if not log.is_file() or log.suffix == '.gz':
                 continue
             for line in log.read_text(errors='replace').splitlines():

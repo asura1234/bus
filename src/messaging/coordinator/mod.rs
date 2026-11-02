@@ -239,7 +239,7 @@ pub(crate) struct BusHandle {
     _control: Option<control::Server>,
     commands: mpsc::SyncSender<(u64, BusCommand)>,
     snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
-    snapshot_wake: Arc<tokio::sync::Notify>,
+    pub(crate) snapshot_wake: Arc<tokio::sync::Notify>,
     events: mpsc::Receiver<BusEvent>,
 }
 
