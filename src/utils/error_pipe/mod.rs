@@ -193,9 +193,42 @@ fn broken_warning(event: &str, target: &str) -> bool {
     )
 }
 
+fn private_dir(dir: &Path) -> io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+fn activate(dir: &Path, generation: &[u8]) -> io::Result<()> {
+    let temporary = dir.join(format!(
+        "error-pipe.enabled.{}.{}",
+        std::process::id(),
+        crate::utils::time::now_ns()
+    ));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(generation)?;
+        std::fs::rename(&temporary, dir.join(ENABLED))
+    })();
+    let _ = std::fs::remove_file(temporary);
+    result
+}
+
 /// The inode is never renamed; its OS lock serializes append and drain across processes.
 fn inbox(dir: &Path) -> io::Result<std::fs::File> {
-    crate::platform::fs::private_dir(dir)?;
+    private_dir(dir)?;
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
@@ -260,8 +293,7 @@ impl Runtime {
         let _ = drain(dir);
         if let Some(name) = selected {
             let generation = format!("{name}:{}", crate::utils::time::now_ns());
-            if crate::platform::fs::atomic_write(&dir.join(ENABLED), generation.as_bytes()).is_ok()
-            {
+            if activate(dir, generation.as_bytes()).is_ok() {
                 self.generation = Some(generation);
             }
         }
@@ -324,5 +356,8 @@ impl Batches {
             .collect()
     }
 }
+#[cfg(feature = "dev-tools")]
+pub(crate) mod fixture;
 #[cfg(test)]
+#[path = "tests/capture_test.rs"]
 mod tests;

@@ -12,7 +12,7 @@ fn emit_error() {
 #[test]
 fn error_pipe_captures_metadata_only_and_filters_warn_noise_and_disabled_sessions() {
     let root = crate::utils::test_temp::unique_temp_path("bus-error-pipe-capture");
-    crate::platform::fs::private_dir(&root).unwrap();
+    private_dir(&root).unwrap();
     let log = root.join("client.log");
     let mut runtime = Runtime::default();
     runtime.configure(&root, Some("orch"));
@@ -35,7 +35,7 @@ fn error_pipe_captures_metadata_only_and_filters_warn_noise_and_disabled_session
     );
     assert_eq!(records[0].event, "bus.test.failure");
     assert_eq!(records[0].log, log);
-    assert!(records[0].location.contains("tests.rs:"));
+    assert!(records[0].location.contains("capture_test.rs:"));
     let serialized = serde_json::to_string(&records).unwrap();
     assert!(!serialized.contains("must stay in logs"));
     assert!(!serialized.contains("private error detail"));

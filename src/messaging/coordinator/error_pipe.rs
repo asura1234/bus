@@ -31,7 +31,7 @@ impl Worker {
             .configure(&dir, target.and(selected.as_deref()));
         #[cfg(feature = "dev-tools")]
         if self.dev_enabled {
-            crate::devtools::error_fixture::emit(&self.data_dir);
+            crate::utils::error_pipe::fixture::emit(&self.data_dir);
         }
         let Some((agent, room)) = target else {
             return;
