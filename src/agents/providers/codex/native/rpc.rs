@@ -79,6 +79,19 @@ impl Rpc {
                 continue;
             }
             if value.get("error").is_some() {
+                // The queue may auto-dispatch between add and explicit start.
+                // Match only the exact owned item and protocol rejection code.
+                if method == "thread/queue/start"
+                    && value["error"]["code"] == -32600
+                    && params["queuedSubmissionId"].as_str().is_some_and(|id| {
+                        value["error"]["message"] == format!("queued submission not found: {id}")
+                    })
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "Codex queued input already dispatched",
+                    ));
+                }
                 // Do not include provider text: errors can contain prompt data.
                 return Err(io::Error::other(format!(
                     "Codex native {method} rejected (code {})",
@@ -209,7 +222,24 @@ impl Rpc {
         } else {
             "thread/queue/add"
         };
-        self.call(method, params)
+        let admitted = self.call(method, params)?;
+        if method == "thread/queue/add" {
+            let queued = admitted["queuedSubmission"]["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| io::Error::other("Codex admitted queue receipt has no identity"))?;
+            // Interrupt pauses Codex's queue. Wake exactly the receipted entry;
+            // turn/start could accidentally steer a racing developer turn.
+            match self.call(
+                "thread/queue/start",
+                json!({"threadId":thread,"queuedSubmissionId":queued}),
+            ) {
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+                Ok(_) => {}
+            }
+        }
+        Ok(admitted)
     }
 
     pub(super) fn interrupt(&mut self, thread: &str) -> io::Result<()> {
@@ -279,11 +309,15 @@ pub(crate) mod tests {
                         json!({"data":[{"id":"busy-turn","status":"inProgress","items":[]}],"nextCursor":null})
                     }
                     "turn/interrupt" => json!({}),
-                    "thread/queue/add" | "turn/steer" => {
+                    "thread/queue/add" | "turn/steer" | "thread/queue/start" => {
                         if lost_ack {
                             break;
                         }
-                        json!({"turn":{"id":"native-turn","status":"inProgress"}})
+                        if method == "thread/queue/add" {
+                            json!({"queuedSubmission":{"id":"native-queue","clientUserMessageId":value["params"]["clientUserMessageId"]}})
+                        } else {
+                            json!({"turn":{"id":"native-turn","status":"inProgress"}})
+                        }
                     }
                     other => panic!("unexpected mutating/attach operation {other}"),
                 };
@@ -296,7 +330,7 @@ pub(crate) mod tests {
                     json!({"id":id,"result":result}).to_string().into(),
                 ))
                 .unwrap();
-                if method.starts_with("turn/") || method == "thread/queue/add" {
+                if method.starts_with("turn/") || method == "thread/queue/start" {
                     break;
                 }
             }
@@ -319,8 +353,11 @@ pub(crate) mod tests {
         )
         .unwrap();
         let calls = handle.join().unwrap();
-        let prompt = calls.last().unwrap();
-        assert_eq!(prompt["method"], "thread/queue/add");
+        let prompt = calls
+            .iter()
+            .find(|v| v["method"] == "thread/queue/add")
+            .unwrap();
+        assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
         assert_eq!(prompt["params"]["threadId"], "owned-thread");
         assert_eq!(
             prompt["params"]["input"],
@@ -338,7 +375,8 @@ pub(crate) mod tests {
         let calls = handle.join().unwrap();
         // turn/start is start-or-steer in Codex; a native queue entry stays
         // independent even if the developer presses Enter after thread/read.
-        assert_eq!(calls.last().unwrap()["method"], "thread/queue/add");
+        assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
+        assert!(!calls.iter().any(|v| v["method"] == "turn/start"));
     }
 
     #[test]
@@ -453,5 +491,155 @@ pub(crate) mod tests {
             calls.last().unwrap()["params"],
             json!({"threadId":"owned-thread","turnId":"busy-turn"})
         );
+    }
+    fn queued_server(
+        start_error: Option<Value>,
+    ) -> (std::path::PathBuf, std::thread::JoinHandle<Vec<Value>>) {
+        let dir = crate::utils::test_temp::unique_temp_path("codex-paused-queue");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s");
+        let listener = UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let mut calls = Vec::new();
+            while let Ok(frame) = ws.read() {
+                let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                calls.push(value.clone());
+                let Some(id) = value.get("id") else { continue };
+                let method = value["method"].as_str().unwrap();
+                let result = match method {
+                    "initialize" => json!({"userAgent":"fixture"}),
+                    "thread/read" => {
+                        json!({"thread":{"id":"owned-thread","status":{"type":"idle"}}})
+                    }
+                    "thread/queue/add" => {
+                        json!({"queuedSubmission":{"id":"owned-queue","clientUserMessageId":"after-interrupt"}})
+                    }
+                    "thread/queue/start" => {
+                        if let Some(error) = &start_error {
+                            if !error.is_null() {
+                                ws.send(tungstenite::Message::Text(
+                                    json!({"id":id,"error":error}).to_string().into(),
+                                ))
+                                .unwrap();
+                            }
+                            break;
+                        }
+                        json!({"turn":{"id":"after-interrupt-turn","status":"inProgress"}})
+                    }
+                    other => panic!("unexpected native operation {other}"),
+                };
+                ws.send(tungstenite::Message::Text(
+                    json!({"id":id,"result":result}).to_string().into(),
+                ))
+                .unwrap();
+                if method == "thread/queue/start" {
+                    break;
+                }
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+            calls
+        });
+        (path, handle)
+    }
+
+    #[test]
+    fn codex_native_paused_queue_starts_only_the_receipted_submission() {
+        let (path, server) = queued_server(None);
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        let result = rpc.prompt(
+            "owned-thread",
+            "after interrupt",
+            false,
+            "after-interrupt",
+            None,
+        );
+        drop(rpc);
+        let calls = server.join().unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
+        assert_eq!(
+            calls.last().unwrap()["params"],
+            json!({"threadId":"owned-thread","queuedSubmissionId":"owned-queue"})
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|v| v["method"] == "thread/queue/add")
+                .count(),
+            1
+        );
+        assert!(!calls.iter().any(|v| v["method"] == "turn/start"));
+    }
+
+    #[test]
+    fn codex_native_auto_consumed_queue_is_never_reenqueued() {
+        let (path, server) = queued_server(Some(
+            json!({"code":-32600,"message":"queued submission not found: owned-queue"}),
+        ));
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        let result = rpc.prompt(
+            "owned-thread",
+            "after interrupt",
+            false,
+            "after-interrupt",
+            None,
+        );
+        drop(rpc);
+        let calls = server.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "admitted queue item may already be consumed: {result:?}"
+        );
+        assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|v| v["method"] == "thread/queue/add")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn codex_native_queue_wakeup_failure_keeps_the_existing_admission_uncertain() {
+        for failure in [
+            Value::Null,
+            json!({"code":-32000,"message":"unavailable"}),
+            json!({"code":-32600,"message":"thread already has an active or pending turn"}),
+        ] {
+            let (path, server) = queued_server(Some(failure));
+            let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+            let result = rpc.prompt(
+                "owned-thread",
+                "after interrupt",
+                false,
+                "after-interrupt",
+                None,
+            );
+            drop(rpc);
+            let calls = server.join().unwrap();
+            let error = result
+                .expect_err("lost/rejected wakeup must not claim success or replay admitted input");
+            assert_ne!(error.kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|v| v["method"] == "thread/queue/add")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|v| v["method"] == "thread/queue/start")
+                    .count(),
+                1
+            );
+        }
     }
 }
