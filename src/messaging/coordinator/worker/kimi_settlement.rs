@@ -1,5 +1,5 @@
 //! Read Kimi terminal evidence before settling a request.
-use super::{AgentId, BusState, Path, RuntimeStatus};
+use super::{AgentId, BusState, Path};
 
 pub(super) fn state_provider_is_kimi(state: &BusState, agent: AgentId) -> bool {
     state
@@ -14,14 +14,6 @@ pub(super) fn recorded_kimi_end(
     state: &mut BusState,
     agent: AgentId,
 ) -> Result<Option<crate::messaging::model::RecordedTurnEnd>, String> {
-    if !state.agent(agent).is_some_and(|owner| {
-        matches!(
-            owner.status,
-            RuntimeStatus::Idle | RuntimeStatus::Unavailable
-        )
-    }) {
-        return Ok(None);
-    }
     committed_kimi_end(data_dir, state, agent)
 }
 

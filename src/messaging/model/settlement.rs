@@ -389,8 +389,8 @@ impl BusState {
         )
     }
 
-    /// Kimi's idle frame is not a turn boundary. Close only after an owned
-    /// terminal wire record, or a confirmed process exit with its grace window.
+    /// An owned Kimi wire commit ends the turn even while its screen still
+    /// looks busy or blocked. Process exit without a commit keeps its grace.
     fn settle_kimi_ended_request(
         &mut self,
         agent: AgentId,
@@ -398,14 +398,7 @@ impl BusState {
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
-        if owner.dialog
-            || owner.deletion_pending
-            || owner.session_binding_invalidated
-            || !matches!(
-                owner.status,
-                RuntimeStatus::Idle | RuntimeStatus::Unavailable
-            )
-        {
+        if owner.dialog || owner.deletion_pending || owner.session_binding_invalidated {
             return None;
         }
         let request = self.requests.get(&owner.current_request?)?;

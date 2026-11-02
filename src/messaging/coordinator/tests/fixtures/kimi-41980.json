@@ -1,0 +1,72 @@
+{
+  "source": {
+    "message_id": 41980,
+    "request_id": 41981,
+    "lead_request_id": 41564,
+    "native_lines": [
+      8,
+      1579,
+      1582,
+      1994
+    ],
+    "delivery_start": "2026-11-02T17:33:07.756555Z",
+    "delivery_result": "2026-11-02T17:33:11.093248Z",
+    "outcome": "uncertain",
+    "detail": "Kimi submission may have run; inspect the transcript before resending"
+  },
+  "followup": "I narrowed the lint change to the two #313-owned fields in our new queue_prompt_submission wrapper: expected_turn_id + native_only become one NativePromptOptions value. Steer and every shared queue_prompt_input/prepare/submission-policy hunk stay untouched. Those native fields are already covered by the original C1 grant (41143); the broader three-field grouping is no longer needed.",
+  "wire": [
+    {
+      "type": "turn.prompt",
+      "agentId": "main",
+      "origin": {
+        "kind": "user"
+      },
+      "promptId": "msg_01M6EE6QFF52VK57DTGQ57BFRM",
+      "turnId": 0,
+      "time": 1793633508889,
+      "input": [
+        {
+          "type": "text",
+          "text": "Bus task"
+        }
+      ]
+    },
+    {
+      "type": "turn.ended",
+      "agentId": "main",
+      "turnId": 0,
+      "reason": "failed",
+      "error": {
+        "code": "provider.api_error",
+        "message": "429 You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota",
+        "name": "APIProviderQuotaExhaustedError",
+        "details": {
+          "statusCode": 429,
+          "requestId": null,
+          "traceId": "ee0dfb73643f4297514d6af31906ad7f"
+        },
+        "retryable": false
+      },
+      "durationMs": 6574918,
+      "traceId": "ee0dfb73643f4297514d6af31906ad7f",
+      "time": 1793640083807
+    },
+    {
+      "type": "prompt.completed",
+      "agentId": "main",
+      "promptId": "msg_01M6EE6QFF52VK57DTGQ57BFRM",
+      "finishedAt": "2026-11-02T17:21:23.810Z",
+      "reason": "failed",
+      "time": 1793640083810
+    },
+    {
+      "turnId": 0,
+      "outcome": "failed",
+      "errorMessage": "[object Object]",
+      "type": "agent.turn.ended",
+      "time": 1793640083796,
+      "kind": "event"
+    }
+  ]
+}
