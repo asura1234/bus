@@ -92,9 +92,11 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertIn("agent read AGENT --source visible", guide)
         self.assertIn("agent read AGENT --source recent --lines N", guide)
         self.assertNotIn("returns up to 400 recent lines", guide)
-        self.assertIn("agent dialog AGENT", guide)
-        self.assertIn("agent choose AGENT --option N", guide)
-        self.assertIn("--fingerprint FINGERPRINT", guide)
+        self.assertIn("agent observe AGENT", guide)
+        self.assertIn("agent press AGENT --select", guide)
+        self.assertIn("--terminal-id", guide)
+        self.assertNotIn("agent choose", guide)
+        self.assertNotIn("--fingerprint", guide)
         self.assertNotIn("approve-once", guide)
         self.assertIn("request recover REQUEST_ID --confirm", guide)
         self.assertNotIn("agent orchestrate", guide)
@@ -203,8 +205,9 @@ def installed(*commands):
 
 
 def dialog(text, *labels):
-    return {"text": text, "options": [{"number": n, "label": label, "selected": n == 1}
-                                      for n, label in enumerate(labels, 1)]}
+    return {"text": text + "\n" + "\n".join(
+        ("❯ " if n == 1 else "  ") + f"{n}. {label}" for n, label in enumerate(labels, 1)),
+        "focus": [1, labels[0]], "terminal_id": "terminal-fixture", "content_revision": 6}
 
 
 class EndToEndArgumentTests(unittest.TestCase):
@@ -298,22 +301,122 @@ class EndToEndEnvironmentTests(unittest.TestCase):
 
 
 class EndToEndDialogTests(unittest.TestCase):
+    def test_dialog_answer_uses_driver_selection_bound_to_observed_terminal(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames = {}
+        run.agents = {"claude": 3}
+        run.lock = __import__("threading").Lock()
+        run.report = {"dialogs": []}
+        observed = {"terminal_id": "terminal-3", "pane_id": "w1:p2",
+                    "text": "Accessing workspace:\n❯ 1. No, exit\n  2. Yes, I trust this folder\nEnter to select · Esc to cancel",
+                    "focus": [1, "No, exit"], "content_revision": 2}
+        calls = []
+
+        def cli(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                self.assertEqual(args, ("agent", "observe", 3))
+                return observed
+            self.assertEqual(args, ("agent", "press", 3, "--select", "Yes, I trust this folder",
+                                    "--terminal-id", "terminal-3"))
+            return {"outcome": "selected", "keys": ["down", "enter"],
+                    "selection_pending": False, "observation": observed}
+
+        run.bus = mock.Mock(cli=cli)
+        self.assertTrue(run.answer_dialogs("claude", "trust"))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(run.report["dialogs"][0]["label"], "Yes, I trust this folder")
+
+    def test_answered_frame_is_not_confirmed_again_before_redraw(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames = {}
+        run.agents = {"codex": 3}
+        run.lock = __import__("threading").Lock()
+        run.report = {"dialogs": []}
+        observed = dialog("Would you like to run the following command?", "Yes, proceed (y)", "No (esc)")
+        calls = []
+
+        def cli(*args, **kwargs):
+            calls.append(args)
+            return observed if args[1] == "observe" else {"outcome": "selected", "selection_pending": False}
+
+        run.bus = mock.Mock(cli=cli)
+        self.assertTrue(run.answer_dialogs("codex", "allow"))
+        self.assertFalse(run.answer_dialogs("codex", "allow"))
+        self.assertEqual([call[1] for call in calls], ["observe", "press", "observe"])
+
+    def test_pending_driver_selection_fails_without_resending(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames = {}
+        run.agents = {"codex": 3}
+        run.lock = __import__("threading").Lock()
+        run.report = {"dialogs": []}
+        observed = dialog("Would you like to run the following command?", "Yes, proceed (y)", "No (esc)")
+        calls = []
+
+        def cli(*args, **kwargs):
+            calls.append(args)
+            return observed if args[1] == "observe" else {"outcome": "selection_pending", "keys": ["down"]}
+
+        run.bus = mock.Mock(cli=cli)
+        with self.assertRaisesRegex(AssertionError, "inspect before continuing"):
+            run.answer_dialogs("codex", "allow")
+        self.assertEqual([call[1] for call in calls], ["observe", "press"])
+
+    def test_fake_card_driver_preserves_uncertain_receipt_without_retry(self):
+        from tools.acceptance.grok_fake import Run
+        run = Run.__new__(Run)
+        calls = []
+
+        def cli(*args):
+            calls.append(args)
+            return {"outcome": "unknown", "keys": ["1"], "reason": "lost reply"}
+
+        run.cli = cli
+        with self.assertRaisesRegex(AssertionError, "without replaying"):
+            run.driver_action(9, {"terminal_id": "fixture-terminal"}, "--key", "1")
+        self.assertEqual(calls, [("agent", "press", 9, "--terminal-id", "fixture-terminal", "--key", "1")])
+
+    def test_idle_observation_enqueues_no_input(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames = {}
+        run.agents = {"claude": 3}
+        run.bus = mock.Mock()
+        run.bus.cli.return_value = {"text": "> An editable composer", "focus": None}
+        self.assertFalse(run.answer_dialogs("claude", "trust"))
+        run.bus.cli.assert_called_once_with("agent", "observe", 3, row=None)
+
+    def test_unnumbered_trust_menu_can_choose_the_unfocused_label(self):
+        observation = {"text": "Trust this directory?\n  Trust and continue\n● Exit\n↑↓ navigate · Enter select · Esc exit",
+                       "focus": [2, "Exit"]}
+        self.assertEqual(e2e.pick_option(observation, "trust"), "Trust and continue")
+
+    def test_trust_shortcut_label_stays_literal_for_the_driver(self):
+        observation = {"text": "Workspace Trust Required\n  [a] Trust this workspace\n> [q] Quit\nEnter to select",
+                       "focus": [2, "[q] Quit"]}
+        self.assertEqual(e2e.pick_option(observation, "trust"), "[a] Trust this workspace")
+
+    def test_ambiguous_permission_labels_are_rejected(self):
+        observed = dialog("Would you like to run the following command?", "Yes, proceed", "Approve once")
+        with self.assertRaisesRegex(AssertionError, "ambiguous"):
+            e2e.pick_option(observed, "allow")
+
     def test_trust_prompts_are_accepted_and_update_prompts_skipped(self):
         claude = dialog("Accessing workspace:", "No, exit", "Yes, I trust this folder")
-        self.assertEqual(e2e.pick_option(claude, "trust"), 2)
+        self.assertEqual(e2e.pick_option(claude, "trust"), "Yes, I trust this folder")
         self.assertEqual(e2e.pick_option(dialog("Do you trust this directory?", "Yes, continue", "No, quit"),
-                                         "trust"), 1)
+                                         "trust"), "Yes, continue")
         update = dialog("Update available · 0.1 -> 0.2", "Update now (runs `npm install -g @openai/codex`)",
                         "Skip", "Skip until next version")
-        self.assertEqual(e2e.pick_option(update, "trust"), 2)
-        self.assertEqual(e2e.pick_option(update, "allow"), 2)
+        self.assertEqual(e2e.pick_option(update, "trust"), "Skip")
+        self.assertEqual(e2e.pick_option(update, "allow"), "Skip")
 
     def test_permission_prompts_are_allowed_once_never_always(self):
         codex = dialog("Would you like to run the following command?",
                        "Yes, and don't ask again for this command (p)", "Yes, proceed (y)", "No (esc)")
-        self.assertEqual(e2e.pick_option(codex, "allow"), 2)
+        self.assertEqual(e2e.pick_option(codex, "allow"), "Yes, proceed (y)")
         question = dialog("Continue the Bus e2e check?", "Yes Continue the check", "No Stop", "Type something.")
-        self.assertEqual(e2e.pick_option(question, "allow"), 1)
+        self.assertEqual(e2e.pick_option(question, "allow"), "Yes Continue the check")
 
     def test_unexpected_dialogs_fail_instead_of_guessing(self):
         for purpose in ("trust", "allow"):
@@ -365,6 +468,7 @@ class EndToEndReportTests(unittest.TestCase):
 
     def test_settle_answers_dialogs_and_keeps_the_last_status(self):
         run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames = {}
         run.args = mock.Mock(timeout=30)
         run.agents = {"claude": 3}
         statuses = iter([{"complete": False, "waiting_on_dialog": [3], "requests": []},

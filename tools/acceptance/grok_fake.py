@@ -18,7 +18,7 @@ import tempfile
 import time
 import uuid
 
-from tools.acceptance.harness_test import Bus, CliError
+from tools.acceptance.harness_test import Bus
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -112,15 +112,11 @@ class Run:
             args += ["--queue"]
         return self.cli(*args)["message_id"]
 
-    def dialog_action(self, *args):
-        try:
-            return self.cli(*args)
-        except CliError as error:
-            if "Dialog answer outcome is uncertain" not in str(error):
-                raise
-            # Never repeat an uncertain keypress. Settlement below supplies
-            # evidence that this scripted answer was actually accepted.
-            return {"outcome": "uncertain", "error": str(error), "retried": False}
+    def driver_action(self, agent, observation, *inputs):
+        result = self.cli("agent", "press", agent, "--terminal-id", observation["terminal_id"], *inputs)
+        assert result.get("outcome") in ("sent", "selected") and not result.get("selection_pending"), \
+            f"driver input is pending or uncertain; inspect it without replaying: {result}"
+        return result
 
     def settle(self, message, success=True):
         status = poll(lambda: self.cli("message", "status", message), lambda s: s["complete"])
@@ -187,11 +183,18 @@ class Run:
             records = []
             for prompt, skip in (("fake:question", False), ("fake:free-text", True)):
                 message = self.send(self.room, self.worker, prompt)
-                found = poll(lambda: self.cli("agent", "dialog", self.worker), lambda r: r.get("dialog"))
+                found = poll(lambda: self.cli("agent", "observe", self.worker),
+                             lambda r: "◆ Choose an answer" in r["text"])
                 if skip:
-                    outcome = self.dialog_action("agent", "answer", self.worker, "--skip", "--fingerprint", found["fingerprint"])
+                    assert "Enter:submit" in found["text"], found
+                    back = self.driver_action(self.worker, found, "--key", "esc")
+                    chooser = poll(lambda: self.cli("agent", "observe", self.worker),
+                                   lambda r: "Shift+x:dismiss" in r["text"])
+                    outcome = {"back": back, "dismiss": self.driver_action(
+                        self.worker, chooser, "--key", "shift+x")}
                 else:
-                    outcome = self.dialog_action("agent", "choose", self.worker, "--option", 1, "--fingerprint", found["fingerprint"])
+                    assert "1/2:select" in found["text"], found
+                    outcome = self.driver_action(self.worker, found, "--key", "1")
                 records.append({"observed": found, "answer": outcome, "settled": self.settle(message)})
             return records
         self.case("question-and-dismissal", dialogs)
@@ -260,10 +263,11 @@ class Run:
         def blocker():
             self.peer = self.add(self.joint, "grok-peer")
             job = self.send(self.joint, self.peer, "fake:question fake:raw-reply BLOCKER_RESOLVED", author=self.orch)
-            found = poll(lambda: self.cli("agent", "dialog", self.peer), lambda r: r.get("dialog"))
+            found = poll(lambda: self.cli("agent", "observe", self.peer),
+                         lambda r: "◆ Choose an answer" in r["text"] and "1/2:select" in r["text"])
             notice = poll(lambda: self.cli("agent", "read", self.orch, "--source", "recent", "--lines", 200),
                           lambda r: "Blocked, needs help to continue." in r.get("text", ""))
-            outcome = self.dialog_action("agent", "choose", self.peer, "--option", 1, "--fingerprint", found["fingerprint"])
+            outcome = self.driver_action(self.peer, found, "--key", "1")
             settled = self.settle(job)
             resolved = self.stable_publication(self.joint, self.orch, "BLOCKER_RESOLVED")
             return {"blocker_wake": notice, "scripted_orchestrator_answer": outcome, "settled": settled, "resolved": resolved}

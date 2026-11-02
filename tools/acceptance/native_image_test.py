@@ -139,18 +139,23 @@ def scenario(binary, codex, root, kinds):
         bus.cli("agent", "add", "--room", "bus", "--name", "image-worker", "--provider", "codex",
                 "--pwd", str(root / "work"), "--consent-hooks")
 
+        hook_reviewed = False
+
         def ready():
+            nonlocal hook_reviewed
             agent = next(a for a in bus.cli("state")["agents"] if a["name"] == "image-worker")
             if agent["status"] == "idle":
                 native = bus.native_agent(agent["runtime_identity"]["pane_id"])
                 if native and native.get("native_ready") and native.get("interactive_ready"):
                     return agent
-            screen = bus.cli("agent", "read", "image-worker", "--source", "visible")
-            if "Hooks need review" in screen.get("text", ""):
-                dialog = bus.cli("agent", "dialog", "image-worker")
-                evidence.setdefault("hook_reviews", []).append(dialog)
-                bus.cli("agent", "choose", "image-worker", "--option", "2",
-                        "--fingerprint", dialog["fingerprint"])
+            screen = bus.cli("agent", "observe", "image-worker")
+            if "Hooks need review" in screen.get("text", "") and not hook_reviewed:
+                evidence.setdefault("hook_reviews", []).append(screen)
+                selected = bus.cli("agent", "press", "image-worker", "--select", "Trust all and continue",
+                                   "--terminal-id", screen["terminal_id"])
+                evidence.setdefault("hook_review_inputs", []).append(selected)
+                assert selected.get("outcome") == "selected" and not selected.get("selection_pending"), selected
+                hook_reviewed = True
             return None
 
         agent = until(ready)

@@ -275,16 +275,16 @@ printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$CARGO_TARGET_DIR/
             ["--dev", "agent", "read", "3", "--source", "recent", "--lines", "5000"],
         )
 
-    def test_dev_control_preserves_typed_dialog_cli_shape_without_raw_keys(self) -> None:
+    def test_dev_control_preserves_driver_selection_and_terminal_identity(self) -> None:
         result = self._run(
-            "dev-control", "agent", "choose", "3", "--option", "2", "--fingerprint", "d1.bound.digest"
+            "dev-control", "agent", "press", "3", "--select", "Yes, proceed", "--terminal-id", "terminal-3"
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.cargo_args.exists())
         self.assertEqual(
             self.bus_args.read_text(encoding="utf-8").splitlines(),
-            ["--dev", "agent", "choose", "3", "--option", "2", "--fingerprint", "d1.bound.digest"],
+            ["--dev", "agent", "press", "3", "--select", "Yes, proceed", "--terminal-id", "terminal-3"],
         )
         self.assertNotIn("send-keys", self.bus_args.read_text(encoding="utf-8"))
 

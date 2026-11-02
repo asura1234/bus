@@ -92,17 +92,16 @@ class GrokLoginNativeTest(unittest.TestCase):
                         "--consent-hooks")["agent_id"]
             deadline = time.monotonic() + 50
             while time.monotonic() < deadline:
-                dialog = cli("agent", "dialog", agent)
+                observation = cli("agent", "observe", agent)
                 row = next(a for a in cli("diagnostics")["agents"] if a["agent_id"] == agent)
-                if (dialog.get("dialog") and "Grok login required" in dialog["dialog"]["text"]
-                        and row["status"] == "blocked"):
+                if "Login with Grok" in observation["text"] and row["status"] == "blocked":
                     break
                 time.sleep(1)
             report["visible"] = cli("agent", "read", agent, "--source", "visible")
             report["native"] = bus.native_agent(f"bus-r{room}-a{agent}")
             self.assertEqual(row["status"], "blocked", "login did not become blocked; see " + str(root))
-            self.assertIsNotNone(dialog.get("dialog"), "no login dialog; see " + str(root))
-            self.assertIn("Grok login required", dialog["dialog"]["text"])
+            self.assertIn("Login with Grok", observation["text"], "no native login controls; see " + str(root))
+            self.assertEqual(observation["terminal_id"], report["native"]["terminal_id"])
             self.assertNotEqual(row.get("reason"), "session_hook_missing")
             message = cli("send", "--room", room, "--to", agent, "--text",
                           "Reply with GROK_LOGIN_QUEUED only.")["message_id"]
@@ -119,8 +118,8 @@ class GrokLoginNativeTest(unittest.TestCase):
                 time.sleep(2)
             report["final_status"] = status
             report["final_visible"] = cli("agent", "read", agent, "--source", "visible")
-            report["final_dialog"] = cli("agent", "dialog", agent)
-            self.assertIn("Grok login required", report["final_dialog"]["dialog"]["text"])
+            report["final_observation"] = cli("agent", "observe", agent)
+            self.assertIn("Login with Grok", report["final_observation"]["text"])
             report["history"] = cli("history", "--room", room, "--limit", 30)
         finally:
             report["cleanup"] = bus.stop()

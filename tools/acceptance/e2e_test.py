@@ -6,7 +6,7 @@ drives it only through the dev CLI, and shuts it down at the end. Agents work in
 a scratch git repository under temp/e2e/workspace. Spends real model usage, so
 --allow-live-models is required. Writes temp/e2e/<timestamp>/report.json.
 It launches Bus under /tmp/bus-e2e-* with a scratch repository, scrubs inherited
-environment, answers trust/update prompts through dialog commands, and quits/kills
+environment, answers visible trust/update prompts through the shared terminal driver, and quits/kills
 its own run at end; --keep retains data. Cases cover
 single/queued/multi/background/dialog, orchestrator/adoption/resume; unsupported
 cases SKIP with reasons. Background is Claude-only; auto-approved dialogs (e.g.
@@ -111,22 +111,48 @@ def short_data_dir():
     return Path(tempfile.mkdtemp(prefix="bus-e2e-", dir="/tmp")).resolve()
 
 
-def pick_option(dialog, purpose):
-    """Choose a dialog option, or raise for a dialog this test does not expect.
+def visible_option_labels(observation):
+    """Normalize visible rows for this test's explicit answer policy.
 
-    Update prompts are skipped (never install anything); folder trust is
-    accepted; permission prompts are allowed once, never "always".
+    The production driver resolves menu scope, focus and navigation. The test
+    only identifies an authorized literal row; it never invents an option
+    number or sends arrows itself. Ambiguous candidates are rejected below.
     """
-    options = dialog["options"]
-    labels = {option["number"]: option["label"].strip() for option in options}
-    if re.search(r"update available|new version", dialog.get("text") or "", re.I):
-        wanted = [n for n, label in labels.items() if re.fullmatch(r"skip", label, re.I)]
+    labels = []
+    for row in observation["text"].splitlines():
+        body = row.strip().strip("│┃║").strip()
+        if body.startswith(("❯", "›", ">", "●", "◉", "▶", "→")):
+            body = body[1:].lstrip()
+        numbered = re.match(r"^\d+[.):]\s+(.+)$", body)
+        if numbered:
+            body = numbered[1]
+        if body and not body.endswith(("?", ":")):
+            labels.append(body)
+    return labels
+
+
+def pick_option(observation, purpose):
+    """Select one authorized complete visible label, or reject the screen.
+
+    Folder trust is accepted and command permission is allowed once. An update
+    encountered naturally may only be skipped; this runner never triggers one.
+    """
+    text = observation["text"]
+    labels = visible_option_labels(observation)
+    if re.search(r"update available|new version", text, re.I):
+        wanted = [label for label in labels if re.fullmatch(r"skip", label, re.I)]
     else:
+        expected = (r"trust|accessing workspace" if purpose == "trust" else
+                    r"permission|run (?:the following |this )?command|approve|allow|continue the bus e2e check")
+        if not re.search(expected, text, re.I):
+            raise AssertionError(f"unexpected {purpose} screen: {observation}")
         accept = r"(yes|trust|continue)\b" if purpose == "trust" else r"(yes|allow|run|proceed|approve)\b"
         deny = re.compile(r"\bno\b|always|don.t ask|session|every|skip|exit|update|install", re.I)
-        wanted = [n for n, label in labels.items() if re.match(accept, label, re.I) and not deny.search(label)]
-    if not wanted:
-        raise AssertionError(f"unexpected {purpose} dialog: {dialog}")
+        wanted = [label for label in labels
+                  if re.match(accept, re.sub(r"^\[[ xX✓A-Za-z]\]\s*", "", label), re.I)
+                  and not deny.search(label)]
+    if len(wanted) != 1:
+        raise AssertionError(f"unexpected or ambiguous {purpose} screen: {observation}")
     return wanted[0]
 
 
@@ -247,6 +273,7 @@ class Run:
                        "providers": args.providers, "cases": args.cases, "versions": {},
                        "setup": {}, "dialogs": [], "rows": self.rows}
         self.bus = Bus(self.binary, self.run_dir, self.env)
+        self.answered_frames = {}  # agent -> exact completed observation already answered
         self.agents = {}  # provider, or orchestrator_key(provider) -> agent id
         self.sessions = {}  # same keys -> last provider session id
         self.orchestrated = {}  # provider -> the work room its MASTER orchestrator orchestrates
@@ -272,20 +299,27 @@ class Run:
 
     def answer_dialogs(self, provider, purpose, row=None):
         agent = self.agents[provider]
-        found = self.bus.cli("agent", "dialog", agent, row=row)
-        if not found.get("dialog"):
+        found = self.bus.cli("agent", "observe", agent, row=row)
+        if not found.get("focus"):
+            self.answered_frames.pop(agent, None)
             return False
-        option = pick_option(found["dialog"], purpose)
-        result = self.bus.cli("agent", "choose", agent, "--option", option, "--fingerprint",
-                              found["fingerprint"], row=row)
+        frame = (found["terminal_id"], found["content_revision"])
+        if self.answered_frames.get(agent) == frame:
+            return False
+        label = pick_option(found, purpose)
+        result = self.bus.cli("agent", "press", agent, "--select", label, "--terminal-id",
+                              found["terminal_id"], row=row)
         with self.lock:
-            self.report["dialogs"].append({"provider": provider, "purpose": purpose, "dialog": found["dialog"],
-                                           "option": option, "outcome": result.get("outcome")})
+            self.report["dialogs"].append({"provider": provider, "purpose": purpose,
+                                           "observation": found, "label": label, "result": result})
+        assert result.get("outcome") == "selected" and not result.get("selection_pending"), \
+            f"driver selection did not complete; inspect before continuing: {result}"
+        self.answered_frames[agent] = frame
         return True
 
     def screen(self, provider):
         try:
-            return self.bus.cli("agent", "read", self.agents[provider], "--source", "visible")["text"]
+            return self.bus.cli("agent", "observe", self.agents[provider])["text"]
         except Exception as error:
             return f"unreadable: {error}"
 

@@ -77,7 +77,7 @@ root, acceptance_existing_instance, or the real installed Grok alias.
 | Grok orchestrator / Claude worker | Bootstrap, ordinary authored send (no --async), return idle, durable reply wakes Grok | Record in the hash-bound run report |
 | Three queued prompts | Ordered distinct requests/turns/replies, no loss | Record in the hash-bound run report |
 | Steering | New message joins intended active turn; same final for both requests | Record in the hash-bound run report |
-| Dialog choose / free text | Observe card, answer once with fresh fingerprint; changed scope/parked focus rejects stale input | Record in the hash-bound run report |
+| Dialog selection / free text | Observe the full card, then use press with its visible label, documented key or text+submit; bind terminal identity and inspect pending/uncertain results before continuing | Record in the hash-bound run report |
 | Gate / error / cancel / partial JSONL | No provisional/clipped/error text published as successful final | Record in the hash-bound run report |
 | Long final | Exact 40,000-character transcript result, no silent clipping | Record in the hash-bound run report |
 | MASTER follow-up while worker runs | Earlier MASTER reply remains immutable; later worker result cannot replace it | Record in the hash-bound run report |

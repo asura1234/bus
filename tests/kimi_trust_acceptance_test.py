@@ -79,7 +79,7 @@ def isolated_environment(root):
     # Construct from an allowlist: no live BUS_SOCKET or inherited HERDR_*.
     return {
         "HOME": str(Path.home()),
-        "PATH": f"{root / 'bin'}:/usr/bin:/bin",
+        "PATH": f"{root / 'bin'}:{Path.home() / '.kimi-code/bin'}:/usr/bin:/bin",
         "TERM": "xterm-256color",
         "LANG": "en_US.UTF-8",
         "SHELL": "/bin/zsh",
@@ -108,7 +108,7 @@ class KimiFolderTrustAcceptance(unittest.TestCase):
         shutil.copy2(binary, root / "bin/bus")
         self.assertEqual(hashlib.sha256(binary.read_bytes()).digest(),
                          hashlib.sha256((root / "bin/bus").read_bytes()).digest())
-        for path in [root / "bin", Path("/usr/bin"), Path("/bin")]:
+        for path in [root / "bin", Path.home() / ".kimi-code/bin", Path("/usr/bin"), Path("/bin")]:
             self.assertFalse(os.access(path / "lark-cli", os.X_OK))
         env = isolated_environment(root)
         self.assertEqual(env["HOME"], "/Users/dylanliu")
@@ -134,15 +134,13 @@ class KimiFolderTrustAcceptance(unittest.TestCase):
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 terminal.pump()
-                dialog = control("agent", "dialog", agent)
-                visible = control("agent", "read", agent, "--source", "visible")
-                text = json.dumps(visible)
-                if "Trust this folder?" in json.dumps(dialog) or "No session yet" in text:
-                    save(agent + "-dialog", dialog)
-                    save(agent + "-visible", visible)
-                    self.assertEqual("Trust this folder?" in json.dumps(dialog), expect_trust,
+                observation = control("agent", "observe", agent)
+                text = observation["result"]["text"]
+                if "Trust this folder?" in text or "No session yet" in text:
+                    save(agent + "-observation", observation)
+                    self.assertEqual("Trust this folder?" in text, expect_trust,
                                      f"agent={agent}; evidence={root}")
-                    return dialog["result"]
+                    return observation["result"]
             self.fail(f"No trust chooser or native composer observed; evidence={root}")
 
         try:
@@ -175,11 +173,11 @@ class KimiFolderTrustAcceptance(unittest.TestCase):
                 return str(result["result"]["agent_id"])
 
             first = add("first-kimi")
-            dialog = observe(first, True)
-            option = next(o["number"] for o in dialog["dialog"]["options"]
-                          if "Trust and continue" in o["label"])
-            save("choose", control("agent", "choose", first, "--option", str(option),
-                                   "--fingerprint", dialog["fingerprint"]))
+            observation = observe(first, True)
+            selected = save("press", control("agent", "press", first, "--select", "Trust and continue",
+                                            "--terminal-id", observation["terminal_id"]))
+            self.assertEqual(selected["result"]["outcome"], "selected", selected)
+            self.assertFalse(selected["result"]["selection_pending"], selected)
             observe(first, False)
             second = add("second-kimi")
             observe(second, False)
