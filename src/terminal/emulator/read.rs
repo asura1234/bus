@@ -42,17 +42,17 @@ impl GhosttyPaneTerminal {
 
     /// The native screen, independent of the developer's scrollback viewport.
     /// Composer reads must share the coordinate system of the native cursor.
-    pub(crate) fn screen_ansi(&self) -> String {
+    pub(crate) fn active_ansi(&self) -> String {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_screen_ansi(&core).ok())
+            .and_then(|core| ghostty_active_ansi(&core).ok())
             .unwrap_or_default()
     }
 
     /// Check the synchronized-output mode and read the frame under one lock.
     /// A partially painted composer must never change draft ownership.
-    pub(crate) fn screen_ansi_if_complete(&self) -> Option<String> {
+    pub(crate) fn active_ansi_if_complete(&self) -> Option<String> {
         let core = self.core.lock().ok()?;
         if core
             .terminal
@@ -61,7 +61,7 @@ impl GhosttyPaneTerminal {
         {
             return None;
         }
-        ghostty_screen_ansi(&core).ok()
+        ghostty_active_ansi(&core).ok()
     }
 
     pub(crate) fn visible_ansi_unwrapped(&self) -> String {
@@ -180,17 +180,15 @@ fn ghostty_visible_ansi(
     )
 }
 
-fn ghostty_screen_ansi(core: &GhosttyPaneCore) -> Result<String, crate::terminal::vt::Error> {
+fn ghostty_active_ansi(core: &GhosttyPaneCore) -> Result<String, crate::terminal::vt::Error> {
     let rows = core.terminal.rows()?;
     let cols = core.terminal.cols()?;
     if rows == 0 || cols == 0 {
         return Ok(String::new());
     }
-    core.terminal.read_ansi_screen(
+    core.terminal.read_ansi_active(
         (0, 0),
         (cols.saturating_sub(1), u32::from(rows.saturating_sub(1))),
-        false,
-        false,
     )
 }
 

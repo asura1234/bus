@@ -43,7 +43,7 @@ impl ObservedSubmission {
                 return Err(error);
             }
         };
-        let screen = self.terminal.screen_ansi();
+        let screen = self.terminal.active_ansi();
         let cursor = self
             .terminal
             .cursor_state()
@@ -72,7 +72,7 @@ impl ObservedSubmission {
                 let result = self.run(text, delay, Some(lease), None);
                 if self
                     .inspect
-                    .native_draft_restored(&self.terminal.screen_ansi())
+                    .native_draft_restored(&self.terminal.active_ansi())
                     || matches!(
                         self.observe("input_replay_preflight"),
                         InputObservation::Empty | InputObservation::Accepted
@@ -98,7 +98,7 @@ impl ObservedSubmission {
             .content_lock
             .lock()
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        if self.terminal.screen_ansi() != screen {
+        if self.terminal.active_ansi() != screen {
             lease.restored();
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
@@ -198,7 +198,7 @@ impl ObservedSubmission {
                 self.observe("await_native_stash") == InputObservation::Empty
                     && self
                         .inspect
-                        .native_stash_visible(&self.terminal.screen_ansi()),
+                        .native_stash_visible(&self.terminal.active_ansi()),
             )
         }) {
             self.recovery_log(&exchange, &error);
@@ -210,14 +210,14 @@ impl ObservedSubmission {
         // restore only into an empty composer; never toggle over another draft.
         if !self
             .inspect
-            .native_draft_restored(&self.terminal.screen_ansi())
+            .native_draft_restored(&self.terminal.active_ansi())
             && self.observe("native_restore_preflight") == InputObservation::Empty
         {
             let restored = self.transfer_key(key).and_then(|()| {
                 self.wait_transfer(|| {
                     Ok(self
                         .inspect
-                        .native_draft_restored(&self.terminal.screen_ansi()))
+                        .native_draft_restored(&self.terminal.active_ansi()))
                 })
             });
             if let Err(error) = restored {
@@ -227,7 +227,7 @@ impl ObservedSubmission {
         }
         if self
             .inspect
-            .native_draft_restored(&self.terminal.screen_ansi())
+            .native_draft_restored(&self.terminal.active_ansi())
         {
             lease.restored();
             if let Err(error) = exchange.remove_recovery() {
@@ -255,7 +255,7 @@ impl ObservedSubmission {
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
         active: Option<&Exchange>,
     ) -> io::Result<bool> {
-        let Some(screen) = self.terminal.screen_ansi_if_complete() else {
+        let Some(screen) = self.terminal.active_ansi_if_complete() else {
             return Ok(false);
         };
         let Some(editor) = self.inspect.clipped_input_verification(&screen) else {
@@ -317,7 +317,7 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
         let screen = self
             .terminal
-            .screen_ansi_if_complete()
+            .active_ansi_if_complete()
             .ok_or_else(|| io::Error::other("Composer repaint is incomplete"))?;
         if !valid(&screen) {
             return Err(io::Error::other("Composer changed during editor transfer"));
@@ -370,7 +370,7 @@ impl ObservedSubmission {
             }
             Ok(self
                 .terminal
-                .screen_ansi_if_complete()
+                .active_ansi_if_complete()
                 .is_some_and(|screen| {
                     self.inspect
                         .restoration_marker_visible(&screen, exchange.marker())
@@ -391,7 +391,7 @@ impl ObservedSubmission {
                     "Developer input changed during editor transfer",
                 ));
             }
-            if let Some(screen) = self.terminal.screen_ansi_if_complete() {
+            if let Some(screen) = self.terminal.active_ansi_if_complete() {
                 if self.inspect.editor_frame_readable(&screen)
                     && !self
                         .inspect
@@ -476,7 +476,7 @@ impl ObservedSubmission {
                 self.inspect.editor_frame_unchanged(&verified, screen)
             })?;
             self.wait_transfer(|| {
-                if let Some(screen) = self.terminal.screen_ansi_if_complete() {
+                if let Some(screen) = self.terminal.active_ansi_if_complete() {
                     if screen != verified
                         && (self.inspect.observe(&screen) == InputObservation::Empty
                             || self.inspect.editor_working(&screen))
@@ -510,7 +510,7 @@ impl ObservedSubmission {
         self.wait_transfer(|| {
             Ok(self
                 .inspect
-                .restoration_marker_visible(&self.terminal.screen_ansi(), exchange.marker()))
+                .restoration_marker_visible(&self.terminal.active_ansi(), exchange.marker()))
         })?;
         let mut keys = Vec::with_capacity(backspace.len() * exchange.marker().len());
         for _ in exchange.marker().bytes() {
@@ -520,7 +520,7 @@ impl ObservedSubmission {
         self.wait_transfer(|| {
             Ok(!self
                 .inspect
-                .restoration_marker_visible(&self.terminal.screen_ansi(), exchange.marker()))
+                .restoration_marker_visible(&self.terminal.active_ansi(), exchange.marker()))
         })
     }
 
