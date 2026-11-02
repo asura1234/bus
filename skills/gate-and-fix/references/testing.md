@@ -27,8 +27,8 @@ narrowing in `scripts/suite_selection.py`.
 The classifier distinguishes first-party Python, Rust, documentation, and shared
 inputs. Its path rules, shared-file set, and conservative fallback are executable
 policy in that module. Shared inputs enable both languages. Unknown inputs,
-unparseable source graphs, and deleted sources whose old dependency edges are
-unavailable fail closed. The plan records reasons and prints
+unparseable source graphs, and deleted inputs (including documents) whose old
+dependency edges are unavailable fail closed. The plan records reasons and prints
 `SKIPPED (no Python/Rust changes vs BASE)` for ineligible lanes.
 
 Dependencies override a language skip. Python scripts consumed by Rust keep Rust
@@ -38,11 +38,14 @@ enabling Rust test, Clippy, instrumentation, or coverage lanes. A pure Rust test
 change skips Python when no Python test reads it. The existing binary-consumer
 detector follows source references conservatively and can select extra tests.
 
-Docs-only inputs skip both test lanes unless Rust consumes those resources.
+Existing docs-only inputs skip both test lanes unless Rust consumes those resources.
 Lint and the documentation contracts still run. The documentation contract suite
 and transitive Python tests that read changed documents run as documentation
 checks, separate from the Python test lane. Binary-dependent doc checks get the
-same explicit CLI prerequisite. Static architecture checks also remain. Lint keeps
+same explicit CLI prerequisite. Directory enumeration retains tests that scan a
+changed document's directory, including installed-bundle link checks. Deleted or renamed
+inputs fail closed to both languages because their old edges are unavailable.
+Static architecture checks also remain. Lint keeps
 formatting, Ruff, architecture, placement, file-length and import checks; Clippy
 follows Rust eligibility. The planner supplies its skip to the lint runner.
 
@@ -100,9 +103,11 @@ Each gate admits one test lane at a time, with at most **4 direct test workers**
 Rust nextest and libtest batches, including the diagnostic entrypoints, use that
 same cap. `NEXTEST_TEST_THREADS` accepts a positive integer capped at 4;
 `PYTEST_WORKERS` accepts a nonnegative integer capped at 4, with 0 selecting
-serial execution. Single-file Python, lint architecture and documentation checks
-run serially. Three concurrent gates therefore admit at most **12 direct test
-workers**. Controllers, fixture subprocesses and Cargo compiler jobs are separate
+serial execution. Single-file Python, lint architecture and the mandatory
+documentation contract task run serially. Dependent Python document readers use
+the same capped Python pool as other Python tests. Three concurrent gates
+therefore admit at most **12 direct test workers**. Controllers, fixture
+subprocesses and Cargo compiler jobs are separate
 from this direct-worker count. The executable limits and shared scheduler resource
 live in `scripts/suite_parallelism.py`; target ownership resources remain in place.
 No separate per-run Cargo target is created.

@@ -44,6 +44,7 @@ class References:
             self.paths = {path.relative_to(root).as_posix() for path in root.rglob('*') if path.is_file() or path.is_symlink()}
         self.edges: dict[str, set[str]] = defaultdict(set)
         self.prefixes: list[tuple[str, str]] = []
+        self.directories: list[tuple[str, str]] = []
         self.sources: dict[str, str] = {}
         self.uncertain = False
         engine = root if (root / 'tools/quality/placement.py').is_file() else Path(__file__).resolve().parents[3]
@@ -133,7 +134,9 @@ class References:
         if targets is None:
             self.uncertain = True
         else:
-            self.edges[name].update(targets)
+            edges, directories = targets
+            self.edges[name].update(edges)
+            self.directories.extend((name, directory) for directory in directories)
 
     @staticmethod
     def resource_input(name: str, prefix: str) -> bool:
@@ -164,6 +167,9 @@ class References:
     def incoming(self, name: str) -> set[str]:
         return {source for source, targets in self.edges.items() if name in targets} | {
             source for source, prefix in self.prefixes if self.resource_input(name, prefix)
+        } | {
+            source for source, directory in self.directories
+            if directory == '.' or name == directory or name.startswith(directory + '/')
         }
 
     def cross_owner(self, name: str) -> bool:

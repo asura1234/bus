@@ -58,10 +58,10 @@ class Lanes:
 
 def classify(paths: list[str], references: References) -> Lanes:
     kinds = {kind(name) for name in paths}
-    # Deleted/renamed sources have lost their old graph edges. Do not infer
+    # Deleted/renamed inputs have lost their old graph edges. Do not infer
     # independence from absence, or from an index that could not parse a source.
     shared = "shared" in kinds or bool(paths and references.uncertain) or any(
-        kind(name) != "docs" and not (references.root / name).is_file() for name in paths
+        not (references.root / name).is_file() for name in paths
     )
     incoming = consumers(references, paths)
     rust = shared or "rust" in kinds or any(name.endswith(".rs") for name in incoming)

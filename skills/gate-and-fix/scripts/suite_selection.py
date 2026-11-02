@@ -34,7 +34,7 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
     for name in paths:
         if not name or PurePosixPath(name).is_absolute() or any(p in {"", ".", ".."} for p in name.split("/")):
             raise ValueError("paths must be normalized repository-relative paths")
-    if any(kind(name) == "shared" or (kind(name) != "docs" and not (root / name).is_file()) for name in paths):
+    if any(kind(name) == "shared" or not (root / name).is_file() for name in paths):
         return Selection(True, None, PYTHON, True, "shared/unknown input", coverage_floor,
                          True, "shared/unknown input", "shared/unknown input")
     references = References(root)

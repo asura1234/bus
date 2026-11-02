@@ -129,6 +129,39 @@ def test_docs_keep_transitive_document_contract_consumers_outside_python_lane(tm
     assert "python" not in gates
 
 
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("walk", ['glob("*.md")', 'rglob("*.md")', 'iterdir()'])
+def test_document_directory_readers_remain_document_checks(tmp_path, full, walk):
+    put(tmp_path, "docs/help.md", "Help\n")
+    put(tmp_path, "tools/doc_helper.py", 'from pathlib import Path\n'
+        f'PAGES=list((Path(__file__).parents[1]/"docs").{walk})\n')
+    put(tmp_path, "tools/doc_test.py", "from .doc_helper import PAGES\n")
+    put(tmp_path, "tools/unrelated_test.py", "def test_unrelated(): pass\n")
+    plan = select(["docs/help.md"], full=full, root=tmp_path)
+    assert not plan.python and plan.rust_filter == "none()"
+    assert plan.doc_tests == ("tools/doc_test.py",)
+    assert "tools/doc_test.py" in names(plan, tmp_path)["doc-consumers"].argv
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_deleted_document_fails_closed_for_lost_dependency_edges(tmp_path, full):
+    put(tmp_path, "tools/doc_test.py", 'from pathlib import Path\n'
+        'DOC=Path(__file__).parents[1]/"docs/removed.md"\n'
+        'def test_document_exists(): assert DOC.is_file()\n')
+    plan = select(["docs/removed.md"], full=full, root=tmp_path)
+    assert plan.python and plan.rust_filter is None and plan.dev_tools
+    assert plan.coverage_floor == full
+    gates = names(plan, tmp_path)
+    assert "tools/doc_test.py" in gates["python"].argv
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_shipped_guide_keeps_the_installed_bundle_link_contract(full):
+    root = Path(__file__).resolve().parents[4]
+    plan = select(["skills/gate-and-fix/guide.md"], full=full, root=root)
+    assert "tools/tests/installed_skills_recovery_test.py" in plan.doc_tests
+
+
 def test_plan_and_report_describe_skips_and_do_not_evaluate_coverage(tmp_path, capsys):
     put(tmp_path, "docs/testing.md", "Docs\n")
     with (patch.object(runner.quality, "ROOT", tmp_path),

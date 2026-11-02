@@ -39,12 +39,13 @@ def path_value(node, bindings):
     return None
 
 
-def python_edges(root: Path, name: str, source: str, paths: set[str]) -> set[str] | None:
+def python_edges(root: Path, name: str, source: str, paths: set[str]) -> tuple[set[str], set[str]] | None:
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
     edges: set[str] = set()
+    directories: set[str] = set()
     import_roots = {root, (root / name).parent}
     bindings = {'__file__': root / name}
     assignments = [node for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign))]
@@ -67,12 +68,16 @@ def python_edges(root: Path, name: str, source: str, paths: set[str]) -> set[str
         if bindings == prior:
             break
 
-    def record(value):
+    def record(value, *, directory=False):
         if isinstance(value, Path) and value.is_absolute():
             value = value.resolve()
             if value.is_relative_to(root):
                 relative = value.relative_to(root).as_posix()
-                if relative in paths and not value.is_dir():
+                if directory:
+                    # Directory enumeration also depends on additions/deletions;
+                    # no current-file edge can represent that contract.
+                    directories.add(relative)
+                elif relative in paths and not value.is_dir():
                     edges.add(relative)
 
     def local_names(function):
@@ -122,6 +127,8 @@ def python_edges(root: Path, name: str, source: str, paths: set[str]) -> set[str
                 directory = path_value(node.args[-1], values)
                 if isinstance(directory, Path) and directory.is_absolute() and directory.resolve().is_relative_to(root):
                     import_roots.add(directory.resolve())
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {'glob', 'rglob', 'iterdir'}:
+            record(path_value(node.func.value, values), directory=True)
         if isinstance(node, (ast.BinOp, ast.Call)):
             record(path_value(node, values))
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -134,4 +141,4 @@ def python_edges(root: Path, name: str, source: str, paths: set[str]) -> set[str
 
     for node in tree.body:
         visit(node, dict(bindings) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else bindings)
-    return edges
+    return edges, directories
