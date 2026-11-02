@@ -92,14 +92,21 @@ class FixtureSource:
                     self.functions.append((self.words[i + 1], i, self.scope(i), j, self.pairs[j], tuple(parameters)))
         self.reassignments = {}
         for i in range(1, len(self.words) - 1):
+            if not IDENT.fullmatch(self.words[i]):
+                continue
             # A simple local assignment begins a statement. Fields, declarations,
             # comparisons and compound operators are not local-variable writes.
-            if (IDENT.fullmatch(self.words[i]) and self.words[i - 1] in {"{", ";", "}"}
-                    and self.words[i + 1] == "="):
-                binding = self.binding(self.words[i], i)
-                if binding is not None and not binding[5]:
-                    self.reassignments.setdefault(binding[1], []).append(
-                        (i, self.scope(i), i + 2, self.statement_end(i + 2)))
+            if self.words[i - 1] in {"{", ";", "}"} and self.words[i + 1] == "=":
+                start, end, kind = i + 2, self.statement_end(i + 2), "assign"
+            elif (self.words[i - 1] not in {".", "::"}
+                  and self.words[i + 1:i + 4] == [".", "push", "("] and i + 3 in self.pairs):
+                start, end, kind = i + 4, self.pairs[i + 3], "push"
+            else:
+                continue
+            binding = self.binding(self.words[i], i)
+            if binding is not None and not binding[5]:
+                self.reassignments.setdefault(binding[1], []).append(
+                    (i, self.scope(i), start, end, kind))
         self.memo, self.active = {}, set()
         self.parameters = []
         self.parent_statics = set()
@@ -149,8 +156,10 @@ class FixtureSource:
         key = ("binding", binding[1], writes, tuple(self.parameters))
         def current_value():
             value = self.value(binding[3], binding[4])
-            for _, scope, start, end in writes:
+            for token, scope, start, end, kind in writes:
                 updated = self.value(start, end)
+                if kind == "push":
+                    updated = self.path_component(value, updated, token)
                 if scope == binding[2]:
                     value = updated
                 else:
@@ -198,14 +207,24 @@ class FixtureSource:
                 return frozenset({(token, 0)})
         return frozenset()
 
+    def path_component(self, parent, child, token):
+        self.effect(parent, "directory")
+        paths = frozenset((origin, depth + 1) for origin, depth in parent.paths)
+        if parent.temporary:
+            paths |= self.candidate(token, child)
+        temporary = parent.temporary or ("manifest" in parent.flags and child.literal == "temp")
+        return Value(parent.flags | child.flags, paths, temporary)
+
     def call(self, name, args, offset):
         leaf = name.split("::")[-1]
         value = combined(args)
         if name.endswith("process::id"):
             return Value(frozenset({"pid"}))
-        if leaf in {"now_ns", "now_ms", "now_us"} or name.endswith("SystemTime::now"):
+        if leaf in {"now_ns", "now_ms", "now_us"} or name.endswith(("SystemTime::now", "Instant::now")):
             return Value(frozenset({"clock"}))
         if name.endswith("env::temp_dir"):
+            return Value(temporary=True)
+        if name.endswith(("env::var", "env::var_os")) and value.literal == "TMPDIR":
             return Value(temporary=True)
         if leaf == "env" and value.literal == "CARGO_MANIFEST_DIR":
             return Value(frozenset({"manifest"}))
@@ -261,6 +280,9 @@ class FixtureSource:
                 close = self.pairs[j]
                 args = [self.value(a, b) for a, b in self.arguments(j + 1, close)]
                 value, j = self.call(name, args, start), close + 1
+            elif name == "UNIX_EPOCH" or name.endswith(("time::UNIX_EPOCH", "SystemTime::UNIX_EPOCH")):
+                # The constant itself is fixed; only elapsed() reads the clock.
+                value = Value(frozenset({"epoch"}))
             else:
                 value = self.local_value(word, start) if "::" not in receiver_name else Value()
         else:
@@ -271,16 +293,13 @@ class FixtureSource:
                 break
             close = self.pairs[opening]
             args = [self.value(a, b) for a, b in self.arguments(opening + 1, close)]
-            if method == "join" and args:
-                self.effect(value, "directory")
-                paths = frozenset((origin, depth + 1) for origin, depth in value.paths)
-                if value.temporary:
-                    paths |= self.candidate(start, args[0])
-                temporary = value.temporary or ("manifest" in value.flags and args[0].literal == "temp")
-                value = Value(value.flags | args[0].flags, paths, temporary)
+            if method in {"join", "push"} and args:
+                value = self.path_component(value, args[0], start)
             elif method == "parent":
                 value = Value(value.flags, frozenset((origin, depth - 1) for origin, depth in value.paths
                                                      if depth > 0), value.temporary)
+            elif method == "elapsed" and "epoch" in value.flags:
+                value = Value(value.flags | {"clock"}, value.paths, value.temporary, value.literal)
             elif method == "fetch_add":
                 binding = self.binding(receiver_name, start)
                 static = binding[5] if binding else receiver_name in self.parent_statics
@@ -328,7 +347,7 @@ def fixture_directory_violations(sources):
     # supply sequence provenance. Never search unrelated files by counter name.
     sources = {str(path).replace("\\", "/"): source for path, source in sources.items()}
     models = {path: FixtureSource(path, source) for path, source in sources.items()
-              if any(word in source for word in ("temp_dir", "/tmp", "CARGO_MANIFEST_DIR", "fetch_add"))
+              if any(word in source for word in ("temp_dir", "/tmp", "CARGO_MANIFEST_DIR", "TMPDIR", "fetch_add"))
               or ("static" in source and "Atomic" in source)}
     root = Path(__file__).resolve().parents[2]
     for path, parent in models.items():
@@ -373,6 +392,79 @@ fn make() {
     std::fs::create_dir_all(&root).unwrap();
 }'''
     assert len(fixture_directory_violations({"src/unit/tests/helpers_test.rs": source})) == 1
+
+
+def test_epoch_elapsed_clock_with_pid_directory_is_rejected():
+    source = ('fn test() { let root = std::env::temp_dir().join(format!("s-{}-{}", std::process::id(), '
+              'std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos())); std::fs::create_dir_all(&root).unwrap(); }')
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+def test_tmpdir_env_base_with_pid_clock_directory_is_rejected():
+    source = ('fn test() { let root = std::path::PathBuf::from(std::env::var("TMPDIR").unwrap())'
+              '.join(format!("s-{}-{}", std::process::id(), now_ns())); std::fs::create_dir_all(&root).unwrap(); }')
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+@pytest.mark.parametrize("imports, clock", (
+    ("", "std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap().as_nanos()"),
+    ("use std::time::UNIX_EPOCH as start;", "start.elapsed().unwrap().as_micros()"),
+    ("use std::time::Instant as Clock;", "Clock::now().elapsed().as_nanos()"),
+))
+def test_standard_elapsed_clocks_and_import_aliases_are_rejected(imports, clock):
+    source = imports + '''
+fn test() {
+    let origin = ''' + clock + ''';
+    let root = std::env::temp_dir().join(format!("sample-{}-{origin}", std::process::id()));
+    std::fs::create_dir_all(root);
+}'''
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+@pytest.mark.parametrize("imports, read", (
+    ("", 'std::env::var_os("TMPDIR")'),
+    ("use std::env::var as setting;", 'setting("TMPDIR")'),
+))
+def test_tmpdir_os_values_and_import_aliases_are_temporary_bases(imports, read):
+    source = imports + '''
+fn test() {
+    let base = PathBuf::from(''' + read + '''.unwrap());
+    let root = base.join(format!("sample-{}-{}", std::process::id(), now_ns()));
+    std::fs::create_dir_all(root);
+}'''
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+@pytest.mark.parametrize("consumer", (
+    'std::fs::write(&root, b"data");',
+    "UnixListener::bind(&root);",
+))
+def test_tmpdir_elapsed_paths_keep_proven_direct_file_and_socket_exclusions(consumer):
+    source = '''fn test() {
+    let root = PathBuf::from(std::env::var("TMPDIR").unwrap()).join(format!("sample-{}-{}",
+        std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+    ''' + consumer + "}"
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
+
+
+def test_tmpdir_elapsed_directory_keeps_static_sequence_protection():
+    source = '''static NEXT: AtomicU64 = AtomicU64::new(0);
+fn test() {
+    let root = PathBuf::from(std::env::var_os("TMPDIR").unwrap()).join(format!("sample-{}-{}-{}",
+        std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(root);
+}'''
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
+
+
+def test_epoch_constant_arithmetic_is_not_a_running_clock():
+    source = '''fn test() {
+    let zero = std::time::UNIX_EPOCH.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sample-{}-{zero}", std::process::id()));
+    std::fs::create_dir_all(root);
+}'''
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
 
 
 def test_helper_returned_directory_and_fixed_clock_callers_are_rejected():
@@ -598,6 +690,52 @@ def test_reassignment_rhs_reads_the_previous_value_of_its_binding():
     fs::create_dir_all(&root);
 }'''
     assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+def test_pathbuf_push_directory_requires_shared_sequence():
+    source = '''fn test() {
+    let mut root = std::env::temp_dir();
+    root.push(format!("sample-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&root).unwrap();
+}'''
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+@pytest.mark.parametrize("setup, consumer, expected", (
+    ("", 'std::fs::write(&root, b"data");', 0),
+    ("", "UnixListener::bind(&root);", 0),
+    ('root.push("child");', 'std::fs::write(&root, b"data");', 1),
+    ('let file = root.clone(); root.push("child");', 'std::fs::write(&file, b"data");', 1),
+    ('{ let root = PathBuf::from("/tmp/marker"); std::fs::write(root, b"data"); }',
+     'std::fs::create_dir_all(&root);', 1),
+))
+def test_pathbuf_push_preserves_directory_and_direct_file_roles(setup, consumer, expected):
+    source = '''fn test() {
+    let mut root = std::env::temp_dir();
+    root.push(format!("sample-{}-{}", std::process::id(), now_ns()));
+    ''' + setup + consumer + "}"
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == expected
+
+
+def test_pathbuf_push_keeps_static_sequence_protection():
+    source = '''static NEXT: AtomicU64 = AtomicU64::new(0);
+fn test() {
+    let mut root = PathBuf::from(std::env::var("TMPDIR").unwrap());
+    root.push(format!("sample-{}-{}-{}", std::process::id(), now_ns(),
+        NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(root);
+}'''
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
+
+
+def test_field_push_does_not_mutate_a_same_named_local_binding():
+    source = '''fn test() {
+    let mut root = std::env::temp_dir();
+    holder.root.push(format!("sample-{}-{}", std::process::id(), now_ns()));
+    std::fs::create_dir_all(root);
+}'''
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
 
 
 def test_repository_fixture_directories_use_independent_sequence_numbers():
