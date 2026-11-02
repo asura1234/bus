@@ -1,0 +1,7 @@
+ ✗ bash task failed in background (Watch post-second-restart locks and disk · exit -1)
+  🌒 · Tip: ! to run a shell command
+ ╭─────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                           │
+ ╰─────────────────────────────────────────────────────────────────────────────────────────────╯
+ Ask When Needed  K3.1 Pro thinking: high  ~/work/device-slots  ctrl+o expand | @: mention files
+                                                                          context: 55% (559k/1M)

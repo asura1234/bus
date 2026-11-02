@@ -386,7 +386,7 @@ pub(crate) fn resolve_turn(
 pub(crate) enum MainTurn {
     /// `turn.prompt` has no completed terminal chain yet.
     Open,
-    /// `agent.turn.ended`, `turn.ended`, and `prompt.completed` agree.
+    /// The main agent and outer turn ended; owned prompts also completed.
     Settled,
 }
 
@@ -586,7 +586,13 @@ fn main_turn_lines(
         if terminal_outcome(
             turn.agent.as_deref(),
             turn.turn_reason.as_deref(),
-            turn.prompt_reason.as_deref().unwrap_or(""),
+            if turn.prompt_id.is_some() {
+                turn.prompt_reason.as_deref().unwrap_or("")
+            } else {
+                // Autonomous/background notification turns have no prompt ID
+                // or prompt.completed. Their outer turn end is the boundary.
+                turn.turn_reason.as_deref().unwrap_or("")
+            },
             None,
             None,
         )
@@ -601,7 +607,7 @@ fn main_turn_lines(
 
 struct OpenTurn {
     turn_id: u64,
-    prompt_id: String,
+    prompt_id: Option<String>,
     agent: Option<String>,
     turn_reason: Option<String>,
     prompt_reason: Option<String>,
@@ -619,15 +625,14 @@ fn observe_main_turn(value: &Value, current: &mut Option<OpenTurn>) {
             let Some(turn_id) = value.get("turnId").and_then(Value::as_u64) else {
                 return;
             };
-            let Some(prompt_id) = value.get("promptId").and_then(Value::as_str) else {
-                return;
+            let prompt_id = match value.get("promptId") {
+                None => None,
+                Some(Value::String(id)) if !id.is_empty() => Some(id.to_owned()),
+                _ => return,
             };
-            if prompt_id.is_empty() {
-                return;
-            }
             *current = Some(OpenTurn {
                 turn_id,
-                prompt_id: prompt_id.to_owned(),
+                prompt_id,
                 agent: None,
                 turn_reason: None,
                 prompt_reason: None,
@@ -637,7 +642,15 @@ fn observe_main_turn(value: &Value, current: &mut Option<OpenTurn>) {
             let Some(turn) = current.as_mut() else {
                 return;
             };
-            if value.get("turnId").and_then(Value::as_u64) != Some(turn.turn_id) {
+            // This counts internal LLM/tool iterations, not outer turns.
+            // The main wire and current turn.prompt provide its scope.
+            if turn.turn_reason.is_some()
+                || value.get("turnId").and_then(Value::as_u64).is_none()
+                || value
+                    .get("agentId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id != "main")
+            {
                 return;
             }
             if let Some(outcome) = value.get("outcome").and_then(Value::as_str) {
@@ -663,7 +676,8 @@ fn observe_main_turn(value: &Value, current: &mut Option<OpenTurn>) {
                 return;
             };
             if value.get("agentId").and_then(Value::as_str) != Some("main")
-                || value.get("promptId").and_then(Value::as_str) != Some(turn.prompt_id.as_str())
+                || turn.prompt_id.is_none()
+                || value.get("promptId").and_then(Value::as_str) != turn.prompt_id.as_deref()
             {
                 return;
             }

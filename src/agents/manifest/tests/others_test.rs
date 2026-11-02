@@ -125,21 +125,13 @@ fn kimi_live_tracking_agents_running_footer_is_working() {
 }
 
 #[test]
-fn kimi_live_tracking_tasks_running_is_working() {
+fn kimi_live_tracking_tasks_running_is_idle() {
     let detection = kimi_detection(&kimi_frame(
         "Ask When Needed  K2.8 Preview thinking: max  [2 tasks running]",
     ));
-    assert_eq!(
-        detection.state,
-        AgentState::Working,
-        "matched {:?}",
-        detection.matched_rule.as_ref().map(|rule| rule.id.as_str())
-    );
-    assert!(detection.visible_working);
-    assert_eq!(
-        detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-        Some("footer_tasks_running_working")
-    );
+    assert_eq!(detection.state, AgentState::Idle);
+    assert!(detection.visible_idle);
+    assert!(!detection.visible_working);
 }
 
 #[test]
@@ -238,9 +230,9 @@ K3.1 Pro thinking: high  …/tmp/project  master\n\
 
     let tasks = kimi_frame("Ask When Needed  K2.8 Preview thinking: max  [1 task running]");
     assert!(!super::super::kimi_running_command_is_winner(&tasks));
-    let still_working = super::super::kimi_screen_without_running_command(&tasks);
-    assert_eq!(still_working.state, AgentState::Working);
-    assert!(still_working.visible_working);
+    let idle = super::super::kimi_screen_without_running_command(&tasks);
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
 }
 
 #[test]
@@ -276,7 +268,7 @@ fn kimi_idle_composer_with_command_phrase_in_finished_reply_stays_idle() {
 }
 
 #[test]
-fn kimi_tasks_running_footer_is_working() {
+fn kimi_tasks_running_footer_is_idle() {
     let loaded =
         bundled_loaded_manifest(AgentKind::Kimi, bundled_manifest(AgentKind::Kimi).unwrap());
     for tasks in ["[1 task running]", "[2 tasks running]"] {
@@ -291,11 +283,12 @@ fn kimi_tasks_running_footer_is_working() {
             },
             &loaded,
         );
-        assert_eq!(detection.state, AgentState::Working, "{tasks}");
-        assert!(detection.visible_working, "{tasks}");
+        assert_eq!(detection.state, AgentState::Idle, "{tasks}");
+        assert!(detection.visible_idle, "{tasks}");
+        assert!(!detection.visible_working, "{tasks}");
         assert_eq!(
             detection.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("footer_tasks_running_working"),
+            Some("current_empty_composer"),
             "{tasks}"
         );
     }

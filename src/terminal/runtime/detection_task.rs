@@ -763,8 +763,8 @@ impl DetectionTask {
     }
 }
 
-/// Resolve the command marker against native wire evidence, or its strict
-/// styled-header fallback. `None` means the remaining screen is a viewer.
+/// Resolve ambiguous command/tip markers against native main-turn evidence.
+/// `None` means the remaining screen is a viewer.
 pub(super) fn classify_kimi_command_screen(
     terminal: &PaneTerminal,
     home: Option<&std::path::Path>,
@@ -772,21 +772,32 @@ pub(super) fn classify_kimi_command_screen(
     content: &str,
     screen_detection: crate::agents::AgentDetection,
 ) -> Option<crate::agents::AgentDetection> {
-    if !crate::agents::manifest::kimi_running_command_is_winner(content) {
+    use crate::agents::manifest::KimiTurnMarker;
+    let Some(marker) = crate::agents::manifest::kimi_turn_marker(content) else {
         return Some(screen_detection);
-    }
+    };
     let turn = crate::agents::providers::kimi::activity::refresh_running_command_turn(home, cache);
-    let has_command_suffix =
-        crate::agents::providers::kimi::activity::running_command_has_command_suffix(content);
-    let ansi = turn.is_none().then(|| terminal.visible_ansi());
-    let line_is_bold = ansi
-        .as_deref()
-        .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
-    if crate::agents::providers::kimi::activity::running_command_text_is_live(
-        turn,
-        line_is_bold,
-        has_command_suffix,
-    ) {
+    let live = match marker {
+        KimiTurnMarker::Tip => {
+            turn != Some(crate::agents::providers::kimi::wire::MainTurn::Settled)
+        }
+        KimiTurnMarker::Command => {
+            let has_command_suffix =
+                crate::agents::providers::kimi::activity::running_command_has_command_suffix(
+                    content,
+                );
+            let ansi = turn.is_none().then(|| terminal.visible_ansi());
+            let line_is_bold = ansi
+                .as_deref()
+                .and_then(crate::agents::providers::kimi::activity::running_command_line_is_bold);
+            crate::agents::providers::kimi::activity::running_command_text_is_live(
+                turn,
+                line_is_bold,
+                has_command_suffix,
+            )
+        }
+    };
+    if live {
         return Some(screen_detection);
     }
     let adjusted = crate::agents::manifest::kimi_screen_without_running_command(content);
@@ -868,7 +879,7 @@ mod blocked_tests {
                 detection_context: self.detection_context.clone(),
                 render_notify: Arc::new(Notify::new()),
                 render_dirty: Arc::new(RenderSignal::default()),
-                kimi_code_home: Arc::new(Mutex::new(None)),
+                kimi_code_home: self.kimi_code_home.clone(),
             };
             let mut status = DetectionState::new(kind);
             status.state = previous;

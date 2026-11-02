@@ -1,0 +1,73 @@
+[
+  {
+    "type": "turn.prompt",
+    "agentId": "main",
+    "turnId": 8,
+    "promptId": "msg_01M6E5T24BF28XDCNXN6N3DHT6",
+    "time": 1793624705179
+  },
+  {
+    "type": "agent.turn.ended",
+    "turnId": 8,
+    "time": 1793625107138,
+    "outcome": "done"
+  },
+  {
+    "type": "turn.ended",
+    "agentId": "main",
+    "turnId": 8,
+    "time": 1793625107177,
+    "reason": "completed"
+  },
+  {
+    "type": "prompt.completed",
+    "agentId": "main",
+    "promptId": "msg_01M6E5T24BF28XDCNXN6N3DHT6",
+    "time": 1793625107178,
+    "reason": "completed"
+  },
+  {
+    "type": "turn.prompt",
+    "agentId": "main",
+    "turnId": 9,
+    "time": 1793625299895
+  },
+  {
+    "type": "agent.turn.ended",
+    "turnId": 9,
+    "time": 1793625306712,
+    "outcome": "done"
+  },
+  {
+    "type": "turn.ended",
+    "agentId": "main",
+    "turnId": 9,
+    "time": 1793625306751,
+    "reason": "completed"
+  },
+  {
+    "type": "turn.prompt",
+    "agentId": "main",
+    "turnId": 10,
+    "time": 1793625377834
+  },
+  {
+    "type": "agent.turn.ended",
+    "turnId": 10,
+    "time": 1793625735948,
+    "outcome": "done"
+  },
+  {
+    "type": "turn.ended",
+    "agentId": "main",
+    "turnId": 10,
+    "time": 1793625736058,
+    "reason": "completed"
+  },
+  {
+    "type": "turn.prompt",
+    "agentId": "main",
+    "turnId": 11,
+    "time": 1793625957364
+  }
+]

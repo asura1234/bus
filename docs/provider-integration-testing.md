@@ -383,12 +383,12 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   text has to be submitted by the editor handoff. A one-line pointer does not
   prove the long paste. Mark every unrun cell explicitly.
 
-- [ ] Busy-then-idle delivery. A turn, a tool, or a background row is busy even
+- [ ] Busy-then-idle delivery. A foreground turn, tool, or live busy row is busy even
   when Bus status says idle. A bare `grok` title does not win over `Queued`,
   still-running, or suggestion frames. Busy frames to record include Grok
   `[stop]`, `◎ … still running`, `◎ waiting · send a message to interrupt`,
-  `Queued N` or `N queued` with N at least 1, and Kimi `[N tasks running]`,
-  `Running a command`, or `Working…` (Kimi only when `agent add --help` lists
+  `Queued N` or `N queued` with N at least 1, and Kimi foreground
+  `Running a command` or `Working…` (Kimi only when `agent add --help` lists
   `kimi`). Bus must submit the message or keep it queued, and must not leave
   its text in the composer. A `Queued N` prompt is accepted: wait for that
   turn, and closing it as `reply_not_captured` fails. A suggestion ghost
@@ -432,7 +432,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   `current_request`, on an empty composer, fails. The next send is
   `prior_request_active` or `prompt_not_shown`. The committed turn-end record
   must clear it. `request recover` is a repair, not a pass, and is forbidden
-  while the frame shows `[N tasks running]`, `Working…`, or `Running a command`.
+  while the frame shows foreground `Working…` or `Running a command`.
   `transcript_unmatched` or `no_start_hook` with those markers visible is a
   false recovery diagnosis.
 - [ ] Locate the owned native transcript from the provider's callback metadata
@@ -973,3 +973,16 @@ idle then deliver, and an approval card without `--yolo`.
   to the next message. A model merely preparing to run the command is not proof
   that foreground execution was interrupted. Archive logs without following
   credential or OAuth links in private provider homes.
+
+- **2026-11-02 — Kimi foreground and background status:** Background shell
+  inventory (`[N tasks running]`) must not block an empty native composer.
+  A moon-tip row can remain after a main turn ends; resolve it against the
+  private main wire just like an ambiguous command header, keeping genuine
+  bare-moon/braille thinking/tool markers Working. A native autonomous
+  `turn.prompt` can omit `promptId` and finishes with `agent.turn.ended` plus
+  `turn.ended`, without `prompt.completed`. It must supersede an older completed
+  Bus turn, or a live foreground command can be forced Idle. Internal agent
+  iteration IDs are independent of outer turn IDs. Test a native background
+  Bash watch loop using `sleep 30`, an idle prompt with the loop alive, queued
+  delivery in order, a real foreground command, loop completion and cold
+  resume. This supersedes the earlier lesson treating task inventory as work.

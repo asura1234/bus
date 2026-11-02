@@ -1,0 +1,12 @@
+ ● Running a command · $ df -h /Users/dylanliu/work && env -u BUS_SOCKET -u BUS_DATA_DIR -u HER…
+   Press Ctrl+B to run in background
+   … /dev/disk3s5   460Gi   418Gi    19Gi    96%    6.3M  202M    3%   /System/Volumes/Data
+  🌔 · Tip: ask Kimi to schedule tasks, e.g. "remind me at 5pm"
+ ───────────────────────────────────────────────────────────────────────────────────────────────
+   ❯ [1/4 at 21:12] [Bus message 98748]
+   ↑ to edit · ctrl-s to steer immediately
+ ╭─────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                           │
+ ╰─────────────────────────────────────────────────────────────────────────────────────────────╯
+ Ask When Needed  K3.1 Pro thinking: high  ~/work/bus-fix-poll-status  fix/cursor-usage-limit […
+                                                                          context: 30% (306k/1M)

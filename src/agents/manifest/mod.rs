@@ -80,13 +80,27 @@ fn kimi_screen_input(screen: &str) -> DetectionInput<'_> {
     }
 }
 
-/// True when the running-command line, not a higher-priority Kimi marker, won.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum KimiTurnMarker {
+    Command,
+    Tip,
+}
+
+/// Only ambiguous winning markers need native turn evidence. Strong spinners,
+/// thinking and tool activity retain their existing precedence.
+pub(crate) fn kimi_turn_marker(screen: &str) -> Option<KimiTurnMarker> {
+    let loaded = load_manifest(AgentKind::Kimi)?;
+    let rule = matched_manifest_rule(kimi_screen_input(screen), &loaded, false, None)?;
+    match rule.id.as_str() {
+        "footer_running_command_working" => Some(KimiTurnMarker::Command),
+        "moon_tip_spinner_working" => Some(KimiTurnMarker::Tip),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn kimi_running_command_is_winner(screen: &str) -> bool {
-    let Some(loaded) = load_manifest(AgentKind::Kimi) else {
-        return false;
-    };
-    matched_manifest_rule(kimi_screen_input(screen), &loaded, false, None)
-        .is_some_and(|rule| rule.id == "footer_running_command_working")
+    kimi_turn_marker(screen) == Some(KimiTurnMarker::Command)
 }
 
 /// Screen state after refusing a command label and its accompanying tip as proof of work.
