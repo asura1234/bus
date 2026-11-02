@@ -217,6 +217,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "workflows/handover-template.md",
             "workflows/investigation-report-template.md",
             "workflows/template.md",
+            "skills/address-review-comments/references/root-cause-provenance-format.md",
             "skills/agent-stats/references/stats-format.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
             "skills/delete-dead-code/references/duplicate-findings-format.md",
