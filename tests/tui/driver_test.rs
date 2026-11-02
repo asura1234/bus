@@ -1752,24 +1752,29 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
             .is_some_and(|turn| !turn.is_empty()),
         "{status}"
     );
-    let (code, observed) = parse(scratch_bus(&session, &["agent", "dialog", "dialog-worker"]));
+    let (code, observed) = parse(scratch_bus(
+        &session,
+        &["agent", "observe", "dialog-worker"],
+    ));
     assert_eq!(code, 0, "{observed}");
-    let dialog = &observed["result"];
+    let observation = &observed["result"];
     assert!(
-        dialog["dialog"].to_string().contains("Choose a path"),
-        "{dialog}"
+        observation["text"]
+            .as_str()
+            .unwrap()
+            .contains("Choose a path"),
+        "{observation}"
     );
-    let fingerprint = dialog["fingerprint"].as_str().unwrap();
     let (code, selected) = parse(scratch_bus(
         &session,
         &[
             "agent",
-            "choose",
+            "press",
             "dialog-worker",
-            "--option",
-            "2",
-            "--fingerprint",
-            fingerprint,
+            "--select",
+            "B",
+            "--terminal-id",
+            observation["terminal_id"].as_str().unwrap(),
         ],
     ));
     assert_eq!(code, 0, "{selected}");
