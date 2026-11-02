@@ -51,6 +51,7 @@ impl Worker {
                     .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
                         target: pane,
                         keys,
+                        native_interrupt: None,
                     }))
             {
                 tracing::warn!(
