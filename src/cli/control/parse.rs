@@ -336,7 +336,6 @@ fn agent_cli() -> Command {
                         .value_parser(clap::value_parser!(u32).range(1..)),
                 ),
         )
-        .subcommand(subcommand("dialog").arg(value_arg("agent").required(true)))
         .subcommand(
             subcommand("observe")
                 .arg(value_arg("agent").required(true))
@@ -344,24 +343,6 @@ fn agent_cli() -> Command {
                 .arg(flag("cells")),
         )
         .subcommand(agent_press_cli())
-        .subcommand(
-            subcommand("choose")
-                .arg(value_arg("agent").required(true))
-                .arg(option("option"))
-                .arg(option("fingerprint")),
-        )
-        .subcommand(
-            subcommand("answer")
-                .arg(value_arg("agent").required(true))
-                .arg(
-                    value_arg("text")
-                        .long("text")
-                        .required_unless_present("skip")
-                        .conflicts_with("skip"),
-                )
-                .arg(flag("skip").required_unless_present("text"))
-                .arg(option("fingerprint")),
-        )
         .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
         .subcommand(subcommand("clear").arg(value_arg("agent").required(true)))
         .subcommand(subcommand("resume").arg(option("room")))
@@ -455,23 +436,6 @@ fn parse_agent(args: &ArgMatches) -> Result<(&'static str, Value), String> {
         Some(("read", args)) => parse_agent_read(args)?,
         Some(("observe", args)) => ("agent.observe", parse_driver(args, false)?),
         Some(("press", args)) => ("agent.press", parse_driver(args, true)?),
-        Some(("dialog", args)) => (
-            "agent.dialog.observe",
-            json!({"agent": required(args, "agent")?}),
-        ),
-        Some(("choose", args)) => (
-            "agent.dialog.choose",
-            json!({
-                "agent": required(args, "agent")?,
-                "option": required(args, "option")?,
-                "fingerprint": required(args, "fingerprint")?,
-            }),
-        ),
-        Some(("answer", args)) => (
-            "agent.dialog.answer",
-            json!({"agent": required(args, "agent")?, "text":if args.get_flag("skip") {None} else {Some(required(args,"text")?)},
-                "skip":args.get_flag("skip"), "fingerprint":required(args,"fingerprint")?}),
-        ),
         Some(("setup-confirm", args)) => (
             "agent.setup-confirm",
             json!({"agent": required(args, "agent")?, "confirm": confirmed(args)?}),

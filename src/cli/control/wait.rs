@@ -265,7 +265,7 @@ fn dialog_response(id: &str, last_status: Value) -> Response {
     let mut response = Response::failure(
         id,
         "agent_waiting_on_dialog",
-        "A recipient is waiting on a dialog; use agent dialog, then agent choose or agent answer, then wait again",
+        "A recipient is waiting on terminal input; use agent observe, then agent press, then wait again",
     );
     response.result = last_status;
     response

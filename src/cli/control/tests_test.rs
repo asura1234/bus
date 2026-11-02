@@ -186,17 +186,6 @@ const SAMPLES: &[&[&str]] = &[
     &["agent", "read", "a", "--source", "visible"],
     &["agent", "observe", "a"],
     &["agent", "press", "a", "--key", "y"],
-    &["agent", "dialog", "a"],
-    &[
-        "agent",
-        "choose",
-        "a",
-        "--option",
-        "1",
-        "--fingerprint",
-        "f",
-    ],
-    &["agent", "answer", "a", "--skip", "--fingerprint", "f"],
     &["agent", "clear", "a"],
     &["agent", "resume", "--room", "r"],
     &["agent", "interrupt", "a"],
@@ -757,97 +746,6 @@ fn room_orchestrator_core_bus_read_forms_require_model_selected_evidence_bounds(
     assert!(
         command(&["agent", "read", "Reviewer", "--source", "visible", "--lines", "2"]).is_err()
     );
-}
-
-#[test]
-fn agent_dialog_cli_observes_and_chooses_with_a_fingerprint() {
-    let observe = command(&["agent", "dialog", "Reviewer"]).unwrap();
-    assert_eq!(observe.method, "agent.dialog.observe");
-    assert_eq!(observe.params, json!({"agent":"Reviewer"}));
-    let choose = command(&[
-        "agent",
-        "choose",
-        "Reviewer",
-        "--option",
-        "2",
-        "--fingerprint",
-        "d1.abc.def",
-    ])
-    .unwrap();
-    assert_eq!(choose.method, "agent.dialog.choose");
-    assert_eq!(
-        choose.params,
-        json!({"agent":"Reviewer","option":"2","fingerprint":"d1.abc.def"})
-    );
-    for args in [
-        &["agent", "choose", "Reviewer", "--option", "2"][..],
-        &["agent", "choose", "Reviewer", "--fingerprint", "d1.abc.def"],
-        &[
-            "agent",
-            "choose",
-            "Reviewer",
-            "--option",
-            " ",
-            "--fingerprint",
-            "f",
-        ],
-        &["agent", "dialog", "Reviewer", "--keys", "enter"],
-        &["agent", "permission", "Reviewer"],
-        &["agent", "approve-once", "Reviewer", "--fingerprint", "f"],
-    ] {
-        assert!(command(args).is_err(), "{args:?}");
-    }
-}
-
-#[test]
-fn agent_answer_requires_a_fingerprint_and_exactly_one_answer_mode() {
-    let text = command(&[
-        "agent",
-        "answer",
-        "61",
-        "--text",
-        "MY TOKEN",
-        "--fingerprint",
-        "f",
-    ])
-    .unwrap();
-    assert_eq!(text.method, "agent.dialog.answer");
-    assert_eq!(
-        text.params,
-        json!({"agent":"61","text":"MY TOKEN","skip":false,"fingerprint":"f"})
-    );
-    let skip = command(&["agent", "answer", "61", "--skip", "--fingerprint", "f"]).unwrap();
-    assert_eq!(
-        skip.params,
-        json!({"agent":"61","text":null,"skip":true,"fingerprint":"f"})
-    );
-    for args in [
-        vec!["agent", "answer", "61", "--text", "ok"],
-        vec!["agent", "answer", "61", "--fingerprint", "f"],
-        vec![
-            "agent",
-            "answer",
-            "61",
-            "--text",
-            "ok",
-            "--skip",
-            "--fingerprint",
-            "f",
-        ],
-        vec!["agent", "answer", "61", "--text", " ", "--fingerprint", "f"],
-        vec![
-            "agent",
-            "answer",
-            "61",
-            "--skip",
-            "--keys",
-            "enter",
-            "--fingerprint",
-            "f",
-        ],
-    ] {
-        assert!(command(&args).is_err(), "{args:?}");
-    }
 }
 
 #[test]
@@ -3029,32 +2927,27 @@ fn one_hundred_async_waiters_do_not_starve_interrupt_or_new_send() {
         thread::sleep(Duration::from_millis(5));
     }
     assert!(followers.iter().all(|f| !f.is_finished()));
-    let outcomes: Vec<_> = [
-        "agent.interrupt",
-        "message.send",
-        "state",
-        "agent.dialog.answer",
-    ]
-    .into_iter()
-    .map(|method| {
-        control::request_with_timeout(
-            &dir,
-            &Request {
-                id: method.into(),
-                method: method.into(),
-                params: json!({"agent": "worker", "text": "new work"}),
-            },
-            Duration::from_secs(2),
-        )
-    })
-    .collect();
+    let outcomes: Vec<_> = ["agent.interrupt", "message.send", "state", "agent.press"]
+        .into_iter()
+        .map(|method| {
+            control::request_with_timeout(
+                &dir,
+                &Request {
+                    id: method.into(),
+                    method: method.into(),
+                    params: json!({"agent": "worker", "text": "new work"}),
+                },
+                Duration::from_secs(2),
+            )
+        })
+        .collect();
     release.store(true, Ordering::Release);
     let completed: Vec<_> = followers.into_iter().map(|f| f.join().unwrap()).collect();
     stopping.store(true, Ordering::Release);
     worker.join().unwrap();
     drop(server);
     std::fs::remove_dir_all(&dir).unwrap();
-    for (method, outcome) in ["interrupt", "send", "state", "answer"]
+    for (method, outcome) in ["interrupt", "send", "state", "press"]
         .into_iter()
         .zip(outcomes)
     {
@@ -3370,9 +3263,9 @@ fn identity_every_agent_cli_entry_accepts_names_ids_and_scoping() {
     for selector in ["reviewer", "21546"] {
         for tail in [
             vec!["read", "--source", "visible"],
-            vec!["dialog"],
-            vec!["choose", "--option", "1", "--fingerprint", "fp"],
-            vec!["answer", "--text", "yes", "--fingerprint", "fp"],
+            vec!["observe"],
+            vec!["press", "--select", "Yes"],
+            vec!["press", "--text", "yes", "--submit"],
             vec!["delete", "--confirm"],
             vec!["setup-confirm", "--confirm"],
             vec!["clear"],
