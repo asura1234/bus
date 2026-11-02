@@ -2105,10 +2105,19 @@ fn grok_owned_pending_stop_survives_until_cancel_or_failure_without_publishing_s
             json!({"hookEventName":event,"sessionId":"session","promptId":"turn","reason":"user_interrupt","error":"server_error"}),
         );
         consume(&mut worker, agent, &dir);
-        assert_eq!(
-            worker.state.request(request).unwrap().phase,
-            RequestPhase::Abandoned
-        );
+        if event == "stop_cancelled" {
+            assert_eq!(
+                worker.state.request(request).unwrap().phase,
+                RequestPhase::Abandoned
+            );
+        } else {
+            assert!(!worker.state.request(request).unwrap().settled());
+            assert!(agent_of(&worker, agent).provider_retry.is_some());
+            assert_eq!(
+                agent_of(&worker, agent).shown_status(),
+                RuntimeStatus::Working
+            );
+        }
         assert!(worker
             .state
             .request(request)
