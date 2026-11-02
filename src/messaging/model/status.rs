@@ -53,11 +53,14 @@ impl RoomAgent {
         failed.then_some(self.actionable_error.as_deref()).flatten()
     }
 
-    /// The status Bus shows for this agent: a visible choice dialog blocks it
-    /// whatever its provider reports (Codex reports Idle while it waits on an
-    /// approval). Agent rows and room status both use it, so they agree.
+    /// Availability includes the launch directory: providers cannot run hooks
+    /// from a removed cwd. Retain native activity separately so an in-flight
+    /// turn can still settle from its rollout. Agent rows, control reads and
+    /// room status all use this projection.
     pub(crate) fn shown_status(&self) -> RuntimeStatus {
-        if self.dialog || self.missing_binary.is_some() {
+        if self.working_directory_error.is_some() {
+            RuntimeStatus::Unavailable
+        } else if self.dialog || self.missing_binary.is_some() {
             RuntimeStatus::Blocked
         } else {
             self.status

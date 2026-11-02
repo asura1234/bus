@@ -102,6 +102,7 @@ fn deleted_working_directory_surfaces_recovery_action_for_every_provider() {
             "do not stop or restart the provider"
         );
         assert!(observed.working_directory_error.is_some());
+        assert_eq!(observed.shown_status(), RuntimeStatus::Unavailable);
         assert_eq!(
             JsonStore::new(dir.join("state.json"))
                 .load()
@@ -115,6 +116,7 @@ fn deleted_working_directory_surfaces_recovery_action_for_every_provider() {
         );
         std::fs::create_dir(&cwd).unwrap();
         poll_until(&mut worker, agent, |a| a.working_directory_error.is_none());
+        assert_eq!(worker.state.agent(agent).unwrap().shown_status(), expected);
         assert!(worker
             .state
             .agent(agent)
