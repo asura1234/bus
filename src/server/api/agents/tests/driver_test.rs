@@ -545,3 +545,120 @@ async fn cursor_quota_metadata_survives_the_provider_word_wrapped_warning() {
         "quota observation must not modify the restored draft"
     );
 }
+
+const KIMI_QUOTA_SCREEN: &str = concat!(
+    "Error: [provider.api_error] 429 You've reached your 5-hour usage limit.\r\n",
+    "Your quota will reset when the current 5-hour window ends.\r\n",
+    "╭────────────────────────────────────────────────────────────╮\r\n",
+    "│ >                                                          │\r\n",
+    "╰────────────────────────────────────────────────────────────╯\r\n",
+    "Ask When Needed  K3.1 Pro thinking: high  [1 task running]\r\n",
+    "context: 34% (340k/1M)",
+);
+
+#[tokio::test]
+async fn kimi_quota_banner_produces_provider_error_metadata() {
+    use crate::agents::{AgentKind, AgentState};
+    let (mut app, _, mut writes) = shell(KIMI_QUOTA_SCREEN.as_bytes());
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Working);
+    let info = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+    assert!(
+        info["provider_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("5-hour usage limit")),
+        "quota error must be observable despite the background-task footer: {info}"
+    );
+    assert_eq!(
+        info["agent_status"],
+        serde_json::json!(crate::protocol::api::schema::AgentStatus::Unknown),
+        "the existing coordinator mapping must make the quota-limited agent Unavailable"
+    );
+    assert!(
+        info["provider_quota_reset_at"].as_u64().is_none(),
+        "the banner does not report an exact reset timestamp"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "quota detection must never type into the native terminal"
+    );
+}
+
+#[tokio::test]
+async fn kimi_nonquota_429_is_not_a_usage_limit() {
+    use crate::agents::{AgentKind, AgentState};
+    let screen = "Error: [provider.api_error] 429 Too many requests. Retry after one second.\r\n│ >                     │\r\nK3.1 Pro thinking: high\r\ncontext: 1%";
+    let (mut app, _, mut writes) = shell(screen.as_bytes());
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let info = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+    assert!(
+        info["provider_error"].is_null(),
+        "a nonquota 429 must not disable the agent: {info}"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn kimi_quota_metadata_clears_after_reset_and_a_fresh_native_frame() {
+    use crate::agents::{AgentKind, AgentState};
+    let (mut app, _, mut writes) = shell(KIMI_QUOTA_SCREEN.as_bytes());
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let limited = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+    assert!(
+        limited["provider_error"].as_str().is_some(),
+        "the pre-reset quota observation must exist"
+    );
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[HReply after reset succeeded\r\n | >                  |\r\nK3.1 Pro thinking: high\r\ncontext: 1%");
+    let recovered = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+    assert!(
+        recovered["provider_error"].is_null(),
+        "a fresh healthy frame clears the quota observation: {recovered}"
+    );
+    assert_eq!(
+        recovered["agent_status"],
+        serde_json::json!(crate::protocol::api::schema::AgentStatus::Idle)
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn kimi_quota_history_before_a_new_native_prompt_is_not_current() {
+    use crate::agents::{AgentKind, AgentState};
+    let screen = format!("{KIMI_QUOTA_SCREEN}\r\n❯ Reply after the reset\r\n● Reply succeeded.\r\n│ >                         │\r\nK3.1 Pro thinking: high\r\ncontext: 1%");
+    let (mut app, _, mut writes) = shell(screen.as_bytes());
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let info = serde_json::to_value(app.agent_info(0, pane).unwrap()).unwrap();
+    assert!(
+        info["provider_error"].is_null(),
+        "a past quota error must not disable a recovered native turn: {info}"
+    );
+    assert_eq!(
+        info["agent_status"],
+        serde_json::json!(crate::protocol::api::schema::AgentStatus::Idle)
+    );
+    assert!(writes.try_recv().is_err());
+}

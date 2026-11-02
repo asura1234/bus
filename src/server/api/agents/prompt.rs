@@ -329,7 +329,7 @@ impl App {
     > {
         self.reconcile_managed_agent_target(&params.target);
         let agent = self
-            .agent_info_for_target(&params.target)
+            .agent_info_for_prompt(&params.target)
             .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
         if let Err((code, message)) = check_unbound_prompt_identity_and_idle(&agent, &params) {
             return Err(encode_error(id, code, message));
@@ -362,7 +362,7 @@ impl App {
     > {
         self.reconcile_managed_agent_target(&params.target);
         let agent = self
-            .agent_info_for_target(&params.target)
+            .agent_info_for_prompt(&params.target)
             .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
         if let Err((code, message)) = check_prompt_identity_and_idle(&agent, &params) {
             return Err(encode_error(id, code, message));

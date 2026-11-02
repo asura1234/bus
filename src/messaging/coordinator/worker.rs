@@ -44,6 +44,9 @@ pub(super) struct Worker {
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     pub(super) delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    pub(super) kimi_quota_retries: BTreeMap<AgentId, super::kimi_quota::Retry>,
+    #[cfg(test)]
+    pub(super) test_kimi_quota_now_ms: Option<u64>,
     /// Author waiters renew these leases without acknowledging any reply.
     /// A dead waiter cannot hold routing across restart or lease expiry.
     pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
@@ -160,6 +163,9 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            kimi_quota_retries: BTreeMap::new(),
+            #[cfg(test)]
+            test_kimi_quota_now_ms: None,
             reply_waiters: BTreeMap::new(),
             #[cfg(test)]
             test_reply_waiter_now: None,
@@ -562,6 +568,7 @@ impl Worker {
         else {
             return Ok(());
         };
+        self.observe_kimi_quotas(&infos);
         self.withdraw_restored_grok_prompts();
         // Every callback this tick applies is persisted by one write.
         perf::COORDINATOR_LOOP.relabel("tick.callbacks");

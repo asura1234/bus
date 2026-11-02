@@ -124,7 +124,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-pub(super) fn native_info(
+pub(in crate::messaging::coordinator) fn native_info(
     pane: &str,
     agent: &str,
     session: &str,

@@ -468,3 +468,50 @@ fn kimi_cancelled_exchange_retains_marker_proof_until_the_composer_is_empty() {
         "an interrupted readback must leave exact proof for the marker still in the composer"
     );
 }
+
+fn quota_frame() -> String {
+    let mut lines: Vec<String> = IDLE.lines().map(str::to_owned).collect();
+    let top = lines
+        .iter()
+        .rposition(|line| line.trim().starts_with('╭'))
+        .unwrap();
+    lines.splice(
+        top..top,
+        [
+            "Error: [provider.api_error] 429 You've reached your 5-hour usage limit.".to_owned(),
+            "Your quota will reset when the current 5-hour window ends.".to_owned(),
+        ],
+    );
+    lines.join("\n")
+}
+
+#[tokio::test]
+async fn kimi_quota_probe_uses_guarded_native_composer_despite_unknown_metadata() {
+    delivery(&quota_frame(), false, 0).await;
+}
+
+#[tokio::test]
+async fn kimi_quota_flagged_working_pane_still_rejects_guarded_input() {
+    let _scratch = Scratch::new();
+    let (mut app, method, mut writes, directory) = fixture(&quota_frame(), false);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Working);
+    let info = app.agent_info(0, pane).unwrap();
+    assert_eq!(
+        info.agent_status,
+        crate::protocol::api::schema::AgentStatus::Unknown
+    );
+    let response = start(&mut app, method);
+    let result = response.recv_timeout(WAIT).unwrap();
+    assert!(result.contains("agent_not_idle"), "{result}");
+    assert!(
+        writes.try_recv().is_err(),
+        "a truly Working pane must receive no native input"
+    );
+    assert!(!directory.exists());
+}

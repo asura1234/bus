@@ -986,4 +986,39 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn kimi_failure_uses_structured_outer_error_instead_of_object_stringification() {
+        let error = serde_json::json!({
+            "code": "provider.api_error",
+            "message": "429 You've reached your 5-hour usage limit.",
+            "name": "APIProviderQuotaExhaustedError",
+            "details": {"statusCode": 429},
+            "retryable": false
+        });
+        let mut rows = [
+            serde_json::json!({"type":"turn.prompt","agentId":"main","turnId":3,"promptId":"p3","input":[{"type":"text","text":"Bus task"}]}),
+            serde_json::json!({"type":"agent.turn.ended","turnId":3,"outcome":"failed","errorMessage":"[object Object]"}),
+            serde_json::json!({"type":"turn.ended","agentId":"main","turnId":3,"reason":"failed","error":error}),
+            serde_json::json!({"type":"prompt.completed","agentId":"main","promptId":"p3","reason":"failed"}),
+        ];
+        let wire = rows
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>();
+        assert_eq!(
+            committed_outcome(&wire, 3, "Bus task"),
+            Some(Outcome::Failed(
+                "APIProviderQuotaExhaustedError: 429 You've reached your 5-hour usage limit."
+                    .into()
+            ))
+        );
+        assert_eq!(committed_outcome(&wire, 3, "foreign prompt"), None);
+        rows[2]["turnId"] = serde_json::json!(4);
+        let foreign = rows
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>();
+        assert_eq!(committed_outcome(&foreign, 3, "Bus task"), None);
+    }
 }

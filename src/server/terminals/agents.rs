@@ -150,6 +150,29 @@ impl App {
             })
     }
 
+    /// Reporting a quota outage must not prevent a guarded recovery attempt.
+    pub(in crate::server) fn agent_info_for_prompt(
+        &self,
+        target: &str,
+    ) -> Result<crate::protocol::api::schema::AgentInfo, TerminalTargetError> {
+        let mut info = self.agent_info_for_target(target)?;
+        if info.agent.as_deref() == Some("kimi")
+            && info
+                .provider_error
+                .as_deref()
+                .is_some_and(crate::agents::providers::kimi::usage::is_quota_error)
+        {
+            let resolved = self.resolve_agent_target(target)?;
+            let pane = self
+                .pane_info(resolved.ws_idx, resolved.pane_id)
+                .ok_or_else(|| TerminalTargetError::NotFound {
+                    target: target.to_owned(),
+                })?;
+            info.agent_status = pane.agent_status;
+        }
+        Ok(info)
+    }
+
     pub(in crate::server) fn focus_agent_target(
         &mut self,
         target: &str,
@@ -497,7 +520,7 @@ impl App {
                 pane.agent_status == crate::protocol::api::schema::AgentStatus::Working,
             )
         });
-        Some(crate::protocol::api::schema::AgentInfo {
+        let mut info = crate::protocol::api::schema::AgentInfo {
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)
                 .and_then(|runtime| runtime.definite_launch_input_error()),
@@ -547,7 +570,9 @@ impl App {
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,
-        })
+        };
+        apply_kimi_quota(&mut info, observed.as_ref().map(|(grid, _)| grid));
+        Some(info)
     }
 
     fn agent_name_conflicts(
@@ -562,6 +587,22 @@ impl App {
             })
             .collect()
     }
+}
+
+fn apply_kimi_quota(
+    info: &mut crate::protocol::api::schema::AgentInfo,
+    grid: Option<&crate::terminal::driver::Grid>,
+) {
+    if info.agent.as_deref() != Some("kimi") {
+        return;
+    }
+    let Some(error) =
+        grid.and_then(|grid| crate::agents::providers::kimi::usage::quota_error(&grid.text()))
+    else {
+        return;
+    };
+    info.provider_error = Some(error);
+    info.agent_status = crate::protocol::api::schema::AgentStatus::Unknown;
 }
 
 pub(in crate::server) fn available_shell_name(
