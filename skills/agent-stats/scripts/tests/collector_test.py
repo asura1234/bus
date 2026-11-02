@@ -620,6 +620,8 @@ def test_recorded_bare_canonical_roots_keep_exact_legacy_source_ids(tmp_path):
                 == credits["codexrevd"]["shared_issues"]
                 == 1
             )
+            rendered = call("report", "--store", store).stdout
+            assert "root B APPLY: reviewer attribution unavailable" in rendered
         else:
             assert credits["clauderev4"]["unique_issues"] == 2
 
