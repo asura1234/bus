@@ -997,7 +997,25 @@ impl Delivery {
             .filter(|row| row["request_id"].as_u64() == Some(request.0))
             .collect();
         assert_eq!(replies.len(), 1, "reply missing/duplicated: {history}");
-        assert_eq!(replies[0]["reply"]["text"], text);
+        let source = r
+            .completed_reply
+            .as_ref()
+            .and_then(|reply| reply.group)
+            .and_then(|group| {
+                self.state()
+                    .shared_reply_sources(r.room_id, |_| true)
+                    .get(&group)
+                    .copied()
+            });
+        if let Some(source) = source.filter(|source| *source != request) {
+            assert!(replies[0]["reply"].is_null());
+            assert_eq!(
+                replies[0]["answered_with_message"],
+                json!(self.state().request(source).unwrap().prompt.id)
+            );
+        } else {
+            assert_eq!(replies[0]["reply"]["text"], text);
+        }
     }
 }
 impl Drop for Delivery {

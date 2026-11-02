@@ -645,3 +645,191 @@ fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
     let text = render(&state);
     assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
 }
+
+fn batch_history_state(hidden_lead: bool) -> (BusState, RoomId, Vec<RequestId>) {
+    let mut state = BusState::default();
+    let room = state.create_room("batch-work").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    let mut requests = Vec::new();
+    if hidden_lead {
+        let sender = state
+            .create_agent(room, "sender", Provider::Codex, "/project".into(), None)
+            .unwrap();
+        requests.push(
+            state
+                .submit_bus_message_with(
+                    room,
+                    Draft {
+                        text: "HIDDEN_BATCH_ROUTING_ENVELOPE".into(),
+                        files: vec![],
+                        recipient_ids: [agent].into(),
+                    },
+                    Author::Agent(sender),
+                    1_000,
+                    false,
+                )
+                .unwrap()[0],
+        );
+    }
+    for (index, text) in [
+        "first visible task",
+        "second visible task",
+        "third visible task",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        requests.push(
+            state
+                .submit_message_from(
+                    room,
+                    Draft {
+                        text: text.into(),
+                        files: vec![],
+                        recipient_ids: [agent].into(),
+                    },
+                    Author::Developer,
+                    1_001 + index as u64,
+                )
+                .unwrap()[0],
+        );
+    }
+    assert!(state.coalesce_queue(requests[0]).is_some());
+    for id in &requests {
+        state.finish_for_test(*id, "SHARED_BATCH_ANSWER", 2_000);
+    }
+    (state, room, requests)
+}
+
+fn batch_history_lines(state: &BusState, room: RoomId) -> Vec<Line> {
+    History::default()
+        .lines(
+            state,
+            state.room(room).unwrap(),
+            100,
+            1,
+            3_000,
+            &mut Thumbnails::default(),
+        )
+        .to_vec()
+}
+
+fn batch_history_assert_lines(state: &BusState, room: RoomId, visible: &[RequestId]) {
+    let lines = batch_history_lines(state, room);
+    let lead_message = state.request(visible[0]).unwrap().prompt.id;
+    let bodies: Vec<_> = lines
+        .iter()
+        .filter(|line| line.text.contains("SHARED_BATCH_ANSWER"))
+        .collect();
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        bodies[0].anchor.prompt, lead_message,
+        "body must belong to the lead exchange"
+    );
+    assert_eq!(
+        bodies[0].raw_markdown.as_ref().unwrap().0,
+        MarkdownSource::Reply(visible[0])
+    );
+    for follower in &visible[1..] {
+        let message = state.request(*follower).unwrap().prompt.id;
+        assert!(
+            lines.iter().any(|line| {
+                line.anchor.prompt == message
+                    && line
+                        .text
+                        .to_lowercase()
+                        .contains(&format!("answered with message {}", lead_message.0))
+                    && line.raw_markdown.is_none()
+            }),
+            "member {message:?} needs its answer reference"
+        );
+    }
+    let quotes: Vec<_> = lines
+        .iter()
+        .filter_map(|line| match &line.action {
+            Some(Action::Quote(request)) => Some(*request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        quotes,
+        [visible[0]],
+        "only the full body has a Quote action"
+    );
+}
+
+#[test]
+fn batch_history_tui_places_body_under_first_visible_lead_and_references_each_follower() {
+    let (mut state, room, requests) = batch_history_state(false);
+    batch_history_assert_lines(&state, room, &requests);
+    assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+    batch_history_assert_lines(&state, room, &requests);
+}
+
+#[test]
+fn batch_history_tui_hidden_lead_falls_back_to_first_visible_member() {
+    let (mut state, room, requests) = batch_history_state(true);
+    for archived in [false, true] {
+        if archived {
+            assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+        }
+        batch_history_assert_lines(&state, room, &requests[1..]);
+        assert!(batch_history_lines(&state, room)
+            .iter()
+            .all(|line| !line.text.contains("HIDDEN_BATCH_ROUTING_ENVELOPE")));
+    }
+}
+
+#[test]
+fn batch_history_tui_individual_answer_does_not_steal_the_later_shared_final() {
+    let (state, room, requests) = batch_history_state(false);
+    // Persisted shape after an explicit reply answers the original turn lead:
+    // its individual answer has no shared group; outstanding members share a new anchor.
+    let mut document = serde_json::to_value(state).unwrap();
+    document["requests"][requests[0].0.to_string()]["completed_reply"]["group"] =
+        serde_json::Value::Null;
+    document["requests"][requests[0].0.to_string()]["completed_reply"]["content"]["text"] =
+        "INDIVIDUAL_BATCH_ANSWER".into();
+    for id in &requests[1..] {
+        document["requests"][id.0.to_string()]["completed_reply"]["group"] = requests[1].0.into();
+    }
+    let state: BusState = serde_json::from_value(document).unwrap();
+    let lines = batch_history_lines(&state, room);
+    let individual = lines
+        .iter()
+        .find(|line| line.text.contains("INDIVIDUAL_BATCH_ANSWER"))
+        .unwrap();
+    assert_eq!(
+        individual.anchor.prompt,
+        state.request(requests[0]).unwrap().prompt.id
+    );
+    let shared = lines
+        .iter()
+        .find(|line| line.text.contains("SHARED_BATCH_ANSWER"))
+        .unwrap();
+    assert_eq!(
+        shared.anchor.prompt,
+        state.request(requests[1]).unwrap().prompt.id
+    );
+    let lead_message = state.request(requests[1]).unwrap().prompt.id;
+    assert!(lines.iter().any(|line| {
+        line.anchor.prompt == state.request(requests[2]).unwrap().prompt.id
+            && line
+                .text
+                .to_lowercase()
+                .contains(&format!("answered with message {}", lead_message.0))
+    }));
+}
+
+#[test]
+fn batch_history_tui_cross_room_group_keeps_one_body_under_each_rooms_first_visible_lead() {
+    let (mut state, work, requests) = batch_history_state(false);
+    let master = state.ensure_master_room();
+    let mut document = serde_json::to_value(state).unwrap();
+    document["requests"][requests[1].0.to_string()]["room_id"] = master.0.into();
+    let state: BusState = serde_json::from_value(document).unwrap();
+    batch_history_assert_lines(&state, work, &[requests[0], requests[2]]);
+    batch_history_assert_lines(&state, master, &[requests[1]]);
+}
