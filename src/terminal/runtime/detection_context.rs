@@ -1,5 +1,5 @@
 //! Request ownership supplied by Bus, with the existing native composer reader.
-use super::{InputObservation, SubmissionInspector, TerminalRuntime};
+use super::{SubmissionInspector, TerminalRuntime};
 use crate::agents::AgentKind;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -23,8 +23,7 @@ impl DetectionContext {
     ) -> Option<bool> {
         (self.kind == kind).then_some(())?;
         self.inspector.as_ref().map(|inspect| {
-            inspect.observe_with_launch(screen, cursor, self.pristine.load(Ordering::Acquire))
-                == InputObservation::Empty
+            inspect.draft_ready(screen, cursor, self.pristine.load(Ordering::Acquire))
         })
     }
 
