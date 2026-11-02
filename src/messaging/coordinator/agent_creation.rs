@@ -116,7 +116,30 @@ impl Worker {
             hooks.launch_id,
             prepared.adopted_session.clone(),
         )?;
-        let created = self.create_agent_tab(&input, &mut prepared);
+        self.start_created_agent(
+            &input,
+            id,
+            identity,
+            selected_executable,
+            grok_home,
+            kimi_home,
+            prepared,
+            events,
+        )
+    }
+
+    fn start_created_agent(
+        &mut self,
+        input: &AddAgent,
+        id: AgentId,
+        identity: AgentRuntimeIdentity,
+        selected_executable: Option<String>,
+        grok_home: Option<String>,
+        kimi_home: Option<String>,
+        mut prepared: launch::PreparedLaunch,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let created = self.create_agent_tab(input, &mut prepared);
         let (pane, terminal) = match created {
             Ok(ResponseResult::TabCreated { root_pane, .. }) => {
                 (root_pane.pane_id, root_pane.terminal_id)
