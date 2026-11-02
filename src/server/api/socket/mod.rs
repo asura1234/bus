@@ -86,5 +86,3 @@ mod tests;
 
 #[cfg(all(test, unix))]
 use crate::protocol::api::socket_path;
-#[cfg(all(test, windows))]
-use std::time::Instant;
