@@ -205,6 +205,19 @@ impl Worker {
         }
     }
 
+    fn delay_dev_command(&self) {
+        if !self.dev_enabled {
+            return;
+        }
+        let delay = std::fs::read_to_string(self.data_dir.join("command-delay-ms"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
+    }
+
     /// Commits `state` and makes it durable. A state that differs from the
     /// last write only in status-only observations writes nothing: those are
     /// never persisted on their own (see `apply_poll`), so rewriting the same
@@ -441,8 +454,10 @@ impl Worker {
                     }
                 }
                 Ok((id, command)) => {
-                    let submitting =
-                        matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
+                    let submitting = matches!(
+                        command,
+                        BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
+                    );
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let name = perf::command_name(&command);
                     let started = std::time::Instant::now();
@@ -451,6 +466,7 @@ impl Worker {
                     let result = if self.storage_pause.is_some() {
                         Err(self.storage_notice().into())
                     } else {
+                        self.delay_dev_command();
                         self.command(command, &events)
                     };
                     perf::COMMAND.record_op(started.elapsed(), name);

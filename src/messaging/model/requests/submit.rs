@@ -84,6 +84,31 @@ impl BusState {
         self.submit_draft_from(room, Author::Developer, now_ms, true, false)
     }
 
+    pub(crate) fn submit_draft_exact(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        now_ms: u64,
+        queued: bool,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        let original = std::mem::replace(
+            &mut self
+                .rooms
+                .get_mut(&room)
+                .ok_or(ModelError::UnknownRoom(room))?
+                .draft,
+            draft,
+        );
+        let result = self.submit_draft_from(room, Author::Developer, now_ms, queued, false);
+        if result.is_err() {
+            self.rooms
+                .get_mut(&room)
+                .ok_or(ModelError::UnknownRoom(room))?
+                .draft = original;
+        }
+        result
+    }
+
     fn submit_draft_from(
         &mut self,
         room: RoomId,

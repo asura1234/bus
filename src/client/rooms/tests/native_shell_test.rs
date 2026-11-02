@@ -755,9 +755,8 @@ fn paste_and_composition_never_send_while_enter_and_newline_have_distinct_meanin
     key(&mut ui, KeyCode::Enter, KeyModifiers::SHIFT);
     key(&mut ui, KeyCode::Char('j'), KeyModifiers::CONTROL);
     assert_eq!(ui.locals[&room].text.text, "hello\nworld文\n\n");
-    assert!(ui.send_intent.is_none());
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(ui.send_intent, Some(room));
+    assert_eq!(ui.submissions.len(), 1);
 }
 
 #[test]
@@ -779,7 +778,6 @@ fn path_drop_attaches_literal_multiple_paths_without_changing_draft_or_recipient
             .count(),
         2
     );
-    assert!(ui.send_intent.is_none());
 }
 
 #[test]

@@ -72,12 +72,14 @@ impl BusUi {
         let visible_anchor = (!self.history_follow_tail)
             .then(|| self.history.anchor_at(self.main_scroll))
             .flatten();
-        self.history.request_lines(
-            Arc::clone(&self.snapshot),
+        let (history_snapshot, submissions) = self.history_projection();
+        self.history.request_lines_with_submissions(
+            history_snapshot,
             room.id,
             width,
             now,
             &mut self.thumbnails,
+            submissions,
         );
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
@@ -490,18 +492,7 @@ impl BusUi {
     }
 
     fn draft_files(&self, room: &Room) -> Vec<PathBuf> {
-        let mut files = room.draft.files.clone();
-        for pending in &self.failed {
-            if let crate::messaging::coordinator::BusCommand::AttachFile(id, path) =
-                &pending.command
-            {
-                if *id != room.id {
-                    continue;
-                }
-                files.push(PathBuf::from(path));
-            }
-        }
-        files
+        self.current_draft_files(room.id)
     }
 
     fn file_detail_view(&self, view: &mut View, layout: RoomLayout) {

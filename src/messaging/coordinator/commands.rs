@@ -12,7 +12,7 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let mut state = self.state.clone();
-        let queued = matches!(command, C::SubmitQueued(_));
+        let queued = matches!(command, C::SubmitQueued(..));
         let result = match command {
             C::CreateRoom(name) => return self.persist_new_room(state, &name, events),
             C::RenameRoom(id, name) => state.rename_room(id, &name),
@@ -73,8 +73,8 @@ impl Worker {
                 state.attach_file(room, path)
             }
             C::RemoveFile(room, path) => state.remove_file(room, &path),
-            C::Submit(room) | C::SubmitQueued(room) => {
-                return self.persist_draft_submission(state, room, queued);
+            C::Submit(room, draft) | C::SubmitQueued(room, draft) => {
+                return self.persist_draft_submission(state, room, draft, queued);
             }
             C::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
             C::CompleteHookSetup(id) => {
@@ -124,19 +124,23 @@ impl Worker {
         &mut self,
         mut state: BusState,
         room: RoomId,
+        draft: crate::messaging::model::Draft,
         queued: bool,
     ) -> Result<(), String> {
-        let now = crate::messaging::storage::io::now_ms();
-        let requests = if queued {
-            state.submit_draft_queued(room, now)
-        } else {
-            state.submit_draft(room, now)
+        let home = std::env::home_dir().ok_or("Home directory unavailable")?;
+        for path in &draft.files {
+            crate::messaging::attachments::validate_attachment(&path.display().to_string(), &home)
+                .map_err(|e| e.to_string())?;
         }
-        .map_err(|e| e.to_string())?;
+        let now = crate::messaging::storage::io::now_ms();
+        let requests = state
+            .submit_draft_exact(room, draft.clone(), now, queued)
+            .map_err(|e| e.to_string())?;
         self.journal(
             state,
-            JournalOp::Submit {
+            JournalOp::SubmitDraft {
                 room,
+                draft,
                 queued,
                 now_ms: now,
             },

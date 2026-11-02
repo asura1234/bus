@@ -92,6 +92,38 @@ fn composer_toolbar_has_a_matching_horizontal_line_above_editable_text() {
     }
 }
 
+#[test]
+fn room_notes_have_a_box_and_top_section_is_separated_from_history() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_text(room, "history body").unwrap();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.submit_draft(room, 10).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.locals.get_mut(&room).unwrap().notes.insert("Room notes");
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let color = buffer[(27, 0)].fg;
+    // One line of notes gets a one-row box; history starts right below it.
+    for (x, y, symbol) in [(29, 2, "┌"), (98, 2, "┐"), (29, 4, "└"), (98, 4, "┘")] {
+        assert_eq!(buffer[(x, y)].symbol(), symbol);
+        assert_eq!(buffer[(x, y)].fg, color);
+    }
+    for x in 30..98 {
+        for y in [2, 4, 5] {
+            assert_eq!(buffer[(x, y)].symbol(), "─");
+            assert_eq!(buffer[(x, y)].fg, color);
+        }
+    }
+    assert_eq!(buffer[(30, 3)].symbol(), "R");
+    assert_eq!(buffer[(30, 6)].symbol(), "Y");
+    assert_eq!(buffer[(30, 7)].symbol(), "h");
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('!'), KeyModifiers::NONE);
+    assert_eq!(ui.locals[&room].notes.text, "Room notes!");
+}
+
 /// The composer's bottom border is the window's last row, so no row exists
 /// below it for any notice, search or queue status.
 fn assert_composer_on_last_row(ui: &mut BusUi, cols: u16, rows: u16, case: &str) -> String {
@@ -131,9 +163,7 @@ fn nothing_is_drawn_under_the_composer() {
         );
         ui.error = None;
 
-        ui.send_intent = Some(room);
         assert_composer_on_last_row(&mut ui, cols, rows, "pending send");
-        ui.send_intent = None;
     }
 
     // An agent notice goes to the client log, not the screen.

@@ -77,6 +77,7 @@ impl History {
             now,
             thumbnails,
             Default::default(),
+            &Default::default(),
         )
     }
 
@@ -89,6 +90,7 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
         filters: crate::messaging::model::RoomHistoryFilters,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
     ) -> &[Line] {
         static LINES: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.lines");
@@ -103,6 +105,7 @@ impl History {
             now / 60_000,
             thumbnails.layout_key(),
             filters,
+            submission_signature(submissions),
         );
         if self.key.is_some_and(|previous| {
             previous.0 == key.0
@@ -110,6 +113,7 @@ impl History {
                 && previous.2 == key.2
                 && previous.4 == key.4
                 && previous.5 == key.5
+                && previous.6 == key.6
                 && (previous.3 == key.3 || self.age_valid.contains(&now))
         }) {
             self.key = Some(key);
@@ -158,6 +162,7 @@ impl History {
                 width,
                 now,
                 thumbnails,
+                submissions,
             );
 
             self.push_reply_lines(
@@ -220,6 +225,7 @@ impl History {
         width: u16,
         now: u64,
         thumbnails: &mut Thumbnails,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
     ) {
         let start = lines.len();
         let header_timer = super::phases::HEADER.start();
@@ -245,6 +251,16 @@ impl History {
             .flatten();
         if attention.is_some() {
             header.push(("  [Needs developer]".into(), Tone::Text));
+        }
+        if let Some(status) = submissions.get(&prompt.id) {
+            header.push((
+                match status {
+                    super::LocalSendStatus::Pending => "  [pending]",
+                    super::LocalSendStatus::Failed => "  [failed]",
+                }
+                .into(),
+                Tone::Muted,
+            ));
         }
         header.push((
             format!("  {}", timestamp(prompt.submitted_at_ms, now)),
@@ -556,8 +572,23 @@ fn blank_row(anchor: RowAnchor) -> Line {
 }
 
 /// Which layout input changed, for the rebuild's slow-operation detail.
+fn submission_signature(
+    submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (prompt, status) in submissions {
+        prompt.0.hash(&mut hash);
+        match status {
+            super::LocalSendStatus::Pending => 0_u8,
+            super::LocalSendStatus::Failed => 1_u8,
+        }
+        .hash(&mut hash);
+    }
+    hash.finish()
+}
+
 fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str {
-    let Some((signature, room, width, minute, thumbnails, filters)) = previous else {
+    let Some((signature, room, width, minute, thumbnails, filters, submissions)) = previous else {
         return "first";
     };
     if room != next.1 {
@@ -570,6 +601,8 @@ fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str 
         "thumbnails"
     } else if filters != next.5 {
         "filters"
+    } else if submissions != next.6 {
+        "submissions"
     } else if minute != next.3 {
         "minute"
     } else {

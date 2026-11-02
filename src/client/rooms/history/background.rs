@@ -1,7 +1,10 @@
 //! One coalescing worker owns expensive layouts. Compose only exchanges Arcs.
 use super::super::thumbnails::Thumbnails;
-use super::{History, Line};
-use crate::messaging::{coordinator::BusSnapshot, model::RoomId};
+use super::{History, Line, LocalSendStatus};
+use crate::messaging::{
+    coordinator::BusSnapshot,
+    model::{PromptId, RoomId},
+};
 use crate::protocol::kitty::HostCellSize;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -29,6 +32,7 @@ struct Job {
     key: Key,
     generation: u64,
     snapshot: Arc<BusSnapshot>,
+    submissions: BTreeMap<PromptId, LocalSendStatus>,
     now: u64,
 }
 
@@ -225,6 +229,25 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
     ) {
+        self.request_lines_with_submissions(
+            snapshot,
+            room,
+            width,
+            now,
+            thumbnails,
+            Default::default(),
+        );
+    }
+
+    pub(in crate::client::rooms) fn request_lines_with_submissions(
+        &mut self,
+        snapshot: Arc<BusSnapshot>,
+        room: RoomId,
+        width: u16,
+        now: u64,
+        thumbnails: &mut Thumbnails,
+        submissions: BTreeMap<PromptId, LocalSendStatus>,
+    ) {
         static REQUEST: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.request");
         let _timer = REQUEST.start();
@@ -239,6 +262,7 @@ impl History {
                     now,
                     thumbnails,
                     room.history_filters,
+                    &submissions,
                 );
             }
             return;
@@ -321,6 +345,7 @@ impl History {
             key,
             generation,
             snapshot,
+            submissions,
             now,
         };
         let mut mailbox = background
@@ -371,6 +396,7 @@ fn run(shared: Arc<Shared>) {
             job.now,
             &mut thumbnails,
             room.history_filters,
+            &job.submissions,
         );
         #[cfg(test)]
         shared.progress.finished.fetch_add(1, Ordering::Relaxed);

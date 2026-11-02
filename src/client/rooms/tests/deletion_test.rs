@@ -40,9 +40,12 @@ fn confirmed_delete_reaches_worker_before_prior_submit_snapshot_arrives() {
     let (mut ui, room, agent) = fixture();
     let (handle, commands) = BusHandle::test_channel(Arc::clone(&ui.snapshot));
     ui.handle = Some(handle);
-    let submit = ui.queue(BusCommand::Submit(room), Effect::Submit(room, 0));
+    let submit = ui.queue(
+        BusCommand::Submit(room, Draft::default()),
+        Effect::Submit(room, 0),
+    );
     ui.tick();
-    assert!(matches!(commands.try_recv(), Ok((id, BusCommand::Submit(_))) if id == submit));
+    assert!(matches!(commands.try_recv(), Ok((id, BusCommand::Submit(..))) if id == submit));
     // Worker is polling after Submit; no new snapshot or ack has reached the UI.
     ui.queue(
         BusCommand::SetDraftText(room, "keep draft".into()),
@@ -208,16 +211,17 @@ fn confirming_room_delete_cancels_unsent_dispatch_but_preserves_other_drafts() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let (mut ui, room, _) = fixture();
     ui.locals.get_mut(&room).unwrap().text.insert("not sent");
-    ui.send_intent = Some(room);
-    ui.queue(BusCommand::Submit(room), Effect::Submit(room, 0));
+    ui.queue(
+        BusCommand::Submit(room, Draft::default()),
+        Effect::Submit(room, 0),
+    );
     ui.compute_view(100, 30);
     mouse(&mut ui, MouseEventKind::Down(MouseButton::Left), 25, 3);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(ui.send_intent.is_none());
     assert!(!ui
         .pending
         .iter()
-        .any(|p| matches!(p.command, BusCommand::Submit(_))));
+        .any(|p| matches!(p.command, BusCommand::Submit(..))));
     assert!(ui
         .pending
         .iter()

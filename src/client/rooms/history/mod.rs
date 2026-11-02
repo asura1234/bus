@@ -20,7 +20,7 @@ mod phases {
     pub(super) static THUMBNAILS: Timer = Timer::new("client.history.thumbnails");
 }
 
-use super::render::Action;
+use super::{render::Action, LocalSendStatus};
 use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
 #[cfg(test)]
 use exchange::timestamp;
@@ -143,6 +143,7 @@ type LayoutKey = (
     u64,
     Option<(u32, u32)>,
     crate::messaging::model::RoomHistoryFilters,
+    u64,
 );
 
 pub(super) fn filter_lines(

@@ -45,10 +45,9 @@ fn multi_paragraph_bracketed_paste_with_host_color_replies_round_trips_into_draf
             );
             assert_eq!(replies, 258, "host replies must retain their routing");
             assert_eq!(pastes, 1, "one paste must remain one edit");
-            assert!(ui.send_intent.is_none());
             assert!(ui.pending.iter().all(|pending| !matches!(
                 pending.command,
-                BusCommand::Submit(_) | BusCommand::AttachFile(..)
+                BusCommand::Submit(..) | BusCommand::AttachFile(..)
             )));
         }
     }
@@ -64,7 +63,6 @@ fn multi_paragraph_bracketed_paste_preserves_terminal_line_endings_in_draft() {
             ui.input(&event, false, &mut Default::default());
         }
         assert_eq!(ui.locals[&room].text.text, expected, "{line_ending:?}");
-        assert!(ui.send_intent.is_none());
     }
 }
 
@@ -122,7 +120,6 @@ fn every_shifted_symbol_types_into_the_composer() {
                 "{symbol} was not typed for {input:?}"
             );
             assert!(ui.form.is_none() && !ui.recipient_menu);
-            assert!(ui.send_intent.is_none());
         }
     }
 }
@@ -146,7 +143,6 @@ fn symbols_stay_literal_in_paste_and_forms() {
         panic!("file form lost")
     };
     assert_eq!(editor.text, "~/@+");
-    assert!(ui.send_intent.is_none());
 }
 
 #[test]
@@ -155,11 +151,10 @@ fn enter_without_checked_agents_opens_the_picker_and_preserves_draft() {
     for text in ["hello", "@author hello", "/help me", "/other"] {
         ui.locals.get_mut(&room).unwrap().text = editor::Editor::new(text.into());
         key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-        assert!(ui.send_intent.is_none());
         assert!(ui
             .pending
             .iter()
-            .all(|p| !matches!(p.command, BusCommand::Submit(_))));
+            .all(|p| !matches!(p.command, BusCommand::Submit(..))));
         assert_eq!(ui.locals[&room].text.text, text);
         assert!(ui.recipient_menu);
         assert!(!room_screen(&mut ui, 100, 30).contains("Choose agents with @ before sending."));
@@ -168,11 +163,9 @@ fn enter_without_checked_agents_opens_the_picker_and_preserves_draft() {
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::default();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(!ui.recipient_menu);
-    assert!(ui.send_intent.is_none());
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("/help".into());
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(room_screen(&mut ui, 100, 30).contains("Keyboard shortcuts"));
-    assert!(ui.send_intent.is_none());
 }
 
 #[test]
@@ -200,7 +193,6 @@ fn composer_grows_with_newlines_and_wrapping_then_shrinks_after_deletion() {
     assert_eq!(grown.height, 8, "every new blank line gets space");
     assert!(grown.y < compact.y);
     assert_eq!(grown.bottom(), compact.bottom());
-    assert!(ui.send_intent.is_none());
     for _ in 0..7 {
         key(&mut ui, KeyCode::Backspace, KeyModifiers::NONE);
     }
@@ -252,12 +244,14 @@ fn composer_uses_full_height_and_toggle_preserves_draft_and_recipients() {
     assert_eq!(composer_rect(&ui), full);
     assert_eq!(ui.locals[&room].text.text, draft);
     assert_eq!(ui.locals[&room].recipients, [agent].into());
-    assert!(ui.send_intent.is_none());
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     assert!(room_screen(&mut ui, 100, 30).contains("[x] author"));
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(ui.send_intent, Some(room));
+    assert_eq!(ui.submissions.len(), 1);
 }
 
 #[test]
@@ -310,7 +304,9 @@ fn consecutive_sends_keep_checked_recipients_and_queue_the_successor() {
             let result = match pending.command {
                 BusCommand::SetDraftText(room, text) => state.set_draft_text(room, &text),
                 BusCommand::SetRecipients(room, ids) => state.set_draft_recipients(room, ids),
-                BusCommand::Submit(room) => state.submit_draft(room, 10).map(|_| ()),
+                BusCommand::Submit(room, draft) => {
+                    state.submit_draft_exact(room, draft, 10, false).map(|_| ())
+                }
                 command => panic!("unexpected command: {command:?}"),
             };
             ui.receive_event(BusEvent::CommandFinished {
@@ -389,6 +385,153 @@ fn consecutive_sends_keep_checked_recipients_and_queue_the_successor() {
         [agent].into()
     );
     assert_eq!(ui.snapshot.state, state);
+}
+
+#[test]
+fn slow_accept_clears_sent_text_and_a_second_enter_sends_only_the_new_draft() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    ui.input(
+        &RawInputEvent::Paste("first message".into()),
+        false,
+        &mut Default::default(),
+    );
+
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(ui.locals[&room].text.text, "");
+    assert_eq!(
+        ui.pending
+            .iter()
+            .filter(|pending| matches!(pending.command, BusCommand::Submit(..)))
+            .count(),
+        1,
+        "Enter must queue its submit without waiting for draft autosaves"
+    );
+    let pending = room_screen(&mut ui, 100, 30);
+    assert!(pending.contains("first message"), "{pending}");
+    assert!(pending.contains("[pending]"), "{pending}");
+
+    ui.input(
+        &RawInputEvent::Paste("second message".into()),
+        false,
+        &mut Default::default(),
+    );
+    assert_eq!(ui.locals[&room].text.text, "second message");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(ui.locals[&room].text.text, "");
+    assert_eq!(
+        ui.pending
+            .iter()
+            .filter(|pending| matches!(pending.command, BusCommand::Submit(..)))
+            .count(),
+        2,
+        "a second Enter must never be ignored or reuse the first message"
+    );
+}
+
+#[test]
+fn failed_slow_send_marks_history_failed_and_restores_sent_text_before_new_typing() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    ui.input(
+        &RawInputEvent::Paste("recover me".into()),
+        false,
+        &mut Default::default(),
+    );
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    ui.input(
+        &RawInputEvent::Paste("new draft".into()),
+        false,
+        &mut Default::default(),
+    );
+    let submit = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(pending.command, BusCommand::Submit(..)))
+        .expect("submit is queued synchronously")
+        .id;
+    let earlier = ui
+        .pending
+        .iter()
+        .filter(|pending| pending.id < submit)
+        .map(|pending| pending.id)
+        .collect::<Vec<_>>();
+    for command_id in earlier {
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id,
+            result: Ok(()),
+        });
+    }
+
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: submit,
+        result: Err("coordinator unavailable".into()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = submit;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+
+    assert_eq!(ui.locals[&room].text.text, "recover me\nnew draft");
+    let failed = room_screen(&mut ui, 100, 30);
+    assert!(failed.contains("recover me"), "{failed}");
+    assert!(failed.contains("[failed]"), "{failed}");
+}
+
+#[test]
+fn multiline_send_and_attachments_leave_the_composer_before_acknowledgement() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    let path = std::path::PathBuf::from("/project/context.md");
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.attach_file(room, path).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.input(
+        &RawInputEvent::Paste("first line\nsecond line".into()),
+        false,
+        &mut Default::default(),
+    );
+
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(ui.locals[&room].text.text, "");
+    let pending = room_screen(&mut ui, 100, 30);
+    assert!(pending.contains("first line"), "{pending}");
+    assert!(pending.contains("second line"), "{pending}");
+    assert!(pending.contains("context.md"), "{pending}");
+    assert!(pending.contains("[pending]"), "{pending}");
+}
+
+#[test]
+fn switching_rooms_mid_send_preserves_the_new_draft_and_pending_history() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.input(
+        &RawInputEvent::Paste("send from first room".into()),
+        false,
+        &mut Default::default(),
+    );
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    ui.open_room(other);
+    ui.input(
+        &RawInputEvent::Paste("other room draft".into()),
+        false,
+        &mut Default::default(),
+    );
+    ui.open_room(room);
+
+    assert_eq!(ui.locals[&room].text.text, "");
+    assert_eq!(ui.locals[&other].text.text, "other room draft");
+    let pending = room_screen(&mut ui, 100, 30);
+    assert!(pending.contains("send from first room"), "{pending}");
+    assert!(pending.contains("[pending]"), "{pending}");
 }
 
 #[test]
@@ -537,8 +680,8 @@ fn deleting_the_line_continuation_marker_restores_enter_to_send() {
     assert_eq!(ui.locals[&room].text.text, "ready to send");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
 
-    assert_eq!(ui.locals[&room].text.text, "ready to send");
-    assert_eq!(ui.send_intent, Some(room));
+    assert_eq!(ui.locals[&room].text.text, "");
+    assert_eq!(ui.submissions.len(), 1);
 }
 
 #[test]
@@ -551,7 +694,10 @@ fn pending_send_leaves_the_status_line_under_the_composer_empty() {
         .text
         .insert("ready to send");
     let idle = room_screen(&mut ui, 100, 30);
-    ui.send_intent = Some(room);
+    ui.queue(
+        BusCommand::Submit(room, Draft::default()),
+        Effect::Submit(room, 0),
+    );
     let pending = room_screen(&mut ui, 100, 30);
     // The send is logged; flashing a status row for it only moves the composer.
     assert_eq!(pending, idle);
