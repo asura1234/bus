@@ -24,7 +24,7 @@ pub(crate) struct RestartLog {
     pub(crate) old_binary: String,
     pub(crate) new_binary: String,
     /// Whole session: `restarted`, `rolled_back`, `rollback_failed`,
-    /// `quit_failed`, or `refused`.
+    /// `quit_failed`, `relaunch_failed`, or `refused`.
     pub(crate) outcome: String,
     pub(crate) reason: String,
 }
