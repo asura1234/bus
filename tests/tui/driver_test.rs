@@ -1701,7 +1701,9 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     let session = Session::start("f-dialog");
     let work = session_dir(&session.0).join("work");
     let script = work.join("dialog.json");
-    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"CASE_DIALOG_7","actions":[{"type":"dialog","title":"Choose a path","options":["A","B"]},{"type":"reply","text":"selected {{choice}}"}]}]}"#).unwrap();
+    // Hold an unrelated bootstrap choice open so a generic Blocked wait is
+    // guaranteed to see the wrong request before CASE_DIALOG_7 can start.
+    std::fs::write(&script, r#"{"version":1,"turns":[{"contains":"Bus messaging: you are dialog-worker","actions":[{"type":"dialog","title":"Bootstrap gate","options":["Continue bootstrap"]},{"type":"reply","text":"BOOTSTRAP_DONE"}]},{"contains":"CASE_DIALOG_7","actions":[{"type":"dialog","title":"Choose a path","options":["A","B"]},{"type":"reply","text":"selected {{choice}}"}]}]}"#).unwrap();
     let args = format!("--script {}", script.display());
     let (code, added) = parse(scratch_bus(
         &session,
@@ -1721,6 +1723,7 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
         ],
     ));
     assert_eq!(code, 0, "{added}");
+    wait_for_scripted_screen(&session, "dialog-worker", "Bootstrap gate");
     let (code, sent) = parse(scratch_bus(
         &session,
         &[
@@ -1744,8 +1747,17 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     ]);
     let (code, status) = parse(scratch_bus(&session, &["message", "status", &id]));
     assert_eq!(code, 0, "{status}");
+    let (code, blocked_screen) = parse(scratch_bus(
+        &session,
+        &["agent", "observe", "dialog-worker"],
+    ));
+    assert_eq!(code, 0, "{blocked_screen}");
     let request = &status["result"]["requests"][0];
-    assert_eq!(request["start_bound"], true, "{status}");
+    assert_eq!(
+        request["start_bound"], true,
+        "{status}; observed screen: {}",
+        blocked_screen["result"]["text"]
+    );
     assert!(
         request["turn_id"]
             .as_str()
@@ -1792,6 +1804,25 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
     let request = &result["message"]["result"]["requests"][0];
     assert_eq!(request["stage"], "replied", "{result}");
     assert_eq!(request["reply"]["text"], "selected B", "{result}");
+}
+
+fn wait_for_scripted_screen(session: &Session, agent: &str, title: &str) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let (code, observed) = parse(scratch_bus(session, &["agent", "observe", agent]));
+        if code == 0
+            && observed["result"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains(title))
+        {
+            return observed["result"].clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "agent never displayed {title}: {observed}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 #[test]
