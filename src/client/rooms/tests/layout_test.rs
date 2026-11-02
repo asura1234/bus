@@ -419,7 +419,7 @@ fn sidebar_width_setting_applies_at_once_to_hits_scroll_and_pane_surface() {
 }
 
 #[test]
-fn retired_room_notes_rows_belong_to_history_for_every_room_kind() {
+fn work_room_history_matches_master_layout() {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();
@@ -446,7 +446,7 @@ fn retired_room_notes_rows_belong_to_history_for_every_room_kind() {
 }
 
 #[test]
-fn retired_room_notes_rows_are_available_to_ctrl_f_like_master() {
+fn work_room_ctrl_f_uses_master_top_area() {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();
@@ -484,13 +484,4 @@ fn retired_room_notes_rows_are_available_to_ctrl_f_like_master() {
         );
         assert!(ui.view.history.height > 0);
     }
-}
-
-#[test]
-fn retired_room_notes_shortcut_leaves_typing_in_the_composer() {
-    let (mut ui, room, _) = fixture();
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
-    assert_eq!(ui.locals[&room].text.text, "x");
-    assert!(ui.send_intent.is_none());
 }

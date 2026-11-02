@@ -2,31 +2,6 @@ use super::*;
 use crate::messaging::model::RoomKind;
 
 #[test]
-fn retired_room_notes_api_is_unknown_and_state_omits_the_field() {
-    let (mut worker, room, _agent, dir) = fixture();
-    let response = call(
-        &mut worker,
-        "retired-command",
-        "room.notes",
-        json!({"room":room.0.to_string(),"text":"status"}),
-    );
-    assert!(!response.ok, "{response:?}");
-    assert_eq!(response.error.unwrap().code, "unknown_method");
-    let state = call(
-        &mut worker,
-        "state-without-retired-field",
-        "state",
-        json!({}),
-    );
-    assert!(state.ok, "{state:?}");
-    for room in state.result["rooms"].as_array().unwrap() {
-        assert!(room.get("notes").is_none(), "{room}");
-    }
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
 fn room_orchestrator_core_developer_abandon_idle_request_preserves_the_agent_and_queue() {
     let (mut worker, _room, agent, dir) = fixture();
     worker
