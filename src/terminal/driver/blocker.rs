@@ -139,6 +139,12 @@ fn tail_clear(
     menu: Option<&Range<usize>>,
     hint: &Range<usize>,
 ) -> bool {
+    // Menu scoping may already include the rule directly above a metadata row.
+    let preceding_rule = rows[..from]
+        .iter()
+        .rev()
+        .find(|row| !plain(row).is_empty())
+        .is_some_and(|row| !meaningful(row));
     let mut below_rule = false;
     (from..=end).all(|index| {
         let row = plain(&rows[index]);
@@ -158,7 +164,7 @@ fn tail_clear(
         if keyboard_hint(row).is_some()
             || numbered(row)
             || row.starts_with("? ")
-            || row.contains(" · ")
+            || ((!hint.is_empty() || preceding_rule) && row.contains(" · "))
         {
             return true;
         }
