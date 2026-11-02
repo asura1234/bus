@@ -74,6 +74,7 @@ impl Transport for FreshLaunchNative {
                 self.submitted.send(params).unwrap();
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
+                    timestamps: Default::default(),
                 })
             }
             Method::PaneGet(params) if params.pane_id == "pane" => Ok(ResponseResult::Ok {}),
@@ -178,6 +179,7 @@ impl Transport for PollingNative {
                 self.submitted.send(()).unwrap();
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
+                    timestamps: Default::default(),
                 })
             }
             _ => panic!("unexpected terminal operation"),

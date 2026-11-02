@@ -57,6 +57,7 @@ impl BusState {
             group: None,
         });
         request.completed_at_ms = Some(now_ms);
+        request.latency.reply_captured_at_ms.get_or_insert(now_ms);
         let room = self
             .rooms
             .get_mut(&room)

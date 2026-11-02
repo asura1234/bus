@@ -596,3 +596,30 @@ fn every_provider_empty_final_is_durable_and_has_no_room_publication() {
         }
     }
 }
+
+#[test]
+fn delivery_timestamps_round_trip_and_legacy_requests_default_to_empty() {
+    let (mut state, _, request) = idle_with_queued(1_000, "timed");
+    let accepted = state.request(request).unwrap().prompt.submitted_at_ms;
+    assert_eq!(
+        state.request(request).unwrap().latency.accepted_at_ms,
+        Some(accepted)
+    );
+    state.record_queued(request, 1_005).unwrap();
+    state.record_queued(request, 900).unwrap();
+    assert_eq!(
+        state.request(request).unwrap().latency.queued_at_ms,
+        Some(1_005),
+        "a retry or backward wall clock cannot replace the first timestamp"
+    );
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][request.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("latency");
+    let restored: BusState = serde_json::from_value(document).unwrap();
+    assert!(restored.request(request).unwrap().latency.is_empty());
+    let round_trip: BusState =
+        serde_json::from_value(serde_json::to_value(&restored).unwrap()).unwrap();
+    assert_eq!(round_trip, restored);
+}

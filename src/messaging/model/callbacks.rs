@@ -27,11 +27,21 @@ impl BusState {
         let current = self.agents.get(&agent).and_then(|a| a.current_request);
         let final_event =
             matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
+        let reply_event = final_event.is_some();
+        let started_event = matches!(callback.kind, CallbackEventKind::PromptStarted);
         let disposition = self.accept_callback_unrecorded(callback);
         if let Some(callback) = final_event {
             self.record_worker_final(&callback, &disposition);
         }
         if !matches!(disposition, CallbackDisposition::Rejected(_)) {
+            if let Some(request) = current {
+                if started_event {
+                    self.record_provider_started(request, occurred_at_ms);
+                }
+                if reply_event {
+                    self.record_reply_captured(request, occurred_at_ms);
+                }
+            }
             if let Some(request) = current.and_then(|id| self.requests.get_mut(&id)) {
                 let progress = request.progress_at_ms.get_or_insert(occurred_at_ms);
                 *progress = (*progress).max(occurred_at_ms);
@@ -554,6 +564,10 @@ impl BusState {
         for member in members {
             if let Some(member) = self.requests.get_mut(&member) {
                 if !member.settled() {
+                    member
+                        .latency
+                        .reply_captured_at_ms
+                        .get_or_insert(pending.received_at_ms);
                     member.completed_at_ms = Some(completed_at_ms);
                     member.completed_reply = Some(super::types::CompletedReply {
                         content: pending.clone(),
@@ -571,6 +585,10 @@ impl BusState {
             .get_mut(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
         if !request.settled() {
+            request
+                .latency
+                .reply_captured_at_ms
+                .get_or_insert(pending.received_at_ms);
             request.completed_at_ms = Some(completed_at_ms);
             request.completed_reply = Some(super::types::CompletedReply {
                 content: pending,

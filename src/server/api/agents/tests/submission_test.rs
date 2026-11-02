@@ -711,6 +711,11 @@ async fn api_waits_for_committed_enter_within_its_delay_allowance() {
         response.contains("agent_prompted"),
         "normal committed delivery timed out: {response}"
     );
+    let body: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let timestamps = &body["result"]["timestamps"];
+    let text_written = timestamps["text_written_at_ms"].as_u64().unwrap();
+    let enter_written = timestamps["enter_written_at_ms"].as_u64().unwrap();
+    assert!(text_written <= enter_written);
     assert!(received[..text_len].iter().all(|byte| *byte == b'x'));
     assert_eq!(&received[text_len..], b"\rafter");
 }

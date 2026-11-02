@@ -243,7 +243,7 @@ impl TerminalRuntime {
             hard_deadline,
             withdraw_grace,
             clock,
-            diagnostics: diagnostics::Diagnostics::default(),
+            diagnostics: diagnostics::Diagnostics::with_timestamps(scope.timestamps()),
             startup_suggestion_open: self.startup_suggestion_open.clone(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
