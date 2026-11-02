@@ -129,7 +129,7 @@ fn last_session(
 ) -> io::Result<sessions::LocalSession> {
     let reads_perf =
         matches!(action, Action::Control(args) if args.first().is_some_and(|arg| arg == "perf"));
-    if reads_perf {
+    if reads_perf || matches!(action, Action::Dashboard) {
         registry.last()
     } else {
         registry.resume(ResumeTarget::Last)
@@ -290,7 +290,7 @@ fn session_root(
             return Ok(None);
         }
         // Stop targets the same session as control commands.
-        Action::Control(_) | Action::Stop => match explicit_root.clone() {
+        Action::Control(_) | Action::Stop | Action::Dashboard => match explicit_root.clone() {
             Some(root) => (root, None),
             None => {
                 let session = last_session(registry, &invocation.action)?;
@@ -399,6 +399,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             perf::run(&crate::utils::paths::data_dir(), &control_args[1..])
         }
         Action::Control(control_args) => control::run(&root, &control_args),
+        Action::Dashboard => dashboard::run(&root),
         Action::Stop => {
             // Stopping the server closes every agent pane; an attached UI exits
             // without saving drafts, so quit it first when one is open.

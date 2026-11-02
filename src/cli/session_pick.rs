@@ -20,6 +20,7 @@ pub(super) struct RestartRequest {
 pub(super) enum Action {
     Run,
     Sessions,
+    Dashboard,
     Resume(ResumeTarget),
     Stop,
     Restart(RestartRequest),
@@ -58,6 +59,13 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
             }
             "--help" | "-h" if action.is_none() => {
                 action = Some(Action::Help);
+                index += 1;
+            }
+            "dashboard" if action.is_none() => {
+                if !dev {
+                    return Err("dev tool: run `bus --dev dashboard`".into());
+                }
+                action = Some(Action::Dashboard);
                 index += 1;
             }
             "sessions" if action.is_none() => {
