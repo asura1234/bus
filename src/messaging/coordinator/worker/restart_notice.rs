@@ -38,10 +38,8 @@ mod tests {
     #[test]
     fn restart_failure_receipt_logs_once_without_creating_chat() {
         for outcome in ["rolled_back", "refused", "rollback_failed"] {
-            let dir = std::env::temp_dir().join(format!(
-                "bus-restart-receipt-{}-{}-{outcome}",
-                std::process::id(),
-                crate::messaging::storage::io::now_ns(),
+            let dir = crate::utils::test_temp::unique_temp_path(&format!(
+                "bus-restart-receipt-{outcome}"
             ));
             let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
             let mut record = crate::utils::restart_record::RestartLog {
