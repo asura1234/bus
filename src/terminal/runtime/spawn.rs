@@ -811,7 +811,6 @@ impl TerminalRuntime {
             content_write_lock,
             draft_input,
             driver_state: Default::default(),
-            #[cfg(test)]
             detection_content_seq,
             managed_launch_pending,
             detection_context,
