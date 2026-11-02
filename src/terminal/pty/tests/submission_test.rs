@@ -50,6 +50,7 @@ fn run_recorded_submission(
             deadline,
             reply: reply_tx,
             timestamps: Default::default(),
+            record_text_write: true,
         })
         .unwrap();
     data_tx
@@ -140,6 +141,7 @@ fn expired_queued_submission_is_not_written() {
             deadline: None,
             reply: first_reply_tx,
             timestamps: Default::default(),
+            record_text_write: true,
         })
         .unwrap();
     data_tx
@@ -150,6 +152,7 @@ fn expired_queued_submission_is_not_written() {
             deadline: Some(Instant::now() + Duration::from_millis(10)),
             reply: expired_reply_tx,
             timestamps: Default::default(),
+            record_text_write: true,
         })
         .unwrap();
 

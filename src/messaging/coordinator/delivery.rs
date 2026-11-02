@@ -4,6 +4,7 @@ use super::{
     callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
     RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
+use crate::messaging::native::TransportError;
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
@@ -466,10 +467,7 @@ impl Worker {
         );
         let method = submission_method(agent, text, terminal, pane, steer);
         let response = self.transport.request(method);
-        let native_timestamps = match &response {
-            Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
-            _ => Default::default(),
-        };
+        let native_timestamps = native_response_timestamps(&response);
         let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: identity.session_id.clone(),
@@ -507,9 +505,7 @@ impl Worker {
             "Native submit result; uncertain outcomes are never retried"
         );
         let mut state = self.state.clone();
-        state
-            .record_native_timestamps(request, native_timestamps)
-            .map_err(|e| e.to_string())?;
+        record_native_timestamps(&mut state, request, native_timestamps)?;
         state
             .record_submission(request, outcome.clone())
             .map_err(|e| e.to_string())?;
@@ -587,10 +583,7 @@ impl Worker {
                     expected_session_id: session.clone(),
                     steer: true,
                 }));
-        let native_timestamps = match &response {
-            Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
-            _ => Default::default(),
-        };
+        let native_timestamps = native_response_timestamps(&response);
         let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: Some(session.clone()),
@@ -615,9 +608,7 @@ impl Worker {
             mode = "steer", outcome = ?outcome,
             elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
         let mut state = self.state.clone();
-        state
-            .record_native_timestamps(request, native_timestamps)
-            .map_err(|e| e.to_string())?;
+        record_native_timestamps(&mut state, request, native_timestamps)?;
         state
             .record_steering(request, outcome.clone())
             .map_err(|e| e.to_string())?;
@@ -625,6 +616,25 @@ impl Worker {
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }
+}
+
+fn native_response_timestamps(
+    response: &Result<ResponseResult, TransportError>,
+) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
+    match response {
+        Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
+        _ => Default::default(),
+    }
+}
+
+fn record_native_timestamps(
+    state: &mut crate::messaging::model::BusState,
+    request: RequestId,
+    timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
+) -> Result<(), String> {
+    state
+        .record_native_timestamps(request, timestamps)
+        .map_err(|error| error.to_string())
 }
 
 fn submission_method(

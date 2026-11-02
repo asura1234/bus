@@ -411,6 +411,10 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
                 Some("parser written with the streaming API"),
                 "{provider:?}"
             );
+            assert!(
+                fixture.request(id).latency.provider_started_at_ms.is_some(),
+                "{provider:?} request {id:?} is missing its provider start"
+            );
         }
         assert_eq!(fixture.error(), None, "{provider:?}");
         let status = fixture

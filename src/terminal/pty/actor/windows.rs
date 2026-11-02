@@ -44,6 +44,7 @@ enum PtyIoDataCommand {
         deadline: Option<Instant>,
         reply: std_mpsc::Sender<std::io::Result<()>>,
         timestamps: SharedSubmissionTimestamps,
+        record_text_write: bool,
     },
 }
 
@@ -114,6 +115,7 @@ impl PtyIoActorHandle {
             delay,
             deadline,
             &InputScope::default(),
+            true,
         )
     }
 
@@ -124,6 +126,7 @@ impl PtyIoActorHandle {
         delay: Duration,
         deadline: Option<Instant>,
         scope: &InputScope,
+        record_text_write: bool,
     ) -> std::io::Result<InputCompletion> {
         let accepting = self
             .accepting
@@ -144,6 +147,7 @@ impl PtyIoActorHandle {
                 deadline,
                 reply: reply_tx,
                 timestamps: scope.timestamps(),
+                record_text_write,
             })
             .map_err(|err| match err {
                 mpsc::error::TrySendError::Full(_) => {
@@ -350,6 +354,7 @@ fn run_input_forwarder(
                 deadline,
                 reply,
                 timestamps,
+                record_text_write,
             } => {
                 let result = if deadline.is_some_and(|deadline| {
                     deadline.saturating_duration_since(Instant::now()) <= delay
@@ -358,11 +363,13 @@ fn run_input_forwarder(
                 } else {
                     let text_deadline = deadline.and_then(|deadline| deadline.checked_sub(delay));
                     write_submission_part(&write_tx, text, text_deadline).and_then(|()| {
-                        timestamps
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .text_written_at_ms
-                            .get_or_insert(crate::utils::time::now_ms());
+                        if record_text_write {
+                            timestamps
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .text_written_at_ms
+                                .get_or_insert(crate::utils::time::now_ms());
+                        }
                         // A started text write is committed. Finish Enter even if the caller
                         // stops waiting so a timeout cannot leave a partial prompt.
                         std::thread::sleep(delay);
