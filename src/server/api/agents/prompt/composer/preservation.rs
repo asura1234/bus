@@ -278,8 +278,7 @@ fn codex_clipped(screen: &str) -> bool {
     super::composer_frame(AgentKind::Codex, &lines.join("\n"))
         && lines
             .iter()
-            .filter(|line| line.trim_start().starts_with('›'))
-            .next_back()
+            .rfind(|line| line.trim_start().starts_with('›'))
             .is_some_and(|line| line.trim_end().ends_with('↑'))
 }
 

@@ -278,7 +278,7 @@ impl ObservedSubmission {
             self.inspect.editor_frame_unchanged(&screen, current)
         })?;
         self.wait_transfer(|| exchange.acknowledged())?;
-        let verified = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
+        let verified = self.checked_editor_marker(exchange, &editor.backspace, lease)?;
         if !self.inspect.verified_input(&verified, &editor.text) {
             return Err(io::Error::other(
                 "Native composer ownership could not be verified",

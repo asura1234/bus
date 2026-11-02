@@ -578,6 +578,24 @@ impl ObservedSubmission {
         result
     }
 
+    fn verified_paste_lease<'a>(
+        &self,
+        delay: Duration,
+        lease: Option<&'a super::draft_input::DraftInputLease>,
+        exchange: Option<&crate::platform::draft_editor::Exchange>,
+    ) -> io::Result<Option<&'a super::draft_input::DraftInputLease>> {
+        let Some(lease) = lease else {
+            return Ok(None);
+        };
+        self.verify_clipped_input(delay, lease, exchange)
+            .map(|verified| verified.then_some(lease))
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "Full draft verification failed after paste; no Enter was sent. Inspect the composer before resending: {error}"
+                ))
+            })
+    }
+
     fn run(
         &self,
         text: Bytes,
@@ -615,16 +633,9 @@ impl ObservedSubmission {
                 break;
             }
             if observation == InputObservation::Other {
-                if let Some(lease) = lease {
-                    let verified = self.verify_clipped_input(delay, lease, exchange).map_err(|error| {
-                        io::Error::other(format!(
-                            "Full draft verification failed after paste; no Enter was sent. Inspect the composer before resending: {error}"
-                        ))
-                    })?;
-                    if verified {
-                        verified_lease = Some(lease);
-                        break;
-                    }
+                verified_lease = self.verified_paste_lease(delay, lease, exchange)?;
+                if verified_lease.is_some() {
+                    break;
                 }
             }
             if let Err(error) = self.check_deadline() {
