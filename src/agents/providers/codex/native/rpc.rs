@@ -154,27 +154,34 @@ impl Rpc {
         message: &str,
         expected_turn: Option<&str>,
     ) -> io::Result<Value> {
-        let resolved;
-        let thread = if thread.is_empty() {
-            let loaded = self.call("thread/loaded/list", json!({"limit":2}))?;
-            let threads = loaded["data"]
-                .as_array()
-                .ok_or_else(|| io::Error::other("Codex loaded thread list is invalid"))?;
-            if threads.len() != 1 || !loaded["nextCursor"].is_null() {
-                return Err(io::Error::other(
-                    "Codex initial input requires exactly one loaded TUI thread",
-                ));
-            }
-            resolved = threads[0]
-                .as_str()
-                .filter(|id| !id.is_empty())
-                .ok_or_else(|| io::Error::other("Codex loaded thread has no identity"))?
-                .to_owned();
-            &resolved
-        } else {
-            thread
-        };
-        let active = self.active_turn(thread, false)?;
+        let (thread, active) = (|| -> io::Result<_> {
+            let thread = if thread.is_empty() {
+                let loaded = self.call("thread/loaded/list", json!({"limit":2}))?;
+                let threads = loaded["data"]
+                    .as_array()
+                    .ok_or_else(|| io::Error::other("Codex loaded thread list is invalid"))?;
+                if threads.len() != 1 || !loaded["nextCursor"].is_null() {
+                    return Err(io::Error::other(
+                        "Codex initial input requires exactly one loaded TUI thread",
+                    ));
+                }
+                threads[0]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| io::Error::other("Codex loaded thread has no identity"))?
+                    .to_owned()
+            } else {
+                thread.to_owned()
+            };
+            let active = self.active_turn(&thread, false)?;
+            Ok((thread, active))
+        })()
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Codex native preflight refused before input",
+            )
+        })?;
         if steer && (expected_turn.is_none() || active.as_deref() != expected_turn) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
