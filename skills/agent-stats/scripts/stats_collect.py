@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from stats_artifacts import (
@@ -178,9 +179,34 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
         if entries:
             provenance[p] = entries
     candidate_reports = []
+    rebases = set()
     for p in paths:
         if p.suffix == ".json":
             value = json_at(p)
+            if (
+                isinstance(value, dict)
+                and {
+                    "base",
+                    "old_head",
+                    "head",
+                    "commits_replayed",
+                    "skipped",
+                    "foreign",
+                    "own_versions_replaced",
+                    "conflicts",
+                    "resolution",
+                    "dropped_shared_infra",
+                }
+                <= value.keys()
+            ):
+                data = {
+                    k: value[k]
+                    for k in ("base", "old_head", "head", "commits_replayed")
+                }
+                key = (data["base"], data["old_head"], data["head"])
+                if key not in rebases:
+                    emit("rebase", "author", data, p)
+                    rebases.add(key)
             if (
                 isinstance(value, dict)
                 and {"head", "duration_ms", "exit_code", "results"} <= value.keys()
@@ -286,6 +312,22 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
                     path,
                 )
     if metadata:
+        task_keys = {
+            task,
+            str(metadata["number"]),
+            "pr-" + str(metadata["number"]),
+            metadata["headRefName"],
+        }
+        authors = [
+            r
+            for r in history
+            if r["kind"] in ("assignment", "handover")
+            and r["role"] == "author"
+            and r["task"] in task_keys
+            and r["ts"]
+            and datetime.fromisoformat(r["ts"].replace("Z", "+00:00"))
+            <= datetime.fromisoformat(metadata["mergedAt"].replace("Z", "+00:00"))
+        ]
         data = dict(
             number=metadata["number"],
             title=metadata["title"],
@@ -301,9 +343,12 @@ def collect(task, artifacts, gh=None, repo=None, workflow=None, history=()):
             additions=metadata["additions"],
             deletions=metadata["deletions"],
             files=metadata["changedFiles"],
-            authors=[],
+            authors=sorted({r["agent"]["name"] for r in authors}),
         )
-        emit("pr", "author", data, gh, ts=metadata["mergedAt"])
+        published = emit("pr", "author", data, gh, ts=metadata["mergedAt"])
+        for assignment in authors:
+            published["sources"].extend(assignment["sources"])
+        published["id"] = digest({k: v for k, v in published.items() if k != "id"})
         if repo:
             for row in [
                 x

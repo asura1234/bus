@@ -3,7 +3,7 @@
   "properties": {
     "schema_version": {"type": "integer","enum": [1]},
     "id": {"type": "string","minLength": 1,"pattern": "^[0-9a-f]{64}$"},
-    "kind": {"type": "string","minLength": 1,"enum": ["assignment","handover","pr","review","root_cause","run","coverage","delta","workflow","delivery","compaction","phase","escape","assignment_end"]},
+    "kind": {"type": "string","minLength": 1,"enum": ["assignment","handover","pr","review","root_cause","run","coverage","delta","workflow","delivery","compaction","phase","escape","assignment_end","rebase"]},
     "task": {"type": "string","minLength": 1,"pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"},
     "ts": {"type": ["string","null"],"format": "date-time"},
     "role": {"type": "string","minLength": 1,"enum": ["author","reviewer","tester","explorer","investigator","operator","orchestrator"]},
@@ -28,6 +28,7 @@
     "compaction": {"type": "object","properties": {"count": {"type": "integer","minimum": 0},"last_at_ms": {"type": ["integer","null"],"minimum": 0}},"required": ["count","last_at_ms"],"additionalProperties": false},
     "phase": {"type": "object","properties": {"phase": {"type": "string","enum": ["work","waiting_review","in_review","gate","waiting_build_slot"]},"transition": {"type": "string","enum": ["start","end"]},"start_id": {"type": ["string","null"],"pattern": "^[0-9a-f]{64}$"},"duration_ms": {"type": ["integer","null"],"minimum": 0},"artifact_sha": {"type": ["string","null"],"pattern": "^[0-9a-f]{64}$"}},"required": ["phase","transition","start_id","duration_ms","artifact_sha"],"additionalProperties": false},
     "escape": {"type": "object","properties": {"ready_head": {"type": "string","pattern": "^[0-9a-f]{7,64}$"},"defect_head": {"type": "string","pattern": "^[0-9a-f]{7,64}$"},"claim_event": {"type": "string","pattern": "^[0-9a-f]{64}$"},"locations": {"type": "array","minItems": 1,"items": {"type": "string","minLength": 1}},"detected_by": {"type": "array","minItems": 1,"items": {"type": "string","enum": ["review","gate","live"]}},"proof": {"type": "string","enum": ["unchanged-cited-files"]}},"required": ["ready_head","defect_head","claim_event","locations","detected_by","proof"],"additionalProperties": false},
+    "rebase": {"type":"object","properties":{"base":{"type":"string","pattern":"^[0-9a-f]{7,64}$"},"old_head":{"type":"string","pattern":"^[0-9a-f]{7,64}$"},"head":{"type":"string","pattern":"^[0-9a-f]{7,64}$"},"commits_replayed":{"type":"integer","minimum":0}},"required":["base","old_head","head","commits_replayed"],"additionalProperties":false},
     "assignment_end": {"type": "object","properties": {"assignment_id": {"type": "string","pattern": "^[0-9a-f]{64}$"},"outcome": {"type": "string","enum": ["completed","stopped_early","replaced","cancelled"]},"proven": {"type": "boolean"},"reason": {"type": "string","minLength": 1},"message_ids": {"type": "array","items": {"type": "integer","minimum": 1}}},"required": ["assignment_id","outcome","proven","reason","message_ids"],"additionalProperties": false}
   }
 }

@@ -2,9 +2,11 @@
 
 import re
 from collections import defaultdict
+from datetime import datetime
 
 COUNTS = (
     "assignments",
+    "authored_prs",
     "handovers",
     "review_rounds",
     "unique_issues",
@@ -67,6 +69,7 @@ def report(rows):
     rows = projected(rows)
     board = {}
     reviews = [r for r in rows if r["kind"] == "review"]
+    assignments = [r for r in rows if r["kind"] in ("assignment", "handover")]
     last_delivery = {
         (r["task"], r["data"]["request_id"]): r["id"]
         for r in rows
@@ -149,6 +152,22 @@ def report(rows):
                     value["findings_by_dimension"][dimension] = (
                         value["findings_by_dimension"].get(dimension, 0) + 1
                     )
+        elif kind == "pr":
+            for name in data["authors"]:
+                candidates = [
+                    r
+                    for r in assignments
+                    if r["agent"]["name"] == name
+                    and r["role"] == "author"
+                    and r["task"] in {row["task"], str(data["number"]), data["branch"]}
+                    and r["ts"]
+                    and datetime.fromisoformat(r["ts"].replace("Z", "+00:00"))
+                    <= datetime.fromisoformat(data["merged_at"].replace("Z", "+00:00"))
+                ]
+                identities = {str(r["agent"]) for r in candidates}
+                entry(
+                    row, name, candidates[0]["agent"] if len(identities) == 1 else None
+                )["authored_prs"] += 1
         elif kind == "review":
             entry(row)["review_rounds"] += 1
         elif kind == "escape":
@@ -239,6 +258,16 @@ def report(rows):
             unmeasured=sorted(unmeasured),
         ),
         root_causes=len(roots),
+        rebases_by_task={
+            task: len(
+                {
+                    (r["data"]["base"], r["data"]["old_head"], r["data"]["head"])
+                    for r in rows
+                    if r["kind"] == "rebase" and r["task"] == task
+                }
+            )
+            for task in sorted({r["task"] for r in rows if r["kind"] == "rebase"})
+        },
         compactions_by_agent=dict(sorted(compactions.items())),
     )
 
@@ -249,12 +278,12 @@ def markdown(value):
         "",
         "Observed counts and sample sizes; unknown means unavailable. Workload is not normalized. Proven-event counts do not establish zero incidence when evidence is missing.",
         "",
-        "| Role | Provider / model | Agents | Unique | Shared | APPLY / REJECT | Stopped early |",
-        "|---|---|---:|---:|---:|---:|---:|",
+        "| Role | Provider / model | Agents | Authored PRs | Unique | Shared | APPLY / REJECT | Stopped early |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for r in value["model_leaderboard"]:
         lines.append(
-            f"| {r['role']} | {r['provider']} / {r['model']} | {r['agents']} | {r['unique_issues']} | {r['shared_issues']} | {r['applied']} / {r['rejected']} | {r['stopped_early']} |"
+            f"| {r['role']} | {r['provider']} / {r['model']} | {r['agents']} | {r['authored_prs']} | {r['unique_issues']} | {r['shared_issues']} | {r['applied']} / {r['rejected']} | {r['stopped_early']} |"
         )
     lines += [
         "",

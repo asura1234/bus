@@ -464,3 +464,90 @@ def test_current_gate_artifact_uses_its_canonical_verifier(tmp_path):
     )
     assert r.returncode == 1
     assert not (tmp_path / "stats/events.jsonl").exists()
+
+
+def test_author_assignments_link_exact_pr_or_branch_before_merge(tmp_path):
+    sys.path.insert(0, str(CLI.parent))
+    from stats_collect import collect
+    from stats_report import report
+    from stats_schema import record, source, unknown
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    gh = tmp_path / "gh.json"
+    gh.write_text(
+        json.dumps(
+            dict(
+                number=7,
+                title="Recorded PR",
+                url="https://example.org/7",
+                state="MERGED",
+                headRefName="feat/tracked",
+                headRefOid="a" * 40,
+                createdAt="2026-11-02T01:00:00Z",
+                mergedAt="2026-11-02T03:00:00Z",
+                mergeCommit={"oid": "b" * 40},
+                author={"login": "developer"},
+                commits=[{"oid": "a" * 40}],
+                additions=10,
+                deletions=2,
+                changedFiles=3,
+            )
+        )
+    )
+
+    def assigned(task, name, role="author", at="2026-11-02T02:00:00Z"):
+        actor = dict(
+            id=name, name=name, provider="recorded-provider", model="recorded-model"
+        )
+        return record(
+            "assignment",
+            task,
+            role,
+            actor,
+            unknown(),
+            [source(gh)],
+            dict(message_id=None, room_id=568, workspace_snapshot=None),
+            at,
+        )
+
+    history = [
+        assigned("feat/tracked", "first"),
+        assigned("pr-7", "second"),
+        assigned("7", "third"),
+        assigned("other-task", "unrelated"),
+        assigned("pr-7", "late", at="2026-11-02T04:00:00Z"),
+        assigned("pr-7", "reviewer", "reviewer"),
+    ]
+    rows = collect("pr-7", root, gh=gh, history=history)
+    pr = next(r for r in rows if r["kind"] == "pr")
+    assert pr["data"]["authors"] == ["first", "second", "third"]
+    assert len(pr["sources"]) == 4
+    board = report(history + rows)["model_leaderboard"]
+    assert next(r for r in board if r["role"] == "author")["authored_prs"] == 3
+
+
+def test_completed_rebase_receipts_are_counted_once_not_workflow_mentions(tmp_path):
+    sys.path.insert(0, str(CLI.parent))
+    from stats_collect import collect
+    from stats_report import report
+
+    receipt = dict(
+        base="a" * 40,
+        old_head="b" * 40,
+        head="c" * 40,
+        commits_replayed=15,
+        skipped=1,
+        foreign=2,
+        own_versions_replaced=0,
+        conflicts=["recorded-path"],
+        resolution="recorded resolution",
+        dropped_shared_infra=[],
+    )
+    for name in ("first", "copy"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "result.json").write_text(json.dumps(receipt))
+    rows = collect("pr-7", tmp_path)
+    assert len([r for r in rows if r["kind"] == "rebase"]) == 1
+    assert report(rows)["rebases_by_task"] == {"pr-7": 1}

@@ -12,6 +12,13 @@ Hand-written model annotations in a review lane are not model evidence.
 For an orchestrator's own coordinating task, use its ID for both selectors;
 its work-room binding is checked even though its home room is MASTER.
 
+Use `pr-N`, the numeric PR number, or the exact GitHub branch name as the
+assignment task key to link author assignments to merged PR facts. Only
+assignments observed before the merge qualify. Authored PR counts describe
+participation; shared authors each receive one participation count. Completed
+rebase receipts supply old/new/base SHAs and replayed commits; workflow mentions
+remain timeline context and do not count as completed rebases.
+
 For reliable forward attribution, end a review or validation phase with its
 actual artifact path. That binds its exact content hash to the assignment's
 identity and an automatically observed completion time. Reruns that produce
