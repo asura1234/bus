@@ -2,7 +2,13 @@ use super::*;
 use crate::protocol::keys::KeyboardProtocol;
 
 fn menu(text: &str) -> Grid {
-    let mut grid = Grid::blank(80, 12);
+    let cols = text
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(80);
+    let mut grid = Grid::blank(cols as u16, text.lines().count().max(12) as u16);
     for (row, text) in text.lines().enumerate() {
         for (col, c) in text.chars().enumerate() {
             grid.cells[row][col].symbol = c.to_string();
@@ -103,11 +109,13 @@ async fn observing_terminal_preserves_unpublished_dirty_rows() {
     let TerminalDirtyPatchOutcome::Patch(patch) = after_observation else {
         panic!("read-only observation must retain the unpublished patch");
     };
-    assert!(patch.rows.iter().any(|(_, cells)| cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>()
-        .contains("NEW")));
+    assert!(patch.rows.iter().any(|(_, cells)| {
+        cells
+            .iter()
+            .map(|cell| cell.symbol.as_str())
+            .collect::<String>()
+            .contains("NEW")
+    }));
 }
 
 #[tokio::test]
@@ -297,7 +305,7 @@ fn driver_blocker_uses_controls_without_provider_vocabulary() {
         "Unfamiliar shell asks [Y/n] ",
         "Queued questions\nshift+left to answer",
     ] {
-        assert!(blocker(&menu(screen)).is_some(), "{screen}");
+        assert!(blocker(&menu(screen), false).is_some(), "{screen}");
         assert!(has_input_controls(screen), "{screen}");
     }
 }
@@ -309,7 +317,7 @@ fn driver_blocker_ignores_transcript_and_draft_menu_text() {
         "Old question\n❯ Alpha\n  Beta\nEnter to select · Esc to cancel\n\n> Current editable draft",
         "A discussion of enter submit and esc cancel, without a control row",
     ] {
-        assert!(blocker(&menu(screen)).is_none(), "{screen}");
+        assert!(blocker(&menu(screen), false).is_none(), "{screen}");
         assert!(!has_input_controls(screen), "{screen}");
     }
 }
@@ -319,7 +327,19 @@ fn driver_blocker_episode_ignores_selection_but_changes_with_question() {
     let first = "Question one\n❯ 1. Alpha\n  2. Beta\nEnter select · Esc cancel";
     let moved = "Question one\n  1. Alpha\n❯ 2. Beta\nEnter select · Esc cancel";
     let other = moved.replace("Question one", "Question two");
-    let id = blocker(&menu(first)).expect("live controls");
-    assert_eq!(Some(id.clone()), blocker(&menu(moved)));
-    assert_ne!(Some(id), blocker(&menu(&other)));
+    let id = blocker(&menu(first), false).expect("live controls");
+    assert_eq!(Some(id.clone()), blocker(&menu(moved), false));
+    assert_ne!(Some(id), blocker(&menu(&other), false));
 }
+
+#[test]
+fn driver_blocker_reads_captured_claude_multiselect() {
+    let screen = include_str!("../../../../tests/fixtures/claude-question/multi-select.txt");
+    assert!(
+        blocker(&menu(screen), false).is_some(),
+        "captured live checkbox controls: {screen}"
+    );
+}
+
+#[path = "blocker_test.rs"]
+mod blocker_regressions;

@@ -477,7 +477,12 @@ impl App {
             .lookup_runtime_sender(ws_idx, pane_id)
             .and_then(|runtime| crate::terminal::driver::observe(runtime).ok());
         let screen_detection_skipped = observed.is_none();
-        let dialog = observed.and_then(|(grid, _)| crate::terminal::driver::blocker(&grid));
+        let dialog = observed.and_then(|(grid, _)| {
+            crate::terminal::driver::blocker(
+                &grid,
+                pane.agent_status == crate::protocol::api::schema::AgentStatus::Working,
+            )
+        });
         Some(crate::protocol::api::schema::AgentInfo {
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)

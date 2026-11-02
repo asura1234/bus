@@ -248,3 +248,23 @@ async fn a_provider_without_observed_submission_keeps_its_visible_idle_signal() 
         AgentState::Blocked
     );
 }
+
+#[tokio::test]
+async fn codex_runtime_keeps_stale_question_activity_working() {
+    for (activity, hint) in [
+        ("• Working (12s • esc to interrupt)", "    shift+left to answer"),
+        (
+            "• Waiting for background terminal (39m 17s • esc to interrupt) · 1 background terminal",
+            "    shift+← to answer",
+        ),
+    ] {
+        let screen = format!(
+            "{activity}\n\n• Queued follow-up inputs\n  ? 1 question\n{hint}\n\n› Ask Codex to do anything\n"
+        );
+        assert_eq!(
+            detect(AgentKind::Codex, &screen, false, None, false).await,
+            AgentState::Working,
+            "a collapsed stale question must not replace visible ongoing activity: {screen}"
+        );
+    }
+}

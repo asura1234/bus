@@ -628,7 +628,12 @@ impl DetectionTask {
             status.pending_idle.clear();
             return;
         };
-        if !process_exited && crate::terminal::driver::has_input_controls(&content) {
+        if !process_exited
+            && crate::terminal::driver::has_blocking_input_controls(
+                &content,
+                screen_detection.visible_working,
+            )
+        {
             screen_detection.state = AgentState::Blocked;
             screen_detection.visible_blocker = true;
             screen_detection.visible_idle = false;
@@ -908,6 +913,51 @@ mod blocked_tests {
             scan("kimi-k2.5 thinking [2 agents running]", true).await,
             (AgentState::Working, false)
         );
+    }
+
+    async fn scan_codex_controls(screen: &str) -> (AgentState, bool) {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(180, 64);
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+        let result = runtime
+            .test_scan_detection_context(AgentKind::Codex, AgentState::Working)
+            .await;
+        assert!(
+            writes.try_recv().is_err(),
+            "state detection never answers controls"
+        );
+        result
+    }
+
+    #[tokio::test]
+    async fn driver_pending_question_shortcut_does_not_replace_live_working_state() {
+        for screen in [
+            include_str!("../../../tests/fixtures/codex-question/collapsed.txt"),
+            include_str!("../../../tests/fixtures/codex-question/collapsed-warning.txt"),
+            include_str!(
+                "../../../tests/fixtures/codex-question/queued-message-hides-question.txt"
+            ),
+        ] {
+            assert_eq!(
+                scan_codex_controls(screen).await,
+                (AgentState::Working, false),
+                "{screen}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn driver_foreground_controls_override_working_and_pending_question_chrome() {
+        for screen in [
+            include_str!("../../../tests/fixtures/codex-question/expanded-working.txt"),
+            "• Working (4s • esc to interrupt)\n• Queued follow-up inputs\n  ? 1 question\n    shift+left to answer\nPress enter to confirm or esc to cancel\n› 1. Yes, proceed\n",
+            "• Working (17s • esc to interrupt)\nWhat token should be used?\nType your answer\nenter submit   ⌃] skip   ⇧→ main prompt\n",
+        ] {
+            assert_eq!(
+                scan_codex_controls(screen).await,
+                (AgentState::Blocked, true),
+                "{screen}"
+            );
+        }
     }
 
     fn feed_pty(runtime: &super::super::TerminalRuntime, bytes: &[u8]) {

@@ -193,13 +193,21 @@ pub(crate) fn selection_identity(
 }
 
 pub(super) fn option_body(row: &str) -> (&str, bool) {
-    let row = row.trim().trim_matches(['│', '┃']).trim();
-    let selected = row.starts_with(['❯', '›', '>', '●', '◉', '▶', '→']);
+    let row = row.trim().trim_matches(['│', '┃', '║']).trim();
+    let selected = row.starts_with(['❯', '❭', '›', '>', '●', '◉', '▶', '→']);
     let row = if selected {
         row.chars()
             .next()
             .map_or(row, |c| &row[c.len_utf8()..])
             .trim_start()
+    } else {
+        row
+    };
+    let row = if !selected {
+        row.strip_prefix('·')
+            .map(str::trim_start)
+            .filter(|row| row.starts_with(|ch: char| ch.is_ascii_digit()))
+            .unwrap_or(row)
     } else {
         row
     };
@@ -213,7 +221,7 @@ pub(super) fn option_label(row: &str) -> (&str, bool) {
         && row
             .as_bytes()
             .get(digits)
-            .is_some_and(|c| matches!(c, b'.' | b')' | b':'))
+            .is_some_and(|c| matches!(c, b'.' | b')' | b':') || c.is_ascii_whitespace())
     {
         row[digits + 1..].trim_start()
     } else {
