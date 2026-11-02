@@ -559,6 +559,7 @@ impl DetectionTask {
                 }
                 status.agent_startup_grace_until = None;
                 status.pending_idle.clear();
+                self.detection_notify.notify_one();
                 return true;
             }
         }
@@ -1121,5 +1122,9 @@ mod blocked_tests {
         tokio::time::timeout(Duration::from_millis(50), task.wait_for_change(&status))
             .await
             .expect("startup grace did not wake without output");
+        assert!(task.startup_grace_blocks_read(&mut status, Instant::now(), false));
+        tokio::time::timeout(Duration::ZERO, task.detection_notify.notified())
+            .await
+            .expect("startup grace did not schedule the required follow-up scan");
     }
 }
