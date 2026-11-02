@@ -58,3 +58,73 @@ fn reply_capture_diagnostics_use_claude_and_cursor_correlation_fields() {
         assert!(!log.contains("PRIVATE"), "{log}");
     }
 }
+
+#[test]
+fn paired_native_frontend_is_one_runtime_but_nested_tools_remain_nested() {
+    use crate::{
+        agents::{identify::ProviderProcess, AgentKind},
+        platform::ProcessInstance,
+    };
+    let backend = ProcessInstance {
+        pid: 10,
+        birth: 100,
+    };
+    let frontend = ProcessInstance {
+        pid: 20,
+        birth: 200,
+    };
+    let codex = Some(ProviderProcess {
+        agent: AgentKind::Codex,
+        launcher: false,
+    });
+    let launcher = Some(ProviderProcess {
+        agent: AgentKind::Codex,
+        launcher: true,
+    });
+    let shell = (
+        ProcessInstance {
+            pid: 30,
+            birth: 300,
+        },
+        None,
+    );
+    let pair = [(backend, codex), shell, (frontend, launcher)];
+    assert!(!provider_chain_is_nested(&pair, Some(frontend)));
+    assert!(provider_chain_is_nested(&pair, None));
+    assert!(provider_chain_is_nested(
+        &pair,
+        Some(ProcessInstance {
+            birth: 199,
+            ..frontend
+        })
+    ));
+    let nested = [
+        (
+            ProcessInstance {
+                pid: 40,
+                birth: 400,
+            },
+            codex,
+        ),
+        shell,
+        (backend, codex),
+        shell,
+        (frontend, launcher),
+    ];
+    assert!(
+        provider_chain_is_nested(&nested, Some(frontend)),
+        "a nested Codex tool must not become the managed agent"
+    );
+    let foreign = [
+        (backend, codex),
+        shell,
+        (
+            frontend,
+            Some(ProviderProcess {
+                agent: AgentKind::Claude,
+                launcher: false,
+            }),
+        ),
+    ];
+    assert!(provider_chain_is_nested(&foreign, Some(frontend)));
+}
