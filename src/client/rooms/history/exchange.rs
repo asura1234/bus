@@ -265,7 +265,7 @@ impl History {
                 let newest = members.iter().rev().find(|id| {
                     state
                         .request(**id)
-                        .is_some_and(|member| member.room_id == room.id)
+                        .is_some_and(|member| member.room_id == room.id && visible_request(member))
                 });
                 if newest.is_some_and(|last| *last != request.id) {
                     continue;
@@ -429,6 +429,11 @@ fn wrap_header(
         .collect()
 }
 
+/// Routing envelopes have neither a chat body nor a shared-reply slot.
+fn visible_request(request: &Request) -> bool {
+    !request.bus_generated || !matches!(request.prompt.author, Author::Agent(_))
+}
+
 /// The room's history entries in display order: requests grouped by prompt,
 /// then authored notices.
 fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
@@ -439,7 +444,7 @@ fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Ex
     // or a provider's answer to one into history, including archived requests.
     for request in state.requests().filter(|r| r.room_id == room.id) {
         let prompt = &request.prompt;
-        if request.bus_generated && matches!(prompt.author, Author::Agent(_)) {
+        if !visible_request(request) {
             continue;
         }
         exchanges
