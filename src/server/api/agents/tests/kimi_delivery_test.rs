@@ -323,6 +323,7 @@ async fn stranded_delivery(interrupt: bool, quarantined: bool) {
             AgentSendKeysParams {
                 target: pane,
                 keys: vec!["esc".into()],
+                native_interrupt: None,
             },
         );
         assert!(!result.contains("error"), "{result}");

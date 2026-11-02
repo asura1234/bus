@@ -259,6 +259,7 @@ async fn rejected_post_restart_prompt_does_not_reset_native_resume_deadline() {
                             expected_agent: "codex".into(),
                             expected_session_id: "saved-session".into(),
                             steer: false,
+                            expected_turn_id: None,
                         },
                     ),
                 },
