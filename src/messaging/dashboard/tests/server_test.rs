@@ -206,3 +206,16 @@ fn ordinary_browser_disconnects_and_header_timeouts_never_enter_warning_pipe() {
     });
     assert!(!capture.text().contains("WARN"), "{}", capture.text());
 }
+
+#[test]
+fn dashboard_health_names_the_build_that_embeds_the_page() {
+    let response = http_response(
+        Path::new("/nonexistent-dashboard-test"),
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n",
+        "127.0.0.1:1234",
+        "test-nonce",
+    );
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["token"], "test-nonce");
+    assert_eq!(body["build"], env!("BUS_BUILD_SHA"));
+}
