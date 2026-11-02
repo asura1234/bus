@@ -60,8 +60,7 @@ impl BusState {
     }
 
     pub(super) fn orchestrator_final_to_worker(&self, request: &Request) -> bool {
-        matches!(request.prompt.author, Author::Agent(author)
-            if self.agent(author).is_some_and(|agent| agent.orchestrates.is_none()))
+        self.worker_author(&request.prompt.author)
             && self
                 .agent(request.agent_id)
                 .is_some_and(|agent| agent.orchestrates.is_some())
@@ -69,6 +68,16 @@ impl BusState {
                 .completed_reply
                 .as_ref()
                 .is_some_and(|reply| reply.group.is_some())
+    }
+
+    fn worker_author(&self, author: &Author) -> bool {
+        let Author::Agent(id) = author else {
+            return false;
+        };
+        self.agent(*id)
+            .map(|agent| agent.orchestrates)
+            .or_else(|| self.retired_agent(*id).map(|agent| agent.orchestrates))
+            .is_some_and(|orchestrates| orchestrates.is_none())
     }
 
     /// A decision made in response to a worker belongs in MASTER. The source
@@ -106,11 +115,7 @@ impl BusState {
         }
         let worker_request = group
             .iter()
-            .filter(|request| !request.settled())
-            .find(|request| {
-                matches!(request.prompt.author, Author::Agent(id)
-                if self.agent(id).is_some_and(|author| author.orchestrates.is_none()))
-            });
+            .find(|request| self.worker_author(&request.prompt.author));
         let Some(worker_request) = worker_request else {
             return Ok(());
         };
