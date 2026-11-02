@@ -249,6 +249,12 @@ pub(crate) fn run_handoff_entry() -> io::Result<()> {
 pub(crate) fn run_session_coordinator() -> io::Result<()> {
     let root = crate::utils::env::bus_data_dir()
         .ok_or_else(|| io::Error::other("BUS_DATA_DIR is required for a session coordinator"))?;
+    let logging = crate::utils::logging::init_file_logging_at(
+        crate::utils::paths::data_dir_for(Some(crate::messaging::coordinator::DEFAULT_SESSION)),
+        "herdr-client.log",
+        &super::logging_options(),
+    );
+    crate::utils::logging::startup("client", &logging);
     let handle = crate::messaging::coordinator::BusHandle::start(
         root.clone(),
         crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
@@ -825,7 +831,7 @@ mod tests {
             .contains("rollback failed: old binary missing"));
         assert_eq!(effects.coordinators, vec![plan.old_binary.clone()]);
         let notice = restart_record::notice_text(&record);
-        assert!(!notice.contains("rolled back"), "{notice}");
+        assert!(notice.is_none());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -841,7 +847,7 @@ mod tests {
         assert_eq!(record.outcome, "rollback_failed");
         assert!(effects.killed.contains(&8), "{:?}", effects.killed);
         let notice = restart_record::notice_text(&record);
-        assert!(!notice.contains("rolled back to"), "{notice}");
+        assert!(notice.is_none());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -877,7 +883,7 @@ mod tests {
         let record = execute_handoff(&plan, &mut effects);
         assert_ne!(record.outcome, "rolled_back");
         let notice = restart_record::notice_text(&record);
-        assert!(!notice.contains("rolled back"), "{notice}");
+        assert!(notice.is_none());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -975,16 +981,8 @@ mod tests {
         assert_eq!(record.outcome, "refused");
         assert_eq!(record.old_sha, recorded);
         assert_eq!(record.new_binary, refuse.display().to_string());
-        let notice = restart_record::notice_text(&record);
-        assert!(
-            notice.contains(&format!("still serving {recorded}")),
-            "{notice}"
-        );
-        assert!(
-            notice.contains(&format!("{} was not started", refuse.display())),
-            "{notice}"
-        );
-        assert!(!notice.contains("not serving"), "{notice}");
+        assert!(restart_record::notice_text(&record).is_none());
+        assert!(!record.reason.is_empty());
         assert!(!restart_record::restart_lock_path(&root).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }

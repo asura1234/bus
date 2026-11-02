@@ -52,3 +52,14 @@ that actual journal atomic-replace operation to fail. Record the fault paths.
 
 1. Type `retained-save-draft` into the composer, then press Ctrl+Q. Wait for `bus.command.failed` or `bus.storage.paused` in the client log and `bus.quit.warning`. Capture a full frame, screenshot and effects. The draft remains; no save error, unsaved warning, force-quit hint, retry hint or storage marker is drawn. The log contains the failed command and cause.
 2. Remove only the injected empty state.journal.json directory and restore the journal backup if one existed. Wait for the force window to expire using the timestamp from `bus.quit.warning`, then press Ctrl+Q to retry saving. Verify successful clean exit and that the saved draft equals `retained-save-draft`; scan the complete recording for error text and retain the logs.
+
+### ERR-04 — Failed restart outcome
+
+Preconditions/setup: Create/select a fresh scratch room `restart-errors` and bind
+one fake Codex orchestrator in MASTER. Fixture writes may place a complete
+RestartLog in only this driver's `data/restarts/outcome.json`; no restart command
+or live server handoff is performed. Record old/new SHAs, binaries, actor, timestamp,
+outcome and a unique diagnostic reason.
+
+1. For each `rolled_back`, `refused` and `rollback_failed` outcome, write the fixture record. Wait for the contextual restart diagnostic in this session's client log and for the outcome file to be consumed. Capture the full room frame after each: no failure cause, rollback/refusal body or recovery text appears. A later tick must not duplicate the diagnostic.
+2. Write a `restarted` record with a diagnostic reason. Wait for its safe successful-restart announcement. Capture the full frame, screenshot and effects: the ordinary announcement remains visible, while the reason appears only in the contextual client log. Inspect the complete recording for every unique reason, then stop the scratch session.

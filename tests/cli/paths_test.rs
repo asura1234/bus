@@ -309,3 +309,88 @@ fn notify_you_help_explains_developer_recipient_and_mandatory_notifications() {
     }
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn headless_restart_failure_reaches_the_client_log_before_outcome_consumption() {
+    use std::process::{Child, Stdio};
+    use std::time::{Duration, Instant};
+    struct ScratchCoordinator {
+        child: Child,
+        root: std::path::PathBuf,
+    }
+    impl Drop for ScratchCoordinator {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+    let root = isolated_home("noerr-headless");
+    let home = root.join("home");
+    let restarts = root.join("restarts");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&restarts).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [&root, &home, &restarts] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    let outcome = restarts.join("outcome.json");
+    std::fs::write(&outcome, serde_json::to_vec(&serde_json::json!({
+        "at_ms":1000,"who":"user:headless-test","old_sha":"a".repeat(40),"new_sha":"b".repeat(40),
+        "old_binary":"/old","new_binary":"/new","outcome":"rolled_back","reason":"HEADLESS_RESTART_CAUSE_SENTINEL"
+    })).unwrap()).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
+    command
+        .arg("--session-coordinator")
+        .env("BUS_DATA_DIR", &root)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("BUS_LOG", "bus=info")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "BUS_SESSION_ID",
+        "BUS_DEV",
+        "HERDR_ENV",
+        "HERDR_SESSION",
+        "HERDR_SOCKET_PATH",
+        "HERDR_CLIENT_SOCKET_PATH",
+        "HERDR_CONFIG_PATH",
+    ] {
+        command.env_remove(key);
+    }
+    let mut scratch = ScratchCoordinator {
+        child: command.spawn().unwrap(),
+        root,
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while outcome.exists() {
+        assert!(
+            scratch.child.try_wait().unwrap().is_none(),
+            "headless coordinator exited before consuming its outcome"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "headless coordinator did not consume outcome"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let path = scratch
+        .root
+        .join("herdr-config/sessions/bus/herdr-client.log");
+    let log = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        log.contains("HEADLESS_RESTART_CAUSE_SENTINEL"),
+        "headless consumption must retain its diagnostic in the client log: {}: {log}",
+        path.display()
+    );
+    assert!(
+        log.contains("rolled_back") && log.contains("user:headless-test"),
+        "{log}"
+    );
+}

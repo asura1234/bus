@@ -1500,7 +1500,19 @@ fn a_restart_burst_posts_no_per_request_reply_not_captured() {
         Some("reply_not_captured")
     );
     assert!(state
-        .announce_restart("Restarted old -> new (by agent:9).", now)
+        .announce_restart(
+            &crate::utils::restart_record::RestartLog {
+                at_ms: now,
+                who: "agent:9".into(),
+                old_sha: "old".into(),
+                new_sha: "new".into(),
+                old_binary: "/old".into(),
+                new_binary: "/new".into(),
+                outcome: "restarted".into(),
+                reason: String::new()
+            },
+            now
+        )
         .unwrap());
     f.worker.save(state).unwrap();
     collect(&mut f);
@@ -1658,7 +1670,19 @@ fn request_starting_after_restart_keeps_reply_not_captured() {
     let now = io::now_ms();
     let mut state = f.worker.state.clone();
     assert!(state
-        .announce_restart("Restarted old -> new (by agent:9).", now - 60_000)
+        .announce_restart(
+            &crate::utils::restart_record::RestartLog {
+                at_ms: now,
+                who: "agent:9".into(),
+                old_sha: "old".into(),
+                new_sha: "new".into(),
+                old_binary: "/old".into(),
+                new_binary: "/new".into(),
+                outcome: "restarted".into(),
+                reason: String::new()
+            },
+            now - 60_000
+        )
         .unwrap());
     f.worker.save(state).unwrap();
     let orch = f.orch;

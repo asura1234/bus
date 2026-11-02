@@ -611,3 +611,49 @@ fn tui_error_text_latest_only_cache_cannot_restore_diagnostic_chat() {
     ui.receive_snapshot(Arc::new(snapshot));
     assert_no_diagnostics(&mut ui, &["LEGACY_DIAGNOSTIC_SENTINEL"]);
 }
+
+#[test]
+fn tui_error_text_restart_outcomes_never_draw_a_diagnostic() {
+    for outcome in ["rolled_back", "refused", "rollback_failed", "restarted"] {
+        let (mut ui, room, _) = fixture();
+        let mut snapshot = (*ui.snapshot).clone();
+        orchestrate(&mut snapshot.state, room);
+        let record = crate::utils::restart_record::RestartLog {
+            at_ms: 1000,
+            who: "user:test".into(),
+            old_sha: "a".repeat(40),
+            new_sha: "b".repeat(40),
+            old_binary: "/old".into(),
+            new_binary: "/new".into(),
+            outcome: outcome.into(),
+            reason: "RESTART_CAUSE_SENTINEL".into(),
+        };
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            snapshot.state.announce_restart(&record, 1000).unwrap();
+            snapshot.revision += 1;
+            ui.receive_snapshot(Arc::new(snapshot));
+            assert_no_diagnostics(
+                &mut ui,
+                &[
+                    "RESTART_CAUSE_SENTINEL",
+                    "did not become healthy",
+                    "was refused",
+                    "restart failed",
+                ],
+            );
+        });
+        let logs = capture.text();
+        assert!(
+            logs.contains("RESTART_CAUSE_SENTINEL") && logs.contains(outcome),
+            "{logs}"
+        );
+        assert!(
+            logs.contains(&record.old_sha) && logs.contains(&record.new_sha),
+            "{logs}"
+        );
+        if outcome == "restarted" {
+            assert!(room_screen(&mut ui, 180, 60).contains("Restarted"));
+        }
+    }
+}
