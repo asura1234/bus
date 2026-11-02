@@ -107,7 +107,8 @@ def main():
             bus.cli('agent', 'add', '--room', 'bus', '--name', provider, '--provider', provider,
                     '--pwd', str(REPO), '--consent-hooks')
             bus.wait_native_ready(provider)
-            assert bus.cli('agent', 'dialog', provider).get('dialog') is None, 'unexpected trust or permission dialog'
+            screen = bus.cli('agent', 'observe', provider).get('text', '').lower()
+            assert not any(prompt in screen for prompt in ('trust this folder', 'do you trust', 'would you like to run', 'do you want to proceed')), 'unexpected trust or permission dialog'
             marker = f'EVENT_{provider.upper()}_OK'
             record = send(bus, provider, f'Reply with {marker} exactly, with no other text.')
             assert record['correct'], record

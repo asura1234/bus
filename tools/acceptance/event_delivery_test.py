@@ -166,8 +166,8 @@ class Scratch:
             lead = self.send('a1', f'fake:dialog 30 S4-lead-{self.name}-{i}', 'S4-lead', wait=False)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                dialog = self.bus(['agent', 'dialog', 'a1'])['result']
-                if dialog.get('dialog'):
+                observed = self.bus(['agent', 'observe', 'a1'])['result']
+                if 'Do you want to proceed?' in observed.get('text', ''):
                     break
                 time.sleep(.05)
             else:
@@ -175,11 +175,10 @@ class Scratch:
             blocked = self.send('a1', f'S4-{self.name}-{i} must not enter', 'S4', wait=False)
             time.sleep(1)
             status = self.bus(['message', 'status', blocked['id']])['result']
-            screen = self.bus(['agent', 'read', 'a1', '--source', 'visible'])
-            blocked['dialog_safe'] = not any(r.get('stage') == 'replied' for r in status['requests']) and 'Do you want to proceed?' in json.dumps(screen)
+            screen = self.bus(['agent', 'observe', 'a1'])['result']
+            blocked['dialog_safe'] = not any(r.get('stage') == 'replied' for r in status['requests']) and 'Do you want to proceed?' in screen.get('text', '')
             blocked['correct'] = blocked['dialog_safe']
-            dialog = self.bus(['agent', 'dialog', 'a1'])['result']
-            self.bus(['agent', 'choose', 'a1', '--option', '1', '--fingerprint', dialog['fingerprint']])
+            self.bus(['agent', 'press', 'a1', '--key', '1'])
             self.wait_reply(lead)
             self.wait_reply(blocked)
             blocked['correct'] = blocked['dialog_safe'] and blocked.get('status', {}).get('stage') == 'replied'
