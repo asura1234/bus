@@ -467,7 +467,7 @@ fn process_exists(pid: libc::pid_t) -> bool {
 }
 
 pub fn unique_test_dir() -> PathBuf {
-    crate::fixture_dirs::unique_test_dir("hapi")
+    crate::fixture_dirs::unique_temp_path("hapi")
 }
 
 pub fn test_lock() -> MutexGuard<'static, ()> {
@@ -516,7 +516,7 @@ mod tests {
     }
 
     fn unique_missing_runtime_dir(label: &str) -> PathBuf {
-        crate::fixture_dirs::unique_test_dir(&format!("bus-watchdog-scoping-{label}"))
+        crate::fixture_dirs::unique_temp_path(&format!("bus-watchdog-scoping-{label}"))
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::{
 
 #[test]
 fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
-    let root = crate::fixture_dirs::unique_test_dir("bus-hook-shape");
+    let root = crate::fixture_dirs::unique_temp_path("bus-hook-shape");
     for (index, (text, transcript, expected, parsed)) in [
         (None, true, "missing", "parsed"),
         (Some(serde_json::Value::Null), true, "null", "parsed"),
@@ -89,7 +89,7 @@ fn reply_capture_diagnostics_distinguish_empty_missing_and_ignored_callbacks() {
 
 #[test]
 fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically() {
-    let dir = crate::fixture_dirs::unique_test_dir("bus-cli-callback");
+    let dir = crate::fixture_dirs::unique_temp_path("bus-cli-callback");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
@@ -146,7 +146,7 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
 
 #[test]
 fn callback_cli_continues_existing_launch_spool_without_reset_or_replay() {
-    let root = crate::fixture_dirs::unique_test_dir("bus-cli-saved-spool");
+    let root = crate::fixture_dirs::unique_temp_path("bus-cli-saved-spool");
     let dir = root.join("callbacks/saved-launch");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = br#"{"agent_id":7,"provider":"codex","launch_id":"saved-launch"}"#;
@@ -234,7 +234,7 @@ fn project_hook_is_inert_without_bus_launch_environment() {
 
 #[test]
 fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
-    let dir = crate::fixture_dirs::unique_test_dir("bus-cli-rejected");
+    let dir = crate::fixture_dirs::unique_temp_path("bus-cli-rejected");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
@@ -291,7 +291,7 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
 
 #[test]
 fn held_spool_and_diagnostics_locks_leave_a_durable_hook_before_success() {
-    let dir = crate::fixture_dirs::unique_test_dir("bus-cli-held-spool");
+    let dir = crate::fixture_dirs::unique_temp_path("bus-cli-held-spool");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),

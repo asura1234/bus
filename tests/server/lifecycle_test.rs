@@ -17,7 +17,7 @@ use support::{
 };
 
 fn unique_test_dir() -> PathBuf {
-    crate::fixture_dirs::unique_test_dir("bus-server-test")
+    crate::fixture_dirs::unique_temp_path("bus-server-test")
 }
 
 struct SpawnedBus {

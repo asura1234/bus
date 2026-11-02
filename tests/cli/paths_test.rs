@@ -25,7 +25,7 @@ fn failed_agent_reads_emit_only_one_json_object_even_when_streams_are_combined()
 }
 
 fn isolated_home(label: &str) -> std::path::PathBuf {
-    let path = crate::fixture_dirs::unique_test_dir(&format!("bus-shell-{label}"));
+    let path = crate::fixture_dirs::unique_temp_path(&format!("bus-shell-{label}"));
     std::fs::create_dir_all(&path).unwrap();
     path
 }
