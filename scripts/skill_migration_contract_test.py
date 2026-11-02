@@ -7,6 +7,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 CANONICAL_SKILLS = {
+    "agent-stats",
     "address-review-comments",
     "best-of-n",
     "commit-and-push",
@@ -216,6 +217,8 @@ class SkillMigrationContractTest(unittest.TestCase):
             "workflows/handover-template.md",
             "workflows/investigation-report-template.md",
             "workflows/template.md",
+            "skills/address-review-comments/references/root-cause-provenance-format.md",
+            "skills/agent-stats/references/stats-format.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
             "skills/delete-dead-code/references/duplicate-findings-format.md",
             "skills/e2e-test/references/e2e-run-report-format.md",
