@@ -100,6 +100,20 @@ impl BusState {
         {
             return Err(ModelError::InvalidTransition);
         }
+        if self
+            .requests
+            .get(&request)
+            .is_some_and(Request::is_error_report)
+            && !matches!(outcome, SubmissionOutcome::Confirmed { .. })
+        {
+            // Reporting must not produce an actionable-error projection or retry its own failure.
+            self.close_turn_with_reason(
+                request,
+                crate::utils::time::now_ms(),
+                "error_report_delivery_failed".into(),
+            )?;
+            return Ok(());
+        }
         self.record_queue_rejection(request, &outcome);
         self.record_dialog_notice_write(request, &outcome);
         let request_state = self
@@ -424,7 +438,9 @@ impl BusState {
                 .and_then(Request::submission_notice)
                 .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
-            self.set_agent_error(agent, Some(message))?;
+            if !self.request(request).is_some_and(Request::is_error_report) {
+                self.set_agent_error(agent, Some(message))?;
+            }
             tracing::info!(
                 event = "bus.message.recovered",
                 request_id = request.0,

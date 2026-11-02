@@ -3486,3 +3486,20 @@ fn error_pipe_settings_option_builds_the_dev_setting_request() {
     let off = command(&["settings", "--error-orchestrator", "off"]).unwrap();
     assert_eq!(off.params, json!({"name":"off"}));
 }
+
+#[test]
+fn error_pipe_cli_help_hides_the_option_without_dev_and_rejects_mixed_settings() {
+    let args = vec!["settings".to_owned(), "--help".to_owned()];
+    let normal = help_for(command_tree(false), &args).unwrap();
+    let dev = help_for(command_tree(true), &args).unwrap();
+    assert!(!normal.contains("--error-orchestrator"), "{normal}");
+    assert!(dev.contains("--error-orchestrator"), "{dev}");
+    assert!(command(&[
+        "settings",
+        "--error-orchestrator",
+        "lead",
+        "room-sound",
+        "--on"
+    ])
+    .is_err());
+}

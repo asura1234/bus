@@ -163,7 +163,15 @@ impl Worker {
             if self.deliver_launch_prompt(&agent)? {
                 continue;
             }
-            self.deliver_request(&agent, waited, steer_unbound)?;
+            let report = self
+                .state
+                .next_queued_request(agent.id)
+                .and_then(|id| self.state.request(id))
+                .is_some_and(super::Request::is_error_report);
+            let result = self.deliver_request(&agent, waited, steer_unbound);
+            if !report {
+                result?;
+            }
         }
         Ok(())
     }
@@ -366,6 +374,11 @@ impl Worker {
         let Some(request) = self.state.next_queued_request(agent.id) else {
             return Ok(());
         };
+        let _error_report = crate::utils::error_pipe::suppress(
+            self.state
+                .request(request)
+                .is_some_and(super::Request::is_error_report),
+        );
         let mut state = self.state.clone();
         // Messages that piled up while the agent was unavailable go as one prompt.
         let text = match waited.then(|| state.coalesce_queue(request)).flatten() {

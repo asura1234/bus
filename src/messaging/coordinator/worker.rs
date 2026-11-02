@@ -223,6 +223,10 @@ impl Worker {
 
     fn write(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
+            if crate::utils::error_pipe::is_suppressed() {
+                tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
+                return Err(error.to_string());
+            }
             self.pause_storage(&error);
             return Err(self.storage_notice().into());
         }
@@ -526,6 +530,7 @@ impl Worker {
         can_deliver: impl FnMut() -> bool,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        self.refresh_error_pipe_at(io::now_ms());
         perf::COORDINATOR_LOOP.relabel("tick.disk_space");
         self.refresh_disk_space_at(std::time::Instant::now())?;
         if let Err(error) = self.announce_recorded_restart() {

@@ -2,6 +2,63 @@
 use super::{mpsc, settings, BusEvent, RoomKind, Worker};
 
 impl Worker {
+    pub(super) fn refresh_error_pipe_at(&mut self, now: u64) {
+        let selected = self
+            .dev_enabled
+            .then(|| {
+                self.settings_path
+                    .as_deref()
+                    .and_then(|path| settings::load(path).ok())
+                    .and_then(|settings| settings.error_orchestrator)
+            })
+            .flatten();
+        let target = selected
+            .as_deref()
+            .and_then(|name| {
+                self.state.agents().find(|agent| {
+                    agent.name == name
+                        && !agent.deletion_pending
+                        && agent.orchestrates.is_some()
+                        && self
+                            .state
+                            .room(agent.room_id)
+                            .is_some_and(|room| room.kind == RoomKind::Master)
+                })
+            })
+            .and_then(|agent| agent.orchestrates.map(|room| (agent.id, room)));
+        let dir = self.error_log_dir();
+        self.error_pipe
+            .configure(&dir, target.and(selected.as_deref()));
+        let Some((agent, room)) = target else {
+            return;
+        };
+        let notices = self.error_pipe.collect(&dir, now);
+        if notices.is_empty() {
+            return;
+        }
+        let _report = crate::utils::error_pipe::suppress(true);
+        let mut state = self.state.clone();
+        for text in notices {
+            if state
+                .submit_message_with(
+                    room,
+                    super::Draft {
+                        text,
+                        files: Vec::new(),
+                        recipient_ids: [agent].into(),
+                    },
+                    super::Author::Bus,
+                    now,
+                    true,
+                )
+                .is_err()
+            {
+                return;
+            }
+        }
+        // A report-send failure is consumed. It never becomes another report or a UI error.
+        let _ = self.save(state);
+    }
     pub(super) fn error_orchestrators(&self) -> Vec<String> {
         self.state
             .agents()

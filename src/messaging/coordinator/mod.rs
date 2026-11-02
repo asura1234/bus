@@ -328,6 +328,7 @@ impl BusHandle {
         let mut worker = Worker::open(data_dir.clone(), Box::new(BusTransport::new(target)))?;
         worker.dev_enabled = diagnostics::dev_enabled();
         worker.settings_path = settings::path();
+        worker.refresh_error_pipe_at(io::now_ms());
         if let Err(error) = worker.apply_global_settings() {
             tracing::warn!(%error, "global Bus settings not applied");
             worker.error = Some(error);
