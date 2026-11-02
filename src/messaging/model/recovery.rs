@@ -299,11 +299,11 @@ impl BusState {
             ""
         };
         let reason = notice.failure_reason.as_deref().unwrap_or(reason);
-        let text = format!(
-            "{}\n{delivery} ({reason}).{observation}",
-            notice.prompt.text
-        );
-        self.post_bus_notice(room, None, text, now_ms)?;
+        let question = notice.prompt.text.clone();
+        // Delivery diagnostics are not part of the actionable question. The
+        // client logs this agent diagnostic with its room/agent context.
+        self.set_agent_error(agent, Some(format!("{delivery} ({reason}).{observation}")))?;
+        self.post_bus_notice(room, None, question, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 

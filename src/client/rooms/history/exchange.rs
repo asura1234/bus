@@ -271,8 +271,7 @@ impl History {
                     continue;
                 }
             }
-            let (reply, quote) = exchange_reply(state, room, request, *agent_id);
-            let text = reply.as_ref();
+            let (text, quote) = exchange_reply(request);
             // One blank row between replies, as at every other block
             // boundary; the exchange's own Gap row follows the last one.
             if replied {
@@ -431,12 +430,18 @@ fn wrap_header(
 }
 
 /// The room's history entries in display order: requests grouped by prompt,
-/// then notices and any saved latest-only prompt.
+/// then authored notices.
 fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
     let mut exchanges = BTreeMap::new();
-    // Room messages, including Bus notices, share prompt/reply history.
+    // Worker notifications are provider-routing envelopes, not authored chat.
+    // Their actual replies already belong to the source requests (and autonomous
+    // finals have their own developer post). Never project diagnostic envelopes
+    // or a provider's answer to one into history, including archived requests.
     for request in state.requests().filter(|r| r.room_id == room.id) {
         let prompt = &request.prompt;
+        if request.bus_generated && matches!(prompt.author, Author::Agent(_)) {
+            continue;
+        }
         exchanges
             .entry((prompt.submitted_at_ms, prompt.id.0))
             .or_insert_with(|| Exchange {
@@ -448,20 +453,6 @@ fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Ex
     }
     // Bus notices for the developer read like messages addressed to nobody.
     for prompt in state.notices(room.id) {
-        exchanges.insert(
-            (prompt.submitted_at_ms, prompt.id.0),
-            Exchange {
-                prompt,
-                requests: BTreeMap::new(),
-            },
-        );
-    }
-    // Retain compatibility with saved latest-only records.
-    if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
-        !exchanges
-            .values()
-            .any(|exchange| exchange.prompt.id == prompt.id)
-    }) {
         exchanges.insert(
             (prompt.submitted_at_ms, prompt.id.0),
             Exchange {
@@ -547,30 +538,13 @@ fn participant_tone(participant: &Author) -> Tone {
     }
 }
 
-fn exchange_reply<'a>(
-    state: &'a BusState,
-    room: &'a Room,
-    request: Option<&'a Request>,
-    agent: AgentId,
-) -> (std::borrow::Cow<'a, str>, Option<RequestId>) {
+fn exchange_reply(request: Option<&Request>) -> (&str, Option<RequestId>) {
     if let Some(request) = request {
         if let Some(reply) = request.reply() {
-            return (std::borrow::Cow::Borrowed(&reply.text), Some(request.id));
+            return (&reply.text, Some(request.id));
         }
-        let submission = request
-            .group
-            .and_then(|lead| state.request(lead))
-            .unwrap_or(request);
-        if let Some(notice) = submission.submission_notice() {
-            return (std::borrow::Cow::Owned(notice), None);
-        }
-    } else if let Some(reply) = room.latest_replies.get(&agent) {
-        return (
-            std::borrow::Cow::Borrowed(&reply.text),
-            Some(reply.request_id),
-        );
     }
-    (std::borrow::Cow::Borrowed("…"), None)
+    ("…", None)
 }
 
 // Prompts and completed finals are immutable after creation. Check their
