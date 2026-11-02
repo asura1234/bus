@@ -340,7 +340,11 @@ Default is the full history. --limit N takes newest N in chronological order;
 --before ID is exclusive, requires --limit. Reduce N to fit the 16 MiB response.
 Result: {room_id,room_name,deleted,messages:[{prompt,author_name,recipient_names,
   delivery}],has_more?,next_before?}. prompt holds id,author,text,files,
-  recipient_ids,submitted_at_ms; delivery is message status or null for notices.
+  recipient_ids,submitted_at_ms; delivery is null for notices. Otherwise it is
+  message status with a history projection: each shared reply body appears once
+  per room. Follower request rows set reply:null and
+  answered_with_message:LEAD_MESSAGE_ID. Use message status to read every
+  request's full reply.
   Pagination adds has_more/next_before; pass next_before for the older page.
   Text is raw Markdown; file/image paths are absolute. Deleted agent labels end
   in [deleted]; room_name stays plain and deleted:true marks a deleted room.
