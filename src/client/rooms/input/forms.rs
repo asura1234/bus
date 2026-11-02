@@ -208,6 +208,7 @@ impl BusUi {
                     self.open_error_orchestrator()
                 }
                 field if Some(field) == self.perf_overlay_field() => self.toggle_perf_overlay(),
+                field if Some(field) == self.dashboard_field() => self.request_delivery_dashboard(),
                 field => {
                     if let Some(target) = field
                         .checked_sub(self.room_sound_field(0))

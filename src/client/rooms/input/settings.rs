@@ -190,6 +190,7 @@ impl BusUi {
                 super::super::render::SoundSettingsLine::Sound { field, .. }
                 | super::super::render::SoundSettingsLine::Stepper { field, .. }
                 | super::super::render::SoundSettingsLine::PerfOverlay { field }
+                | super::super::render::SoundSettingsLine::Dashboard { field }
                 | super::super::render::SoundSettingsLine::ErrorOrchestrator { field }
                 | super::super::render::SoundSettingsLine::FeishuRecipient { field }
                 | super::super::render::SoundSettingsLine::FeishuCli { field }
@@ -315,6 +316,28 @@ impl BusUi {
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+impl BusUi {
+    pub(super) fn request_delivery_dashboard(&mut self) {
+        let Some(field) = self.dashboard_field() else {
+            return;
+        };
+        self.settings_field = field;
+        self.reveal_settings_field();
+        self.dashboard_pending = self
+            .settings_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .filter(|root| root.is_absolute())
+            .map(std::path::Path::to_path_buf);
+        if self.dashboard_pending.is_none() {
+            tracing::info!(
+                event = "bus.dashboard.open_failed",
+                "Attached session root unavailable"
+            );
         }
     }
 }

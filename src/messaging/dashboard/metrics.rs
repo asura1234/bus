@@ -78,7 +78,7 @@ fn reason(request: &Request) -> &str {
         .filter(|r| !r.is_empty())
         .unwrap_or("missing_reason")
 }
-fn stage(request: &Request) -> &str {
+fn stage(request: &Request) -> &'static str {
     if request.reply().is_some() {
         return "replied";
     }
@@ -124,6 +124,47 @@ pub(super) struct Hour {
 pub(super) struct Dashboard {
     pub(super) all: Series,
     pub(super) providers: BTreeMap<String, Series>,
+    recipients: BTreeMap<String, Group>,
+    rooms: BTreeMap<String, Group>,
+    failures: Vec<Failure>,
+}
+#[derive(Serialize)]
+struct Group {
+    name: String,
+    provider: Option<String>,
+    series: Series,
+}
+#[derive(Serialize)]
+struct Failure {
+    request_id: u64,
+    message_id: u64,
+    recipient_id: u64,
+    recipient: String,
+    provider: &'static str,
+    room_id: u64,
+    room: String,
+    sent_at_ms: u64,
+    hour_start_ms: i64,
+    hour: String,
+    stage: &'static str,
+    reason: String,
+    delivery: &'static str,
+    cause: &'static str,
+}
+#[derive(Default)]
+struct GroupBuilder {
+    name: String,
+    provider: Option<String>,
+    series: SeriesBuilder,
+}
+impl GroupBuilder {
+    fn finish(self) -> Group {
+        Group {
+            name: self.name,
+            provider: self.provider,
+            series: self.series.finish(),
+        }
+    }
 }
 #[derive(Clone)]
 pub(super) struct HourKey {
@@ -248,6 +289,9 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
         .into_iter()
         .map(|p| (p.to_owned(), SeriesBuilder::default()))
         .collect();
+    let mut recipients: BTreeMap<String, GroupBuilder> = BTreeMap::new();
+    let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
+    let mut failures = Vec::new();
     for request in state.requests() {
         let provider = state
             .agent(request.agent_id)
@@ -260,6 +304,46 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
             .map_or("unknown", |p| p.label());
         let hour = clock(request.prompt.submitted_at_ms);
         let outcome = classify(state, request);
+        let name = state.agent_label(request.agent_id);
+        let room = state
+            .history_room_name(request.room_id)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Room {} [deleted]", request.room_id.0));
+        recipients
+            .entry(request.agent_id.0.to_string())
+            .or_insert_with(|| GroupBuilder {
+                name: name.clone(),
+                provider: Some(provider.into()),
+                ..Default::default()
+            })
+            .series
+            .add(&hour, request, &outcome);
+        rooms
+            .entry(request.room_id.0.to_string())
+            .or_insert_with(|| GroupBuilder {
+                name: room.clone(),
+                ..Default::default()
+            })
+            .series
+            .add(&hour, request, &outcome);
+        if matches!(outcome.cause, "bus" | "external") {
+            failures.push(Failure {
+                request_id: request.id.0,
+                message_id: request.prompt.id.0,
+                recipient_id: request.agent_id.0,
+                recipient: name,
+                provider,
+                room_id: request.room_id.0,
+                room,
+                sent_at_ms: request.prompt.submitted_at_ms,
+                hour_start_ms: hour.start_ms,
+                hour: hour.label.clone(),
+                stage: stage(request),
+                reason: reason(request).to_owned(),
+                delivery: outcome.delivery,
+                cause: outcome.cause,
+            });
+        }
         all.add(&hour, request, &outcome);
         providers
             .entry(provider.into())
@@ -268,6 +352,15 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
     }
     Dashboard {
         all: all.finish(),
+        recipients: recipients
+            .into_iter()
+            .map(|(id, group)| (id, group.finish()))
+            .collect(),
+        rooms: rooms
+            .into_iter()
+            .map(|(id, group)| (id, group.finish()))
+            .collect(),
+        failures,
         providers: providers
             .into_iter()
             .map(|(p, s)| (p, s.finish()))

@@ -2,7 +2,9 @@
 use std::io;
 
 pub(crate) mod control;
-mod dashboard;
+#[cfg(test)]
+#[path = "tests/dashboard_test.rs"]
+mod dashboard_tests;
 pub(crate) mod help;
 pub(crate) mod launch;
 mod perf;
@@ -399,7 +401,19 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             perf::run(&crate::utils::paths::data_dir(), &control_args[1..])
         }
         Action::Control(control_args) => control::run(&root, &control_args),
-        Action::Dashboard => dashboard::run(&root),
+        Action::Dashboard => {
+            let mut options = logging_options();
+            options.dev = false;
+            crate::utils::logging::init_file_logging_at(
+                crate::utils::paths::data_dir(),
+                "dashboard.log",
+                &options,
+            );
+            if let Err(error) = crate::messaging::dashboard::run(&root) {
+                tracing::warn!(event = "bus.dashboard.serve_failed", %error);
+            }
+            Ok(())
+        }
         Action::Stop => {
             // Stopping the server closes every agent pane; an attached UI exits
             // without saving drafts, so quit it first when one is open.

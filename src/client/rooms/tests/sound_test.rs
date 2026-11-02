@@ -1127,3 +1127,28 @@ fn feishu_notifications_stay_on_without_changing_draft() {
         .iter()
         .any(|row| row.contains("Feishu notifications (always on)")));
 }
+
+#[test]
+fn developer_dashboard_button_is_visible_and_emits_the_attached_session_root() {
+    let (mut ui, _, _) = sound_fixture(1);
+    ui.action(render::Action::Settings);
+    assert!(!settings_rows(&mut ui, 55)
+        .iter()
+        .any(|row| row.contains("Open delivery dashboard")));
+    ui.dev_settings = true;
+    ui.settings_path = Some(std::path::PathBuf::from(
+        "/scratch/current-session/settings.json",
+    ));
+    assert!(settings_rows(&mut ui, 55)
+        .iter()
+        .any(|row| row.contains("Open delivery dashboard")));
+    ui.settings_field = ui.perf_overlay_field().unwrap() - 1;
+    let event = crate::protocol::keys::host::RawInputEvent::Key(
+        crate::protocol::keys::TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    let mut outcome = crate::client::compositor::ClientShellInput::default();
+    ui.input(&event, true, &mut outcome);
+    assert!(matches!(outcome.actions.as_slice(),
+        [crate::client::compositor::ClientShellAction::OpenDeliveryDashboard(root)] if root == std::path::Path::new("/scratch/current-session")));
+    assert!(ui.error.is_none());
+}

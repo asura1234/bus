@@ -90,35 +90,6 @@ fn http_only_serves_known_get_routes_and_does_not_read_arbitrary_paths() {
 }
 
 #[test]
-fn dashboard_is_dev_only_and_session_selection_does_not_write_the_registry() {
-    use crate::cli::session_pick::parse_invocation;
-    let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    assert!(parse_invocation(&args(&["dashboard"])).is_err());
-    let invocation = parse_invocation(&args(&["--dev", "dashboard"])).unwrap();
-    assert_eq!(format!("{:?}", invocation.action), "Dashboard");
-    assert!(parse_invocation(&args(&["--dev", "dashboard", "extra"])).is_err());
-    let root = crate::utils::test_temp::unique_temp_path("dashboard-registry");
-    let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(root.clone());
-    let session = registry.create().unwrap();
-    std::fs::remove_file(root.join("session-registry.lock")).unwrap();
-    let before = std::fs::metadata(root.join("last-session"))
-        .unwrap()
-        .modified()
-        .unwrap();
-    let selected = crate::cli::last_session(&registry, &invocation.action).unwrap();
-    assert_eq!(selected.id, session.id);
-    assert_eq!(
-        std::fs::metadata(root.join("last-session"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        before
-    );
-    assert!(!root.join("session-registry.lock").exists());
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn data_refresh_replays_newer_submit_journal_entries() {
     use crate::messaging::model::Provider;
     use crate::messaging::storage::state_store::JournalOp;
@@ -157,4 +128,25 @@ fn data_refresh_replays_newer_submit_journal_entries() {
     );
     assert_eq!(files(&root), before);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn http_rejects_rebinding_cross_origin_and_duplicate_hosts() {
+    let root = Path::new("/nonexistent-dashboard-test");
+    let check =
+        |request: &str| http_response(root, request.as_bytes(), "127.0.0.1:1234", "nonce").status;
+    assert_eq!(
+        check("GET /data HTTP/1.1\r\nHost: attacker.example\r\n\r\n"),
+        "403 Forbidden"
+    );
+    assert_eq!(check("GET /data HTTP/1.1\r\nHost: 127.0.0.1:1234\r\nOrigin: https://attacker.example\r\n\r\n"), "403 Forbidden");
+    assert_eq!(
+        check("GET /data HTTP/1.1\r\nHost: 127.0.0.1:1234\r\nHost: 127.0.0.1:1234\r\n\r\n"),
+        "403 Forbidden"
+    );
+    assert_eq!(
+        check("GET /health HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n"),
+        "200 OK"
+    );
+    assert_eq!(check("broken\r\n\r\n"), "400 Bad Request");
 }

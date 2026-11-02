@@ -32,6 +32,21 @@ impl BusUi {
         ready: bool,
         outcome: &mut ClientShellInput,
     ) -> bool {
+        let consumed = self.input_inner(event, ready, outcome);
+        if let Some(root) = self.dashboard_pending.take() {
+            outcome
+                .actions
+                .push(crate::client::compositor::ClientShellAction::OpenDeliveryDashboard(root));
+        }
+        consumed
+    }
+
+    fn input_inner(
+        &mut self,
+        event: &RawInputEvent,
+        ready: bool,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
         if let RawInputEvent::Key(key) = event {
             if self.global_room_key(key, event, outcome) {
                 return true;
@@ -628,6 +643,7 @@ impl BusUi {
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::TogglePerfOverlay => self.toggle_perf_overlay(),
             Action::OpenErrorOrchestrator => self.open_error_orchestrator(),
+            Action::OpenDeliveryDashboard => self.request_delivery_dashboard(),
             Action::ChooseErrorOrchestrator(id) => self.choose_error_orchestrator(id),
             Action::EditFeishuRecipient => self.open_feishu_setting(false),
             Action::EditFeishuCli => self.open_feishu_setting(true),

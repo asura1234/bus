@@ -98,6 +98,7 @@ impl BusUi {
             Action::ToggleColorBlindMode => "color-blind".into(),
             Action::TogglePerfOverlay => "perf-overlay".into(),
             Action::OpenErrorOrchestrator => "error-orchestrator".into(),
+            Action::OpenDeliveryDashboard => "delivery-dashboard".into(),
             Action::ChooseErrorOrchestrator(id) => format!(
                 "error-orchestrator-choice:{}",
                 id.map_or_else(|| "Off".into(), |id| self.agent_name(id))

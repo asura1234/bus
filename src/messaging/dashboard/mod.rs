@@ -1,45 +1,45 @@
 //! Loopback-only, read-only view of persisted delivery records.
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::messaging::storage::state_store::JsonStore;
 mod metrics;
+mod service;
 
 const PAGE: &str = include_str!("page.html");
 const MAX_HEADERS: usize = 8192;
 const REQUEST_DEADLINE: Duration = Duration::from_secs(1);
 
-pub(super) fn run(root: &Path) -> io::Result<()> {
-    let mut options = super::logging_options();
-    // This reader has its own log, never an error-pipe inbox or a TUI notice.
-    options.dev = false;
-    crate::utils::logging::init_file_logging_at(
-        crate::utils::paths::data_dir(),
-        "dashboard.log",
-        &options,
-    );
-    if let Err(error) = serve(root) {
-        tracing::warn!(event = "bus.dashboard.serve_failed", %error);
-    }
-    Ok(())
+pub(crate) fn run(root: &Path) -> io::Result<()> {
+    serve(root)
 }
 
 fn serve(root: &Path) -> io::Result<()> {
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
-    let authority = listener.local_addr()?.to_string();
-    writeln!(io::stdout().lock(), "http://{authority}/")?;
+    let server = match service::start(root)? {
+        service::Started::Existing(endpoint) => {
+            writeln!(io::stdout().lock(), "{}", endpoint.url)?;
+            io::stdout().flush()?;
+            return Ok(());
+        }
+        service::Started::Owned(server) => server,
+    };
+    let authority = server.listener.local_addr()?.to_string();
+    writeln!(io::stdout().lock(), "{}", server.endpoint.url)?;
     io::stdout().flush()?;
-    for connection in listener.incoming() {
-        let result =
-            connection.and_then(|mut stream| serve_connection(&mut stream, root, &authority));
+    for connection in server.listener.incoming() {
+        let result = connection.and_then(|mut stream| {
+            serve_connection(&mut stream, root, &authority, &server.endpoint.token)
+        });
         if let Err(error) = result {
             tracing::warn!(event = "bus.dashboard.http_failed", %error);
         }
     }
     Ok(())
 }
+
+pub(crate) use service::open_in_browser;
 
 struct Response {
     status: &'static str,
@@ -134,7 +134,7 @@ fn read_headers(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     ))
 }
 
-fn http_response(root: &Path, headers: &[u8], authority: &str) -> Response {
+fn http_response(root: &Path, headers: &[u8], authority: &str, token: &str) -> Response {
     let Ok(headers) = std::str::from_utf8(headers) else {
         return Response::empty("400 Bad Request");
     };
@@ -165,12 +165,24 @@ fn http_response(root: &Path, headers: &[u8], authority: &str) -> Response {
     if hosts != 1 {
         return Response::empty("403 Forbidden");
     }
+    if request[0] == "GET" && request[1] == "/health" {
+        return Response {
+            status: "200 OK",
+            content_type: "application/json",
+            body: serde_json::json!({"token":token}).to_string().into_bytes(),
+        };
+    }
     response_for(root, request[0], request[1])
 }
 
-fn serve_connection(stream: &mut TcpStream, root: &Path, authority: &str) -> io::Result<()> {
+fn serve_connection(
+    stream: &mut TcpStream,
+    root: &Path,
+    authority: &str,
+    token: &str,
+) -> io::Result<()> {
     let headers = read_headers(stream)?;
-    let response = http_response(root, &headers, authority);
+    let response = http_response(root, &headers, authority, token);
     stream.set_write_timeout(Some(REQUEST_DEADLINE))?;
     write!(stream, "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'\r\n\r\n", response.status, response.content_type, response.body.len())?;
     stream.write_all(&response.body)

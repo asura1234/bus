@@ -73,7 +73,7 @@ is added; the short targeted message uses ordinary Bus conversation history.
 
 `bus --dev dashboard` is a local file reader: it works with an ordinary or dev
 session, including an exited server. It prints a random `http://127.0.0.1:PORT/`
-URL, serves one page with inline assets, and refreshes every five seconds.
+URL, serves one page with inline assets, and refreshes every thirty seconds.
 `BUS_DATA_DIR` selects an exact session root; otherwise the last session is read
 without recording a resume. It reads persisted state, journal and archived
 requests; it never sends control commands or saves session state. Stop with Ctrl+C.
@@ -83,3 +83,12 @@ versus Bus-caused terminal failures, excluding deliberate interrupts, deleted
 agents/rooms, provider errors and pending requests. The full classification is
 printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.
+
+Settings > Developer > Open delivery dashboard opens the attached session's
+page in the default browser. Repeated clicks and the dev CLI reuse one service
+per session (OS-released lock and verified loopback endpoint in
+`dashboard-runtime/`, separate from persisted message/request records).
+The whole-session headline is followed by an hourly graph with attempt counts
+and a selectable recipient breakdown; provider and room grouping are available.
+Every failure count or cause opens request metadata and a copyable
+`bus message status MESSAGE_ID` command, with causes ordered by count.

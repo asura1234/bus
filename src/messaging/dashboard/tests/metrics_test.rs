@@ -168,7 +168,11 @@ fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
 #[test]
 fn recipient_room_and_failure_views_preserve_auditable_request_metadata() {
     let cases = cases();
-    let records = [cases[0].record.clone(), cases[4].record.clone(), cases[15].record.clone()];
+    let records = [
+        cases[0].record.clone(),
+        cases[4].record.clone(),
+        cases[15].record.clone(),
+    ];
     let mut state = fixture_state(records);
     state.delete_agent(AgentId(2), 1).unwrap();
     let report = serde_json::to_value(snapshot(&state, singapore_hour)).unwrap();
