@@ -21,6 +21,24 @@ struct ReplyGroups {
     shared_sources: BTreeMap<RequestId, RequestId>,
 }
 
+impl ReplyGroups {
+    fn for_room(state: &BusState, room: RoomId) -> Self {
+        Self {
+            members: state.groups(),
+            shared_sources: state.shared_reply_sources(room, visible_request),
+        }
+    }
+
+    fn reference(&self, state: &BusState, request: &Request) -> Option<String> {
+        let group = request.completed_reply.as_ref()?.group?;
+        let source = *self.shared_sources.get(&group)?;
+        (source != request.id)
+            .then(|| state.request(source))
+            .flatten()
+            .map(|source| format!("Answered with message {}", source.prompt.id.0))
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/history_group_test.rs"]
 mod group_tests;
@@ -67,10 +85,7 @@ impl History {
         let (groups, exchanges) = {
             let _timer = super::phases::GROUPING.start();
             (
-                ReplyGroups {
-                    members: state.groups(),
-                    shared_sources: state.shared_reply_sources(room.id, visible_request),
-                },
+                ReplyGroups::for_room(state, room.id),
                 exchanges(state, room),
             )
         };
@@ -279,14 +294,7 @@ impl History {
                     continue;
                 }
             }
-            let reference = request.and_then(|request| {
-                let group = request.completed_reply.as_ref()?.group?;
-                let source = *groups.shared_sources.get(&group)?;
-                (source != request.id)
-                    .then(|| state.request(source))
-                    .flatten()
-                    .map(|source| format!("Answered with message {}", source.prompt.id.0))
-            });
+            let reference = request.and_then(|request| groups.reference(state, request));
             let (text, quote) = reference
                 .as_deref()
                 .map_or_else(|| exchange_reply(request), |text| (text, None));
