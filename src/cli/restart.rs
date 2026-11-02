@@ -1178,9 +1178,15 @@ mod tests {
             text.contains("never restarts a server on its own"),
             "{text}"
         );
-        assert!(text.contains("not serving"), "{text}");
-        assert!(text.contains("refused before any stop"), "{text}");
-        assert!(text.contains("still serving"), "{text}");
+        assert!(
+            text.contains("safe metadata after a successful restart"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Failure diagnostics go to herdr-client.log"),
+            "{text}"
+        );
+        assert!(text.contains("outcome and reason"), "{text}");
         assert!(text.contains("Omit --yolo to keep"), "{text}");
         assert!(
             text.contains("does not change a recorded --dev mode"),
