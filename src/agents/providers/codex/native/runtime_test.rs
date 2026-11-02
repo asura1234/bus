@@ -148,3 +148,35 @@ fn codex_native_explicit_permission_cli_retains_the_configured_tui_before_a_back
     fs::remove_dir_all(dir).unwrap();
     assert!(attempted.is_empty(), "incompatible remote permission options must choose the original TUI before starting a native writer: {attempted:?}");
 }
+
+#[test]
+fn codex_native_fresh_permission_options_select_the_available_native_transport() {
+    // Real Codex0.164.0 thread/start witnesses establish both policy contracts.
+    for args in [
+        vec!["--sandbox", "read-only", "--ask-for-approval", "on-request"],
+        vec!["--yolo"],
+    ] {
+        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert!(
+            supports_native(&args),
+            "fresh permissions support native thread/start: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn codex_native_permission_fallback_uses_effective_resume_or_fork_options() {
+    for (args, native) in [
+        (vec!["--sandbox=read-only", "resume", "thread"], false),
+        (vec!["fork", "thread", "--yolo"], false),
+        (vec!["--yolo", "-c", "resume"], true),
+        (vec!["resume", "thread", "--", "--sandbox=read-only"], true),
+        (
+            vec!["-c", "note=--sandbox=read-only", "resume", "thread"],
+            true,
+        ),
+    ] {
+        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(supports_native(&args), native, "{args:?}");
+    }
+}

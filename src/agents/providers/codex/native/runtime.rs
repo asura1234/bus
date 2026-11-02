@@ -66,33 +66,7 @@ impl Runtime {
             return Ok(argv.to_vec());
         }
         self.session.take();
-        let args = &argv[1..];
-        if crate::agents::providers::launch::argument_positions(
-            crate::agents::providers::ProviderKind::Codex,
-            args,
-        )
-        .iter()
-        .any(|&index| {
-            matches!(
-                args[index].as_str(),
-                "-p" | "--profile"
-                    | "--remote"
-                    | "-s"
-                    | "--sandbox"
-                    | "-a"
-                    | "--ask-for-approval"
-                    | "--yolo"
-                    | "--dangerously-bypass-approvals-and-sandbox"
-                    | "--full-auto"
-                    | "--approve-for-me"
-            ) || args[index].starts_with("--profile=")
-                || (args[index].starts_with("-p") && args[index].len() > 2)
-                || args[index].starts_with("--remote=")
-                || args[index].starts_with("--sandbox=")
-                || args[index].starts_with("--ask-for-approval=")
-                || (args[index].starts_with("-s") && args[index].len() > 2)
-                || (args[index].starts_with("-a") && args[index].len() > 2)
-        }) {
+        if !supports_native(&argv[1..]) {
             // App-server 0.164 rejects profiles; remote resume rejects explicit
             // permission CLI overrides. Preserve their configured standalone TUI
             // before any differently configured native backend is started.
@@ -167,6 +141,38 @@ impl Runtime {
         session.rpc.take();
         Some(result)
     }
+}
+
+// Pure capability selection; does not create a provider process or input scope.
+fn supports_native(args: &[String]) -> bool {
+    let positions = crate::agents::providers::launch::argument_positions(
+        crate::agents::providers::ProviderKind::Codex,
+        args,
+    );
+    let resumed = positions
+        .iter()
+        .any(|&index| matches!(args[index].as_str(), "resume" | "fork"));
+    !positions.iter().any(|&index| {
+        let arg = args[index].as_str();
+        matches!(arg, "-p" | "--profile" | "--remote")
+            || arg.starts_with("--profile=")
+            || (arg.starts_with("-p") && arg.len() > 2)
+            || arg.starts_with("--remote=")
+            || (resumed
+                && (matches!(
+                    arg,
+                    "-s" | "--sandbox"
+                        | "-a"
+                        | "--ask-for-approval"
+                        | "--yolo"
+                        | "--dangerously-bypass-approvals-and-sandbox"
+                        | "--full-auto"
+                        | "--approve-for-me"
+                ) || arg.starts_with("--sandbox=")
+                    || arg.starts_with("--ask-for-approval=")
+                    || (arg.starts_with("-s") && arg.len() > 2)
+                    || (arg.starts_with("-a") && arg.len() > 2)))
+    })
 }
 
 impl Session {
