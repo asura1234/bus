@@ -33,7 +33,9 @@ struct Session {
 }
 
 impl Runtime {
-    pub(crate) fn from_builder(cmd: &CommandBuilder) -> Self {
+    pub(crate) fn shared_from_builder(
+        cmd: &CommandBuilder,
+    ) -> std::sync::Arc<std::sync::Mutex<Self>> {
         let enabled = cmd
             .iter_extra_env_as_str()
             .any(|(k, v)| k == "BUS_CODEX_NATIVE" && v == "1");
@@ -47,19 +49,19 @@ impl Runtime {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/")),
         });
-        Self {
+        std::sync::Arc::new(std::sync::Mutex::new(Self {
             config,
             session: None,
-        }
+        }))
     }
 
     pub(crate) fn launch(&mut self, argv: &[String]) -> io::Result<Vec<String>> {
         let Some(config) = self.config.as_ref() else {
             return Ok(argv.to_vec());
         };
-        if !argv
+        if argv
             .first()
-            .is_some_and(|v| Path::new(v).file_name().is_some_and(|v| v == "codex"))
+            .is_none_or(|v| Path::new(v).file_name().is_none_or(|v| v != "codex"))
         {
             return Ok(argv.to_vec());
         }
@@ -73,6 +75,7 @@ impl Runtime {
         .any(|&index| {
             matches!(args[index].as_str(), "-p" | "--profile" | "--remote")
                 || args[index].starts_with("--profile=")
+                || (args[index].starts_with("-p") && args[index].len() > 2)
                 || args[index].starts_with("--remote=")
         }) {
             // App-server 0.164 explicitly rejects config profiles. Keep its
