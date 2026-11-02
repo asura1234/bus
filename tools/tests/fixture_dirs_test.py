@@ -63,6 +63,13 @@ class FixtureSource:
             scope = self.scope(offsets.get(use.start(), 0))
             for _, parts, alias in use_leaves(use[1]):
                 self.imports.append((alias, "::".join(parts), scope))
+        # Inherent helpers are callable from their containing lexical scope.
+        # Keep the explicit type, rather than promoting every same-named method.
+        self.impls = {}
+        for declaration in re.finditer(
+                r"\bimpl\s+((?:r#)?[A-Za-z_]\w*(?:::(?:r#)?[A-Za-z_]\w*)*)\s*\{", self.code):
+            token, opening = offsets[declaration.start()], offsets[declaration.end() - 1]
+            self.impls[opening] = (self.canonical(declaration[1], token), self.scope(token))
         self.bindings, self.functions = [], []
         for i, word in enumerate(self.words):
             if word in {"let", "static", "const"}:
@@ -210,8 +217,8 @@ class FixtureSource:
     def path_component(self, parent, child, token):
         self.effect(parent, "directory")
         paths = frozenset((origin, depth + 1) for origin, depth in parent.paths)
-        if parent.temporary:
-            paths |= self.candidate(token, child)
+        if parent.temporary and not parent.paths:
+            paths |= self.candidate(token, combined((parent, child)))
         temporary = parent.temporary or ("manifest" in parent.flags and child.literal == "temp")
         return Value(parent.flags | child.flags, paths, temporary)
 
@@ -230,7 +237,8 @@ class FixtureSource:
             return Value(frozenset({"manifest"}))
         if leaf in DIRECTORIES and args:
             self.effect(args[0], "directory")
-        if leaf in FILES or name.endswith("File::create"):
+        if (leaf in FILES or name.endswith("File::create")
+                or name in {"std::process::Command::new", "portable_pty::CommandBuilder::new"}):
             if args:
                 self.effect(args[0], "file")
         if leaf == "set_var" and len(args) > 1 and args[0].literal in DIRECTORY_ENV:
@@ -245,9 +253,21 @@ class FixtureSource:
             for match in re.finditer(r"(?<!\{)\{([A-Za-z_]\w*)(?:[}:])", value.literal):
                 captures.append(self.local_value(match[1], offset))
             return combined((value, *captures))
-        functions = [f for f in self.functions if f[0] == leaf and f[2][0] < offset < f[2][1]]
+        functions = []
+        for function in self.functions:
+            if function[0] != leaf:
+                continue
+            scope = function[2]
+            if associated := self.impls.get(scope[0]):
+                target, containing = associated
+                if name == f"{target}::{leaf}":
+                    scope = containing
+                elif name != f"Self::{leaf}":
+                    continue
+            if scope[0] < offset < scope[1]:
+                functions.append((scope[0], function))
         if functions:
-            function = max(functions, key=lambda f: f[2][0])
+            function = max(functions, key=lambda candidate: candidate[0])[1]
             def returned():
                 previous = self.parameters
                 self.parameters = [*previous, *((function[3], function[4], parameter, argument)
@@ -310,7 +330,7 @@ class FixtureSource:
                 else:
                     value = Value()
             else:
-                if method == "current_dir" and args:
+                if method in {"current_dir", "cwd"} and args:
                     self.effect(args[0], "directory")
                 elif method in FILES and args:
                     self.effect(args[0], "file")
@@ -746,3 +766,122 @@ def test_repository_fixture_directories_use_independent_sequence_numbers():
     assert sources, "No Rust sources found for fixture directory policy"
     violations = fixture_directory_violations(sources)
     assert not violations, "Unsafe temporary directory fixtures:\n" + "\n".join(violations)
+
+
+def test_direct_executable_is_not_a_directory_fixture():
+    source = '''fn test() {
+    let root = std::env::temp_dir().join(format!("missing-{}-{}", std::process::id(), now_ns()));
+    let _ = std::process::Command::new(&root);
+}'''
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
+
+
+def test_aliased_clock_keeps_pid_clock_directory_provenance():
+    source = '''use crate::utils::time::now_ns as clock;
+fn test() {
+    let root = std::env::temp_dir().join(format!("sample-{}-{}", std::process::id(), clock()));
+    std::fs::create_dir_all(&root).unwrap();
+}'''
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+def test_split_pid_and_clock_components_form_a_directory_fixture():
+    source = '''fn test() {
+    let root = std::path::PathBuf::from(format!("/tmp/sample-{}", std::process::id()))
+        .join(format!("{}", now_ns()));
+    std::fs::create_dir_all(&root).unwrap();
+}'''
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+def test_associated_helper_receives_clock_provenance_from_test_caller():
+    source = '''impl Fixture {
+    fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("sample-{}-{}", std::process::id(),
+            timestamp.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    }
+}
+#[test]
+fn case() {
+    let root = Fixture::at(std::time::SystemTime::now());
+    std::fs::create_dir_all(root).unwrap();
+}'''
+    assert len(fixture_directory_violations({"src/fixture_test.rs": source})) == 1
+
+
+@pytest.mark.parametrize("constructor", (
+    "std::process::Command::new",
+    "portable_pty::CommandBuilder::new",
+))
+def test_executable_evidence_never_blesses_a_directory(constructor):
+    source = f'fn test() {{ let root = {PATH}; {constructor}(&root); std::fs::create_dir_all(&root); }}'
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+@pytest.mark.parametrize("setup", (
+    "use std::process::Command as Run; fn test() { let root = PATH; Run::new(&root); }",
+    "use portable_pty::CommandBuilder as Run; fn test() { let root = PATH; Run::new(&root); }",
+))
+def test_executable_constructor_aliases_keep_file_evidence(setup):
+    assert fixture_directory_violations({"tests/case.rs": setup.replace("PATH", PATH)}) == []
+
+
+def test_process_arguments_are_not_executable_evidence():
+    source = f'fn test() {{ let root = {PATH}; std::process::Command::new("true").arg(&root); }}'
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+def test_pty_cwd_remains_directory_evidence_after_executable_construction():
+    source = f'fn test() {{ let root = {PATH}; portable_pty::CommandBuilder::new(&root).cwd(&root); }}'
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
+
+
+@pytest.mark.parametrize("leaf, consumer, expected", (
+    ('format!("{}", now_ns())', 'std::fs::create_dir_all(root);', 1),
+    ('format!("{}", now_ns())', 'std::fs::write(root, b"");', 0),
+    ('format!("{}", now_ns())', 'std::fs::create_dir_all(root.join("nested"));', 1),
+))
+def test_split_components_keep_path_roles_and_one_origin(leaf, consumer, expected):
+    source = ('fn test() { let root = std::env::temp_dir()'
+              '.join(format!("p-{}", std::process::id())).join(' + leaf + '); ' + consumer + ' }')
+    assert len(fixture_directory_violations({"tests/case.rs": source})) == expected
+
+
+def test_split_components_keep_sequence_protection():
+    source = '''static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn test() {
+    let root = std::env::temp_dir().join(format!("p-{}-{}", std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))).join(format!("{}", now_ns()));
+    std::fs::create_dir_all(root);
+}'''
+    assert fixture_directory_violations({"tests/case.rs": source}) == []
+
+
+@pytest.mark.parametrize("safe_inner, expected", ((True, 0), (False, 1)))
+def test_associated_helpers_match_type_and_nearest_containing_scope(safe_inner, expected):
+    safe = 'crate::utils::test_temp::unique_temp_path("safe")'
+    unsafe = ('std::env::temp_dir().join(format!("p-{}-{}", std::process::id(), '
+              'timestamp.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))')
+    inner, outer = (safe, unsafe) if safe_inner else (unsafe, safe)
+    source = f'''mod nested {{ struct Fixture;
+impl Fixture {{ fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {{ {inner} }} }}
+fn test() {{ let root = Fixture::at(std::time::SystemTime::now()); std::fs::create_dir_all(root); }}
+}}
+struct Fixture;
+impl Fixture {{ fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {{ {outer} }} }}'''
+    assert len(fixture_directory_violations({"src/fixture_test.rs": source})) == expected
+
+
+def test_associated_self_call_keeps_clock_parameter_provenance():
+    source = '''struct Fixture;
+impl Fixture {
+    fn at(timestamp: std::time::SystemTime) -> std::path::PathBuf {
+        Self::path(timestamp)
+    }
+    fn path(timestamp: std::time::SystemTime) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("p-{}-{}", std::process::id(),
+            timestamp.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    }
+}
+fn test() { let root = Fixture::at(std::time::SystemTime::now()); std::fs::create_dir_all(root); }'''
+    assert len(fixture_directory_violations({"src/fixture_test.rs": source})) == 1
