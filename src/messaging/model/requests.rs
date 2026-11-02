@@ -565,9 +565,10 @@ impl BusState {
             .ok_or(ModelError::UnknownRequest(request))?;
         match outcome {
             SubmissionOutcome::Confirmed { .. } => request_state.phase = RequestPhase::Active,
-            SubmissionOutcome::Uncertain { .. } => {
+            SubmissionOutcome::Uncertain { message } => {
                 request_state.phase = RequestPhase::Active;
                 request_state.uncertain_outcome = true;
+                request_state.submission_error = Some(message);
             }
             SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy => {
                 // Nothing was typed, so the lead's turn keeps the work it

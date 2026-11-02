@@ -593,10 +593,10 @@ impl BusState {
             if let Some(member) = self.requests.get_mut(member) {
                 member.phase = RequestPhase::Submitting;
                 member.uncertain_outcome = true;
-                member.submission_error = Some(
+                member.submission_error.get_or_insert_with(|| {
                     "Provider turn ended without claiming this input; awaiting turn ownership proof."
-                        .into(),
-                );
+                        .into()
+                });
             }
         }
         self.publish_group_reply(request_id, &members, &pending)?;

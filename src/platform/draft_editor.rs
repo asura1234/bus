@@ -34,6 +34,10 @@ struct Request {
     sequence: u64,
     expires_ms: u64,
     operation: Operation,
+    /// A submission readback may share the exchange holding a developer draft.
+    /// Keep that draft's recovery file intact while checking different bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verify_text: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -186,6 +190,7 @@ impl Exchange {
             expires_ms: crate::utils::time::now_ms()
                 .saturating_add(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
             operation: Operation::Idle,
+            verify_text: None,
         };
         write_json(&dir.join(REQUEST), &request)?;
         Ok(Self {
@@ -223,7 +228,22 @@ impl Exchange {
         self.request(Operation::Verify)
     }
 
+    pub(crate) fn request_verify_text(&self, text: &str) -> io::Result<()> {
+        if text.len() as u64 > MAX_BYTES {
+            return Err(io::Error::other("Draft exceeds 2 MiB"));
+        }
+        self.request_with_text(Operation::Verify, Some(text.to_owned()))
+    }
+
     fn request(&self, operation: Operation) -> io::Result<()> {
+        self.request_with_text(operation, None)
+    }
+
+    fn request_with_text(
+        &self,
+        operation: Operation,
+        verify_text: Option<String>,
+    ) -> io::Result<()> {
         let _lock = lock(&self.dir)?;
         let mut current = self
             .request
@@ -238,6 +258,7 @@ impl Exchange {
         let next = Request {
             sequence: current.sequence + 1,
             operation,
+            verify_text,
             ..current.clone()
         };
         write_json(&self.dir.join(REQUEST), &next)?;
@@ -514,7 +535,10 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
             Vec::new()
         }
         Operation::Restore | Operation::Verify => {
-            let mut original = fs::read(&saved)?;
+            let mut original = match &request.verify_text {
+                Some(text) if request.operation == Operation::Verify => text.as_bytes().to_vec(),
+                _ => fs::read(&saved)?,
+            };
             let expected = if request.operation == Operation::Restore {
                 &[][..]
             } else {

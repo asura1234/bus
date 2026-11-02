@@ -11,6 +11,8 @@ mod shell_launch;
 mod shutdown;
 mod submission;
 mod submission_clock;
+#[cfg(test)]
+pub(crate) use submission::tests::codex_clipped_composer;
 pub(crate) use submission::{
     DraftPreservation, EditorSubmission, InputObservation, PromptNotShown, SubmissionInspector,
 };

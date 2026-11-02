@@ -199,6 +199,80 @@ fn a_rejected_steering_write_preserves_the_original_turn_end_evidence() {
 }
 
 #[test]
+fn uncertain_steering_preserves_native_submission_failure_detail() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "original task");
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    let correction = submit_text(&mut state, room, agent, "review reply");
+    state.begin_steering(correction, lead).unwrap();
+    let native_detail = concat!(
+        "Provider did not accept prompt before submission deadline. ",
+        "The draft was left because it was edited or could not be attributed to Bus. ",
+        "No Enter was sent by Bus. Inspect the agent's transcript and composer before ",
+        "resending; preserve your edits while removing any remaining Bus draft"
+    );
+    state
+        .record_steering(
+            correction,
+            SubmissionOutcome::Uncertain {
+                message: native_detail.into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .request(correction)
+            .unwrap()
+            .submission_error
+            .as_deref(),
+        Some(native_detail),
+        "recording uncertain steering must retain the native refusal"
+    );
+
+    // The original turn's final does not claim the pasted review reply.
+    let payload = state.request(lead).unwrap().prompt.rendered_payload();
+    assert_eq!(
+        state.accept_callback(ProviderCallback::final_event(
+            "original-final",
+            20,
+            agent,
+            "launch-codex",
+            "provider-session",
+            "turn-1",
+            &payload,
+            "original task completed",
+        )),
+        CallbackDisposition::AcceptedPendingSettlement
+    );
+    let pending = state.request(correction).unwrap();
+    assert_eq!(pending.phase, RequestPhase::Submitting);
+    assert_eq!(pending.submission_error.as_deref(), Some(native_detail));
+    assert!(pending
+        .submission_notice()
+        .unwrap()
+        .ends_with(native_detail));
+
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 21)
+        .unwrap();
+    assert!(state.settle_unclaimed_steering(agent, 21 + TURN_SETTLE_MS, |_| None));
+    let settled = state.request(correction).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        settled.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert_eq!(settled.submission_error.as_deref(), Some(native_detail));
+    assert!(settled
+        .submission_notice()
+        .unwrap()
+        .ends_with(native_detail));
+}
+
+#[test]
 fn grok_working_turn_keeps_a_follow_up_queued_instead_of_steering_it() {
     let mut state = BusState::new();
     let room = state.create_room("work").unwrap();

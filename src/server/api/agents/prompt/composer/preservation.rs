@@ -142,12 +142,40 @@ impl SubmissionInspector for PreservingComposer {
         })
     }
 
+    fn clipped_input_verification(&self, screen: &str) -> Option<EditorSubmission> {
+        (self.kind == AgentKind::Codex && self.keys.len() == 3 && codex_clipped(screen)).then(
+            || EditorSubmission {
+                text: self.expected.replace("\r\n", "\n").replace('\r', "\n"),
+                directory: self.directory.clone(),
+                key: self.keys[1].clone(),
+                backspace: self.keys[2].clone(),
+                verification_error: None,
+            },
+        )
+    }
+
+    fn verified_input(&self, screen: &str, text: &str) -> bool {
+        self.kind == AgentKind::Codex
+            && self.editor_frame_readable(screen)
+            && self.owned.verified_input(screen, text)
+    }
+
     fn editor_frame_readable(&self, screen: &str) -> bool {
         self.kind == AgentKind::Kimi && input(self.kind, screen).is_some()
+            || self.kind == AgentKind::Codex
+                && input(self.kind, screen).is_some()
+                && matches!(
+                    super::observe_with_cursor(self.kind, screen, &self.expected, None),
+                    InputObservation::Empty | InputObservation::Pending | InputObservation::Other
+                )
     }
 
     fn editor_frame_unchanged(&self, previous: &str, current: &str) -> bool {
-        (self.kind != AgentKind::Kimi && previous == current)
+        (self.kind == AgentKind::Codex
+            && self.editor_frame_readable(previous)
+            && self.editor_frame_readable(current)
+            && input(self.kind, previous) == input(self.kind, current))
+            || (self.kind != AgentKind::Kimi && previous == current)
             || (self.kind == AgentKind::Kimi
                 && super::super::kimi::same_editor_frame(previous, current))
             || (self.kind == AgentKind::Kimi
@@ -225,7 +253,9 @@ impl SubmissionInspector for PreservingComposer {
 
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
         input(self.kind, screen).is_some_and(|body| {
-            if self.kind == AgentKind::Kimi {
+            // Codex soft-wraps the native editor receipt after its PID
+            // separator. Match the exact terminal token across rendered rows.
+            if matches!(self.kind, AgentKind::Kimi | AgentKind::Codex) {
                 body.chars()
                     .filter(|c| !c.is_whitespace())
                     .collect::<String>()
@@ -235,6 +265,23 @@ impl SubmissionInspector for PreservingComposer {
             }
         })
     }
+}
+
+fn codex_clipped(screen: &str) -> bool {
+    let lines: Vec<String> = screen
+        .lines()
+        .map(|line| {
+            super::styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect::<String>()
+        })
+        .collect();
+    super::composer_frame(AgentKind::Codex, &lines.join("\n"))
+        && lines
+            .iter()
+            .rfind(|line| line.trim_start().starts_with('›'))
+            .is_some_and(|line| line.trim_end().ends_with('↑'))
 }
 
 fn native_stash_present(screen: &str) -> bool {
