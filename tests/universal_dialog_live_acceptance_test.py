@@ -146,6 +146,8 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
         self.assertRegex(sha, r"^[0-9a-f]{40}$")
         self.assertEqual(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO,
                                                 text=True).strip(), sha)
+        self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO,
+                                                text=True), "", "acceptance requires the clean committed head")
         binary = Path(os.environ["BUS_UNIVERSAL_DIALOG_BINARY"]).resolve(strict=True)
         self.assertFalse("target" in binary.parts or ".cargo-targets" in binary.parts,
                          "supply a copied, verified binary outside shared Cargo targets")
@@ -276,8 +278,8 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 self.assertFalse(os.access(Path(directory) / "lark-cli", os.X_OK))
 
             version = run(["--version"])
-            self.assertIn(sha, version)
-            self.assertNotIn(sha + "-dirty", version, "acceptance requires the committed head")
+            # Current --version is a release version, not compiled-SHA evidence.
+            # Both private run_start identities below must attest this exact head.
             paths = save("paths", control("--paths"))
             self.assertEqual(Path(paths["data"]), root / "data")
             logs = Path(paths["logs"]).resolve()
