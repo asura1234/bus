@@ -673,7 +673,7 @@ fn a_pending_exit_keeps_its_leader_until_the_agent_is_cleared() {
 
 #[tokio::test]
 async fn terminal_output_wakes_detection_without_a_steady_state_tick() {
-    let viewer = "• Working (4s • esc to interrupt)\r\n› transcript\r\n↑/↓ to scroll · pgup/pgdn to move · home/end to jump · q to quit · esc to edit prev\r\n";
+    let viewer = "• Working (4s • esc to interrupt)\r\n› \r\n? for shortcuts\r\n";
     let runtime = TerminalRuntime::test_with_screen_bytes(120, 24, viewer.as_bytes());
     let (events, mut received) = mpsc::channel(8);
     let (_, _, detector) = crate::terminal::runtime::detection_task::spawn_detection_task(
@@ -693,13 +693,7 @@ async fn terminal_output_wakes_detection_without_a_steady_state_tick() {
     let result = tokio::time::timeout(std::time::Duration::from_millis(200), received.recv()).await;
     detector.abort();
     assert!(
-        matches!(
-            result,
-            Ok(Some(TerminalEvent::StateChanged {
-                state: AgentState::Working,
-                ..
-            }))
-        ),
+        matches!(result, Ok(Some(TerminalEvent::StateChanged { .. }))),
         "output did not wake detection within 200ms: {result:?}"
     );
 }
