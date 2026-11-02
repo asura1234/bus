@@ -234,3 +234,54 @@ fn abandoned_steering_never_borrows_a_leads_binding_before_its_own_paste() {
         );
     }
 }
+
+#[test]
+fn manual_recovery_is_counted_as_a_bus_failure_with_its_own_reason() {
+    use crate::messaging::model::{Author, Draft, ManualRecovery};
+    let mut state = BusState::new();
+    let room = state.create_room("manual recovery").unwrap();
+    let agent = state
+        .create_agent(room, "kimi", Provider::Kimi, "/scratch".into(), None)
+        .unwrap();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "stuck delivery".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            100,
+            true,
+        )
+        .unwrap()[0];
+    state
+        .manually_recover_idle_request(
+            request,
+            ManualRecovery {
+                actor: Author::Developer,
+                at_ms: 200,
+            },
+        )
+        .unwrap();
+    let report = snapshot(&state, singapore_hour);
+    let counts = &report.all.counts;
+    assert_eq!(
+        (
+            counts.attempts,
+            counts.failed,
+            counts.bus_failures,
+            counts.external
+        ),
+        (1, 1, 1, 0)
+    );
+    assert_eq!(counts.bus_reasons["manual_recovery"], 1);
+    assert_eq!(counts.external_reasons.get("manual_recovery"), None);
+    assert_eq!(report.all.rates.bus_reliability.numerator, 0);
+    assert_eq!(report.all.rates.bus_reliability.denominator, 1);
+    assert_eq!(report.all.rates.bus_reliability.percent, Some(0.0));
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].reason, "manual_recovery");
+    assert_eq!(report.failures[0].cause, "bus");
+}

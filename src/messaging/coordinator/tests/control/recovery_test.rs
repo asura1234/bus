@@ -309,3 +309,11 @@ fn automatic_queued_recovery_does_not_claim_manual_actor_or_cause() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn manual_recovery_remains_a_bus_caused_delivery_failure() {
+    let class = crate::messaging::model::classify_request_failure("manual_recovery");
+    assert_eq!(class, crate::messaging::model::RequestFailureClass::Bus);
+    assert!(!class.is_deliberate());
+    assert!(!class.is_external());
+}
