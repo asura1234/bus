@@ -490,7 +490,7 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         "No message without new information.",
         "One copy of each result.",
         "No \"still working\" posts.",
-        "Bus does not wrap a result.",
+        "Bus reply wrappers.",
         "The orchestrator does not narrate.",
         "One developer post per review round.",
         "No new toasts or popup errors.",
