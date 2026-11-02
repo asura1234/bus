@@ -236,6 +236,7 @@ impl TerminalRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_observed_input_with_inspector(
         &self,
         text: Bytes,
