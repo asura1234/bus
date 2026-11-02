@@ -332,7 +332,9 @@ pub(crate) fn install_hooks(
 fn is_temporary(path: &Path) -> bool {
     let temp = std::env::temp_dir();
     let canonical = temp.canonicalize().unwrap_or_else(|_| temp.clone());
-    path.starts_with(&temp) || path.starts_with(&canonical)
+    path.starts_with(&temp)
+        || path.starts_with(&canonical)
+        || crate::utils::test_temp::is_fixture_path(path)
 }
 
 pub(crate) fn read_resume_json(path: &Path) -> Result<Value, String> {
