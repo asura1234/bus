@@ -645,7 +645,11 @@ impl ObservedSubmission {
             .editor_submission()
             .ok_or_else(|| io::Error::other("Native editor input is unavailable"))?;
         let exchange =
-            Exchange::begin_preserving(directory, self.clock.remaining(self.hard_deadline))
+            Exchange::begin_preserving(directory.clone(), self.clock.remaining(self.hard_deadline))
+                .map_err(|error| {
+                    tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
+                    io::Error::other(PromptNotShown::ComposerBusy)
+                })
                 .inspect_err(|_| lease.restored())?;
         exchange
             .request_swap(&editor.text)
