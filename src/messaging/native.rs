@@ -73,9 +73,17 @@ impl BusTransport {
         tracing::debug!(event = "bus.api.start", api_request_id = %request.id,
             method = method_name, "Bus native API call");
         loop {
-            let timeout = crate::protocol::api::submission::method_budget(&request.method)
-                .map(|budget| budget + crate::protocol::api::submission::RPC_MARGIN)
-                .unwrap_or(Duration::from_secs(3));
+            let timeout = if matches!(
+                &request.method,
+                Method::AgentStart(_) | Method::AgentStartIfIdentity(_)
+            ) {
+                crate::protocol::api::AGENT_START_TIMEOUT
+                    + crate::protocol::api::submission::RPC_MARGIN
+            } else {
+                crate::protocol::api::submission::method_budget(&request.method)
+                    .map(|budget| budget + crate::protocol::api::submission::RPC_MARGIN)
+                    .unwrap_or(Duration::from_secs(3))
+            };
             let response = send(&self.client, &request, timeout)
                 .and_then(crate::protocol::api::client::parse_response_value);
             // Both shell-start rejections precede PTY input. Integrated shells
@@ -299,6 +307,48 @@ mod tests {
         server.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn native_timeout_agent_start_waits_for_a_slow_server_acknowledgement() {
+        use interprocess::local_socket::traits::Listener;
+        use std::io::{BufRead, Write};
+        let dir = crate::utils::test_temp::unique_temp_path("bus-slow-start");
+        crate::messaging::storage::io::private_dir(&dir).unwrap();
+        let path = dir.join("api.sock");
+        let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&mut stream)
+                .read_line(&mut line)
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["method"], "agent.start");
+            std::thread::sleep(Duration::from_secs(4));
+            writeln!(
+                stream,
+                "{{\"id\":{},\"result\":{{\"type\":\"ok\"}}}}",
+                value["id"]
+            )
+            .unwrap();
+        });
+        let mut client = BusTransport::new(ConnectionTarget::SocketPath(path));
+        let outcome = client.request(Method::AgentStart(
+            crate::protocol::api::schema::AgentStartParams {
+                name: "slow".into(),
+                kind: "claude".into(),
+                pane_id: "w1:p2".into(),
+                args: vec![],
+                executable: None,
+                grok_home: None,
+                kimi_home: None,
+                timeout_ms: None,
+            },
+        ));
+        server.join().unwrap();
+        assert!(outcome.is_ok(), "slow agent start failed: {outcome:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn network_and_post_enqueue_errors_are_always_uncertain() {
         assert!(

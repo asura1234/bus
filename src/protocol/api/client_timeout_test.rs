@@ -2,7 +2,7 @@ use super::*;
 use interprocess::local_socket::traits::Listener as _;
 
 #[test]
-fn delayed_blocking_response_returns_receive_timeout() {
+fn native_timeout_delayed_blocking_response_returns_receive_timeout() {
     let dir = crate::utils::test_temp::unique_temp_path("poll-timeout");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("api.sock");
@@ -31,7 +31,7 @@ fn delayed_blocking_response_returns_receive_timeout() {
     server.join().unwrap();
     assert!(request.contains("agent.list"));
     assert!(
-        matches!(result, Err(ApiClientError::Io(ref error)) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)),
+        matches!(result, Err(ApiClientError::Io(ref error)) if error.kind() == io::ErrorKind::TimedOut),
         "{result:?}"
     );
     std::fs::remove_dir_all(dir).unwrap();
