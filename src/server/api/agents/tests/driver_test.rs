@@ -540,5 +540,8 @@ async fn cursor_quota_metadata_survives_the_provider_word_wrapped_warning() {
         "You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)"
     );
     assert!(info["provider_quota_reset_at"].as_u64().is_some());
-    assert!(writes.try_recv().is_err(), "quota observation must not modify the restored draft");
+    assert!(
+        writes.try_recv().is_err(),
+        "quota observation must not modify the restored draft"
+    );
 }

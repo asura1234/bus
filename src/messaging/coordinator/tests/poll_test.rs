@@ -608,10 +608,8 @@ mod status_tests {
             second.agent_session.as_mut().unwrap().value = "session-b".into();
             agents.push(second);
         }
-        let (mut worker, agent, room, dir, _) = fixture(
-            Provider::Cursor,
-            vec![Ok(ResponseResult::Ok {}), listing],
-        );
+        let (mut worker, agent, room, dir, _) =
+            fixture(Provider::Cursor, vec![Ok(ResponseResult::Ok {}), listing]);
         let mut state = worker.state.clone();
         let second = state
             .create_agent(room, "second-cursor", Provider::Cursor, dir.clone(), None)
@@ -628,7 +626,9 @@ mod status_tests {
             )
             .unwrap();
         state.confirm_hook_setup(second).unwrap();
-        state.observe_status(second, RuntimeStatus::Idle, io::now_ms()).unwrap();
+        state
+            .observe_status(second, RuntimeStatus::Idle, io::now_ms())
+            .unwrap();
         worker.save(state).unwrap();
         let request = queue(&mut worker, room, agent, "bootstrap");
         worker.submit_ready().unwrap();
@@ -645,9 +645,15 @@ mod status_tests {
         );
         assert!(!worker.state.request(request).unwrap().trusted_start_bound);
         worker.poll().unwrap();
-        assert_eq!(worker.usage.state_json()["cursor"]["observed_by_agent"], json!(second));
+        assert_eq!(
+            worker.usage.state_json()["cursor"]["observed_by_agent"],
+            json!(second)
+        );
         consume(&mut worker, agent, &dir);
-        assert_eq!(worker.state.request(request).unwrap().phase, RequestPhase::Abandoned);
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Abandoned
+        );
         assert!(worker.state.request(request).unwrap().trusted_start_bound);
         assert_eq!(
             worker.state.request(request).unwrap().failure_reason.as_deref(),
