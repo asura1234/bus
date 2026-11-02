@@ -29,21 +29,13 @@ impl Worker {
         Ok((terminal.clone(), pane.clone(), identity.session_id.clone()))
     }
 
-    /// Read one coherent driver frame, then verify the native identity and status.
-    /// Generic Blocked state covers a screen whose controls are not yet recognizable;
-    /// a matching non-Blocked native status plus a clear frame retires stale list data.
+    /// AgentInfo projects one coherent driver read in the native server. Keep
+    /// terminal ownership here; terminal parsing stays behind that API boundary.
     pub(in crate::messaging::coordinator) fn native_blocker(
         &mut self,
         id: super::AgentId,
     ) -> Result<Option<String>, String> {
         let (terminal, pane, session) = self.terminal_identity(id)?;
-        let observation = native_observe(&pane, Some(&terminal), None, &mut |method| {
-            self.transport.request(method)
-        })
-        .map_err(|error| error.message)?;
-        if observation.pane_id != pane {
-            return Err("Agent pane identity changed; observe it again".into());
-        }
         let ResponseResult::AgentInfo { agent } = self
             .transport
             .request(Method::AgentGet(schema::AgentTarget {
@@ -65,12 +57,13 @@ impl Worker {
         {
             return Err("Agent terminal or session changed; observe it again".into());
         }
-        Ok(
-            crate::terminal::driver::blocker(&observation.grid).or_else(|| {
-                (agent.agent_status == schema::AgentStatus::Blocked)
-                    .then(|| super::super::dialogs::BLOCKED.to_owned())
-            }),
-        )
+        if agent.screen_detection_skipped {
+            return Err("Terminal is redrawing; observe it again".into());
+        }
+        Ok(agent.dialog_id.or_else(|| {
+            (agent.agent_status == schema::AgentStatus::Blocked)
+                .then(|| super::super::dialogs::BLOCKED.to_owned())
+        }))
     }
 
     pub(super) fn execute_driver(&mut self, method: &str, p: &Value) -> Result<Value, String> {

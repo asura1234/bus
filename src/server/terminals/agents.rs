@@ -507,10 +507,11 @@ impl App {
             return None;
         }
         let pane = self.pane_info(ws_idx, pane_id)?;
-        let dialog = self
+        let observed = self
             .lookup_runtime_sender(ws_idx, pane_id)
-            .and_then(|runtime| crate::terminal::driver::observe(runtime).ok())
-            .and_then(|(grid, _)| crate::terminal::driver::blocker(&grid));
+            .and_then(|runtime| crate::terminal::driver::observe(runtime).ok());
+        let screen_detection_skipped = observed.is_none();
+        let dialog = observed.and_then(|(grid, _)| crate::terminal::driver::blocker(&grid));
         Some(crate::protocol::api::schema::AgentInfo {
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)
@@ -535,7 +536,7 @@ impl App {
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
             agent_status: pane.agent_status,
-            screen_detection_skipped: false,
+            screen_detection_skipped,
             dialog_id: dialog,
             update_error: None,
             state_labels: pane.state_labels,

@@ -4,7 +4,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// The fake server exposes the same styled Grid as the production driver.
+/// The fake server supplies coherent driver-derived episode/status metadata.
 #[derive(Clone, Default)]
 struct Screen {
     pending_question: bool,
@@ -24,45 +24,15 @@ struct Screen {
 struct FakeServer(Arc<Mutex<Screen>>);
 
 impl Screen {
-    fn observation(&self, pane: &str) -> schema::TerminalObservation {
-        let text = self.raw_screen.clone().unwrap_or_else(|| {
-            if self.dialog || self.pending_question {
-                let heading = self.text.as_deref().unwrap_or(if self.question {
-                    "What token should Bus use?"
-                } else if self.pending_question {
-                    "Another question needs an answer"
-                } else {
-                    "Do you want to proceed?"
-                });
-                format!("{heading}\n❯ 1. Yes\n  2. No\nEnter to select · Esc to cancel")
-            } else {
-                "> ".into()
-            }
-        });
-        let mut grid = schema::driver::Grid::blank(160, 12);
-        for (row, line) in text.lines().enumerate().take(12) {
-            for (col, ch) in line.chars().enumerate().take(160) {
-                grid.cells[row][col].symbol = ch.to_string();
-            }
-        }
-        schema::TerminalObservation {
-            terminal_id: if self.wrong_terminal {
-                "replacement"
-            } else {
-                "terminal"
-            }
-            .into(),
-            pane_id: if self.wrong_pane { "replacement" } else { pane }.into(),
-            content_revision: 4 + self.revision,
-            text: grid.text(),
-            focus: crate::terminal::driver::selection_focus_for_label(&grid, None).ok(),
-            focus_occurrence: 0,
-            grid,
-        }
-    }
-
+    // The native server owns classification. This transport fixture supplies
+    // semantic episode metadata independently of the terminal implementation.
     fn current_dialog(&self) -> Option<String> {
-        crate::terminal::driver::blocker(&self.observation("pane").grid)
+        (self.dialog || self.pending_question).then(|| {
+            format!(
+                "{:?}:{:?}:{:?}:{:?}",
+                self.question, self.pending_question, self.text, self.raw_screen
+            )
+        })
     }
 
     fn info(&self, pane: &str) -> schema::AgentInfo {
@@ -73,6 +43,7 @@ impl Screen {
             "focused": false, "interactive_ready": true, "revision": 1,
             "agent_status": if self.dialog || self.blocked || self.pending_question { "blocked" } else { "idle" },
             "dialog_id": self.current_dialog(),
+            "screen_detection_skipped": self.unavailable_reads > 0,
             "agent_session": self.session.as_ref().map(|session| json!({
                 "source":"bus", "agent":"claude", "kind":"id", "value":session,
             })),
@@ -83,26 +54,20 @@ impl Screen {
 impl Transport for FakeServer {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         let mut screen = self.0.lock().unwrap();
-        if matches!(&method, Method::AgentObserve(_)) && screen.unavailable_reads > 0 {
-            screen.unavailable_reads -= 1;
-            return Err(TransportError {
-                code: Some("terminal_observation_unavailable".into()),
-                message: "Agent screen changed while it was being observed".into(),
-                definitely_rejected: true,
-            });
-        }
         Ok(match method {
-            Method::AgentGet(params) => ResponseResult::AgentInfo {
-                agent: screen.info(&params.target),
-            },
+            Method::AgentGet(params) => {
+                let agent = screen.info(&params.target);
+                screen.unavailable_reads = screen.unavailable_reads.saturating_sub(1);
+                ResponseResult::AgentInfo { agent }
+            }
             Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 ResponseResult::AgentList {
                     agents: vec![screen.info("pane")],
                 }
             }
-            Method::AgentObserve(params) => ResponseResult::TerminalObserved {
-                observation: screen.observation(&params.target),
-            },
+            Method::AgentObserve(_) => {
+                panic!("blocker verification must consume one coherent native projection")
+            }
             Method::AgentPress(_) => {
                 screen.inputs += 1;
                 panic!("observing and notifying must never answer a native prompt")
@@ -622,7 +587,7 @@ struct UnreadableScreen(FakeServer);
 impl Transport for UnreadableScreen {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentObserve(_) => Err(TransportError {
+            Method::AgentGet(_) => Err(TransportError {
                 code: None,
                 message: "native server unavailable".into(),
                 definitely_rejected: false,
