@@ -120,6 +120,11 @@ impl BusState {
         callback: &ProviderCallback,
     ) -> Option<CallbackDisposition> {
         let owner = self.agents.get(&callback.agent_id)?;
+        // Kimi reconciles committed failures before Started, including an
+        // already-held failure. Keep its independent inputs on that one path.
+        if owner.provider == Provider::Kimi {
+            return None;
+        }
         let hold = owner.provider_retry.as_ref()?;
         if owner.current_request.is_some_and(|id| id != hold.lead) {
             // Independently attributed native work keeps the ordinary continuation contract.

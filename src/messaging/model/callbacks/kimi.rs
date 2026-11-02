@@ -30,6 +30,10 @@ impl BusState {
         }
         let boundary = lead.submission_boundary;
         let status_revision = owner.status_revision;
+        let already_held = owner
+            .provider_retry
+            .as_ref()
+            .is_some_and(|hold| hold.lead == lead.id);
         let lead = lead.id;
         let next = self.group_members(lead).into_iter().find(|id| {
             self.requests.get(id).is_some_and(|member| {
@@ -60,9 +64,13 @@ impl BusState {
                 member.group = next.filter(|next| next != id);
             }
         }
-        let settled = self.settle_ended_request(callback.agent_id, callback.occurred_at_ms, |_| {
-            Some(RecordedTurnEnd::Error(error))
-        });
+        let settled = if already_held {
+            Some(lead)
+        } else {
+            self.settle_ended_request(callback.agent_id, callback.occurred_at_ms, |_| {
+                Some(RecordedTurnEnd::Error(error))
+            })
+        };
         if settled.is_some() {
             for id in pending {
                 if let Some(member) = self.requests.get_mut(&id) {

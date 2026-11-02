@@ -388,8 +388,9 @@ fn kimi_followup_after_failed_lead_rejects_callbacks_before_submission() {
 }
 
 #[test]
-fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
-    for restart in [false, true] {
+fn provider_flake_legacy_kimi_inputs_keep_their_turns_before_and_after_hold() {
+    // The old retry callback path must not strand a second native input on the held lead.
+    for (restart, settle_first) in [(false, true), (false, false), (true, true), (true, false)] {
         let mut f = Fixture::new(Provider::Kimi);
         let wire = super::kimi_steering_tests::home(&f);
         let lead = running(&mut f, "original task", "0");
@@ -410,12 +411,28 @@ fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
             .unwrap();
         let failed_wire = failure_wire(&mut f, lead, 0);
         std::fs::write(&wire, &failed_wire).unwrap();
+        if settle_first {
+            f.consume();
+        }
 
         f.started("1", "first independent followup");
         f.started("2", "second independent followup");
         f.consume();
 
-        assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+        assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert_eq!(
+            f.worker
+                .state
+                .agent(f.agent)
+                .unwrap()
+                .provider_retry
+                .as_ref()
+                .unwrap()
+                .lead,
+            lead,
+        );
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
+        assert!(f.request(lead).turn_ended_at_ms.is_some());
         assert_eq!(
             [
                 (
@@ -468,6 +485,23 @@ fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
         );
         assert_eq!(f.request(first).provider_turn_id.as_deref(), Some("1"));
         assert_eq!(f.request(second).provider_turn_id.as_deref(), Some("2"));
+        f.status(RuntimeStatus::Idle);
+        let due = f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .retry_at_ms;
+        assert!(f.worker.state.retry_provider_requests(due));
+        assert_eq!(f.worker.state.queued_requests(f.agent), &[lead]);
+        assert_eq!(f.reply(first).as_deref(), Some("first independent answer"));
+        assert_eq!(
+            f.reply(second).as_deref(),
+            Some("second independent answer")
+        );
         assert_eq!(
             f.typed().len(),
             3,
