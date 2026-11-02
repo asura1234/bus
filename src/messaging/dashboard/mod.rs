@@ -17,7 +17,7 @@ pub(crate) fn run(root: &Path) -> io::Result<()> {
 }
 
 fn serve(root: &Path) -> io::Result<()> {
-    let server = match service::start(root)? {
+    let mut server = match service::start(root)? {
         service::Started::Existing(endpoint) => {
             writeln!(io::stdout().lock(), "{}", endpoint.url)?;
             io::stdout().flush()?;
@@ -28,18 +28,25 @@ fn serve(root: &Path) -> io::Result<()> {
     let authority = server.listener.local_addr()?.to_string();
     writeln!(io::stdout().lock(), "{}", server.endpoint.url)?;
     io::stdout().flush()?;
-    for connection in server.listener.incoming() {
-        match connection {
-            Ok(stream) => dispatch_connection(
+    server.listener.set_nonblocking(true)?;
+    loop {
+        if server.retire_if_replaced(root)? {
+            return Ok(());
+        }
+        match server.listener.accept() {
+            Ok((stream, _)) => dispatch_connection(
                 stream,
                 root.to_owned(),
                 authority.clone(),
                 server.endpoint.token.clone(),
             ),
-            Err(error) => log_http_error(&error),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
         }
     }
-    Ok(())
 }
 
 pub(crate) use service::open_in_browser;
@@ -172,7 +179,9 @@ fn http_response(root: &Path, headers: &[u8], authority: &str, token: &str) -> R
         return Response {
             status: "200 OK",
             content_type: "application/json",
-            body: serde_json::json!({"token":token}).to_string().into_bytes(),
+            body: serde_json::json!({"token":token,"build":env!("BUS_BUILD_SHA")})
+                .to_string()
+                .into_bytes(),
         };
     }
     response_for(root, request[0], request[1])
