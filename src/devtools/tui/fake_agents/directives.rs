@@ -79,12 +79,14 @@ pub(super) const DIALOG: &str =
 /// Shows [`DIALOG`] for `seconds`, then clears it. Nothing is chosen: the
 /// dialog only holds the turn, which then answers as usual.
 pub(super) fn show_dialog(seconds: u64) {
+    super::spike_audit("dialog_open", json!({"seconds":seconds}));
     let mut out = std::io::stdout();
     let _ = write!(out, "{DIALOG}");
     let _ = out.flush();
     std::thread::sleep(std::time::Duration::from_secs(seconds));
     let rows = DIALOG.matches("\r\n").count();
     let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
+    super::spike_audit("dialog_close", json!({"seconds":seconds}));
     let _ = out.flush();
 }
 

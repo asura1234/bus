@@ -77,6 +77,7 @@ fn log_request(
     // without a subscriber can cache as `Interest::never`.
     tracing::info!(
         event, reason, request_id = id.0, prompt_id, room_id, agent_id,
+        wall_ns = crate::utils::time::now_ns(),
         provider = ?provider, phase = ?phase, launch_id = ?launch_id,
         terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
         turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
