@@ -787,6 +787,7 @@ fn submission_method(
             expected_session_id: session.clone(),
             steer,
             expected_generation: Some(generation),
+            expected_turn_id: None,
         })
     } else {
         Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
