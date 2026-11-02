@@ -146,12 +146,12 @@ pub(crate) enum AgentDetection {
     Disabled,
 }
 
-/// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
-/// Dropping this aborts async tasks and closes the PTY. An already-running bounded
-/// compression step may finish before releasing its terminal reference.
 #[cfg(unix)]
 pub(crate) mod native_input;
 
+/// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
+/// Dropping this aborts async tasks and closes the PTY. An already-running bounded
+/// compression step may finish before releasing its terminal reference.
 pub struct TerminalRuntime {
     pane_id: PaneId,
     terminal: Arc<PaneTerminal>,
