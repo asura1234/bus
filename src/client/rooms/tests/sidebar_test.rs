@@ -872,7 +872,7 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
 }
 
 #[test]
-fn sidebar_build_hash_keeps_save_failure_notices_visible() {
+fn sidebar_build_hash_never_shares_its_footer_with_save_failure_text() {
     let (mut ui, _, _) = fixture();
     ui.force_exit_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
     let (buffer, y, right) = settings_row(&mut ui, 100, 30);
@@ -882,7 +882,7 @@ fn sidebar_build_hash_keeps_save_failure_notices_visible() {
             .map(|x| buffer[(x, row)].symbol())
             .collect::<String>()
     };
-    assert!(text(y - 3 - extra).starts_with("Ctrl+Q again within 5s"));
-    assert!(text(y - 2 - extra).starts_with("May lose unsaved edits"));
-    assert_eq!(ui.view.sidebar_body.bottom(), y - 3 - extra);
+    assert!(!text(y - 3 - extra).starts_with("Ctrl+Q again within 5s"));
+    assert!(!text(y - 2 - extra).starts_with("May lose unsaved edits"));
+    assert_eq!(ui.view.sidebar_body.bottom(), y - 1 - extra);
 }

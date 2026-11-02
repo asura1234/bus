@@ -312,11 +312,7 @@ impl BusUi {
             + master_header_rows
             + rooms.len()
             + agents.iter().map(|entry| entry.height).sum::<usize>();
-        let notices = if self.force_exit_until.is_some() || self.quit_retry_pending() {
-            2
-        } else {
-            u16::from(self.quitting.is_some())
-        };
+        let notices = u16::from(self.quitting.is_some());
         // The footer stays pinned below any exit notices.
         let footer_rows = 2 + u16::from(cfg!(feature = "dev-tools"));
         view.sidebar_body = Rect::new(
@@ -624,26 +620,9 @@ impl BusUi {
         let sw = view.sidebar.width.saturating_sub(3);
         let build_row = u16::from(cfg!(feature = "dev-tools"));
         view.row(
-            Rect::new(1, rows.saturating_sub(4 + build_row), sw, 1),
-            if self.force_exit_until.is_some() {
-                "Ctrl+Q again within 5s"
-            } else if self.quit_retry_pending() {
-                "Ctrl+Q retries saving"
-            } else {
-                ""
-            },
-            None,
-            false,
-            true,
-        );
-        view.row(
             Rect::new(1, rows.saturating_sub(3 + build_row), sw, 1),
             if self.quitting.is_some() {
                 "Saving before exit…"
-            } else if self.force_exit_until.is_some() {
-                "May lose unsaved edits"
-            } else if self.quit_retry_pending() {
-                "Unsaved changes or slow storage"
             } else {
                 ""
             },

@@ -57,7 +57,9 @@ impl RoomAgent {
     /// whatever its provider reports (Codex reports Idle while it waits on an
     /// approval). Agent rows and room status both use it, so they agree.
     pub(crate) fn shown_status(&self) -> RuntimeStatus {
-        if self.dialog || self.missing_binary.is_some() {
+        if self.missing_binary.is_some() {
+            RuntimeStatus::Unavailable
+        } else if self.dialog {
             RuntimeStatus::Blocked
         } else {
             self.status

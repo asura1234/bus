@@ -620,7 +620,7 @@ fn ctrl_q_after_expired_warning_retries_failed_save_and_can_confirm_next_warning
 }
 
 #[test]
-fn quit_warning_expires_visibly_and_repeat_or_release_never_confirms() {
+fn quit_force_window_expires_without_error_text_and_repeat_or_release_never_confirms() {
     use crossterm::event::KeyEventKind;
     let (mut ui, room, _) = fixture();
     ui.locals
@@ -649,7 +649,7 @@ fn quit_warning_expires_visibly_and_repeat_or_release_never_confirms() {
     let screen = room_screen(ui, 120, 40);
     assert!(!screen.contains("within 5s"));
     assert!(!screen.contains("May lose unsaved edits"));
-    assert!(screen.contains("Ctrl+Q retries saving"));
+    assert!(!screen.contains("Ctrl+Q retries saving"));
     assert!(!shell.handle_input_bytes(b"\x11").detach);
     assert!(shell.bus.as_ref().unwrap().quitting.is_some());
 }

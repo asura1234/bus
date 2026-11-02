@@ -4,14 +4,8 @@ use std::time::Instant;
 
 const QUIT_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const QUIT_FORCE_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
-const QUIT_UNSAVED_NOTICE: &str = "Unsaved changes or slow storage. Press Ctrl+Q again within 5s to force quit; unsaved edits may be lost. Wait 5s, then Ctrl+Q retries saving.";
-const QUIT_RETRY_NOTICE: &str = "Unsaved changes or slow storage. Ctrl+Q retries saving.";
 
 impl BusUi {
-    pub(super) fn quit_retry_pending(&self) -> bool {
-        self.error.as_deref() == Some(QUIT_RETRY_NOTICE)
-    }
-
     pub(super) fn request_quit(&mut self) {
         // Repeated presses while saving must not postpone the warning.
         if self.quitting.is_some() {
@@ -25,12 +19,6 @@ impl BusUi {
             "Save and quit requested"
         );
         self.force_exit_until = None;
-        if matches!(
-            self.error.as_deref(),
-            Some(QUIT_UNSAVED_NOTICE | QUIT_RETRY_NOTICE)
-        ) {
-            self.error = None;
-        }
         self.quitting = Some(std::time::Instant::now());
         let failed = std::mem::take(&mut self.failed);
         for pending in failed {
@@ -49,9 +37,6 @@ impl BusUi {
         let mut changed = false;
         if self.force_exit_until.is_some_and(|until| now >= until) {
             self.force_exit_until = None;
-            if self.error.as_deref() == Some(QUIT_UNSAVED_NOTICE) {
-                self.error = Some(QUIT_RETRY_NOTICE.into());
-            }
             changed = true;
         }
         if let Some(started) = self
@@ -87,7 +72,6 @@ impl BusUi {
             );
             self.quitting = None;
             self.force_exit_until = Some(now + QUIT_FORCE_WINDOW);
-            self.error = Some(QUIT_UNSAVED_NOTICE.into());
             changed = true;
         }
         changed
