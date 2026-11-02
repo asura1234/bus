@@ -105,12 +105,11 @@ impl BusState {
             .chain(members)
             .filter_map(|id| self.request(*id))
             .collect();
-        // A participating MASTER request already displays this final. A
+        // An unsettled MASTER request will display this final. A
         // repeated settlement of a partly claimed group has already posted it.
-        if group
-            .iter()
-            .any(|request| request.room_id == master || request.reply() == Some(pending))
-        {
+        if group.iter().any(|request| {
+            (request.room_id == master && !request.settled()) || request.reply() == Some(pending)
+        }) {
             return Ok(());
         }
         let worker_request = group
