@@ -143,7 +143,7 @@ fn launch_metrics_failed_native_observations_do_not_fabricate_failure() {
     assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
     assert_eq!(
         worker.state.agent(agent).unwrap().status,
-        RuntimeStatus::Unavailable
+        RuntimeStatus::Idle
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
