@@ -408,11 +408,7 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
     }
     // Outside any git checkout: Cursor hooks go to the project root, and a test
     // binary written into this repository's hooks would capture live agents.
-    let dir = std::env::temp_dir().join(format!(
-        "bus-cursor-adoption-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-cursor-adoption");
     crate::messaging::storage::io::private_dir(&dir).unwrap();
     let reported = std::sync::Arc::default();
     let transport = Launches {
@@ -496,11 +492,7 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
             }
         }
     }
-    let dir = std::env::temp_dir().join(format!(
-        "bus-adoption-reservation-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-adoption-reservation");
     crate::messaging::storage::io::private_dir(&dir).unwrap();
     let mut worker = Worker::open(dir.clone(), Box::new(SuccessfulLaunches { tabs: 0 })).unwrap();
     worker.dev_enabled = true;
@@ -708,11 +700,7 @@ fn agent_clear_restores_reply_instructions_for_an_adopted_codex_session() {
             Ok(ResponseResult::AgentPrompted { agent })
         }
     }
-    let dir = std::env::temp_dir().join(format!(
-        "bus-control-clear-adopted-codex-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-control-clear-adopted-codex");
     let typed = Arc::new(Mutex::new(Vec::new()));
     let mut worker = Worker::open(dir.clone(), Box::new(Prompts(Arc::clone(&typed)))).unwrap();
     worker.dev_enabled = true;
