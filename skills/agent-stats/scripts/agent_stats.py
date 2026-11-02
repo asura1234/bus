@@ -10,7 +10,7 @@ from pathlib import Path
 
 from stats_identity import envelope, identity
 from stats_schema import SCHEMA, canonical, read_json, record, source
-from stats_store import append, read_records
+from stats_store import append, read_records, snapshot
 
 
 def run_json(argv):
@@ -76,20 +76,8 @@ def assignment(args):
             old = prior[-1]["agent"]
             paths.extend(prior[-1]["sources"])
         data.update(old_agent=old, reason=args.reason)
-    # Evidence is content addressed, so later input-file changes cannot alter old facts.
-    if any(p.is_symlink() for p in [store.absolute(), *store.absolute().parents]):
-        raise ValueError("invalid store: symlink path")
-    for snapshot, locator in evidence:
-        from stats_schema import digest
-
-        saved = store / "raw" / (digest(snapshot) + ".json")
-        saved.parent.mkdir(parents=True, exist_ok=True)
-        content = canonical(snapshot) + "\n"
-        if saved.is_symlink() or (saved.exists() and saved.read_text() != content):
-            raise ValueError("invalid evidence snapshot collision")
-        if not saved.exists():
-            saved.write_text(content)
-        paths.append(source(saved, locator))
+    for observed_value, locator in evidence:
+        paths.append(source(snapshot(store, observed_value), locator))
     value = record(
         args.command if args.command == "handover" else "assignment",
         args.task,

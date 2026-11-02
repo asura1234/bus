@@ -52,3 +52,33 @@ def append(store, records):
                 stream.flush()
                 os.fsync(stream.fileno())
         return len(fresh)
+
+
+def snapshot(store, value):
+    """Publish a complete immutable snapshot before concurrent readers see it."""
+    import tempfile
+    from stats_schema import digest
+
+    store = Path(store).absolute()
+    if any(p.is_symlink() for p in [store, *store.parents]):
+        raise ValueError("invalid store: symlink path")
+    root = store / "raw"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / (digest(value) + ".json")
+    content = canonical(value) + "\n"
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=root, encoding="utf-8", delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.is_symlink() or path.read_text() != content:
+                raise ValueError("invalid evidence snapshot collision") from None
+    finally:
+        temporary.unlink()
+    return path
