@@ -78,7 +78,9 @@ def main():
         room = cli('room', 'create', 'provider-flake')['room_id']
         agent = cli('agent', 'add', '--room', room, '--name', 'flake-worker', '--provider', 'claude',
                     '--pwd', root / 'work')['agent_id']
-        bus.wait_native_ready('flake-worker')
+        managed = until(lambda: next(a for a in cli('state')['agents'] if a['name'] == 'flake-worker'),
+                        lambda a: a['runtime_identity'].get('pane_id'))
+        report['native_ready'] = bus.wait_native_ready(managed['runtime_identity']['pane_id'])
         sent = cli('send', '--room', room, '--to', agent,
                    '--text', 'fake:overload-once fake:raw-reply PROVIDER_FLAKE_RECOVERED')
         message, request = sent['message_id'], sent['request_ids'][0]
