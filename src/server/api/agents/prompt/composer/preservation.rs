@@ -165,7 +165,7 @@ impl SubmissionInspector for PreservingComposer {
             || self.kind == AgentKind::Codex
                 && input(self.kind, screen).is_some()
                 && matches!(
-                    super::observe(self.kind, screen, &self.expected),
+                    super::observe_with_cursor(self.kind, screen, &self.expected, None),
                     InputObservation::Empty | InputObservation::Pending | InputObservation::Other
                 )
     }
