@@ -368,14 +368,12 @@ impl App {
             }
         };
 
-        #[cfg(unix)]
-        super::native_input::bind(&runtime, &launch_env);
-        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-            guard_resumed_agent_launch(terminal, &runtime);
-        }
-        if let Err(err) =
-            runtime.queue_shell_command(&argv, super::agents::DEFAULT_AGENT_START_TIMEOUT)
-        {
+        if let Err(err) = queue_resumed_agent_launch(
+            self.state.terminals.get_mut(&terminal_id),
+            &runtime,
+            &launch_env,
+            &argv,
+        ) {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,
@@ -420,6 +418,22 @@ impl App {
         }
         true
     }
+}
+
+fn queue_resumed_agent_launch(
+    terminal: Option<&mut crate::terminal::TerminalState>,
+    runtime: &crate::terminal::TerminalRuntime,
+    launch_env: &crate::terminal::runtime::PaneLaunchEnv,
+    argv: &[String],
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    super::native_input::bind(runtime, launch_env);
+    #[cfg(not(unix))]
+    let _ = launch_env;
+    if let Some(terminal) = terminal {
+        guard_resumed_agent_launch(terminal, runtime);
+    }
+    runtime.queue_shell_command(argv, super::agents::DEFAULT_AGENT_START_TIMEOUT)
 }
 
 fn guard_resumed_agent_launch(
