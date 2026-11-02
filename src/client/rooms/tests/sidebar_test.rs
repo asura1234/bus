@@ -977,3 +977,53 @@ fn room_count_excludes_a_working_agent_until_it_is_available() {
         assert!(line.trim_end().ends_with(expected), "{line}");
     }
 }
+
+#[test]
+fn opening_a_room_keeps_its_name_and_count_together() {
+    let (mut ui, first, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.ensure_master_room();
+    let mut rooms = vec![first];
+    for index in 1..9 {
+        rooms.push(
+            snapshot
+                .state
+                .create_room(&format!("extra-{index}"))
+                .unwrap(),
+        );
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    for capacity in [1, 2, 9] {
+        let rows = capacity + 2 + u16::from(cfg!(feature = "dev-tools"));
+        for target in [rooms[1], rooms[8]] {
+            ui.sidebar_scroll = 0;
+            ui.compute_view(100, rows);
+            ui.open_room(target);
+            ui.compute_view(100, rows);
+            assert_eq!(ui.view.sidebar_body.height, capacity);
+            let hits = ui
+                .view
+                .hits
+                .iter()
+                .filter(|hit| hit.action == render::Action::Room(target))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                hits.len(),
+                if capacity == 1 { 2 } else { 4 },
+                "name/status and count targets must fit at capacity {capacity}"
+            );
+            let name_row = hits[0].rect.y;
+            assert!(name_row < capacity);
+            if capacity > 1 {
+                let mut buffer =
+                    ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, rows));
+                ui.render(&mut buffer);
+                let count = (0..ui.view.sidebar.width - 1)
+                    .map(|x| buffer[(x, name_row + 1)].symbol())
+                    .collect::<String>();
+                assert!(count.trim_start().starts_with("Agents"), "{count}");
+                assert!(count.trim_end().ends_with("0/0"), "{count}");
+            }
+        }
+    }
+}
