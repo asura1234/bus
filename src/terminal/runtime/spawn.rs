@@ -528,6 +528,10 @@ fn spawn_child_watcher(
     });
 }
 
+fn initial_child_instance(pid: Option<u32>) -> Option<crate::platform::ProcessInstance> {
+    pid.and_then(crate::platform::process_instance)
+}
+
 impl TerminalRuntime {
     // Runtime construction threads PTY geometry, host context, launch policy, and render hooks.
     #[allow(clippy::too_many_arguments)]
@@ -744,10 +748,7 @@ impl TerminalRuntime {
         let child_pid = Arc::new(AtomicU32::new(0));
         let reported_cwd = Arc::new(Mutex::new(None));
         let child_wait_completed = Arc::new(AtomicBool::new(false));
-        let child_instance = spawned
-            .child
-            .process_id()
-            .and_then(crate::platform::process_instance);
+        let child_instance = initial_child_instance(spawned.child.process_id());
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
         spawn_child_watcher(
