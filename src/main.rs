@@ -101,13 +101,9 @@ fn main() -> io::Result<()> {
             configure_session(&raw_args);
             cli::restart::run_handoff_entry()
         }
-        // Headless coordinator for the session a restart just brought back.
-        Some("--session-coordinator") if raw_args.len() == 2 => {
-            configure_session(&raw_args);
-            cli::restart::run_session_coordinator()
-        }
         _ => cli::run(&raw_args[1..]),
-    }
+    }?;
+    cli::restart::resume_after_quit()
 }
 
 /// Applies the daemon session selected through the environment before a hidden entry runs.

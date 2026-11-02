@@ -234,9 +234,26 @@ grants are dropped. private/orchestrator-credentials.json is no longer read; del
 
 ## Developer restart for orchestrators
 
-`bus --dev restart --binary PATH --confirm` replaces the running server and keeps this session. Without `--dev` it is refused and hidden from `bus --help`.
+`bus --dev restart --binary PATH --confirm` saves and quits the whole Bus, then
+relaunches PATH in the same terminal and session. The server, TUI and its
+coordinator all run the selected build; agents use their existing provider resume
+paths. Without `--dev` the command is refused and hidden from `bus --help`.
 Before it, every room's orchestrator asks its working agents to pause: commit and push, stop builds and tests, release slot locks, then stop.
-Wait for each confirmation, then restart. After the outcome notice, tell them to resume.
+Wait for each confirmation, then restart. The relaunch keeps the recorded
+`--dev`, `--yolo`, session and data directory. If the replacement fails its health
+check, Bus relaunches the saved previous binary in that terminal instead.
+The initial `stage:handoff` receipt means the restart was queued. Only
+`restarts/log.jsonl` outcome `restarted` confirms that both the server and TUI
+run the requested build SHA. Package versions do not establish build identity.
+Failures identify the failed part and a command to finish manually. After checking
+the outcome notice or log, tell agents to resume work.
+
+Agents retain the CLI paths in their instructions and shell environment. Use
+`--binary` with the path those agents call, such as the absolute
+`target/debug/bus` path, and put the new build there before restarting. Restart
+does not rewrite other executables, symlinks, or saved agent instructions.
+For a TUI that predates whole-session restart, quit with Ctrl+Q and run the
+new binary with `--dev resume --last` (and the original `--yolo` setting) once.
 Details: `bus --dev restart --help`.
 
 ## Repository status and acceptance

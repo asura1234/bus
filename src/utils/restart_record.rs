@@ -23,8 +23,8 @@ pub(crate) struct RestartLog {
     pub(crate) new_sha: String,
     pub(crate) old_binary: String,
     pub(crate) new_binary: String,
-    /// Server: `restarted`, `rolled_back`, `rollback_failed`, `refused`.
-    /// A client appends `client_attach_failed` independently of server health.
+    /// Whole session: `restarted`, `rolled_back`, `rollback_failed`,
+    /// `quit_failed`, or `refused`.
     pub(crate) outcome: String,
     pub(crate) reason: String,
 }
@@ -75,6 +75,23 @@ pub(crate) struct LivePid {
     pub(crate) birth: u64,
 }
 
+/// Written only after the TUI has connected and started its coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct TuiBuild {
+    pub(crate) sha: String,
+    pub(crate) binary: PathBuf,
+    pub(crate) backup_binary: PathBuf,
+    pub(crate) process: LivePid,
+}
+
+pub(crate) fn tui_build_path(root: &Path) -> PathBuf {
+    restarts_dir(root).join("tui.json")
+}
+
+pub(crate) fn read_tui_build(root: &Path) -> Option<TuiBuild> {
+    serde_json::from_slice(&std::fs::read(tui_build_path(root)).ok()?).ok()
+}
+
 pub(crate) fn restarts_dir(root: &Path) -> PathBuf {
     root.join(RESTARTS)
 }
@@ -101,10 +118,6 @@ pub(crate) fn handoff_path(root: &Path) -> PathBuf {
 
 pub(crate) fn handoff_pid_path(root: &Path) -> PathBuf {
     restarts_dir(root).join("handoff.pid")
-}
-
-pub(crate) fn coordinator_pid_path(root: &Path) -> PathBuf {
-    restarts_dir(root).join("coordinator.pid")
 }
 
 pub(crate) fn restart_lock_path(root: &Path) -> PathBuf {
@@ -170,13 +183,6 @@ pub(crate) fn reattach_command(marker: &RestartMarker) -> String {
         Some(id) => format!("{binary}{flags} resume {id}"),
         None => format!("{binary}{flags}"),
     }
-}
-
-pub(crate) fn reattach_message(marker: &RestartMarker, why: &str) -> String {
-    format!(
-        "Bus restarted and this client could not stay attached ({why}).\nRun `{}` to reattach.",
-        reattach_command(marker)
-    )
 }
 
 pub(crate) fn parse_identity(stdout: &str) -> Result<Identity, String> {

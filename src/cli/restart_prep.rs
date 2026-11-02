@@ -30,19 +30,10 @@ pub(super) fn begin_handoff(
                 &refused_record(request, new_binary, old_binary, old_sha, "unknown", &error),
             )
         })?;
-    let (old_binary, old_sha) = serving.map_err(|error| {
-        record_refused(
-            root,
-            &refused_record(
-                request,
-                new_binary,
-                Path::new(""),
-                "unknown",
-                &identity.sha,
-                &error,
-            ),
-        )
-    })?;
+    let (old_binary, old_sha) = serving.unwrap_or_else(|_| (PathBuf::new(), "unknown".into()));
+    let tui = rollback_tui(root, request, new_binary, &identity, &old_binary, &old_sha)?;
+    let old_binary = tui.backup_binary;
+    let old_sha = tui.sha;
     let recorded = restart_record::read_recorded_launch(&restart_record::build_path(root))
         .map_err(|error| {
             record_refused(
@@ -95,6 +86,7 @@ pub(super) fn begin_handoff(
             request.as_who.as_deref(),
             std::env::var("USER").ok().as_deref(),
         ),
+        tui: tui.process,
         session_id: launch.session_id,
         explicit_data_dir: launch.explicit_data_dir,
         dev: launch.dev,
@@ -114,6 +106,36 @@ pub(super) fn begin_handoff(
         ));
     }
     publish_handoff(root, request, &plan)
+}
+
+fn rollback_tui(
+    root: &Path,
+    request: &RestartRequest,
+    new_binary: &Path,
+    identity: &restart_record::Identity,
+    old_binary: &Path,
+    old_sha: &str,
+) -> io::Result<restart_record::TuiBuild> {
+    let tui = restart_record::read_tui_build(root).filter(|tui| {
+        restart_record::valid_build_sha(&tui.sha)
+            && crate::platform::process_still_live(tui.process.pid, tui.process.birth)
+    }).ok_or_else(|| record_refused(root, &refused_record(
+        request, new_binary, old_binary, old_sha, &identity.sha,
+        "the running TUI has no whole-session restart receipt; quit with Ctrl+Q, then run the new binary with the same --dev, --yolo and resume/session settings",
+    )))?;
+    let previous = super::run_identity(&tui.backup_binary)
+        .and_then(|stdout| restart_record::parse_identity(&stdout))
+        .map_err(|error| record_refused(root, &refused_record(
+            request, new_binary, old_binary, old_sha, &identity.sha,
+            &format!("cannot validate the saved rollback binary: {error}; quit with Ctrl+Q and resume the new binary manually"),
+        )))?;
+    if previous.sha != tui.sha {
+        return Err(record_refused(root, &refused_record(
+            request, new_binary, old_binary, old_sha, &identity.sha,
+            "saved rollback binary SHA differs from the running TUI; quit with Ctrl+Q and resume the new binary manually",
+        )));
+    }
+    Ok(tui)
 }
 
 fn publish_handoff(root: &Path, request: &RestartRequest, plan: &HandoffPlan) -> io::Result<()> {
