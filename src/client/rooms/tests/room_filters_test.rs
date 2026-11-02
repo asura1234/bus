@@ -586,3 +586,30 @@ fn stale_filter_frame_does_not_move_find_selection() {
     assert_eq!(search.as_ref().unwrap().current, 1);
     assert!(!search.as_ref().unwrap().jump_to_newest);
 }
+
+#[test]
+fn background_layout_carries_filters_and_releases_find_jump() {
+    let (mut ui, room, agent) = fixture();
+    mixed_find_history(&mut ui, room, agent);
+    ui.open_room(room);
+    ui.history.enable_background().unwrap();
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    for c in "needle".chars() {
+        key(&mut ui, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
+    apply_filter_commands(&mut ui);
+    for _ in 0..1_000 {
+        room_screen(&mut ui, 100, 30);
+        if ui.history.current_filters().to_you && !ui.chat_search.as_ref().unwrap().jump_to_newest {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(ui.history.current_filters().to_you);
+    assert!(!ui.chat_search.as_ref().unwrap().jump_to_newest);
+    assert_eq!(
+        ui.chat_search.as_ref().unwrap().current,
+        ui.view.search_matches.len() - 1
+    );
+}

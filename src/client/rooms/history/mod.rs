@@ -183,6 +183,7 @@ pub(super) struct History {
     source: Option<(u64, RoomId)>,
     signature: u64,
     lines: Arc<[Line]>,
+    displayed_filters: crate::messaging::model::RoomHistoryFilters,
     background: Option<background::Background>,
     cancellation: Option<background::Cancellation>,
     age_valid: std::ops::Range<u64>,
@@ -204,7 +205,7 @@ impl History {
     }
 
     pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {
-        self.key.map_or_else(Default::default, |key| key.5)
+        self.displayed_filters
     }
 
     pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {

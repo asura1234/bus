@@ -35,6 +35,7 @@ struct Job {
 struct Layout {
     key: Key,
     lines: Arc<[Line]>,
+    filters: crate::messaging::model::RoomHistoryFilters,
     age_valid: Range<u64>,
 }
 
@@ -256,6 +257,10 @@ impl History {
                 .layouts
                 .get(&room)
                 .map_or_else(Arc::default, |layout| Arc::clone(&layout.lines));
+            self.displayed_filters = background
+                .layouts
+                .get(&room)
+                .map_or_else(Default::default, |layout| layout.filters);
             background.displayed_room = Some(room);
         }
         let completed = {
@@ -276,6 +281,7 @@ impl History {
             .filter(|layout| layout.reusable(key, now))
         {
             self.lines = Arc::clone(&layout.lines);
+            self.displayed_filters = layout.filters;
             if background.requested != Some(key) {
                 background.shared.generation.fetch_add(1, Ordering::Relaxed);
                 let mut mailbox = background
@@ -291,6 +297,7 @@ impl History {
         // Keep the same room's last complete layout during a resize or update.
         if let Some(layout) = background.layouts.get(&room) {
             self.lines = Arc::clone(&layout.lines);
+            self.displayed_filters = layout.filters;
         }
         if background.requested == Some(key) {
             return;
@@ -366,6 +373,7 @@ fn run(shared: Arc<Shared>) {
         let layout = Layout {
             key: job.key,
             lines: Arc::clone(&history.lines),
+            filters: room.history_filters,
             age_valid: history.age_valid.clone(),
         };
         let mut mailbox = shared.mailbox.lock().unwrap_or_else(|e| e.into_inner());

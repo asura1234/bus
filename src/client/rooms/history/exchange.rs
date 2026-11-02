@@ -176,6 +176,7 @@ impl History {
         let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
         self.markdown.retain(|source, _| shown.contains(source));
         self.key = Some(key);
+        self.displayed_filters = filters;
         self.lines = super::filter_lines(lines, filters).into();
         self.age_valid = age_valid;
         REBUILD.record_op(
