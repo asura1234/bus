@@ -141,29 +141,10 @@ pub(crate) trait SubmissionInspector: Send {
     fn editor_submission(&self) -> Option<EditorSubmission> {
         None
     }
-    /// A clipped visible draft cannot attest its hidden text. An inspector may
-    /// request an exact native-editor read of the once-pasted composer.
-    fn clipped_input_verification(&self, _screen: &str) -> Option<EditorSubmission> {
-        None
-    }
-    /// Called only after the complete native editor file matched byte for byte
-    /// and its acknowledgment marker returned to, then left, the composer.
-    fn verified_input(&self, _screen: &str, _text: &str) -> bool {
-        false
-    }
-    fn editor_frame_readable(&self, _screen: &str) -> bool {
-        false
-    }
-    fn editor_frame_unchanged(&self, previous: &str, current: &str) -> bool {
-        previous == current
-    }
     /// Select an already encoded key from the same guarded frame that
     /// authorizes submission; provider activity can change during editing.
     fn editor_submit_key(&self, _screen: &str, default: &Bytes) -> Bytes {
         default.clone()
-    }
-    fn editor_working(&self, _screen: &str) -> bool {
-        false
     }
 }
 
@@ -202,8 +183,6 @@ struct ObservedSubmission {
 }
 
 impl TerminalRuntime {
-    /// Completion means the owned composer cleared after Enter, or a turn
-    /// visibly began. A PTY write alone cannot confirm provider acceptance.
     #[cfg(test)]
     pub(crate) fn queue_observed_input_submission(
         &self,
@@ -544,43 +523,6 @@ impl ObservedSubmission {
         io::Error::new(error.kind(), format!("{error}. {detail}. No Enter was sent by Bus. Inspect the agent's transcript and composer before resending; preserve your edits while removing any remaining Bus draft"))
     }
 
-    /// Enter was attempted but acceptance is still unknown. Withdraw only the
-    /// unchanged owned draft, rechecking ownership under the render lock before
-    /// every editing key. Clearing cannot prove the provider never ran it.
-    fn withdraw_pending(&self, timeout: io::Error) -> io::Result<()> {
-        let screen = self.terminal.active_ansi();
-        let cursor = self
-            .terminal
-            .cursor_state()
-            .map(|cursor| (cursor.x, cursor.y));
-        self.deadline
-            .set((self.clock.now() + self.withdraw_grace).min(self.hard_deadline));
-        let cleared = self.clear_draft();
-        self.diagnostics.cleared(&cleared, self.clock.now());
-        let detail = match cleared {
-            Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Accepted) => return Ok(()),
-            Ok(ClearOutcome::Cleared) => "The remaining draft was cleared".to_owned(),
-            Err(error) => format!("The draft could not be safely cleared: {error}"),
-        };
-        self.diagnose_refusal_snapshot(&screen, "withdraw_pending", cursor);
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("{timeout}. {detail}. The message may have run; inspect the agent's transcript and composer before resending"),
-        ))
-    }
-
-    // The caller holds content_lock while queueing, and releases it before waiting.
-    fn enqueue_enter(&self) -> io::Result<InputCompletion> {
-        self.diagnostics.enter(&self.enter, self.clock.now());
-        self.io.queue_input_write_scoped(
-            Bytes::new(),
-            self.enter.clone(),
-            Duration::ZERO,
-            Some(self.deadline.get()),
-            &self.scope,
-        )
-    }
-
     fn finish_enter(&self, completion: io::Result<InputCompletion>) -> io::Result<()> {
         let result = completion.and_then(|completion| {
             completion
@@ -589,25 +531,11 @@ impl ObservedSubmission {
                 .and_then(|result| result)
         });
         self.diagnostics.entered(&result, self.clock.now());
-        result
+        result.map_err(Self::uncertain_submission)
     }
 
-    fn verified_paste_lease<'a>(
-        &self,
-        delay: Duration,
-        lease: Option<&'a super::draft_input::DraftInputLease>,
-        exchange: Option<&crate::platform::draft_editor::Exchange>,
-    ) -> io::Result<Option<&'a super::draft_input::DraftInputLease>> {
-        let Some(lease) = lease else {
-            return Ok(None);
-        };
-        self.verify_clipped_input(delay, lease, exchange)
-            .map(|verified| verified.then_some(lease))
-            .map_err(|error| {
-                io::Error::other(format!(
-                    "Full draft verification failed after paste; no Enter was sent. Inspect the composer before resending: {error}"
-                ))
-            })
+    fn uncertain_submission(error: io::Error) -> io::Error {
+        io::Error::new(error.kind(), format!("{error}. The message may have run; inspect the agent's transcript and composer before resending"))
     }
 
     /// One Enter after a submittable frame. An incomplete or blank redraw is
@@ -660,13 +588,7 @@ impl ObservedSubmission {
         }
     }
 
-    fn run(
-        &self,
-        text: Bytes,
-        delay: Duration,
-        lease: Option<&super::draft_input::DraftInputLease>,
-        _exchange: Option<&crate::platform::draft_editor::Exchange>,
-    ) -> io::Result<()> {
+    fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
         match self.observe_initial("initial")? {
@@ -691,7 +613,6 @@ impl ObservedSubmission {
         // developer input buffered; only a fresh complete blocker reading may
         // refuse the one submission key. A blank redraw is not that reading.
         self.await_submit_key()?;
-        let _ = lease;
         #[cfg(test)]
         self.clock.entered();
         // Native Started/Steered callbacks settle delivery asynchronously.
@@ -699,7 +620,7 @@ impl ObservedSubmission {
         Ok(())
     }
 
-    pub(super) fn wait_for_consumption(&self, withdraw: bool) -> io::Result<()> {
+    pub(super) fn wait_for_consumption(&self) -> io::Result<()> {
         loop {
             let generation = self.clock.generation();
             let guard = self
@@ -725,11 +646,7 @@ impl ObservedSubmission {
             // content lock. Confirm acceptance first; only further input expires.
             if let Err(error) = self.check_deadline() {
                 drop(guard);
-                return if withdraw {
-                    self.withdraw_pending(error)
-                } else {
-                    Err(error)
-                };
+                return Err(error);
             }
             drop(guard);
             #[cfg(test)]

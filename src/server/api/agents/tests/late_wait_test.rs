@@ -36,6 +36,7 @@ async fn watched() -> (TerminalRuntime, tokio::sync::mpsc::Receiver<Bytes>, Sign
         inner: Box::new(observer(AgentKind::Claude, OLD.into())),
         signal: signal.clone(),
     };
+    let release = clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
     let completion = runtime
         .queue_observed_input_with_inspector(
             Bytes::from(format!("\x1b[200~{OLD}\x1b[201~")),
@@ -49,8 +50,8 @@ async fn watched() -> (TerminalRuntime, tokio::sync::mpsc::Receiver<Bytes>, Sign
         )
         .unwrap();
     assert!(writes.recv().await.unwrap().starts_with(b"\x1b[200~"));
-    clock.wait_for_draft_wait();
     clock.advance(Duration::from_secs(3));
+    release.send(()).unwrap();
     assert!(completion.recv_timeout(WAIT).unwrap().is_err());
     (runtime, writes, signal)
 }
@@ -271,6 +272,7 @@ async fn a_native_restored_user_draft_is_never_reclaimed_by_the_old_bus_inspecto
     clock.pause();
     let restored = Arc::new(AtomicBool::new(false));
     let text = "bus line\n".repeat(10);
+    let release = clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
     let completion = runtime
         .queue_observed_input_with_inspector(
             Bytes::from(format!("\x1b[200~{text}\x1b[201~")),
@@ -285,8 +287,8 @@ async fn a_native_restored_user_draft_is_never_reclaimed_by_the_old_bus_inspecto
         )
         .unwrap();
     assert!(writes.recv().await.unwrap().starts_with(b"\x1b[200~"));
-    clock.wait_for_draft_wait();
     clock.advance(Duration::from_secs(3));
+    release.send(()).unwrap();
     assert!(completion.recv_timeout(WAIT).unwrap().is_err());
     // A native stash has restored the developer's rich draft. Its collapsed
     // line count happens to equal Bus's late paste; screen matching alone is

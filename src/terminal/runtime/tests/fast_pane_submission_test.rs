@@ -147,11 +147,7 @@ impl SubmissionInspector for Editor {
             directory: self.directory.clone(),
             key: Bytes::from_static(b"\x07"),
             backspace: Bytes::from_static(b"\x7f"),
-            verification_error: None,
         })
-    }
-    fn editor_frame_readable(&self, _: &str) -> bool {
-        true
     }
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
         screen.contains(marker)
@@ -239,7 +235,10 @@ async fn fast_editor_swap_captures_before_replacement_and_restores_exact_drafts(
         );
         assert_eq!(draft.as_bytes(), original.as_bytes());
         assert!(
-            !crate::platform::draft_editor::Exchange::has_recoverable_draft(&directory),
+            !std::fs::read_dir(&directory)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().starts_with("draft-")),
             "developer draft must never authorize automatic Bus-paste withdrawal"
         );
         assert!(writes.try_recv().is_err());
@@ -275,11 +274,7 @@ async fn consumed_editor_submit_stays_ok_when_restoration_does_not_finish() {
                 directory: self.directory.clone(),
                 key: Bytes::from_static(b"\x07"),
                 backspace: Bytes::from_static(b"\x7f"),
-                verification_error: None,
             })
-        }
-        fn editor_frame_readable(&self, _: &str) -> bool {
-            true
         }
         fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
             screen.contains(marker)
@@ -478,11 +473,7 @@ async fn empty_composer_restore_failure_stays_retryable() {
                 directory: self.directory.clone(),
                 key: Bytes::from_static(b"\x07"),
                 backspace: Bytes::from_static(b"\x7f"),
-                verification_error: None,
             })
-        }
-        fn editor_frame_readable(&self, _: &str) -> bool {
-            true
         }
         fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
             screen.contains(marker)

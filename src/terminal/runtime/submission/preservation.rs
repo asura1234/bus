@@ -24,7 +24,6 @@ pub(crate) struct EditorSubmission {
     pub(crate) directory: PathBuf,
     pub(crate) key: Bytes,
     pub(crate) backspace: Bytes,
-    pub(crate) verification_error: Option<&'static str>,
 }
 
 impl ObservedSubmission {
@@ -83,16 +82,6 @@ impl ObservedSubmission {
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
         }
-        if initial != InputObservation::Empty && self.inspect.editor_frame_readable(&screen) {
-            if let Some(editor) = self.inspect.editor_submission().filter(|editor| {
-                editor.verification_error.is_some()
-                    && Exchange::has_recoverable_draft(&editor.directory)
-            }) {
-                self.recover_editor_draft(&editor, &screen, lease)?;
-                lease.restored();
-                return Err(io::Error::other(PromptNotShown::ComposerBusy));
-            }
-        }
         let preservation = self
             .inspect
             .draft_preservation_since_launch(&screen, cursor, pristine);
@@ -101,7 +90,6 @@ impl ObservedSubmission {
                 if self.inspect.always_use_editor() {
                     if let Some(editor) = self.inspect.editor_submission() {
                         return self.preserve_editor(
-                            text,
                             delay,
                             editor.key,
                             editor.backspace,
@@ -110,7 +98,7 @@ impl ObservedSubmission {
                         );
                     }
                 }
-                let result = self.run(text, delay, Some(lease), None);
+                let result = self.run(text, delay);
                 if result.is_ok() {
                     lease.restored();
                 }
@@ -119,7 +107,7 @@ impl ObservedSubmission {
             InputObservation::Empty | InputObservation::Other | InputObservation::Pending => {}
             _ if preservation.is_none() || !self.inspect.submission_available(&screen) => {
                 lease.restored();
-                return self.run(text, delay, Some(lease), None);
+                return self.run(text, delay);
             }
             _ => {}
         }
@@ -144,7 +132,7 @@ impl ObservedSubmission {
                 key,
                 backspace,
                 directory,
-            } => self.preserve_editor(text, delay, key, backspace, directory, lease),
+            } => self.preserve_editor(delay, key, backspace, directory, lease),
         }
     }
 
@@ -232,7 +220,7 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, Some(lease), None);
+        let result = self.run(text, delay);
         if result.is_ok() {
             if let Err(error) = self.wait_transfer(|| {
                 Ok(self
@@ -328,267 +316,10 @@ impl ObservedSubmission {
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
         if submit {
             self.diagnostics.entered(&result, self.clock.now());
-        }
-        result
-    }
-
-    pub(super) fn verify_clipped_input(
-        &self,
-        delay: Duration,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-        active: Option<&Exchange>,
-    ) -> io::Result<bool> {
-        let Some(screen) = self.terminal.active_ansi_if_complete() else {
-            return Ok(false);
-        };
-        let Some(editor) = self.inspect.clipped_input_verification(&screen) else {
-            return Ok(false);
-        };
-        let owned = if active.is_none() {
-            let exchange = self.exchange(editor.directory)?;
-            exchange.save_recovery(&editor.text)?;
-            Some(exchange)
+            result.map_err(Self::uncertain_submission)
         } else {
-            None
-        };
-        let exchange = active
-            .or(owned.as_ref())
-            .ok_or_else(|| io::Error::other("Draft verification exchange is unavailable"))?;
-        // Verify reads the complete existing native draft. It does not restore,
-        // replace or clear it, and a mismatch leaves the native file untouched.
-        exchange.request_verify_text(&editor.text)?;
-        self.guarded_editor_key(editor.key, lease, false, |current| {
-            self.inspect.editor_frame_unchanged(&screen, current)
-        })?;
-        self.wait_transfer(|| exchange.acknowledged())?;
-        let verified = self.checked_editor_marker(exchange, &editor.backspace, lease)?;
-        if !self.inspect.verified_input(&verified, &editor.text) {
-            return Err(io::Error::other(
-                "Native composer ownership could not be verified",
-            ));
+            result
         }
-        if owned.is_some() {
-            exchange.remove_recovery()?;
-        }
-        self.reset_confirmation(delay);
-        Ok(true)
-    }
-
-    /// Queue a key only while both the rendered composer and the input lease
-    /// still match the evidence used to authorize it.
-    fn guarded_editor_key(
-        &self,
-        key: Bytes,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-        confirmation: bool,
-        valid: impl FnOnce(&str) -> bool,
-    ) -> io::Result<()> {
-        let deadline = if confirmation {
-            self.deadline.get()
-        } else {
-            self.hard_deadline
-        };
-        if self.clock.now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Editor transfer expired",
-            ));
-        }
-        let guard = self
-            .content_lock
-            .lock()
-            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        let screen = self
-            .terminal
-            .active_ansi_if_complete()
-            .ok_or_else(|| io::Error::other("Composer repaint is incomplete"))?;
-        if !valid(&screen) {
-            return Err(io::Error::other("Composer changed during editor transfer"));
-        }
-        let key = if confirmation {
-            self.inspect.editor_submit_key(&screen, &key)
-        } else {
-            key
-        };
-        if self.clock.now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Editor transfer expired",
-            ));
-        }
-        if confirmation {
-            self.diagnostics.enter(&key, self.clock.now());
-        }
-        let completion = lease.with_unedited(|| {
-            self.io.queue_input_write_scoped(
-                key,
-                Bytes::new(),
-                Duration::ZERO,
-                Some(deadline),
-                &self.scope,
-            )
-        })?;
-        drop(guard);
-        let result = completion
-            .recv_timeout(self.clock.remaining(deadline))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
-            .and_then(|result| result);
-        if confirmation {
-            self.diagnostics.entered(&result, self.clock.now());
-        }
-        result
-    }
-
-    fn checked_editor_marker(
-        &self,
-        exchange: &Exchange,
-        backspace: &Bytes,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-    ) -> io::Result<String> {
-        self.wait_transfer(|| {
-            if lease.edited() {
-                return Err(io::Error::other(
-                    "Developer input changed during editor transfer",
-                ));
-            }
-            Ok(self
-                .terminal
-                .active_ansi_if_complete()
-                .is_some_and(|screen| {
-                    self.inspect
-                        .restoration_marker_visible(&screen, exchange.marker())
-                }))
-        })?;
-        let mut keys = Vec::with_capacity(backspace.len() * exchange.marker().len());
-        for _ in exchange.marker().bytes() {
-            keys.extend_from_slice(backspace);
-        }
-        self.guarded_editor_key(Bytes::from(keys), lease, false, |screen| {
-            self.inspect
-                .restoration_marker_visible(screen, exchange.marker())
-        })?;
-        let mut result = None;
-        self.wait_transfer(|| {
-            if lease.edited() {
-                return Err(io::Error::other(
-                    "Developer input changed during editor transfer",
-                ));
-            }
-            if let Some(screen) = self.terminal.active_ansi_if_complete() {
-                if self.inspect.editor_frame_readable(&screen)
-                    && !self
-                        .inspect
-                        .restoration_marker_visible(&screen, exchange.marker())
-                {
-                    result = Some(screen);
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        })?;
-        result.ok_or_else(|| io::Error::other("Editor frame is unavailable"))
-    }
-
-    fn recover_editor_draft(
-        &self,
-        editor: &EditorSubmission,
-        screen: &str,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-    ) -> io::Result<()> {
-        let exchange = Exchange::begin_recovery(
-            editor.directory.clone(),
-            self.hard_deadline.saturating_duration_since(self.clock.now()),
-        ).map_err(|error| {
-            tracing::warn!(event = "bus.draft.recovery_wait", %error, "Existing editor ownership retained");
-            io::Error::other(PromptNotShown::ComposerBusy)
-        })?;
-        exchange.request_recover()?;
-        let result = (|| {
-            self.guarded_editor_key(editor.key.clone(), lease, false, |current| {
-                self.inspect.editor_frame_unchanged(screen, current)
-            })?;
-            self.wait_transfer(|| exchange.acknowledged())?;
-            self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
-            if self.observe("recovered_bus_draft") != InputObservation::Empty {
-                return Err(io::Error::other("Recovered composer is not empty"));
-            }
-            exchange.remove_recovery()?;
-            Ok(())
-        })();
-        result.map_err(|_: io::Error| io::Error::other(PromptNotShown::ComposerBusy))
-    }
-
-    fn submit_through_editor(
-        &self,
-        editor: EditorSubmission,
-        delay: Duration,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-    ) -> io::Result<()> {
-        if editor.text.len() as u64 > crate::platform::draft_editor::MAX_BYTES {
-            lease.restored();
-            return Err(io::Error::other(
-                "Prompt exceeds the 2 MiB editor exchange limit",
-            ));
-        }
-        let exchange = self
-            .exchange(editor.directory)
-            .inspect_err(|_| lease.restored())?;
-        exchange
-            .save_recovery(&editor.text)
-            .inspect_err(|_| lease.restored())?;
-        let transfer = (|| {
-            exchange.request_restore()?;
-            self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
-                self.inspect.observe(screen) == InputObservation::Empty
-            })?;
-            self.wait_transfer(|| exchange.acknowledged())?;
-            let first = self.checked_editor_marker(&exchange, &editor.backspace, lease)?;
-            let verified = if editor.verification_error.is_some() {
-                exchange.request_verify()?;
-                self.guarded_editor_key(editor.key.clone(), lease, false, |screen| {
-                    self.inspect.editor_frame_unchanged(&first, screen)
-                })?;
-                self.wait_transfer(|| exchange.acknowledged())?;
-                self.checked_editor_marker(&exchange, &editor.backspace, lease)?
-            } else {
-                first
-            };
-            self.diagnostics.editor_installed(editor.text.len());
-            self.reset_confirmation(delay);
-            self.check_deadline()?;
-            self.guarded_editor_key(self.enter.clone(), lease, true, |screen| {
-                self.inspect.editor_frame_unchanged(&verified, screen)
-            })?;
-            self.diagnostics.ownership_verified();
-            self.wait_transfer(|| {
-                if let Some(screen) = self.terminal.active_ansi_if_complete() {
-                    if screen != verified
-                        && (self.inspect.observe(&screen) == InputObservation::Empty
-                            || self.inspect.editor_working(&screen))
-                    {
-                        return Ok(true);
-                    }
-                }
-                if self.check_deadline().is_err() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        editor.verification_error.unwrap_or(
-                            "Provider submission may have run; inspect the transcript before resending",
-                        ),
-                    ));
-                }
-                Ok(false)
-            })?;
-            lease.restored();
-            if let Err(error) = exchange.remove_recovery() {
-                self.recovery_log(&exchange, &error);
-            }
-            Ok(())
-        })();
-        if let Err(error) = &transfer {
-            self.recovery_log(&exchange, error);
-        }
-        transfer
     }
 
     fn remove_marker(&self, exchange: &Exchange, backspace: &Bytes) -> io::Result<()> {
@@ -649,7 +380,6 @@ impl ObservedSubmission {
 
     fn preserve_editor(
         &self,
-        _text: Bytes,
         delay: Duration,
         key: Bytes,
         backspace: Bytes,
@@ -680,10 +410,15 @@ impl ObservedSubmission {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
+        // Installation is recorded before submit. Ownership is recorded only
+        // after that Enter write is accepted.
+        self.diagnostics.editor_installed(editor.text.len());
         self.reset_confirmation(delay);
-        let result = self
-            .swap_key(self.enter.clone(), true)
-            .and_then(|()| self.wait_for_consumption(false));
+        let submitted = self.swap_key(self.enter.clone(), true);
+        if submitted.is_ok() {
+            self.diagnostics.ownership_verified();
+        }
+        let result = submitted.and_then(|()| self.wait_for_consumption());
         let restoration = if result.is_err() {
             exchange
                 .request_restore_after_attempt(&editor.text)
