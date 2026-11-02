@@ -326,6 +326,7 @@ class FixtureSource:
 def fixture_directory_violations(sources):
     # Include static-only parent modules so an actually imported counter can
     # supply sequence provenance. Never search unrelated files by counter name.
+    sources = {str(path).replace("\\", "/"): source for path, source in sources.items()}
     models = {path: FixtureSource(path, source) for path, source in sources.items()
               if any(word in source for word in ("temp_dir", "/tmp", "CARGO_MANIFEST_DIR", "fetch_add"))
               or ("static" in source and "Atomic" in source)}
@@ -335,7 +336,7 @@ def fixture_directory_violations(sources):
         if not statics:
             continue
         for edge in rust_edges(root / path, parent.source):
-            child = models.get(str(edge.target.relative_to(root)))
+            child = models.get(edge.target.relative_to(root).as_posix())
             if child is None or not any(alias == "*" and name == "super::*" for alias, name, _ in child.imports):
                 continue
             declaration = next((i for i, t in enumerate(parent.tokens) if t.start() == edge.offset), None)
@@ -505,7 +506,8 @@ fn test() { let root = ''' + PATH + '; fs::create_dir_all(root); }'
     assert len(fixture_directory_violations({"tests/case.rs": source})) == 1
 
 
-def test_parent_static_import_protects_only_the_counter_actually_used():
+@pytest.mark.parametrize("separator", ("/", "\\"))
+def test_parent_static_import_protects_only_the_counter_actually_used(separator):
     parent = '''#[path="child_test.rs"] mod child;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 '''
@@ -514,11 +516,14 @@ fn test() { let root = std::env::temp_dir().join(format!("sample-{}-{}-{}",
     std::process::id(), now_ns(), NEXT.fetch_add(1, Ordering::Relaxed)));
     fs::create_dir_all(root);
 }'''
-    assert fixture_directory_violations({"tests/parent_test.rs": parent,
-                                         "tests/child_test.rs": child}) == []
+    sources = {"tests/parent_test.rs": parent, "tests/child_test.rs": child}
+    assert fixture_directory_violations({path.replace("/", separator): text
+                                         for path, text in sources.items()}) == []
     # A static in another file with the same spelling is not an imported binding.
-    assert len(fixture_directory_violations({"tests/unrelated_test.rs": 'static NEXT: AtomicU64 = AtomicU64::new(0);',
-                                             "tests/child_test.rs": child})) == 1
+    sources = {"tests/unrelated_test.rs": 'static NEXT: AtomicU64 = AtomicU64::new(0);',
+               "tests/child_test.rs": child}
+    assert len(fixture_directory_violations({path.replace("/", separator): text
+                                           for path, text in sources.items()})) == 1
 
 
 def test_clock_provenance_crosses_helper_parameters_and_return_values():
