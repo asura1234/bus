@@ -96,6 +96,7 @@ impl Worker {
                 }),
             )
             .map_err(|e| e.to_string())?;
+        state.watch_launch_command(id, started_at_ms);
         self.save(state)
     }
 
@@ -104,6 +105,7 @@ impl Worker {
         id: AgentId,
         argv: Vec<String>,
         reason: &str,
+        cause: &str,
     ) -> Result<(), String> {
         let agent = self.state.agent(id).cloned().ok_or("Unknown agent")?;
         let diagnostics = self.startup_diagnostics(&agent);
@@ -135,6 +137,13 @@ impl Worker {
                 }),
             )
             .map_err(|error| error.to_string())?;
+        super::launch_metrics::settle_current(
+            &mut state,
+            id,
+            crate::messaging::model::LaunchOutcome::Failed,
+            Some(cause),
+            io::now_ms(),
+        );
         state.abandon_failed_startup_queue(id, io::now_ms());
         state
             .set_agent_error(id, Some(message.clone()))
@@ -178,6 +187,13 @@ impl Worker {
         } else {
             startup.recovery = None;
             startup.failure = Some(startup_failure(&error.message, ""));
+            super::launch_metrics::settle_current(
+                &mut state,
+                id,
+                crate::messaging::model::LaunchOutcome::Failed,
+                error.code.as_deref(),
+                io::now_ms(),
+            );
         }
         state
             .set_agent_startup(id, Some(startup))
