@@ -372,7 +372,7 @@ fn dashboard_provider_hold_and_retry_remain_pending_without_failure_counters() {
                 assert!(state.retry_provider_requests(due));
             }
             2 => {
-                state.begin_submission(request, "launch", due).unwrap();
+                state.begin_submission(request, "launch", 12).unwrap();
             }
             3 => {
                 state
