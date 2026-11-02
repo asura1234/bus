@@ -19,7 +19,7 @@ svg{display:block}svg .bar{fill:var(--accent)}svg g[role=button]{cursor:pointer}
 @media(max-width:750px){main{padding:20px 12px}.cards{grid-template-columns:1fr;gap:10px}header{flex-direction:column}.rate{font-size:28px}.card{padding:16px}}
 </style>
 <main>
-<header><div><div class="eyebrow">Bus · developer tools</div><h1 id="dashboard-title">Delivery</h1><p id="dashboard-description" class="muted">Bus is the message transport. A direct message is reliable when it was delivered, and fast when the delay was low. A missing reply is not a delivery failure. Every percentage names its fraction.</p><span class="pill">Read only · refreshes every 30 seconds</span></div><div><label for="view-mode">View</label><select id="view-mode"><option value="delivery">Delivery</option><option value="launch">Agent launches</option></select></div></header>
+<header><div><div class="eyebrow">Bus · developer tools</div><h1 id="dashboard-title">Delivery</h1><p id="dashboard-description" class="muted">Bus is the message transport. A direct message is reliable when it was delivered, and fast when the delay was low. A missing reply is not a delivery failure. Every percentage names its fraction.</p><span class="pill">Read only · refreshes every 30 seconds</span><div class="legend"><a href="/latency">Delivery latency</a></div></div><div><label for="view-mode">View</label><select id="view-mode"><option value="delivery">Delivery</option><option value="launch">Agent launches</option></select></div></header>
 <p id="updated" aria-live="polite">No data</p>
 <div id="delivery-view">
 <div class="cards" id="cards"></div><p class="counts" id="counts"></p>

@@ -1,0 +1,17 @@
+# Bus delivery-latency QA
+
+## Run contract and setup recipes
+
+- Use only a fresh driver-owned scratch Bus with fake Claude. Never connect to the running Bus, a real provider, global provider configuration, or `target/debug`. Start at 120 columns × 40 rows. The fake agent performs real PTY, composer, hook, persistence and dashboard work; no model thinking is measured.
+- Start with pristine scratch data in the default `bus` room. Read-only scratch state, logs, effects and loopback HTTP may corroborate every step. UI actions create/change the data. Record the commit, driver run folder, request/message IDs, endpoint and all timestamp comparisons. A mismatch is FAIL; unavailable required evidence is FAIL, not a timing retry.
+- **Create and select the worker:** press Ctrl+N; type `latency-agent`; press Tab, select Claude Code and Enter; press Ctrl+A then Ctrl+K; type the absolute scratch workspace path; complete the highlighted path with Enter, then Tab to optional args; click Add. If hook consent appears, approve only the isolated project. Wait for the fake terminal, press F6, then use Ctrl+P to select exactly `latency-agent` and Esc.
+- **Compare phases:** select the completed request in scratch state. Require accepted, queued, picked, native requested, server accepted, writer queued, paste started, exact text written, paste completed, composer owned, Enter sent, Enter written, native confirmed, provider Started, reply captured and reply delivered timestamps. Each exact text/Enter write must be at or before its corresponding runtime completion. Compare timestamps for identically named log events within 2 ms where both exist; coordinator/provider hook observation can be later than the provider event itself and is reported separately.
+
+## LATENCY-01 — Real delivery and dashboard agreement
+
+**Preconditions/setup:** fresh scratch session and the worker created/selected as above.
+
+1. Type `fake:raw-reply LATENCY_OK`, press Enter, and wait for the settled `LATENCY_OK` reply → one replied request contains every required phase timestamp in a monotonic-safe breakdown. The exact actor text-write and Enter-write timestamps match their new native log events within 2 ms; queue/native-request markers match their client log events within 2 ms; provider Started/reply capture and durable room delivery are distinct. Save the request/message IDs and comparison output as evidence.
+2. Open Settings and click `Open delivery dashboard` → the recorded open effect names the scratch dashboard URL. GET `/latency` returns the dark-themed read-only page and GET `/latency/data` returns this request in the slowest drill-down. For every phase, overall/provider/recipient/hourly p50, p90 and p99 equal the persisted duration for this single sample; accepted-to-box uses exact text write, not post-delay completion. Re-read scratch files to show no dashboard writes or message-content exposure. Save the JSON, effect, comparison output and dashboard screenshot as evidence.
+
+**Pass criteria:** all timestamps and log comparisons match, all dashboard groups and hourly rows agree with the persisted request, the slowest request ID is correct, and the dashboard is read-only.

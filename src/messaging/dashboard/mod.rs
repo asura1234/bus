@@ -6,10 +6,12 @@ use std::time::{Duration, Instant};
 
 use crate::messaging::storage::state_store::JsonStore;
 mod launch_metrics;
+mod latency;
 mod metrics;
 mod service;
 
 const PAGE: &str = include_str!("page.html");
+const LATENCY_PAGE: &str = include_str!("latency_page.html");
 const MAX_HEADERS: usize = 8192;
 const REQUEST_DEADLINE: Duration = Duration::from_secs(1);
 
@@ -89,6 +91,47 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
             content_type: "text/html; charset=utf-8",
             body: PAGE.as_bytes().to_vec(),
         },
+        "/latency" => Response {
+            status: "200 OK",
+            content_type: "text/html; charset=utf-8",
+            body: LATENCY_PAGE.as_bytes().to_vec(),
+        },
+        "/latency/data" => {
+            let now = crate::utils::time::now_ms();
+            let metrics = match JsonStore::new(root.join("state.json")).load() {
+                Ok(state) => state.map(|state| latency::snapshot(&state, latency::local_hour)),
+                Err(error) => {
+                    tracing::warn!(event = "bus.dashboard.latency_read_failed", %error);
+                    None
+                }
+            };
+            let hour = latency::local_hour(now);
+            let offset = hour
+                .label
+                .rsplit_once(' ')
+                .map_or("unknown offset", |(_, offset)| offset);
+            let zone = std::env::var("TZ")
+                .ok()
+                .filter(|zone| !zone.is_empty())
+                .or_else(|| {
+                    std::fs::read_link("/etc/localtime").ok().and_then(|path| {
+                        path.to_str()?
+                            .split_once("zoneinfo/")
+                            .map(|(_, zone)| zone.to_owned())
+                    })
+                });
+            let timezone = format!(
+                "Server local time: {} ({offset})",
+                zone.as_deref().unwrap_or("system timezone")
+            );
+            let data =
+                serde_json::json!({"generated_at_ms":now,"timezone":timezone,"metrics":metrics});
+            Response {
+                status: "200 OK",
+                content_type: "application/json; charset=utf-8",
+                body: data.to_string().into_bytes(),
+            }
+        }
         "/data" => {
             let now = crate::utils::time::now_ms();
             let state = match JsonStore::new(root.join("state.json")).load() {
@@ -285,3 +328,7 @@ mod fixtures;
 #[cfg(test)]
 #[path = "tests/launch_metrics_test.rs"]
 mod launch_metrics_tests;
+
+#[cfg(test)]
+#[path = "tests/latency_test.rs"]
+mod latency_tests;
