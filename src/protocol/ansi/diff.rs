@@ -365,7 +365,7 @@ pub(crate) fn clear_truncated_wide_cell(cells: &mut [CellData]) {
     }
 }
 
-pub(super) fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
+pub(crate) fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
     let mut chars = symbol.chars();
     let Some(base) = chars.next() else {
         return false;

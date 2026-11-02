@@ -1,5 +1,6 @@
 //! Host terminal defaults, clipboard and desktop integration.
 use crate::platform::read_limited_reader;
+pub(in crate::platform) use crate::platform::unix::shell_quote;
 use crate::platform::ClipboardCommand;
 use crate::platform::ClipboardImage;
 use crate::platform::LimitedRead;
@@ -47,22 +48,6 @@ pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<
 
 pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
     crate::platform::interactive_unix_shell_command(argv, shell_name, shell_quote)
-}
-
-pub(in crate::platform) fn shell_quote(value: &str) -> String {
-    if !value.is_empty()
-        && value.chars().all(|ch| {
-            ch.is_ascii_alphanumeric()
-                || matches!(
-                    ch,
-                    '@' | '%' | '_' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
-                )
-        })
-    {
-        return value.to_string();
-    }
-
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 pub fn write_clipboard(bytes: &[u8]) -> bool {

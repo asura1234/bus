@@ -62,7 +62,7 @@ impl ScreenInput {
             {
                 return Err("Fake number answer must be one digit".into());
             }
-            Self::Key { answer } if parse_key(answer).is_none() => {
+            Self::Key { answer } if crate::utils::config::parse_key_combo(answer).is_none() => {
                 return Err(format!("Unsupported fake answer key {answer:?}"));
             }
             _ => {}
@@ -166,9 +166,9 @@ impl Interaction {
             }
             ScreenInput::Key { answer } => {
                 if let Event::Key(key) = event {
-                    let matches = parse_key(answer).is_some_and(|(code, modifiers)| {
-                        key.code == code && key.modifiers == modifiers
-                    });
+                    let matches = crate::utils::config::parse_key_combo(answer).is_some_and(
+                        |(code, modifiers)| key.code == code && key.modifiers == modifiers,
+                    );
                     return Some((
                         if matches {
                             answer.clone()
@@ -181,13 +181,6 @@ impl Interaction {
             }
         }
         None
-    }
-}
-
-fn parse_key(name: &str) -> Option<(KeyCode, KeyModifiers)> {
-    match name {
-        "space" => Some((KeyCode::Char(' '), KeyModifiers::empty())),
-        _ => crate::utils::config::parse_key_combo(name),
     }
 }
 

@@ -242,24 +242,17 @@ pub(super) fn wait_for_resolved_agent(
         };
 
         if should_probe {
-            let current = match agent_get(&request_id, &wait.target, api_tx) {
-                Ok(agent) => agent,
-                Err(response) => {
-                    return agent_wait_probe_error(response)
-                        .map(AgentWaitOutcome::Response)
-                        .map(Some);
-                }
-            };
-            if !agent_wait_identity_matches(
-                &current,
+            let current = match probe_wait_agent(
+                &request_id,
+                &wait.target,
+                api_tx,
                 &expected_terminal_id,
                 expected_name.as_deref(),
                 expected_agent.as_deref(),
-            ) {
-                return agent_wait_not_running(request_id)
-                    .map(AgentWaitOutcome::Response)
-                    .map(Some);
-            }
+            )? {
+                Ok(current) => current,
+                Err(response) => return Ok(Some(AgentWaitOutcome::Response(response))),
+            };
             if let Some(status) = matched_event_status {
                 let mut matched = current;
                 matched.agent_status = status;
@@ -271,24 +264,17 @@ pub(super) fn wait_for_resolved_agent(
         }
 
         if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
-            let current = match agent_get(&request_id, &wait.target, api_tx) {
-                Ok(agent) => agent,
-                Err(response) => {
-                    return agent_wait_probe_error(response)
-                        .map(AgentWaitOutcome::Response)
-                        .map(Some);
-                }
-            };
-            if !agent_wait_identity_matches(
-                &current,
+            let current = match probe_wait_agent(
+                &request_id,
+                &wait.target,
+                api_tx,
                 &expected_terminal_id,
                 expected_name.as_deref(),
                 expected_agent.as_deref(),
-            ) {
-                return agent_wait_not_running(request_id)
-                    .map(AgentWaitOutcome::Response)
-                    .map(Some);
-            }
+            )? {
+                Ok(current) => current,
+                Err(response) => return Ok(Some(AgentWaitOutcome::Response(response))),
+            };
             if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
                 return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
             }
@@ -423,6 +409,29 @@ pub(super) fn agent_wait_matches(
 ) -> bool {
     until.contains(&agent.agent_status)
         && after_state_change_seq.is_none_or(|baseline| agent.state_change_seq > baseline)
+}
+
+fn probe_wait_agent(
+    request_id: &str,
+    target: &str,
+    api_tx: &ApiRequestSender,
+    expected_terminal_id: &str,
+    expected_name: Option<&str>,
+    expected_agent: Option<&str>,
+) -> std::io::Result<Result<crate::protocol::api::schema::AgentInfo, String>> {
+    let current = match agent_get(request_id, target, api_tx) {
+        Ok(agent) => agent,
+        Err(response) => return agent_wait_probe_error(response).map(Err),
+    };
+    if !agent_wait_identity_matches(
+        &current,
+        expected_terminal_id,
+        expected_name,
+        expected_agent,
+    ) {
+        return agent_wait_not_running(request_id.to_owned()).map(Err);
+    }
+    Ok(Ok(current))
 }
 
 fn agent_get(

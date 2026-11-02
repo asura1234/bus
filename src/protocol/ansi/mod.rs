@@ -30,7 +30,7 @@ mod cursor;
 mod diff;
 mod style;
 
-pub(crate) use diff::clear_truncated_wide_cell;
+pub(crate) use diff::{clear_truncated_wide_cell, is_halfwidth_katakana_voiced_grapheme};
 
 use crate::protocol::wire::{CursorState, FrameData, PaneSurfacePatchRow};
 pub(crate) use cursor::frame_with_drawn_cursor;

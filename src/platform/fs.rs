@@ -142,6 +142,32 @@ pub(crate) fn lock_file(path: &Path) -> io::Result<FileLock> {
     Ok(FileLock::from_locked(file))
 }
 
+pub(crate) fn guarded_lock_file(path: &Path) -> io::Result<FileLock> {
+    if !path.exists() {
+        match super::create_private_state_file(path) {
+            Ok(file) => file.sync_all()?,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::other("Bus lock is a symlink"));
+    }
+    lock_file(path)
+}
+
+pub(crate) fn guarded_atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(io::Error::other("Bus refuses to replace a symlink"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    atomic_write(path, bytes)
+}
+
 #[derive(Debug)]
 pub(crate) struct AtomicWriteError {
     pub(crate) path: PathBuf,
