@@ -153,6 +153,14 @@ must be able to produce a citation: if you cannot write one, it was not verified
 suggestion copied as an instruction.
 For PR, each ruling briefly notes in its first-party citation and action the goal relationship and consequence, or the basis for lacking a relationship; sync-only items also get a scope ruling first.
 
+
+After canonical root adjudication, serialize those same decisions with the
+[canonical root provenance contract](references/root-cause-provenance-format.md).
+Write `canonical-claims.json` from PASS 1 source assertions and PASS 3 outcomes;
+run `scripts/root_provenance.py --claims <canonical-claims.json> --triage <triage.md>
+--output <provenance.md>` and append its deterministic block unchanged to triage.md.
+This is machine-readable provenance for the existing ledger, not ratings or a second deduplication.
+
 ========== PASS 4: GROUP & REMEDIATE ==========
 
 Plan mode fixed state transition: if the status is `create-plan-complete`, change it to `review-plan-in-progress`; if it is already `review-plan-in-progress` or `review-plan-complete`, leave it, and never move back to `create-plan-in-progress`. With no APPLY, the status change still follows the landing rules.
