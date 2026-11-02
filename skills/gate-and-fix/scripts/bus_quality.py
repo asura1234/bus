@@ -17,6 +17,7 @@ from pathlib import Path
 from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
 from gate_process import Children, Interrupted, interrupt_signals
 from profile_report import merged_profile
+from suite_environment import bootstrap
 
 ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip() or Path.cwd()).resolve()
 OUTPUT = ROOT / "temp/gate-and-fix/coverage"
@@ -584,11 +585,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lane", choices=(*LANES, "ci", "windows-lint"))
     parser.add_argument("--skip-clippy", action="store_true", help="planner found no Rust inputs")
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(arguments)
     if args.skip_clippy and args.lane != "lint":
         parser.error("--skip-clippy is only valid for lint")
     try:
         with interrupt_signals():
+            bootstrap(ROOT, arguments, script=Path(__file__))
             if args.lane not in ("unit", "integration", "coverage", "ci"):
                 return run_lane(args.lane, skip_clippy=args.skip_clippy)
             with Run(ROOT, OUTPUT, args.lane) as profiles:

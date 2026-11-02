@@ -2,9 +2,14 @@
 
 Use `./run test` during development and `./run test --full` for the final gate.
 Both execute the same Python scheduler that `just ci` and gate-and-fix call.
-Python 3.11+, pytest, Ruff, cargo-nextest, cargo-llvm-cov and the Rust
-`llvm-tools-preview` component are the existing gate prerequisites. Put Cargo's
-plugin directory on PATH (usually `$HOME/.cargo/bin`).
+Python 3.11+, cargo-nextest, cargo-llvm-cov and the Rust `llvm-tools-preview`
+component are the gate prerequisites. Put Cargo's plugin directory on PATH
+(usually `$HOME/.cargo/bin`). Actual scheduler and diagnostic invocations create
+or update `temp/gate-tools/python` from `scripts/requirements.txt`, then use that
+private interpreter. Repeated installs reuse satisfied requirements. Setup uses
+an exclusive environment lock and never installs into global Python; failures
+identify `temp/gate-tools/python-setup.log` and start no lanes. `--plan` does not
+create an environment, install packages, or access the package index.
 
 ```sh
 ./run test --plan                 # explain affected selection without building

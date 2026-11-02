@@ -141,20 +141,23 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
 
 ## Developer tools
 
-No Cargo.toml dependency is added. Python 3.11+ is required. Install developer tools once:
+No Cargo.toml dependency is added. Python 3.11+ is required. The runner prepares
+its private Python environment from the checked-in requirements before starting
+any lane; plan mode stays read-only. Setup failures stop before scheduling and
+identify `temp/gate-tools/python-setup.log`. Python setup mechanics live in
+`scripts/suite_environment.py`, including migration of older environments that
+inherited global site packages. Only the Rust developer tools need manual setup:
 
 ```sh
 cargo install cargo-llvm-cov --locked
 rustup component add llvm-tools-preview
-python3 -m venv --system-site-packages temp/gate-tools/python
-temp/gate-tools/python/bin/python -m pip install -r skills/gate-and-fix/scripts/requirements.txt
 # Optional wrappers/faster Rust execution: install just and cargo-nextest.
 ```
 
 On Windows, use `python` in place of `python3` and invoke the runner with the venv's
 `Scripts/python.exe` (or pass that interpreter with `just --set python <path> ci`).
 The runner and just use the local venv if present; otherwise they use the current/default Python,
-which must have the requirements installed. Missing mandatory tools fail with setup guidance.
+which bootstraps the private requirements environment. Missing Rust tools fail with setup guidance.
 `just unit-test` starts and records a private run, `just integration-test` continues it, and
 `just coverage` consumes its profiles and removes it. A failed lane or interrupted command
 removes that run as well; restart from unit after such a failure. Starting unit again discards

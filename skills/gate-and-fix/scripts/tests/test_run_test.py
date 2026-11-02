@@ -177,6 +177,7 @@ def test_interrupt_parallel_entrypoint_stops_child_before_deleting_profiles(tmp_
         "from pathlib import Path;import os;"
         f"r.quality.ROOT=Path({str(tmp_path)!r});r.quality.OUTPUT=r.quality.ROOT/'reports';"
         "r.changed_paths=lambda *_:['run'];"
+        "r.bootstrap=lambda *a,**kw:None;"
         f"r.commands=lambda _s:([r.Gate('build',(sys.executable,'-c',{child!r}),env=dict(os.environ))],[]);"
         "sys.exit(r.main(['--full']))"
     )

@@ -18,6 +18,7 @@ from coverage_run import EXTERNAL_RUN, PROFILE_DIR, Run
 from gate_and_fix import Gate, GateResult, run_gates
 from gate_process import Interrupted, interrupt_signals
 from suite_selection import Selection, changed_paths, select
+from suite_environment import bootstrap
 
 COMMON = ("--no-fail-fast", "--status-level", "fail", "--final-status-level", "fail",
           "--failure-output", "final", "--success-output", "never")
@@ -211,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--full", action="store_true", help="all applicable tests, lint, docs and fresh Rust coverage floor")
     parser.add_argument("--base", default="origin/master", help="affected merge-base (default: origin/master)")
     parser.add_argument("--plan", action="store_true", help="print selection without building or running tests")
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(arguments)
     try:
         paths = changed_paths(quality.ROOT, args.base)
         selection = select(paths, full=args.full, root=quality.ROOT)
@@ -219,15 +221,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({**asdict(selection), "head": quality.head(), "paths": paths,
                               "base": args.base, "lanes": lane_plan(selection, args.base)}, indent=2))
             return 0
-        if not shutil.which("cargo-nextest") and (selection.rust_filter != "none()" or selection.dev_tools):
-            raise ValueError("install cargo-nextest to run Rust tests")
-        if needs_profiles(selection) and not shutil.which("cargo-llvm-cov"):
-            raise ValueError("install cargo-llvm-cov and llvm-tools-preview for full mode")
-        # Conservative fallback collects profiles in the same isolated way, but
-        # only --full can publish a coverage floor verdict.
-        coverage = Run(quality.ROOT, quality.OUTPUT, "ci") if needs_profiles(selection) else nullcontext()
-        with interrupt_signals(), coverage as profiles:
-            return execute(selection, nested=bool(profiles and profiles.external), base=args.base)
+        with interrupt_signals():
+            bootstrap(quality.ROOT, arguments, script=Path(__file__))
+            if not shutil.which("cargo-nextest") and (selection.rust_filter != "none()" or selection.dev_tools):
+                raise ValueError("install cargo-nextest to run Rust tests")
+            if needs_profiles(selection) and not shutil.which("cargo-llvm-cov"):
+                raise ValueError("install cargo-llvm-cov and llvm-tools-preview for full mode")
+            # Only --full can publish a coverage floor verdict.
+            coverage = Run(quality.ROOT, quality.OUTPUT, "ci") if needs_profiles(selection) else nullcontext()
+            with coverage as profiles:
+                return execute(selection, nested=bool(profiles and profiles.external), base=args.base)
     except Interrupted as error:
         print("Test run interrupted; children stopped and run profiles removed", file=sys.stderr)
         return 128 + error.signum
