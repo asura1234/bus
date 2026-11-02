@@ -124,7 +124,7 @@ fn restart_executable_accepts_only_device_drift() {
     previous_mount(&fixture, true);
     assert_eq!(
         saved_executable(&fixture.hooks).unwrap(),
-        fixture.executable
+        fixture.executable.canonicalize().unwrap()
     );
     std::fs::write(&fixture.executable, b"replaced executable").unwrap();
     assert!(saved_executable(&fixture.hooks).is_err());
