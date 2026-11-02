@@ -346,6 +346,15 @@ the wrapper remains held.
   only: the orchestrator never resets its own context and is never replaced
   for compactions. *Why:* you carry the context, carry-over and situational
   awareness for the whole effort.
+
+<a id="unavailable-agents"></a>
+
+- **Replace an Unavailable agent.** A room with an Unavailable agent shows
+  Blocked; that is intended. Remove the agent with
+  `bus agent delete NAME --confirm`. If its work is still open, re-add a fresh
+  agent in an existing folder and brief it from the old agent's handover or
+  resume note.
+
 - **On "Blocked, needs help to continue.", look at the worker's terminal.** A
   worker blocked on a dialog, question, trust prompt, shell prompt, pager or any
   other screen gets you exactly that Bus notice, once, with no details;

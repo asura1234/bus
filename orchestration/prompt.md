@@ -154,6 +154,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   Reuse `<worktree>/target` for all Cargo/gate/coverage/E2E runs; use the room's
   two-build slot protocol. Preflight long device work and ask once for a bounded
   app relaunch/retry lease. [Guide]({{DOCS}}/orchestrator-guide.md#resource-leases-and-build-slots).
+- For an Unavailable agent, follow the
+  [binding replacement rule]({{DOCS}}/orchestrator-rules.md#unavailable-agents).
 - Agents stop at screens they cannot pass alone, including permission, trust
   and question dialogs, shell prompts and pagers. A blocked worker sends you one message, "Blocked,
   needs help to continue.", with no details; a `--async` send keeps waiting

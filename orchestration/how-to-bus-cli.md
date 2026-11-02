@@ -190,8 +190,9 @@ Every action needs a fresh observation and a decision. Without unique visible me
 read the styled screen and use explicit keys. Inspect pending or uncertain results before
 acting again; sent input is not retried implicitly. A successful press proves input was queued;
 observe the resulting screen to verify the program's response. See `bus agent press --help`.
-Fix provider installation/startup first, then `agent resume --room ROOM` for
-saved agents. Use `request recover REQUEST_ID --confirm` only after checking
+For an Unavailable agent, follow the
+[binding replacement rule](orchestrator-rules.md#unavailable-agents).
+Use `request recover REQUEST_ID --confirm` only after checking
 identity/status and effects; it closes work, never undoes or replays it.
 Use `agent interrupt --help` to stop a turn; `agent clear --help` for fresh context.
 Sending provider reset slash commands as messages leaves requests unanswered.
