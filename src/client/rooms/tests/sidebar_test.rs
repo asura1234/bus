@@ -826,7 +826,7 @@ fn room_chrome_uses_shared_phosphor_green() {
         (30, 1, "#"),                      // Room title hash.
         (1, 5, "─"),                       // Rooms/agents separator.
         (27, 0, "│"),                      // Column separator.
-        (29, 2, "─"),                      // History separator below the room title.
+        (29, 3, "─"),                      // History separator below the room filters.
         (editor.x - 1, editor.y - 3, "┌"), // Composer box.
         (editor.x, editor.y - 1, "─"),     // Composer toolbar separator.
     ] {
