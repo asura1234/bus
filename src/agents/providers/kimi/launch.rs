@@ -632,7 +632,7 @@ pub(crate) fn prepare(
 
 #[cfg(all(test, unix))]
 #[path = "update_test.rs"]
-mod update_test;
+pub(crate) mod update_test;
 
 #[cfg(all(test, unix))]
 #[path = "trust_test.rs"]

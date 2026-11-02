@@ -25,6 +25,10 @@ pub(crate) mod provider_glue {
     pub(crate) mod callbacks {
         include!("../agents/providers/tests/spool_test.rs");
     }
+    #[cfg(unix)]
+    mod kimi_restart {
+        include!("coordinator/resume/tests/kimi_restart_test.rs");
+    }
     mod resume_launch {
         mod tests {
             include!("coordinator/resume/tests/capture_test.rs");
