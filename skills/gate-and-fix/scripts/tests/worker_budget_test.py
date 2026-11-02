@@ -19,10 +19,15 @@ def test_full_entrypoint_caps_explicit_rust_and_python_overrides(tmp_path):
     tools=tmp_path/'tools';tools.mkdir()
     for number in range(6):(tools/f'case{number}_test.py').write_text('def test_case(): pass\n')
     with patch.dict(os.environ,NEXTEST_TEST_THREADS='99',PYTEST_WORKERS='99'),patch.object(quality,'ROOT',tmp_path):
-        _,tests=runner.commands(select(['run'],full=True,root=tmp_path))
-    for gate in tests:
-        if '--test-threads' in gate.argv:assert gate.argv[gate.argv.index('--test-threads')+1]=='4'
-        if gate.name=='python':assert gate.argv[gate.argv.index('-n')+1]=='4'
+        build,tests=runner.commands(select(['run'],full=True,root=tmp_path))
+    gates={gate.name:gate for gate in [*build,*tests]}
+    for name in ('instrumented-build','unit','integration','dev-tools'):
+        assert name in gates
+        argv=gates[name].argv
+        assert '--test-threads' in argv
+        assert argv[argv.index('--test-threads')+1]=='4'
+    assert 'python' in gates
+    assert gates['python'].argv[gates['python'].argv.index('-n')+1]=='4'
 
 
 @pytest.mark.parametrize('nextest',[True,False])
