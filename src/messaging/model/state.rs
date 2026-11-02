@@ -238,6 +238,12 @@ impl BusState {
         }
     }
 
+    /// Live obligations only; reconciliation and save diagnostics must not
+    /// traverse permanent archived history to find unfinished native turns.
+    pub(crate) fn unsettled_requests(&self) -> impl Iterator<Item = &Request> {
+        self.requests.values().filter(|request| !request.settled())
+    }
+
     /// A message's recipients in request order, without rescanning permanent history.
     pub(crate) fn requests_for_message(&self, message: PromptId) -> impl Iterator<Item = &Request> {
         MergeById {

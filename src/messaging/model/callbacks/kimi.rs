@@ -43,22 +43,42 @@ impl BusState {
                         .is_some_and(|payload| member.matches_callback_payload(payload))
             })
         });
-        if let Some(member) = next.and_then(|id| self.requests.get_mut(&id)) {
-            member.group = None;
+        // A legacy group can contain more submitted inputs whose native
+        // Started events have not arrived yet. Keep them with the new anchor.
+        let pending: Vec<_> = self
+            .group_members(lead)
+            .into_iter()
+            .filter(|id| {
+                next.is_some()
+                    && self.requests.get(id).is_some_and(|member| {
+                        member.steered && !member.trusted_start_bound && !member.settled()
+                    })
+            })
+            .collect();
+        for id in &pending {
+            if let Some(member) = self.requests.get_mut(id) {
+                member.group = next.filter(|next| next != id);
+            }
         }
         let settled = self.settle_ended_request(callback.agent_id, callback.occurred_at_ms, |_| {
             Some(RecordedTurnEnd::Error(error))
         });
         if settled.is_some() {
-            if let Some(member) = next.and_then(|id| self.requests.get_mut(&id)) {
-                member.submission_boundary = boundary;
-                member.submission_status_revision = status_revision;
+            for id in pending {
+                if let Some(member) = self.requests.get_mut(&id) {
+                    member.submission_boundary = boundary;
+                    member.submission_status_revision = status_revision;
+                }
             }
             if let Some(owner) = self.agents.get_mut(&callback.agent_id) {
                 owner.current_request = next;
             }
-        } else if let Some(member) = next.and_then(|id| self.requests.get_mut(&id)) {
-            member.group = Some(lead);
+        } else {
+            for id in pending {
+                if let Some(member) = self.requests.get_mut(&id) {
+                    member.group = Some(lead);
+                }
+            }
         }
     }
 }

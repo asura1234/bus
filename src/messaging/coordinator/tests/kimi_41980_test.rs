@@ -386,3 +386,170 @@ fn kimi_followup_after_failed_lead_rejects_callbacks_before_submission() {
         CallbackDisposition::Rejected(CallbackRejection::BeforeSubmissionBoundary)
     );
 }
+
+#[test]
+fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
+    for restart in [false, true] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let first = f.send("first independent followup", false);
+        f.deliver();
+        let second = f.send("second independent followup", false);
+        f.deliver();
+
+        let mut snapshot = serde_json::to_value(&f.worker.state).unwrap();
+        for id in [first, second] {
+            let member = &mut snapshot["requests"][id.0.to_string()];
+            member["phase"] = json!("active");
+            member["uncertain_outcome"] = json!(true);
+            member["submission_error"] = json!("legacy unconfirmed write");
+        }
+        f.worker
+            .save(serde_json::from_value(snapshot).unwrap())
+            .unwrap();
+        let failed_wire = failure_wire(&mut f, lead, 0);
+        std::fs::write(&wire, &failed_wire).unwrap();
+
+        f.started("1", "first independent followup");
+        f.started("2", "second independent followup");
+        f.consume();
+
+        assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            [
+                (
+                    f.request(first).phase,
+                    f.request(first).provider_turn_id.as_deref(),
+                ),
+                (
+                    f.request(second).phase,
+                    f.request(second).provider_turn_id.as_deref(),
+                ),
+            ],
+            [
+                (RequestPhase::Active, Some("1")),
+                (RequestPhase::Active, Some("2")),
+            ]
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(second)
+        );
+        assert_eq!(f.typed().len(), 3, "neither legacy input was replayed");
+        if restart {
+            super::kimi_steering_tests::reopen(&mut f);
+            f.status(RuntimeStatus::Working);
+        }
+        let first_payload = f.worker.state.render_request_payload(first).unwrap();
+        let second_payload = f.worker.state.render_request_payload(second).unwrap();
+        std::fs::write(
+            &wire,
+            failed_wire
+                + &super::kimi_steering_tests::native_turn(
+                    1,
+                    &first_payload,
+                    &[],
+                    "first independent answer",
+                )
+                + &super::kimi_steering_tests::native_turn(
+                    2,
+                    &second_payload,
+                    &[],
+                    "second independent answer",
+                ),
+        )
+        .unwrap();
+        f.consume();
+        assert_eq!(f.reply(first).as_deref(), Some("first independent answer"));
+        assert_eq!(
+            f.reply(second).as_deref(),
+            Some("second independent answer")
+        );
+        assert_eq!(f.request(first).provider_turn_id.as_deref(), Some("1"));
+        assert_eq!(f.request(second).provider_turn_id.as_deref(), Some("2"));
+        assert_eq!(
+            f.typed().len(),
+            3,
+            "native receipts and replies never cause replay"
+        );
+    }
+}
+
+struct PolledKimi(Arc<Mutex<Vec<Method>>>);
+
+impl Transport for PolledKimi {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(
+            method,
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+        ) {
+            return Ok(ResponseResult::AgentList {
+                agents: vec![serde_json::from_value(json!({
+                "terminal_id":"terminal", "pane_id":"pane", "agent":"kimi",
+                "agent_status":"working", "interactive_ready":true,
+                "workspace_id":"workspace", "tab_id":"tab", "focused":false, "revision":1,
+                "agent_session":{"source":"bus", "agent":"kimi", "kind":"id", "value":"session"},
+            })).unwrap()],
+            });
+        }
+        Native(self.0.clone()).request(method)
+    }
+}
+
+#[test]
+fn kimi_pre_started_error_logs_recovery_once_after_durable_save() {
+    for batched in [false, true] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "PRIVATE_ORIGINAL", "0");
+        let next = uncertain_member(&mut f);
+        if batched {
+            f.worker.transport = Box::new(PolledKimi(f.native.clone()));
+            f.worker.tick().unwrap();
+        }
+        std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+        f.started("1", incident()["followup"].as_str().unwrap());
+        let spool = f.dir.join("callbacks/launch");
+        f.worker
+            .store
+            .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            let failed = if batched {
+                f.worker.tick()
+            } else {
+                f.worker.consume_callbacks(f.agent, &spool)
+            };
+            assert!(failed.is_err());
+            assert!(!capture.text().contains("bus.message.recovered"));
+            assert_eq!(f.request(lead).phase, RequestPhase::Active);
+            let (events, _events) = std::sync::mpsc::channel();
+            f.worker
+                .retry_storage(std::time::Instant::now() + Duration::from_secs(2), &events);
+            if batched {
+                f.worker.tick().unwrap();
+            } else {
+                f.worker.consume_callbacks(f.agent, &spool).unwrap();
+            }
+            assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+            assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("1"));
+            let saved = f.worker.store.load().unwrap().unwrap();
+            assert_eq!(saved.request(lead).unwrap().phase, RequestPhase::Abandoned);
+            f.consume();
+            f.consume();
+        });
+        let log = capture.text();
+        let rows: Vec<_> = log
+            .lines()
+            .filter(|line| {
+                line.contains("bus.message.recovered")
+                    && line.contains(&format!("request_id={} ", lead.0))
+            })
+            .collect();
+        assert_eq!(rows.len(), 1, "batched={batched}: {log}");
+        assert!(rows[0].contains("reason=\"provider_error\""));
+        assert!(rows[0].contains(&format!("lead_id={}", lead.0)));
+        assert!(!log.contains("PRIVATE"), "{log}");
+    }
+}

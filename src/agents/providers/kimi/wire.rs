@@ -413,7 +413,8 @@ pub(crate) fn resolve_turn(
 pub(crate) enum MainTurn {
     /// `turn.prompt` has no completed terminal chain yet.
     Open,
-    /// `agent.turn.ended`, `turn.ended`, and `prompt.completed` agree.
+    /// The terminal chain agrees, or a structured root failure and its owned
+    /// prompt committed before the delayed inner event.
     Settled,
 }
 

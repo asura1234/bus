@@ -261,8 +261,9 @@ impl BusState {
     }
 
     /// A typed message that starts a different turn must not replace an
-    /// answer already captured for the previous turn. Move unbound steering
-    /// along with the new lead, leaving genuinely folded messages behind.
+    /// answer already captured for the previous turn. Kimi's separate native
+    /// turns also keep their ownership while an earlier final is still pending.
+    /// Move unbound steering with the new lead, leaving folded inputs behind.
     pub(super) fn split_answered_turn(
         &mut self,
         lead: RequestId,
@@ -273,7 +274,11 @@ impl BusState {
             .requests
             .get(&lead)
             .ok_or(ModelError::UnknownRequest(lead))?;
-        if previous.pending_final.is_none() {
+        let independent_kimi_turn = self
+            .agents
+            .get(&callback.agent_id)
+            .is_some_and(|owner| owner.provider == super::Provider::Kimi);
+        if previous.pending_final.is_none() && !independent_kimi_turn {
             // A running generation can be replaced before it answers (Cursor
             // does this for follow-ups). Its messages still await one answer.
             return Ok(false);
@@ -387,6 +392,32 @@ impl BusState {
             "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.",
             "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.",
         )
+    }
+
+    /// A later Kimi Started can precede the earlier turn's wire flush. Settle
+    /// that independent request without replacing the newest current owner.
+    pub(crate) fn settle_previous_kimi_request(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+        recorded: Option<RecordedTurnEnd>,
+    ) -> Option<RequestId> {
+        let owner = self.agents.get(&agent)?;
+        let request = self.requests.get(&id)?;
+        if owner.provider != super::Provider::Kimi
+            || request.agent_id != agent
+            || request.group.is_some()
+            || !request.trusted_start_bound
+            || request.settled()
+        {
+            return None;
+        }
+        let current = owner.current_request;
+        self.agents.get_mut(&agent)?.current_request = Some(id);
+        let settled = self.settle_kimi_ended_request(agent, now_ms, |_| recorded);
+        self.agents.get_mut(&agent)?.current_request = current;
+        settled
     }
 
     /// An owned Kimi wire commit ends the turn even while its screen still
