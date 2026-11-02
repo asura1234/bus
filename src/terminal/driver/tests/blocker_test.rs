@@ -26,6 +26,26 @@ fn driver_numbered_draft_with_context_footer_is_not_a_foreground_menu() {
 }
 
 #[tokio::test]
+async fn driver_editable_composer_text_is_outside_the_control_region() {
+    for text in [
+        "Please print [y/n]",
+        "Please print [yes/no]\n  Enter to confirm",
+        "1. First choice\n  2. Second choice\n  Enter select · Esc cancel",
+    ] {
+        for screen in [
+            format!("history\n────────────────────\n❯ {text}\n────────────────────\n? for shortcuts"),
+            format!("history\n› {text}\n\nGPT-6 · /repo\n? for shortcuts"),
+            format!("╭────────────────────────────────╮\n│ > {} │\n╰────────────────────────────────╯\nK2.8 Preview", text.replace('\n', " │\n│   ")),
+        ] {
+            let grid = captured_grid(&screen);
+            assert!(!has_input_controls(&grid.text()), "literal editable text: {screen}");
+            assert!(blocker(&grid, false).is_none(), "idle composer: {screen}");
+            assert!(blocker(&grid, true).is_none(), "working composer: {screen}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn driver_blocker_recognizes_saved_foreground_and_pending_controls() {
     // The six non-native Grok files are synthetic hypotheses, explicitly
     // identified by their README. They exercise generic key syntax, not live
