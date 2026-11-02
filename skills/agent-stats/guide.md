@@ -55,7 +55,8 @@ can overlap and must not be added to claim wall time.
 
 Records retain source hashes. Collection copies original input bytes into the
 ignored store so worktree deletion does not erase the proof. Re-importing the
-same inputs is idempotent. Review conflicts and malformed known formats stop
+same inputs is idempotent. Current gate artifacts use the sibling gate-and-fix verifier; schema-2
+archives have a dedicated metadata adapter. Review conflicts and malformed known formats stop
 an import. A backfill commits records per PR; its successful summary lists the
 complete imported cohort. Keep the store private: native panes and raw review
 artifacts may contain work context.

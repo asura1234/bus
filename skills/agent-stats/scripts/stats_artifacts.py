@@ -302,6 +302,32 @@ def run_defaults(kind, head, result, **fields):
     )
 
 
+def verified_current_gate(text):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    name = "_agent_stats_gate_verifier"
+    if name not in sys.modules:
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "gate-and-fix/scripts/gate_artifact.py"
+        )
+        if not path.is_file():
+            raise ValueError(
+                "current gate format requires its canonical gate-and-fix verifier"
+            )
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    module = sys.modules[name]
+    base = re.search(r"^- Base: `([^`]+)`$", text, re.M)
+    if not base:
+        raise ValueError("invalid gate base")
+    return module._parse_round(text, expected_base=base.group(1))
+
+
 def markdown_run(text):
     plain = unfenced(text)
     if plain.startswith("# Gate-and-Fix Round\n"):
@@ -316,6 +342,8 @@ def markdown_run(text):
 
         if scalar("Schema") not in ("2", "3"):
             raise ValueError("invalid gate schema")
+        if scalar("Schema") == "3":
+            verified_current_gate(text)
         data = run_defaults("gate", scalar("Head"), scalar("Outcome"))
         for name, result, body in re.findall(
             r"^### (.+?) — (PASS|FAIL)\n(.*?)(?=^### |\Z)", plain, re.M | re.S
@@ -364,8 +392,14 @@ def wrapped_reports(text, head, candidates):
     from pathlib import Path
 
     decoded = []
-    for raw in re.findall(r"```base64\n(.*?)\n```", text, re.S):
-        decoded.append(base64.b64decode(raw, validate=True).decode("utf-8"))
+    if re.search(r"^- Schema: `3`$", text, re.M):
+        _, gates = verified_current_gate(text)
+        decoded = [
+            stream for gate in gates.values() for stream in (gate.stdout, gate.stderr)
+        ]
+    else:
+        for raw in re.findall(r"```base64\n(.*?)\n```", text, re.S):
+            decoded.append(base64.b64decode(raw, validate=True).decode("utf-8"))
     output = "\n".join(decoded)
     refs = re.findall(r"Test report: (.+?\.json)\s*$", output, re.M)
     elapsed = {

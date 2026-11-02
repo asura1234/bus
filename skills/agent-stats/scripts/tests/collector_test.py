@@ -438,3 +438,29 @@ def test_source_rewrite_between_parse_and_hash_fails_closed(tmp_path, monkeypatc
     monkeypatch.setattr(stats_collect, "source", racing_source)
     with pytest.raises(ValueError, match="changed"):
         stats_collect.collect("pr-295", root)
+
+
+def test_current_gate_artifact_uses_its_canonical_verifier(tmp_path):
+    import importlib.util
+
+    path = CLI.parents[2] / "gate-and-fix/scripts/gate_artifact.py"
+    spec = importlib.util.spec_from_file_location("stats_gate_fixture", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    text = module.render_round(
+        round_number=1,
+        base="b" * 40,
+        head="a" * 40,
+        changed_files=["file.py"],
+        results=[module.GateResult("lint", ("true",), 0, 10, "ok", "")],
+    )
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    artifact = root / "round.md"
+    artifact.write_text(text.replace("- Bytes: `2`", "- Bytes: `99`"))
+    r = call(
+        "collect", "--store", tmp_path / "stats", "--task", "pr-1", "--artifacts", root
+    )
+    assert r.returncode == 1
+    assert not (tmp_path / "stats/events.jsonl").exists()
