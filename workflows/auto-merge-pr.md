@@ -148,7 +148,7 @@ while `merge-pr` runs; no skill may bypass them.
 
 You handle these yourself:
 
-- **PR split:** this run merges nothing; the parts replace the original PR.
+- **PR split:** this run merges nothing; the parts replace the original PR/MR.
   Run this workflow once per part and carry over the start answer instead of
   asking again. Start a part once all its parents have merged; parts with no
   open parent can run in parallel, each with its own author and reviewers.
@@ -157,9 +157,13 @@ You handle these yourself:
   A train merges strictly bottom up, never into a parent branch; after a
   parent merges, have an agent run `split-pr restack <plan> --publish` with
   the plan path (`temp/split-pr/<source-slug>/plan.json` in the worktree where
-  split-pr ran, so keep that worktree until every part is done). split-pr
-  keeps the source branch until the developer authorizes cleanup; once every
-  part has its PR, ask the developer in MASTER to close the original PR.
+  split-pr ran, so keep that worktree until every part is done). Once every
+  part has its PR/MR, close the original as superseded with a comment linking
+  every part PR/MR. Keep the original remote branch on origin untouched (never
+  delete it) so owners and reviewers can compare the parts against it; clean up
+  local copies of that branch and its worktree as usual once the train is done.
+  Example: libtv-app !491 (`perf/gallery-free-scroll`) was closed after its split
+  into !494/!496/!497/!500/!501/!538; its remote branch was kept.
 - **Split failed:** rerunning split-pr STOPs while its plan exists
   (PREFLIGHT). Have an agent fix the plan or the branch and rerun the helper
   step that failed; for a failed publish wave, restack mode with the plan path

@@ -22,7 +22,8 @@ RULES
   hand-edit onto, tip, pr or landed.
 - Never push to `upstream`, never push the source or base branch, never
   force-push without `--force-with-lease=<ref>:<expected sha>`.
-- Never delete the source branch, a part branch, or a remote branch.
+- Never delete the source branch on origin or any other remote branch. Local
+  source and part branches and their worktrees are cleaned up as usual.
 - Preserve unrelated changes: never stash, reset, or switch branches over
   tracked dirty files in the user's worktree. Build parts in separate worktrees.
 - Any helper exit code other than 0 stops the run; fix the plan or the branch
@@ -171,5 +172,8 @@ Report:
   own checks, not by coverage;
 - every force-push and retarget performed in restack mode.
 
-Keep the source branch until every part is verified and the user explicitly
-authorizes cleanup.
+Once every part has its PR/MR, close the original PR/MR as superseded with a
+comment linking every part PR/MR. Keep the original remote source branch on
+origin untouched (never delete it) so owners and reviewers can compare the parts
+against it. Clean up local copies of that branch and its worktree as usual once
+every part is done.
