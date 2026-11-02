@@ -134,15 +134,12 @@ impl Rpc {
                     .is_some_and(|flags| interrupt || flags.is_empty()) =>
             {
                 let history = self.call(
-                    "thread/read",
-                    json!({"threadId":thread,"includeTurns":true}),
+                    "thread/turns/list",
+                    json!({"threadId":thread,"limit":1,"sortDirection":"desc","itemsView":"notLoaded"}),
                 )?;
-                if history["thread"]["id"] != thread {
-                    return Err(io::Error::other("Codex native thread identity mismatch"));
-                }
-                let turn = history["thread"]["turns"]
+                let turn = history["data"]
                     .as_array()
-                    .and_then(|turns| turns.last())
+                    .and_then(|turns| turns.first())
                     .ok_or_else(|| io::Error::other("Codex native active turn is unavailable"))?;
                 if turn["status"] != "inProgress" {
                     return Err(io::Error::other("Codex native active turn changed"));
@@ -195,7 +192,12 @@ impl Rpc {
                 "Codex native preflight refused before input",
             )
         })?;
-        if steer && (expected_turn.is_none() || active.as_deref() != expected_turn) {
+        if steer
+            && (expected_turn.is_none()
+                || active
+                    .as_deref()
+                    .is_some_and(|turn| Some(turn) != expected_turn))
+        {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "Codex active turn changed before steering",
@@ -222,6 +224,14 @@ impl Rpc {
         } else {
             "thread/queue/add"
         };
+        tracing::info!(
+            event = "bus.codex.native_request",
+            api_request_id = message,
+            thread_id = thread,
+            expected_turn_id = expected_turn,
+            method,
+            "Submitting Codex native input"
+        );
         let admitted = self.call(method, params)?;
         if method == "thread/queue/add" {
             let queued = admitted["queuedSubmission"]["id"]
@@ -244,6 +254,13 @@ impl Rpc {
 
     pub(super) fn interrupt(&mut self, thread: &str) -> io::Result<()> {
         if let Some(turn) = self.active_turn(thread, true)? {
+            tracing::info!(
+                event = "bus.codex.native_request",
+                thread_id = thread,
+                turn_id = turn,
+                method = "turn/interrupt",
+                "Interrupting Codex native turn"
+            );
             self.call("turn/interrupt", json!({"threadId":thread,"turnId":turn}))?;
         }
         Ok(())
@@ -367,28 +384,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn codex_native_idle_admission_cannot_join_a_racing_developer_turn() {
-        let (path, handle) = server(false, false);
-        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
-        rpc.prompt("owned-thread", "independent", false, "racing-idle", None)
-            .unwrap();
-        let calls = handle.join().unwrap();
-        // turn/start is start-or-steer in Codex; a native queue entry stays
-        // independent even if the developer presses Enter after thread/read.
-        assert_eq!(calls.last().unwrap()["method"], "thread/queue/start");
-        assert!(!calls.iter().any(|v| v["method"] == "turn/start"));
-    }
-
-    #[test]
-    fn codex_native_steer_does_not_require_the_unimplemented_turns_list_api() {
+    fn codex_native_steer_reads_only_the_latest_turn_without_items() {
         let (path, handle) = server(true, false);
         let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
         rpc.prompt("owned-thread", "steer", true, "busy-id", Some("busy-turn"))
             .unwrap();
         let calls = handle.join().unwrap();
+        let query = calls
+            .iter()
+            .find(|call| call["method"] == "thread/turns/list")
+            .unwrap();
+        assert_eq!(
+            query["params"],
+            json!({"threadId":"owned-thread","limit":1,"sortDirection":"desc","itemsView":"notLoaded"})
+        );
         assert!(!calls
             .iter()
-            .any(|call| call["method"] == "thread/turns/list"));
+            .any(|call| call["method"] == "thread/read" && call["params"]["includeTurns"] == true));
     }
 
     #[test]
@@ -640,6 +652,212 @@ pub(crate) mod tests {
                     .count(),
                 1
             );
+        }
+    }
+
+    fn idle_continuation_server() -> (std::path::PathBuf, std::thread::JoinHandle<Vec<Value>>) {
+        let dir = crate::utils::test_temp::unique_temp_path("codex-idle-continuation");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let mut calls = Vec::new();
+            while let Ok(frame) = ws.read() {
+                let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                calls.push(value.clone());
+                let Some(id) = value.get("id") else { continue };
+                let result = match value["method"].as_str().unwrap() {
+                    "initialize" => json!({"userAgent":"fixture"}),
+                    "thread/read" => {
+                        json!({"thread":{"id":"owned-thread","status":{"type":"idle"},"turns":[]}})
+                    }
+                    "thread/queue/add" => {
+                        json!({"queuedSubmission":{"id":"continuation-queue","clientUserMessageId":value["params"]["clientUserMessageId"]}})
+                    }
+                    "thread/queue/start" => {
+                        json!({"turn":{"id":"continuation-turn","status":"inProgress"}})
+                    }
+                    other => panic!("unexpected continuation operation {other}"),
+                };
+                ws.send(tungstenite::Message::Text(
+                    json!({"id":id,"result":result}).to_string().into(),
+                ))
+                .unwrap();
+                if value["method"] == "thread/queue/start" {
+                    break;
+                }
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+            calls
+        });
+        (path, handle)
+    }
+
+    #[test]
+    fn codex_native_idle_background_continuation_starts_a_new_turn() {
+        let (path, server) = idle_continuation_server();
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        rpc.prompt(
+            "owned-thread",
+            "continue after the background task",
+            true,
+            "continuation-input",
+            Some("completed-old-turn"),
+        )
+        .unwrap();
+        let calls = server.join().unwrap();
+        assert!(calls
+            .iter()
+            .any(|call| call["method"] == "thread/queue/add"));
+        assert!(!calls.iter().any(|call| call["method"] == "turn/steer"));
+    }
+
+    #[test]
+    fn codex_native_developer_turn_interleaving_keeps_queue_input_independent() {
+        let dir = crate::utils::test_temp::unique_temp_path("codex-developer-interleaving");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut developer_active = false;
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let mut calls = Vec::new();
+            while let Ok(frame) = ws.read() {
+                let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                calls.push(value.clone());
+                let Some(id) = value.get("id") else { continue };
+                let result = match value["method"].as_str().unwrap() {
+                    "initialize" => json!({"userAgent":"fixture"}),
+                    "thread/read" => {
+                        json!({"thread":{"id":"owned-thread","status":{"type":"idle"},"turns":[]}})
+                    }
+                    "thread/queue/add" => {
+                        assert!(
+                            developer_active,
+                            "developer Enter must precede Bus admission"
+                        );
+                        developer_active = false;
+                        ws.send(tungstenite::Message::Text(json!({"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"developer-turn","status":"completed"}}}).to_string().into())).unwrap();
+                        json!({"queuedSubmission":{"id":"independent-queue","clientUserMessageId":value["params"]["clientUserMessageId"]}})
+                    }
+                    "thread/queue/start" => {
+                        assert!(!developer_active);
+                        json!({"turn":{"id":"independent-turn","status":"inProgress"}})
+                    }
+                    other => panic!("queue input must not steer the developer turn: {other}"),
+                };
+                ws.send(tungstenite::Message::Text(
+                    json!({"id":id,"result":result}).to_string().into(),
+                ))
+                .unwrap();
+                if value["method"] == "thread/read" {
+                    developer_active = true;
+                    ws.send(tungstenite::Message::Text(json!({"method":"turn/started","params":{"threadId":"owned-thread","turn":{"id":"developer-turn","status":"inProgress"}}}).to_string().into())).unwrap();
+                }
+                if value["method"] == "thread/queue/start" {
+                    break;
+                }
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+            calls
+        });
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        rpc.prompt(
+            "owned-thread",
+            "independent",
+            false,
+            "independent-input",
+            None,
+        )
+        .unwrap();
+        let calls = handle.join().unwrap();
+        assert!(calls
+            .iter()
+            .any(|call| call["method"] == "thread/queue/add"));
+        assert!(!calls.iter().any(|call| call["method"] == "turn/steer"));
+    }
+
+    #[test]
+    fn codex_native_large_history_does_not_block_steer() {
+        large_history_operation("steer");
+    }
+
+    #[test]
+    fn codex_native_large_history_does_not_block_interrupt() {
+        large_history_operation("interrupt");
+    }
+
+    fn large_history_operation(operation: &str) {
+        {
+            let dir = crate::utils::test_temp::unique_temp_path("codex-large-history");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("s");
+            let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+            let handle = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut ws = tungstenite::accept(stream).unwrap();
+                let mut calls = Vec::new();
+                while let Ok(frame) = ws.read() {
+                    let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    calls.push(value.clone());
+                    let Some(id) = value.get("id") else { continue };
+                    let result = match value["method"].as_str().unwrap() {
+                        "initialize" => json!({"userAgent":"fixture"}),
+                        "thread/read"
+                            if !value["params"]["includeTurns"].as_bool().unwrap_or(false) =>
+                        {
+                            json!({"thread":{"id":"owned-thread","status":{"type":"active","activeFlags":[]}}})
+                        }
+                        "thread/read" => json!({"thread":{
+                            "id":"owned-thread",
+                            "status":{"type":"active","activeFlags":[]},
+                            "turns":[{"id":"busy-turn","status":"inProgress","items":[{"type":"text","text":"x".repeat(9 * 1024 * 1024)}]}]
+                        }}),
+                        "thread/turns/list" => {
+                            assert_eq!(value["params"]["itemsView"], "notLoaded");
+                            assert_eq!(value["params"]["limit"], 1);
+                            json!({"data":[{"id":"busy-turn","status":"inProgress","items":[]}],"nextCursor":null})
+                        }
+                        "turn/steer" | "turn/interrupt" => json!({}),
+                        other => panic!("unexpected native operation {other}"),
+                    };
+                    ws.send(tungstenite::Message::Text(
+                        json!({"id":id,"result":result}).to_string().into(),
+                    ))
+                    .unwrap();
+                    if matches!(
+                        value["method"].as_str(),
+                        Some("turn/steer" | "turn/interrupt")
+                    ) {
+                        break;
+                    }
+                }
+                std::fs::remove_dir_all(dir).unwrap();
+                calls
+            });
+            let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+            let result = if operation == "steer" {
+                rpc.prompt(
+                    "owned-thread",
+                    "bounded steer",
+                    true,
+                    "large-history-steer",
+                    Some("busy-turn"),
+                )
+                .map(|_| ())
+            } else {
+                rpc.interrupt("owned-thread")
+            };
+            assert!(
+                result.is_ok(),
+                "{operation} must not hydrate full history: {result:?}"
+            );
+            let calls = handle.join().unwrap();
+            assert!(calls.iter().all(|call| call["method"] != "turn/steer"
+                || call["params"]["expectedTurnId"] == "busy-turn"));
         }
     }
 }
