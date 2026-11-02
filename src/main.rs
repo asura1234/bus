@@ -13,9 +13,6 @@ mod server;
 mod terminal;
 mod utils;
 
-#[cfg(test)]
-pub(crate) use utils::test_temp as fixture_dirs;
-
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
 where
     I: IntoIterator<Item = std::ffi::OsString>,

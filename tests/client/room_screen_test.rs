@@ -1,8 +1,9 @@
 //! Built-binary room screen regression, including the Windows host-VT case.
 #![cfg(any(unix, windows))]
 
-#[path = "../../src/utils/tests/temp_path_test.rs"]
-mod fixture_dirs;
+#[path = "../support/fixture_dir_test.rs"]
+mod utils;
+use utils::test_temp as fixture_dirs;
 
 #[path = "../../src/utils/tests/live_bus_env_test.rs"]
 mod live_bus_env;

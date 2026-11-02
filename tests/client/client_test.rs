@@ -2,8 +2,9 @@
 
 #![cfg(unix)]
 
-#[path = "../../src/utils/tests/temp_path_test.rs"]
-mod fixture_dirs;
+#[path = "../support/fixture_dir_test.rs"]
+mod utils;
+use utils::test_temp as fixture_dirs;
 
 // Separate instances retain the original suite's cleanup registry and support test identities.
 #[allow(clippy::duplicate_mod)]

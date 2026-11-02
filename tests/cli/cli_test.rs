@@ -1,7 +1,8 @@
 //! Built-binary callback and isolated CLI-path checks.
 
-#[path = "../../src/utils/tests/temp_path_test.rs"]
-mod fixture_dirs;
+#[path = "../support/fixture_dir_test.rs"]
+mod utils;
+use utils::test_temp as fixture_dirs;
 
 #[path = "callbacks_test.rs"]
 mod callbacks;
