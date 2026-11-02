@@ -17,6 +17,26 @@ fn render(runtime: &TerminalRuntime, frame: &str) {
     );
 }
 
+fn render_verified_marker(runtime: &TerminalRuntime, marker: &str) {
+    const CAPTURED_MARKER: &str = "__BUS_DRAFT_END_15173-18e4226e01abcbb8-0__";
+    const CAPTURED_WRAPPED: &str = "__BUS_DRAFT_END_15173-\n  18e4226e01abcbb8-0__";
+    const CAPTURED_SPLIT: usize = 22;
+    let captured =
+        include_str!("../../../../tests/fixtures/codex-composer/verified-marker-wrapped.txt");
+    assert_eq!(CAPTURED_MARKER.len(), 42);
+    assert_eq!(CAPTURED_WRAPPED.replace("\n  ", ""), CAPTURED_MARKER);
+    assert!(captured.contains(CAPTURED_WRAPPED));
+    assert!(marker.is_ascii());
+    assert_eq!(CAPTURED_MARKER.find('-').unwrap() + 1, CAPTURED_SPLIT);
+    let split = marker.find('-').unwrap() + 1;
+    // Preserve the actual native redraw and its observed split after the PID separator,
+    // substituting only this exchange's independently returned token.
+    let wrapped = format!("{}\n  {}", &marker[..split], &marker[split..]);
+    let frame = captured.replace(CAPTURED_WRAPPED, &wrapped);
+    render(runtime, &frame);
+    runtime.test_process_pty_bytes(format!("\x1b[41;{}H", marker.len() - split + 3).as_bytes());
+}
+
 async fn next(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
     tokio::time::timeout(Duration::from_secs(5), writes.recv())
         .await
@@ -57,7 +77,7 @@ pub(crate) async fn verifies_once_then_submits_and_releases_next_delivery(
     let returned = std::fs::read_to_string(&native_file).unwrap();
     let marker = returned.strip_prefix(TEXT).unwrap();
     assert!(marker.starts_with("__BUS_DRAFT_END_"));
-    runtime.test_process_pty_bytes(format!("\x1b[42;3H{marker}").as_bytes());
+    render_verified_marker(&runtime, marker);
     assert_eq!(
         next(&mut writes).await.as_ref(),
         vec![0x7f; marker.len()],

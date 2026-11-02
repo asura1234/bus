@@ -253,7 +253,9 @@ impl SubmissionInspector for PreservingComposer {
 
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
         input(self.kind, screen).is_some_and(|body| {
-            if self.kind == AgentKind::Kimi {
+            // Codex soft-wraps the native editor receipt after its PID
+            // separator. Match the exact terminal token across rendered rows.
+            if matches!(self.kind, AgentKind::Kimi | AgentKind::Codex) {
                 body.chars()
                     .filter(|c| !c.is_whitespace())
                     .collect::<String>()

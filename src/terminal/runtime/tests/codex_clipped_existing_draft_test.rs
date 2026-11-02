@@ -56,10 +56,7 @@ pub(crate) async fn submits_once_and_restores_existing_developer_draft(
                     render(&runtime, BEFORE);
                 } else if let Some(marker) = draft.strip_prefix(TEXT) {
                     assert!(marker.starts_with("__BUS_DRAFT_END_"));
-                    render(&runtime, CLIPPED);
-                    // Keep this probe specific to nested exchange ownership;
-                    // marker wrapping has its own real-provider acceptance.
-                    runtime.test_process_pty_bytes(format!("\x1b[42;3H{marker}").as_bytes());
+                    render_verified_marker(&runtime, marker);
                 } else {
                     assert!(draft.starts_with(ORIGINAL));
                     render(

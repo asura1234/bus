@@ -12,3 +12,13 @@ Unmodified provider PTY input/output were recorded by a transparent proxy before
 forwarding. Full cells, raw bytes, cursor, identities, and submission refusal
 are archived under the main checkout's `temp/codex-composer/reproduction/` and
 copied into the PR evidence directory before handoff.
+
+`verified-marker-wrapped.txt` is the actual post-Verify redraw at Bus head
+`7fa13c3ab54d58876c18b066da45d573a16ac5d1`, again in the 95 by 44 pane.
+The native helper attested all 823 bytes, then Codex painted the 42-byte receipt
+across rows 39 and 40 after the PID separator; its cursor is (22,40). The exact
+frame, raw PTY, and successful native Verify acknowledgment are archived in
+`temp/pr-294/acceptance-7fa13c3a-failed/` in the main checkout. This run sent no
+Enter because the original marker reader required contiguous rendered text.
+The regression binds that captured token, rejects altered or nonterminal tokens,
+and replays the captured wrap in the native submission harness.
