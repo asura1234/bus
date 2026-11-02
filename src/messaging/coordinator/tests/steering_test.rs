@@ -38,6 +38,9 @@ mod dispatch_shell_hold_tests;
 mod reply_to_tests;
 
 #[cfg(unix)]
+#[path = "kimi_error_queue_test.rs"]
+mod kimi_error_queue_tests;
+#[cfg(unix)]
 #[path = "kimi_steering_test.rs"]
 mod kimi_steering_tests;
 

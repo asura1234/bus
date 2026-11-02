@@ -246,17 +246,10 @@ impl BusState {
             {
                 None
             }
-            // An unconfirmed write ahead of it is failed at its own bound
-            // (`fail_unconfirmed_submissions`); until then nothing refuses it.
-            RequestPhase::Queued
-                if agent.status == RuntimeStatus::Idle
-                    && agent
-                        .current_request
-                        .and_then(|id| self.requests.get(&id))
-                        .is_some_and(|current| current.phase == RequestPhase::Submitting) =>
-            {
-                None
-            }
+            // The owned turn occupies delivery even when its composer is Idle.
+            // Its settlement (or unconfirmed-write bound) releases this queue;
+            // waiting behind it is not a failed submission opportunity.
+            RequestPhase::Queued if agent.current_request.is_some() => None,
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
                 lead.prompt
