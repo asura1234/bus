@@ -46,24 +46,36 @@ pub(super) fn pending_report(
         return None;
     }
     // Keep the closed request's attested identity when its final arrives late.
-    let owner = callback.provider_turn_id.as_deref().and_then(|turn| {
-        state.requests().find(|request| {
-            request.agent_id == agent.id
-                && request.expected_launch_id.as_deref() == Some(&callback.launch_id)
-                && request.trusted_start_bound
-                && request
-                    .submission_boundary
-                    .is_some_and(|b| callback.sequence > b)
-                && request.provider_turn_id.as_deref() == Some(turn)
-                && request.provider_session_id == callback.provider_session_id
-                && request.provider_prompt_id.as_ref().is_none_or(|prompt| {
-                    callback
-                        .provider_prompt_id
-                        .as_ref()
-                        .is_none_or(|actual| actual == prompt)
-                })
-        })
+    let turn = callback.provider_turn_id.as_deref()?;
+    let mut owners = state.requests().filter(|request| {
+        let Some(lead) = state.request(request.group.unwrap_or(request.id)) else {
+            return false;
+        };
+        request.agent_id == agent.id
+            && lead.agent_id == request.agent_id
+            && request.expected_launch_id.as_deref() == Some(&callback.launch_id)
+            && lead.expected_launch_id == request.expected_launch_id
+            && request.trusted_start_bound
+            && lead.trusted_start_bound
+            // Native-claimed steering shares the lead's callback boundary.
+            && lead
+                .submission_boundary
+                .is_some_and(|b| callback.sequence > b)
+            && request.provider_turn_id.as_deref() == Some(turn)
+            && lead.provider_turn_id == request.provider_turn_id
+            && request.provider_session_id == callback.provider_session_id
+            && lead.provider_session_id == request.provider_session_id
+            && request.provider_prompt_id.as_ref().is_none_or(|prompt| {
+                callback
+                    .provider_prompt_id
+                    .as_ref()
+                    .is_none_or(|actual| actual == prompt)
+            })
     });
+    let owner = owners.next();
+    // A developer lead can share this attested turn with worker steering.
+    let worker_woken = owner.is_some_and(|request| state.worker_woken_orchestrator(request))
+        || owners.any(|request| state.worker_woken_orchestrator(request));
     let completed_owner = owner.is_some_and(|request| {
         request.phase == RequestPhase::Completed && request.reply().is_some()
     });
@@ -73,16 +85,13 @@ pub(super) fn pending_report(
                 .reply()
                 .is_some_and(|answer| answer.text.trim() == text.trim())
         });
-    let room = owner
-        .map(|request| {
-            if state.worker_woken_orchestrator(request) {
-                master
-            } else {
-                request.room_id
-            }
-        })
-        .or(agent.orchestrates)
-        .unwrap_or(master);
+    let room = if worker_woken {
+        Some(master)
+    } else {
+        owner.map(|request| request.room_id)
+    }
+    .or(agent.orchestrates)
+    .unwrap_or(master);
     Some(PendingReport {
         master,
         room,
