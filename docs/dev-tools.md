@@ -87,14 +87,26 @@ The page shows local send-hour delivery and reply capture rates, denominators,
 open requests, provider groups, and failure reasons. Bus reliability counts replied
 versus Bus-caused terminal failures, excluding deliberate interrupts, deleted
 agents/rooms, provider errors and pending requests. The full classification is
-printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
+available in a collapsed counting reference and metric tooltips. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.
 
 Settings > Developer > Open delivery dashboard opens the attached session's
-page in the default browser. Repeated clicks and the dev CLI reuse one service
-per session (OS-released lock and verified loopback endpoint in
-`dashboard-runtime/`, separate from persisted message/request records).
+page in the default browser. Repeated clicks and the dev CLI reuse that session's
+service for the current build. Discovery verifies the serving build; leases live
+under `dashboard-runtime/BUILD_SHA/`, and a new build cooperatively retires the
+previous service. These runtime files are separate from message/request records.
 The whole-session headline is followed by an hourly graph with attempt counts
 and a selectable recipient breakdown; provider and room grouping are available.
 Every failure count or cause opens request metadata and a copyable
 `bus message status MESSAGE_ID` command, with causes ordered by count.
+
+The Agent launches view shows usable / (usable + failed) for tracked creation,
+resume and recovery attempts, overall and by local start hour and provider.
+Pending attempts and deliberate cancellations are shown separately. Usability
+requires identity-matched process and prompt readiness, or a trusted new-message
+start; saved identity and failed native observations do not establish success or
+failure. Native restores use their first-observed time. The view labels when
+tracking began: earlier launches have no durable outcome history and are not
+backfilled from the current roster. Failure counts and causes open a bounded list
+with the saved attempt identity, provider, time, cause and log/record references.
+`bus --paths` locates that session's log and state directories.
