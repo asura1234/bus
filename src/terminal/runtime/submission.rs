@@ -182,6 +182,16 @@ struct ObservedSubmission {
     startup_suggestion_open: Arc<AtomicBool>,
 }
 
+/// Owned pane references; preparing a submission does not acquire a scope or draft.
+#[derive(Clone)]
+pub(crate) struct SubmissionHandle {
+    terminal: Arc<PaneTerminal>,
+    io: PaneRuntimeIo,
+    content_write_lock: Arc<Mutex<()>>,
+    draft_input: super::draft_input::SharedDraftInput,
+    startup_suggestion_open: Arc<AtomicBool>,
+}
+
 impl TerminalRuntime {
     #[cfg(test)]
     pub(crate) fn queue_observed_input_submission(
@@ -201,6 +211,50 @@ impl TerminalRuntime {
             deadline,
             Box::new(inspect),
         )
+    }
+
+    pub(crate) fn submission_handle(&self, raw: bool) -> SubmissionHandle {
+        if raw {
+            self.invalidate_shell_prompt();
+        }
+        SubmissionHandle {
+            terminal: self.terminal.clone(),
+            io: self.io.clone(),
+            content_write_lock: self.content_write_lock.clone(),
+            draft_input: self.draft_input.clone(),
+            startup_suggestion_open: self.startup_suggestion_open.clone(),
+        }
+    }
+
+    pub(crate) fn queue_observed_input_with_inspector(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        clear: Vec<Bytes>,
+        delay: Duration,
+        deadline: Option<Instant>,
+        inspect: Box<dyn SubmissionInspector>,
+    ) -> io::Result<InputCompletion> {
+        self.submission_handle(false)
+            .queue_observed_input_with_inspector(text, enter, clear, delay, deadline, inspect)
+    }
+}
+
+impl SubmissionHandle {
+    pub(crate) fn try_send_developer_bytes(&self, bytes: Bytes) -> io::Result<()> {
+        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
+            .map_err(io::Error::other)
+    }
+
+    pub(crate) fn queue_user_input_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+        deadline: Option<Instant>,
+    ) -> io::Result<InputCompletion> {
+        super::draft_input::DraftInput::invalidate(&self.draft_input);
+        self.io.queue_input_write(text, enter, delay, deadline)
     }
 
     pub(crate) fn queue_observed_input_with_inspector(
