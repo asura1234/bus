@@ -77,6 +77,16 @@ class Scratch:
             time.sleep(.05)
         raise RuntimeError(('idle timeout', names, statuses))
 
+    def wait_agent_text(self, agent, needle, timeout=20):
+        deadline = time.monotonic() + timeout
+        while True:
+            screen = self.bus(['agent', 'read', agent, '--source', 'visible'])['result']
+            if needle in screen.get('text', ''):
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(('agent text timeout', agent, needle, screen))
+            time.sleep(.02)
+
     def request(self, message_id):
         status = self.bus(['message', 'status', message_id])['result']
         return next(r for r in status['requests'] if r.get('agent_id') is not None)
@@ -133,6 +143,7 @@ class Scratch:
             draft = f'fake:draft-bytes S2-{self.name}-{i}\n' + ''.join(f'rich line {j:02d}\n' for j in range(12))
             self.ok(['click', '--hit', 'agent:a1'])
             self.ok(['paste', draft])
+            self.wait_agent_text('a1', '[Pasted text #1 +13 lines]')
             record = self.send('a1', f'S2-{self.name}-{i} preserve draft', 'S2', wait=False)
             time.sleep(2)
             initial = self.request(record['id'])
