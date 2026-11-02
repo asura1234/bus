@@ -91,7 +91,7 @@ pub(crate) trait SubmissionInspector: Send {
     /// Input availability is independent of the contents of Bus's paste.
     fn submission_available(&self, screen: &str) -> bool {
         self.observe(screen) != InputObservation::Unavailable
-            && crate::agents::dialog::parse(screen).is_none()
+            && !crate::terminal::driver::has_input_controls(screen)
     }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
