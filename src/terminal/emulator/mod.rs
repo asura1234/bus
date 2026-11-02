@@ -251,8 +251,12 @@ impl PaneTerminal {
         self.ghostty.synchronized_output_active()
     }
 
-    pub(crate) fn visible_ansi_if_complete(&self) -> Option<String> {
-        self.ghostty.visible_ansi_if_complete()
+    pub(crate) fn active_ansi_if_complete(&self) -> Option<String> {
+        self.ghostty.active_ansi_if_complete()
+    }
+
+    pub(crate) fn active_ansi(&self) -> String {
+        self.ghostty.active_ansi()
     }
 
     pub fn visible_text(&self) -> String {

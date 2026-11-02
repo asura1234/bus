@@ -223,6 +223,21 @@ impl Terminal {
         )
     }
 
+    /// Read the live cursor area, excluding both scrollback and viewport offset.
+    pub(crate) fn read_ansi_active(
+        &self,
+        start: (u16, u32),
+        end: (u16, u32),
+    ) -> Result<String, Error> {
+        let point = |(x, y)| ffi::GhosttyPoint {
+            tag: ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_ACTIVE,
+            value: ffi::GhosttyPointValue {
+                coordinate: ffi::GhosttyPointCoordinate { x, y },
+            },
+        };
+        self.read_formatted_selection(point(start), point(end), false, FormatterFormat::Vt, false)
+    }
+
     fn read_formatted_selection(
         &self,
         start: ffi::GhosttyPoint,

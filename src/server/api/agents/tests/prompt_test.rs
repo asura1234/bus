@@ -39,6 +39,32 @@ async fn guarded_claude_prompt_types_into_an_empty_input_box() {
 }
 
 #[tokio::test]
+async fn guarded_claude_prompt_submits_with_scrolled_viewport() {
+    let (mut app, params, _) = claude_agent_with_input("❯");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            88, 40, 100_000, b"", 16,
+        );
+    let captured = include_str!("fixtures/claude_2_1_310_idle_88cols.txt");
+    let text = format!(
+        "\x1b[?2004h{}\n{captured}",
+        "historical response\n".repeat(60)
+    );
+    runtime.test_process_pty_bytes(text.replace('\n', "\r\n").as_bytes());
+    runtime.set_scroll_offset_from_bottom(60);
+    assert!(!runtime.visible_text().contains("bypass permissions"));
+    app.state.insert_test_runtime(pane, runtime);
+    let response = submission_tests::start(
+        &mut app,
+        crate::protocol::api::schema::Method::AgentPromptIfIdle(params),
+    );
+    submission_tests::accept_paste(&app, AgentKind::Claude, "from bus", &mut writes).await;
+    let response = response.recv_timeout(submission_tests::WAIT).unwrap();
+    assert!(response.contains("agent_prompted"), "{response}");
+}
+
+#[tokio::test]
 async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing() {
     use crate::protocol::api::schema::{AgentPromptIfUnboundParams, Method, Request};
     let mut app = app_with_agent();

@@ -665,7 +665,7 @@ impl DetectionTask {
         has_obligation: bool,
         now: Instant,
     ) -> crate::agents::AgentDetection {
-        let screen = self.terminal.visible_ansi();
+        let screen = self.terminal.active_ansi();
         let cursor = self
             .terminal
             .cursor_state()
