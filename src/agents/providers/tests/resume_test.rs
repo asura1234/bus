@@ -13,11 +13,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "bus-provider-resume-{}-{}",
-            std::process::id(),
-            crate::utils::time::now_ns(),
-        ));
+        let root = crate::utils::test_temp::unique_temp_path("bus-provider-resume");
         std::fs::create_dir_all(&root).unwrap();
         Self {
             hooks: HookContext {

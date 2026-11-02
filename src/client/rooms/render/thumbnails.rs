@@ -499,14 +499,7 @@ mod tests {
     }
 
     fn scratch(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "bus-thumbnails-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
+        crate::utils::test_temp::unique_temp_path(&format!("bus-thumbnails-{label}"))
     }
 
     #[test]

@@ -3,11 +3,7 @@ use super::*;
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "bus-statusline-{}-{}",
-            std::process::id(),
-            bus_io::now_ns()
-        ));
+        let path = crate::utils::test_temp::unique_temp_path("bus-statusline");
         std::fs::create_dir_all(&path).unwrap();
         atomic_write(
             &path.join("manifest.json"),

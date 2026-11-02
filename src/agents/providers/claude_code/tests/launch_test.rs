@@ -94,12 +94,7 @@ struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Self {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("bus-claude-adapter-{}-{nonce}", std::process::id()));
+        let path = crate::utils::test_temp::unique_temp_path("bus-claude-adapter");
         std::fs::create_dir_all(path.join("spool")).unwrap();
         std::fs::create_dir_all(path.join(".claude")).unwrap();
         Self(path)

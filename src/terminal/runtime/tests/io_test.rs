@@ -48,14 +48,7 @@ fn cwd_report_retries_delivery_after_event_queue_was_full() {
 
 #[tokio::test]
 async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let cwd = std::env::temp_dir().join(format!(
-        "bus-reported-cwd-cache-{}-{stamp}",
-        std::process::id()
-    ));
+    let cwd = crate::utils::test_temp::unique_temp_path("bus-reported-cwd-cache");
     std::fs::create_dir(&cwd).expect("create reported cwd");
 
     let (runtime, _rx) = TerminalRuntime::test_with_channel(80, 24);
@@ -83,14 +76,7 @@ async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
 fn process_cwd_does_not_require_traversing_the_directory_path() {
     use std::os::unix::fs::PermissionsExt;
 
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let base = std::env::temp_dir().join(format!(
-        "bus-process-cwd-no-stat-{}-{stamp}",
-        std::process::id()
-    ));
+    let base = crate::utils::test_temp::unique_temp_path("bus-process-cwd-no-stat");
     let private = base.join("private");
     let cwd = private.join("cwd");
     std::fs::create_dir_all(&cwd).expect("create process cwd");

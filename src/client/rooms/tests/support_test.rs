@@ -336,14 +336,7 @@ pub(super) fn exchange_with_files(
 }
 
 pub(super) fn thumbnail_dir(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "bus-history-thumbnails-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-history-thumbnails-{label}"))
 }
 
 pub(super) fn png(dir: &std::path::Path, name: &str, size: (u32, u32)) -> std::path::PathBuf {

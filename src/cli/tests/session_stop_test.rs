@@ -124,11 +124,7 @@ fn stop_without_any_recorded_local_session_succeeds() {
         .map(|key| (key, std::env::var_os(key)))
         .collect(),
     );
-    let home = std::env::temp_dir().join(format!(
-        "bus-stop-empty-home-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let home = crate::utils::test_temp::unique_temp_path("bus-stop-empty-home");
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("HOME", &home);
 

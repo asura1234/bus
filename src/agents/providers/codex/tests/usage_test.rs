@@ -11,11 +11,7 @@ fn token_count(limits: Value) -> String {
 
 #[test]
 fn rollout_uses_newest_rate_limits_and_classifies_windows_by_duration() {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-usage-{}-{}",
-        std::process::id(),
-        bus_io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-usage");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("rollout-2026-10-05T00-00-00-abc.jsonl");
     let lines = [
@@ -85,11 +81,7 @@ fn task_complete(turn: &str, error: Value) -> String {
 
 #[test]
 fn rollout_reports_the_error_that_ended_a_given_codex_turn() {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-turn-error-{}-{}",
-        std::process::id(),
-        bus_io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-turn-error");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("rollout-2026-10-12T00-00-00-abc.jsonl");
     let capacity = json!({"message":"Selected model is at capacity. Please try a different model.",
@@ -116,11 +108,7 @@ fn rollout_reports_the_error_that_ended_a_given_codex_turn() {
 }
 
 fn rollout_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-{name}-{}-{}",
-        std::process::id(),
-        bus_io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path(&format!("bus-{name}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

@@ -2,14 +2,7 @@ use super::{prepare_fixture_home, validate};
 
 #[test]
 fn fixture_home_exists_before_a_child_selects_it_as_cwd() {
-    let root = std::env::temp_dir().join(format!(
-        "bus-prepared-home-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path("bus-prepared-home");
     let home = root.join("runtime/home");
     assert!(!home.exists());
     prepare_fixture_home(&home).unwrap();
@@ -41,14 +34,7 @@ fn shared_validation_refuses_the_protected_home_and_data_root() {
 #[test]
 fn state_components_and_link_targets_cannot_enter_protected_roots() {
     use std::os::unix::fs::symlink;
-    let root = std::env::temp_dir().join(format!(
-        "bus-state-alias-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path("bus-state-alias");
     let protected = root.join("protected");
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();

@@ -885,11 +885,9 @@ fn live_sound_reload_updates_bus_room_playback() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let base = ProbeDir(std::path::PathBuf::from("/tmp").join(format!(
-        "bus-sound-reload-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    )));
+    let base = ProbeDir(crate::utils::test_temp::unique_temp_path(
+        "bus-sound-reload",
+    ));
     std::fs::create_dir_all(base.path()).unwrap();
     let root = base.path().join("data");
     let bin = base.path().join("bin");

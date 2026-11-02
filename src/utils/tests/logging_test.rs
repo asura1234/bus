@@ -8,16 +8,7 @@ mod recovery_tests;
 mod retry_tests;
 
 fn temp_log_path(name: &str) -> PathBuf {
-    let unique = format!(
-        "bus-logging-tests-{}-{}-{}",
-        name,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    std::env::temp_dir().join(unique).join("bus.log")
+    crate::utils::test_temp::unique_temp_path(&format!("bus-logging-tests-{name}")).join("bus.log")
 }
 
 #[test]

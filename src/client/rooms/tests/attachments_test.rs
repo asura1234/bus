@@ -224,14 +224,7 @@ fn overflow_mixed_file_chips_keep_full_path_inspection_and_removal() {
 
 #[test]
 fn pasted_images_are_saved_once_under_the_bus_data_dir() {
-    let root = std::env::temp_dir().join(format!(
-        "bus-paste-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path("bus-paste-test");
     let room = RoomId(7);
     let first = input::save_pasted_image(&root, room, b"\x89PNG fake", "png").unwrap();
     let again = input::save_pasted_image(&root, room, b"\x89PNG fake", "png").unwrap();
@@ -248,11 +241,7 @@ fn pasted_images_are_saved_once_under_the_bus_data_dir() {
 
 #[test]
 fn pasted_temporary_images_are_copied_into_the_room_attachments() {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp = std::env::temp_dir().join(format!("bus-temp-paste-{}-{stamp}", std::process::id()));
+    let temp = crate::utils::test_temp::unique_temp_path("bus-temp-paste");
     std::fs::create_dir_all(&temp).unwrap();
     let pasted = temp.join("pasted-image.PNG");
     std::fs::write(&pasted, b"\x89PNG pasted").unwrap();

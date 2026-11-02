@@ -5,11 +5,7 @@ use crate::agents::providers::ProviderKind;
 use std::os::unix::fs::PermissionsExt;
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "bus-codex-hook-trust-{name}-{}-{}",
-        std::process::id(),
-        crate::utils::time::now_ns()
-    ));
+    let root = crate::utils::test_temp::unique_temp_path(&format!("bus-codex-hook-trust-{name}"));
     std::fs::create_dir_all(&root).unwrap();
     root
 }

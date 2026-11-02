@@ -2104,11 +2104,7 @@ fn async_waiters_exit_after_a_connected_endpoint_disappears() {
 #[test]
 fn async_following_survives_live_control_server_at_its_connection_limit() {
     use std::io::Write as _;
-    let dir = std::env::temp_dir().join(format!(
-        "bcl-{:x}-{:x}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bcl");
     let (tx, rx) = std::sync::mpsc::sync_channel(16);
     let _server = crate::messaging::control::start(&dir, tx).unwrap();
     let socket = dir.join("wait.sock");
@@ -2956,11 +2952,7 @@ fn one_hundred_async_waiters_do_not_starve_interrupt_or_new_send() {
         Arc,
     };
     use std::time::Instant;
-    let dir = std::env::temp_dir().join(format!(
-        "bcl100-{:x}-{:x}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bcl100");
     let (tx, rx) = std::sync::mpsc::sync_channel(256);
     let server = control::start(&dir, tx).unwrap();
     let release = Arc::new(AtomicBool::new(false));
@@ -3075,11 +3067,7 @@ fn async_follower_reports_bus_down_after_a_saturated_server_stops() {
     use crate::messaging::control;
     use std::io::Write as _;
     use std::sync::mpsc;
-    let dir = std::env::temp_dir().join(format!(
-        "bcl-stop-{:x}-{:x}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bcl-stop");
     let (commands, received) = mpsc::sync_channel(16);
     let server = control::start(&dir, commands).unwrap();
     let socket = dir.join("wait.sock");

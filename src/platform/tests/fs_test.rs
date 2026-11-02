@@ -1,11 +1,7 @@
 use super::*;
 
 fn temp_dir(label: &str) -> PathBuf {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bus-fs-{label}-{}-{unique}", std::process::id()));
+    let dir = crate::utils::test_temp::unique_temp_path(&format!("bus-fs-{label}"));
     create_private_directory(&dir).unwrap();
     dir
 }
