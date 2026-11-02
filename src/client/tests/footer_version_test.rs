@@ -12,7 +12,7 @@ struct Scratch {
 impl Scratch {
     fn new() -> Self {
         let root = crate::utils::test_temp::unique_temp_path("fv");
-        std::fs::create_dir_all(&root).unwrap();
+        crate::platform::fs::private_dir(&root).unwrap();
         let saved = [
             "BUS_DATA_DIR",
             crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
