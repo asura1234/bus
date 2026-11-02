@@ -313,9 +313,14 @@ impl ObservedSubmission {
         if submit {
             self.diagnostics.enter(&key, self.clock.now());
         }
+        let (text, enter) = if submit {
+            (Bytes::new(), key)
+        } else {
+            (key, Bytes::new())
+        };
         let completion = self.io.queue_input_write_scoped(
-            key,
-            Bytes::new(),
+            text,
+            enter,
             Duration::ZERO,
             Some(deadline),
             &self.scope,
@@ -420,8 +425,9 @@ impl ObservedSubmission {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        // Installation is recorded before submit. Ownership is recorded only
-        // after that Enter write is accepted.
+        // Installation is recorded before submit. The receipt is content-free
+        // and excludes the subsequent submit and draft restoration. Ownership
+        // is recorded only after that Enter write is accepted.
         self.diagnostics.editor_installed(editor.text.len());
         self.reset_confirmation(delay);
         let submitted = self.swap_key(self.enter.clone(), true);
