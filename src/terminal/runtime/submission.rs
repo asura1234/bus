@@ -130,6 +130,16 @@ pub(crate) trait SubmissionInspector: Send {
     fn editor_submission(&self) -> Option<EditorSubmission> {
         None
     }
+    /// A clipped visible draft cannot attest its hidden text. An inspector may
+    /// request an exact native-editor read of the once-pasted composer.
+    fn clipped_input_verification(&self, _screen: &str) -> Option<EditorSubmission> {
+        None
+    }
+    /// Called only after the complete native editor file matched byte for byte
+    /// and its acknowledgment marker returned to, then left, the composer.
+    fn verified_input(&self, _screen: &str, _text: &str) -> bool {
+        false
+    }
     fn editor_frame_readable(&self, _screen: &str) -> bool {
         false
     }
@@ -568,7 +578,12 @@ impl ObservedSubmission {
         result
     }
 
-    fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
+    fn run(
+        &self,
+        text: Bytes,
+        delay: Duration,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
         match self.observe_initial("initial")? {
@@ -591,10 +606,20 @@ impl ObservedSubmission {
         }
         // Paste may be buffered by the provider after the PTY flush. Wait for
         // the owned draft to render before attempting the first Enter.
+        let mut verified_lease = None;
         loop {
             let generation = self.clock.generation();
-            if self.observe("await_paste") == InputObservation::Pending {
+            let observation = self.observe("await_paste");
+            if observation == InputObservation::Pending {
                 break;
+            }
+            if observation == InputObservation::Other {
+                if let Some(lease) = lease {
+                    if self.verify_clipped_input(delay, lease)? {
+                        verified_lease = Some(lease);
+                        break;
+                    }
+                }
             }
             if let Err(error) = self.check_deadline() {
                 return self.withdraw_before_enter(error);
@@ -645,7 +670,10 @@ impl ObservedSubmission {
             let completion = if retry {
                 // Inspect and enqueue under the same lock as PTY rendering.
                 // No paste retry: a lost response must never duplicate text.
-                Some(self.enqueue_enter())
+                Some(match verified_lease {
+                    Some(lease) => lease.with_unedited(|| self.enqueue_enter()),
+                    None => self.enqueue_enter(),
+                })
             } else {
                 None
             };

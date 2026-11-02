@@ -12,6 +12,9 @@ mod grok;
 mod kimi;
 
 #[cfg(test)]
+pub(crate) use composer::preserving_observer;
+
+#[cfg(test)]
 pub(super) use crate::protocol::api::submission::SUBMIT_DELAY as AGENT_PROMPT_SUBMIT_DELAY;
 
 pub(super) fn detection_composer(

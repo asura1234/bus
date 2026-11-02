@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn codex_multiline_review_reply_is_owned_before_steering_enter() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let frame = include_str!("../../../../../tests/fixtures/codex-composer/clipped.txt");
+    let text = include_str!("../../../../../tests/fixtures/codex-composer/review-reply.txt");
+    assert_eq!(text.len(), 823);
+    let inspector = preserving_observer(
+        AgentKind::Codex,
+        text.into(),
+        std::path::PathBuf::new(),
+        vec![
+            bytes::Bytes::from_static(b"\x13"),
+            bytes::Bytes::from_static(b"\x07"),
+            bytes::Bytes::from_static(b"\x7f"),
+        ],
+    );
+    assert_eq!(
+        inspector.observe_with_cursor(frame, Some((56, 40))),
+        InputObservation::Other,
+        "a clipped suffix cannot attest the hidden prefix"
+    );
+    assert!(
+        inspector.editor_frame_readable(frame),
+        "the clipped native composer needs a full editor readback before Enter"
+    );
+    let verification = inspector.clipped_input_verification(frame).unwrap();
+    assert_eq!(verification.text, text);
+    assert!(!inspector.verified_input(frame, &text.replacen("codexrevd", "foreign", 1)));
+    assert_eq!(inspector.observe(frame), InputObservation::Other);
+    assert!(inspector.verified_input(frame, text));
+    assert_eq!(
+        inspector.observe_with_cursor(frame, Some((56, 40))),
+        InputObservation::Pending,
+        "full native readback attests the offscreen prefix before guarded Enter"
+    );
+    assert_eq!(
+        inspector.observe(&frame.replace("Ready", "developer edit")),
+        InputObservation::Other,
+        "ownership is lost when the verified composer changes"
+    );
+}
+
+#[test]
 fn kimi_accepts_the_current_framed_composer_while_idle_or_working() {
     let frame = "╭────────────────────╮\n│ >                │\n╰────────────────────╯\nK2.8 Preview thinking: max";
     assert_eq!(
