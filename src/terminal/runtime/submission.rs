@@ -1,4 +1,4 @@
-//! Observe the composer between writes; retry only Enter for the owned draft.
+//! Spike: preserve drafts, then paste and Enter without ownership read-back.
 mod diagnostics;
 mod preservation;
 mod recovery;
@@ -594,6 +594,38 @@ impl ObservedSubmission {
                     "Full draft verification failed after paste; no Enter was sent. Inspect the composer before resending: {error}"
                 ))
             })
+    }
+
+    fn run_swap(&self, text: Bytes, lease: &super::draft_input::DraftInputLease) -> io::Result<()> {
+        match self.observe_initial("swap_initial")? {
+            InputObservation::Empty => {}
+            InputObservation::Pending | InputObservation::Other => {
+                return Err(io::Error::other(PromptNotShown::InputOccupied));
+            }
+            _ => return Err(io::Error::other(PromptNotShown::NotSubmitted)),
+        }
+        if let Err(error) = self.write(text, Duration::ZERO) {
+            return if PromptNotShown::is(&error) {
+                Err(error)
+            } else {
+                self.withdraw_before_enter(error)
+            };
+        }
+        let guard = self
+            .content_lock
+            .lock()
+            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+        if self.observe("swap_blocker_preflight") == InputObservation::Unavailable {
+            drop(guard);
+            return self.withdraw_before_enter(io::Error::other(PromptNotShown::NotSubmitted));
+        }
+        let completion = lease.with_unedited(|| self.enqueue_enter());
+        drop(guard);
+        if let Err(error) = self.finish_enter(completion) {
+            return self.withdraw_pending(error);
+        }
+        lease.restored();
+        Ok(())
     }
 
     fn run(

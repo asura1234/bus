@@ -69,7 +69,7 @@ impl ObservedSubmission {
                 if let Some(editor) = self.inspect.editor_submission() {
                     return self.submit_through_editor(editor, delay, lease);
                 }
-                let result = self.run(text, delay, Some(lease), None);
+                let result = self.run_swap(text, lease);
                 if self
                     .inspect
                     .native_draft_restored(&self.terminal.active_ansi())
@@ -85,7 +85,7 @@ impl ObservedSubmission {
             InputObservation::Empty | InputObservation::Other | InputObservation::Pending => {}
             _ => {
                 lease.restored();
-                return self.run(text, delay, Some(lease), None);
+                return self.run_swap(text, lease);
             }
         }
         let Some(preservation) = preservation else {
@@ -205,7 +205,7 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, Some(lease), None);
+        let result = self.run_swap(text, lease);
         // Native stash pops at the next submit. On an unsubmitted attempt,
         // restore only into an empty composer; never toggle over another draft.
         if !self
@@ -570,8 +570,16 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, Some(lease), Some(&exchange));
-        match self.restore_editor(&exchange, &key, &backspace) {
+        let result = self.run_swap(text, lease);
+        let restored = self
+            .wait_transfer(|| {
+                Ok(matches!(
+                    self.observe("swap_restore_wait"),
+                    InputObservation::Empty | InputObservation::Accepted
+                ))
+            })
+            .and_then(|()| self.restore_editor(&exchange, &key, &backspace));
+        match restored {
             Ok(()) => lease.restored(),
             Err(error) => self.recovery_log(&exchange, &error),
         }
