@@ -4,7 +4,7 @@
 
 Run in a new scratch Bus with private HOME/data and fake provider launchers. Use 120 columns by 40 rows initially, graphics none. Never access the live Bus. All creation and navigation is through the TUI. Read-only scratch state and hit regions corroborate layout. Each visual assertion requires a cell screenshot that the runner opens and judges. No agents or real models are needed. Record commit and binary identity before starting. Coordinates below are zero-based terminal rows.
 
-### ROOM-LAYOUT-01 — Work room and MASTER share the full conversation area
+### ROOM-01 — Work room and MASTER share the full conversation area
 
 **Preconditions/setup:** a fresh scratch Bus; no workers required.
 
