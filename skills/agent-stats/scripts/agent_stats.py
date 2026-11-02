@@ -120,13 +120,39 @@ def main():
                     "enum"
                 ],
             )
+    c = sub.add_parser("collect")
+    c.add_argument("--store", type=Path)
+    c.add_argument("--task", required=True)
+    c.add_argument("--artifacts", type=Path, required=True)
+    c.add_argument("--gh", type=Path)
+    c.add_argument("--repo", type=Path)
+    c.add_argument("--workflow", type=Path)
+    r = sub.add_parser("report")
+    r.add_argument("--store", type=Path)
+    r.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
-        result = (
-            {"validated": len(read_records(args.file))}
-            if args.command == "validate"
-            else assignment(args)
-        )
+        if args.command == "validate":
+            result = {"validated": len(read_records(args.file))}
+        elif args.command == "collect":
+            from stats_collect import collect
+
+            store = args.store or default_store()
+            records = collect(
+                args.task, args.artifacts, args.gh, args.repo, args.workflow
+            )
+            result = {"appended": append(store, records), "collected": len(records)}
+        elif args.command == "report":
+            from stats_report import report, markdown
+
+            result = report(
+                read_records((args.store or default_store()) / "events.jsonl")
+            )
+            if not args.json:
+                print(markdown(result), end="")
+                return 0
+        else:
+            result = assignment(args)
         print(canonical(result))
         return 0
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as exc:
