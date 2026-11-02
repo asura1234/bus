@@ -422,9 +422,10 @@ ordinary messages form one ordered prompt/group with batch position/time headers
 Explicit replies complete individually; the final answers outstanding requests
 without replacing earlier answers. Raw text/files remain queryable after restart.
 Replies and captured finals reach an agent requester through ordinary messages,
-except empty finals, captured orchestrator finals to workers, and captured finals
-of Bus-generated reply wakes. A non-empty worker-woken orchestrator final is
-published in MASTER. Empty finals settle as replied with empty text.
+except captured orchestrator finals to workers and captured finals of Bus-generated
+reply wakes. Empty or whitespace-only finals are not forwarded; they settle as
+replied with their raw text preserved. A non-empty worker-woken orchestrator final
+is published in MASTER.
 An --as author async waiter renews a 3s lease deferring its reply wake
 (and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
@@ -460,8 +461,11 @@ abandoned closed, will not run later. Queued untyped work may close abandoned af
 prior_request_active, unavailable). Recovery deadlines stay internal and never
 change the reported stage. After 5m blocked the reason is blocked_unanswered. A
 captured Stop answer finishes without waiting for background work.
-Settlement without a final closes as reply_not_captured, provider_error: MESSAGE,
-or agent_unavailable; conclusive pre-delivery startup failure is agent_startup_failed.
+Captured finals, including empty/whitespace text, settle as replied with raw text.
+Provider-proven no-reply completion also settles as replied, with empty text.
+Missing reply evidence closes as reply_not_captured; provider failure or lost
+availability uses provider_error: MESSAGE or agent_unavailable. Conclusive
+pre-delivery startup failure is agent_startup_failed.
 Bus can abandon unclaimed steering after an autonomous turn ends and another
 starts or stays idle 5s; it releases later queued work. Late finals keep references.
 submission_unconfirmed may have run: inspect transcript/composer before resending
