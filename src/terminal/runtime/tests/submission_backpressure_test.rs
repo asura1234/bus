@@ -77,12 +77,14 @@ fn backpressured_cleanup(master: OwnedFd, peer: OwnedFd) {
         diagnostics: Default::default(),
         startup_suggestion_open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
-    let result =
-        submission.withdraw_pending(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed Enter"));
+    let result = submission
+        .withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed paste"));
     let finished = Instant::now();
     let error = result.unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert!(error.to_string().contains("could not be safely cleared"));
+    assert!(error
+        .to_string()
+        .contains("cleanup could not finish safely"));
     assert!(finished >= hard_deadline);
     // Release pressure only after completion. A following ordinary-input marker
     // proves the actor resumed and cannot hide a late cleanup key behind a stall.

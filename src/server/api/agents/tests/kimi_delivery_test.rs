@@ -48,22 +48,26 @@ fn paint(app: &App, frame: &str, draft: &str, repaint: usize) {
             .iter()
             .rposition(|line| line.trim().starts_with('╰'))
             .unwrap();
-        let chars: Vec<_> = draft.chars().collect();
-        let mut rows: Vec<_> = chars
-            .chunks(45)
-            .enumerate()
-            .map(|(n, row)| {
-                format!(
-                    " │ {}{:<49}│",
-                    if n == 0 { "> " } else { "  " },
-                    row.iter().collect::<String>()
-                )
+        let chunks: Vec<String> = draft
+            .split('\n')
+            .flat_map(|line| {
+                let chars: Vec<_> = line.chars().collect();
+                if chars.is_empty() {
+                    vec![String::new()]
+                } else {
+                    chars.chunks(45).map(|row| row.iter().collect()).collect()
+                }
             })
+            .collect();
+        let mut rows: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(n, row)| format!(" │ {}{:<49}│", if n == 0 { "> " } else { "  " }, row))
             .collect();
         if rows.is_empty() {
             rows.push(" │ >                                                  │".into());
         }
-        if chars.len() > 1200 {
+        if draft.chars().count() > 1200 {
             rows = rows.split_off(rows.len().saturating_sub(8));
             rows[0] = rows[0].replacen("│   ", "│ > ", 1);
             lines[top] = lines[top].replacen("────────", "─↑ more─", 1);
@@ -137,12 +141,12 @@ async fn next_or_response(
 }
 
 #[tokio::test]
-async fn kimi_thinking_steer_uses_native_guidance_after_full_editor_verification() {
+async fn kimi_thinking_steer_uses_native_guidance_after_editor_swap() {
     delivery(THINKING, true, 0).await;
 }
 
 #[tokio::test]
-async fn kimi_command_steer_uses_native_guidance_after_full_editor_verification() {
+async fn kimi_command_steer_uses_native_guidance_after_editor_swap() {
     delivery(COMMAND, true, 0).await;
 }
 
@@ -180,47 +184,74 @@ async fn delivery_with_idle_transition(
 }
 
 #[tokio::test]
-async fn kimi_long_clipped_editor_steer_verifies_the_complete_prompt() {
+async fn kimi_long_clipped_editor_steer_installs_the_complete_prompt() {
     delivery_body(COMMAND, true, 0, false, &"long owned prompt ".repeat(120)).await;
 }
 
 async fn delivery_body(frame: &str, steer: bool, fault: u8, idle_before_submit: bool, body: &str) {
+    delivery_with_draft(frame, steer, fault, idle_before_submit, body, "").await;
+}
+
+async fn editor_exchange(
+    app: &App,
+    frame: &str,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    response: &std::sync::mpsc::Receiver<String>,
+    directory: &std::path::Path,
+    file: &std::path::Path,
+    before: &str,
+    expected: &str,
+    fail_submit_ack: bool,
+) -> Option<std::sync::mpsc::Sender<()>> {
+    assert_eq!(next_or_response(writes, response).await.as_ref(), b"\x07");
+    std::fs::write(file, before).unwrap();
+    crate::platform::draft_editor::test_run_at(directory, file).unwrap();
+    let returned = std::fs::read_to_string(file).unwrap();
+    let marker = returned
+        .strip_prefix(expected)
+        .expect("exact complete native input");
+    assert!(marker.starts_with("__BUS_DRAFT_END_"));
+    paint(app, frame, &returned, 1);
+    assert_eq!(
+        next_or_response(writes, response).await.as_ref(),
+        vec![0x7f; marker.len()]
+    );
+    let release =
+        fail_submit_ack.then(|| clock(app).fail_next_write_completion(std::io::ErrorKind::Other));
+    std::fs::write(file, expected).unwrap();
+    paint(app, frame, expected, 2);
+    release
+}
+
+async fn delivery_with_draft(
+    frame: &str,
+    steer: bool,
+    fault: u8,
+    idle_before_submit: bool,
+    body: &str,
+    original: &str,
+) {
     let _scratch = Scratch::new();
     let (mut app, mut method, mut writes, directory) = fixture(frame, steer);
     if let Method::AgentPromptIfIdle(params) = &mut method {
         params.text = body.into();
     }
+    paint(&app, frame, original, 0);
     let response = start(&mut app, method);
     let file = crate::utils::test_temp::unique_temp_path("kimi-native-editor");
-    let mut draft = String::new();
-    let mut release = None;
-    for round in 0..2 {
-        assert_eq!(
-            next_or_response(&mut writes, &response).await.as_ref(),
-            b"\x07",
-            "no paste or submit before exact editor verification"
-        );
-        std::fs::write(&file, &draft).unwrap();
-        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
-        draft = std::fs::read_to_string(&file).unwrap();
-        let marker = draft.strip_prefix(body).unwrap().to_owned();
-        assert!(!marker.is_empty());
-        paint(&app, frame, &draft, round + 1);
-        assert_eq!(
-            next_or_response(&mut writes, &response).await.as_ref(),
-            vec![0x7f; marker.len()]
-        );
-        draft.truncate(body.len());
-        if round == 1 && fault == 2 {
-            release = Some(clock(&app).fail_next_write_completion(std::io::ErrorKind::Other));
-        }
-        let verified_frame = if idle_before_submit && round == 1 {
-            IDLE
-        } else {
-            frame
-        };
-        paint(&app, verified_frame, &draft, round + 2);
-    }
+    let submitted_frame = if idle_before_submit { IDLE } else { frame };
+    let release = editor_exchange(
+        &app,
+        submitted_frame,
+        &mut writes,
+        &response,
+        &directory,
+        &file,
+        original,
+        body,
+        fault == 2,
+    )
+    .await;
     let key = next_or_response(&mut writes, &response).await;
     assert_eq!(
         key.as_ref(),
@@ -230,26 +261,47 @@ async fn delivery_body(frame: &str, steer: bool, fault: u8, idle_before_submit: 
             b"\r"
         }
     );
-    let submitted_frame = if idle_before_submit { IDLE } else { frame };
     if fault == 1 {
-        paint(&app, submitted_frame, &draft, 6);
-        clock(&app).advance(Duration::from_millis(40));
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        clock(&app).advance(Duration::from_secs(20));
+        paint(&app, submitted_frame, body, 3);
+        let generation = clock(&app).advance(Duration::ZERO);
+        clock(&app).wait_for_submission_check(generation);
+        clock(&app).advance(
+            crate::protocol::api::submission::confirmation_budget(Duration::ZERO)
+                + Duration::from_millis(1),
+        );
     } else {
-        paint(&app, submitted_frame, "", 5);
+        paint(&app, submitted_frame, "", 3);
     }
     if let Some(release) = release {
         release.send(()).unwrap();
     }
+    editor_exchange(
+        &app,
+        submitted_frame,
+        &mut writes,
+        &response,
+        &directory,
+        &file,
+        if fault == 1 { body } else { "" },
+        original,
+        false,
+    )
+    .await;
+    editor_exchange(
+        &app,
+        submitted_frame,
+        &mut writes,
+        &response,
+        &directory,
+        &file,
+        original,
+        original,
+        false,
+    )
+    .await;
     let result = response.recv_timeout(WAIT).unwrap();
     if fault == 0 {
         assert!(result.contains("agent_prompted"), "{result}");
-        assert!(!std::fs::read_dir(&directory).unwrap().any(|entry| entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with("draft-")));
     } else {
         assert!(
             !result.contains("agent_prompted"),
@@ -264,9 +316,15 @@ async fn delivery_body(frame: &str, steer: bool, fault: u8, idle_before_submit: 
             "submit may have run: {result}"
         );
     }
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+    assert!(!crate::platform::draft_editor::Exchange::has_preserved_draft(&directory));
+    assert!(!std::fs::read_dir(&directory)
+        .unwrap()
+        .flatten()
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("draft-")));
     assert!(
         writes.try_recv().is_err(),
-        "no retry or duplicate submission"
+        "three handoffs and one submit; no retry or duplicate"
     );
     std::fs::remove_file(file).unwrap();
     std::fs::remove_dir_all(directory).unwrap();
@@ -414,6 +472,16 @@ async fn kimi_edited_stranded_draft_is_preserved_by_exact_editor_readback() {
 #[tokio::test]
 async fn kimi_cancelled_exchange_with_a_quarantined_draft_can_recover() {
     stranded_delivery(false, true).await;
+async fn kimi_developer_draft_does_not_block_delivery_and_is_restored_byte_exact() {
+    delivery_with_draft(
+        IDLE,
+        false,
+        0,
+        false,
+        "from bus",
+        "\t developer 中文\n  second line\ntrailing \t \n\n",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -446,26 +514,5 @@ async fn protected_exchange(expired: bool) {
     assert_eq!(
         std::fs::read_to_string(exchange.recovery()).unwrap(),
         "older Bus prompt"
-    );
-}
-
-#[test]
-fn kimi_cancelled_exchange_retains_marker_proof_until_the_composer_is_empty() {
-    let scratch = Scratch::new();
-    let directory = scratch.root.join("marker-recovery");
-    let previous = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
-    previous.save_recovery("older Bus prompt").unwrap();
-    drop(previous);
-    let exchange = crate::platform::draft_editor::Exchange::begin(directory.clone(), WAIT).unwrap();
-    exchange.request_recover().unwrap();
-    let file = scratch.root.join("native-editor.txt");
-    std::fs::write(&file, "older Bus prompt").unwrap();
-    crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
-    let marker = std::fs::read_to_string(&file).unwrap();
-    assert!(marker.starts_with("__BUS_DRAFT_END_"));
-    assert_eq!(
-        std::fs::read_to_string(exchange.recovery()).unwrap(),
-        marker,
-        "an interrupted readback must leave exact proof for the marker still in the composer"
     );
 }

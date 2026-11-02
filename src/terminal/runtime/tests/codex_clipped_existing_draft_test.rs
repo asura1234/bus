@@ -48,13 +48,7 @@ pub(crate) async fn submits_once_and_restores_existing_developer_draft(
                 std::fs::write(&native_file, &draft).unwrap();
                 crate::platform::draft_editor::test_run_at(&exchange, &native_file).unwrap();
                 draft = std::fs::read_to_string(&native_file).unwrap();
-                if editors == 1 {
-                    assert!(
-                        draft.is_empty(),
-                        "capture must retain and clear the developer draft"
-                    );
-                    render(&runtime, BEFORE);
-                } else if let Some(marker) = draft.strip_prefix(TEXT) {
+                if let Some(marker) = draft.strip_prefix(TEXT) {
                     assert!(marker.starts_with("__BUS_DRAFT_END_"));
                     render_verified_marker(&runtime, marker);
                 } else {
@@ -100,7 +94,7 @@ pub(crate) async fn submits_once_and_restores_existing_developer_draft(
             }
         }
     }
-    assert_eq!((editors, pastes, enters, marker_deletions), (4, 1, 1, 3));
+    assert_eq!((editors, pastes, enters, marker_deletions), (3, 0, 1, 3));
     assert_eq!(
         draft, ORIGINAL,
         "the complete developer draft must be restored"
