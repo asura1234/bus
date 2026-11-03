@@ -70,7 +70,16 @@ impl BusUi {
         let visible_anchor = (!self.history_follow_tail)
             .then(|| self.history.anchor_at(self.main_scroll))
             .flatten();
-        self.request_room_history(room, width, now);
+        let (snapshot, submissions) = self.history_projection();
+        Self::request_room_history(
+            &mut self.history,
+            &mut self.thumbnails,
+            snapshot,
+            room.id,
+            width,
+            now,
+            submissions,
+        );
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
                 self.main_scroll = index;
@@ -132,16 +141,19 @@ impl BusUi {
         self.recipient_menu_view(view, room, local);
     }
 
-    fn request_room_history(&mut self, room: &Room, width: u16, now: u64) {
-        let (snapshot, submissions) = self.history_projection();
-        self.history.request_lines_with_submissions(
-            snapshot,
-            room.id,
-            width,
-            now,
-            &mut self.thumbnails,
-            submissions,
-        );
+    fn request_room_history(
+        history: &mut super::super::history::History,
+        thumbnails: &mut super::super::thumbnails::Thumbnails,
+        snapshot: Arc<crate::messaging::coordinator::BusSnapshot>,
+        room: RoomId,
+        width: u16,
+        now: u64,
+        submissions: std::collections::BTreeMap<
+            crate::messaging::model::PromptId,
+            super::super::LocalSendStatus,
+        >,
+    ) {
+        history.request_lines_with_submissions(snapshot, room, width, now, thumbnails, submissions);
     }
 
     /// The Ctrl+R recall search, which has no panel of its own.
