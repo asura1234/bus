@@ -60,6 +60,7 @@ fn sender_identity_unknown_or_stale_context_refuses_without_mutation() {
     impl Transport for Refusing {
         fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "no such pane".into(),
                 code: None,
                 definitely_rejected: true,
@@ -482,6 +483,7 @@ fn sender_identity_native_lookup_logs_the_refusal_cause_without_message_content(
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             assert!(matches!(method, Method::PaneLocateProcess(_)));
             Err(TransportError {
+                timestamps: Default::default(),
                 code: Some("caller_unknown".into()),
                 message: "stale process incarnation".into(),
                 definitely_rejected: true,
