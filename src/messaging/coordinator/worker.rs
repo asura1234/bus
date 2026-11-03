@@ -34,6 +34,8 @@ pub(super) struct Worker {
     pub(super) durable_state: BusState,
     /// Current requests loaded when this coordinator process opened.
     pub(super) resume_requests: BTreeMap<AgentId, RequestId>,
+    /// Agents whose native resume already owns their restart reconciliation.
+    pub(super) resume_rebound: BTreeSet<AgentId>,
     /// Requests interrupted by native resume or a recorded restart.
     pub(super) restart_requests: BTreeMap<AgentId, RequestId>,
     /// The restart outcome whose requests were captured by a surviving coordinator.
@@ -160,6 +162,7 @@ impl Worker {
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
             resume_requests,
+            resume_rebound: BTreeSet::new(),
             restart_requests: BTreeMap::new(),
             restart_outcome_at: None,
             state,

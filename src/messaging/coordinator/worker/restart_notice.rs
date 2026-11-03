@@ -18,12 +18,8 @@ impl Worker {
                 .agents()
                 .filter_map(|agent| {
                     let current = agent.current_request?;
-                    (self.restart_outcome_at.is_some()
-                        || self
-                            .resume_requests
-                            .get(&agent.id)
-                            .is_none_or(|original| *original == current))
-                    .then_some((agent.id, current))
+                    (self.restart_outcome_at.is_some() || !self.resume_rebound.contains(&agent.id))
+                        .then_some((agent.id, current))
                 })
                 .collect();
             self.restart_outcome_at = Some(record.at_ms);

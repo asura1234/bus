@@ -144,6 +144,7 @@ impl Worker {
     }
 
     pub(in crate::messaging::coordinator) fn note_restored_request(&mut self, agent: &RoomAgent) {
+        self.resume_rebound.insert(agent.id);
         let Some(request) = self.resume_requests.get(&agent.id).copied() else {
             return;
         };

@@ -150,6 +150,44 @@ fn restart_lifecycle_late_outcome_keeps_the_request_delivered_after_native_rebin
     );
 }
 
+#[test]
+fn restart_lifecycle_late_outcome_keeps_queued_work_without_a_loaded_current_request() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let queued = fixture.send(
+        "queued work delivered after resume with no old current request",
+        true,
+    );
+    restart_lifecycle_reopen(&mut fixture, true);
+    fixture.worker.tick().unwrap();
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Active);
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+    restart_lifecycle_receipt(&fixture, "restarted");
+    fixture.worker.tick().unwrap();
+    assert_eq!(
+        fixture.request(queued).phase,
+        RequestPhase::Active,
+        "an empty reopen request set contains no interrupted work; a late receipt must not capture newly delivered work; reason={:?}",
+        fixture.request(queued).failure_reason
+    );
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_every_provider_queue()
