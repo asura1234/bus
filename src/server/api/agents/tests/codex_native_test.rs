@@ -362,6 +362,8 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
         let Ok(mut ws) = tungstenite::accept(stream) else {
             return false;
         };
+        let mut interrupted = false;
+        let mut enumerated = false;
         while let Ok(frame) = ws.read() {
             let value: serde_json::Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
             let Some(id) = value.get("id") else { continue };
@@ -369,13 +371,20 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
             let result = match method {
                 "initialize" => serde_json::json!({"userAgent":"fixture"}),
                 "thread/read" => serde_json::json!({"thread":{
-                    "id":"session", "status":{"type":"active","activeFlags":[]},
+                    "id":"session", "status":if interrupted {serde_json::json!({"type":"idle"})} else {serde_json::json!({"type":"active","activeFlags":[]})},
                     "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
                 }}),
                 "thread/turns/list" => {
-                    serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null})
+                    serde_json::json!({"data":[{"id":"interrupt-turn","status":if interrupted {"interrupted"} else {"inProgress"},"items":[]}],"nextCursor":null})
                 }
-                "turn/interrupt" => serde_json::json!({}),
+                "turn/interrupt" => {
+                    interrupted = true;
+                    serde_json::json!({})
+                }
+                "thread/backgroundTerminals/list" => {
+                    enumerated = true;
+                    serde_json::json!({"data":[],"nextCursor":null})
+                }
                 other => panic!("unexpected interrupt operation {other}"),
             };
             if ws
@@ -388,7 +397,7 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
             {
                 return false;
             }
-            if method == "turn/interrupt" {
+            if enumerated && method == "thread/turns/list" {
                 return true;
             }
         }
@@ -419,7 +428,7 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
     let value = response.recv_timeout(WAIT).unwrap();
     let interrupted = server.join().unwrap();
     assert!(
-        handled && interrupted && value.contains("\"type\":\"ok\""),
+        handled && interrupted && value.contains("\"type\":\"agent_interrupted\""),
         "interrupt must complete after dispatch returned: {value}"
     );
     assert!(
@@ -614,6 +623,99 @@ mod draft_admission {
                 app.lookup_runtime_sender(0, pane).unwrap().visible_text(),
                 before
             );
+        }
+    }
+}
+
+mod interrupt_completion_fact {
+    use super::*;
+    use crate::terminal::runtime::native_input::{
+        NativeInput, NativeInterruptCompletion, NativePrompt,
+    };
+
+    struct CompletedPort(Option<bool>);
+    impl NativeInput for CompletedPort {
+        fn launch(&self, argv: &[String]) -> std::io::Result<Vec<String>> {
+            Ok(argv.to_vec())
+        }
+        fn has_session(&self) -> bool {
+            self.0.is_some()
+        }
+        fn prompt(&self, _: NativePrompt<'_>) -> Option<std::io::Result<()>> {
+            None
+        }
+        fn interrupt(
+            &self,
+            _: &str,
+            _: std::time::Instant,
+        ) -> Option<std::io::Result<NativeInterruptCompletion>> {
+            self.0.map(|confirmed| {
+                if confirmed {
+                    Ok(NativeInterruptCompletion {
+                        turn_id: Some("turn-1".into()),
+                    })
+                } else {
+                    Err(std::io::Error::other("unconfirmed"))
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn native_interrupt_completion_fact_survives_a_blocked_draft() {
+        for native_completed in [None, Some(false), Some(true)] {
+            let (mut app, _, mut writes) =
+                provider_fixture(AgentKind::Codex, true, "developer draft 保留");
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+            app.state
+                .terminals
+                .get_mut(&terminal)
+                .unwrap()
+                .set_detected_state(Some(AgentKind::Codex), AgentState::Blocked);
+            let info = app.agent_info(0, pane).unwrap();
+            let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+            let before = runtime.visible_text();
+            runtime.bind_native_input(std::sync::Arc::new(CompletedPort(native_completed)));
+            let params = serde_json::from_value(serde_json::json!({
+                "target":info.pane_id,"keys":["esc"],"native_interrupt":{
+                    "expected_terminal_id":info.terminal_id,"expected_session_id":"session"
+                }
+            }))
+            .unwrap();
+            let (send, response) = std::sync::mpsc::channel();
+            assert!(app.handle_deferred_agent_api_request(
+                Request {
+                    id: "native-completion".into(),
+                    method: Method::AgentSendKeys(params)
+                },
+                send
+            ));
+            let text = response.recv_timeout(WAIT).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                app.lookup_runtime_sender(0, pane).unwrap().visible_text(),
+                before
+            );
+            if native_completed == Some(true) {
+                assert!(writes.try_recv().is_err());
+                assert_eq!(value["result"]["type"], "agent_interrupted", "{text}");
+                assert_eq!(value["result"]["terminal_id"], info.terminal_id);
+                assert_eq!(value["result"]["session_id"], "session");
+                assert_eq!(value["result"]["turn_id"], "turn-1");
+            } else if native_completed == Some(false) {
+                assert_eq!(
+                    value["error"]["code"], "agent_interrupt_unconfirmed",
+                    "{text}"
+                );
+                assert!(writes.try_recv().is_err());
+            } else {
+                assert_eq!(
+                    value["result"]["type"], "ok",
+                    "typed admission is not native completion"
+                );
+                assert_eq!(writes.try_recv().unwrap().as_ref(), b"\x1b");
+            }
         }
     }
 }

@@ -108,7 +108,11 @@ impl Runtime {
         self.session.is_some()
     }
 
-    pub(crate) fn interrupt(&mut self, thread: &str, deadline: Instant) -> Option<io::Result<()>> {
+    pub(crate) fn interrupt(
+        &mut self,
+        thread: &str,
+        deadline: Instant,
+    ) -> Option<io::Result<Option<String>>> {
         let session = self.session.as_mut()?;
         if session.standalone() {
             return None;
@@ -119,8 +123,8 @@ impl Runtime {
         tracing::info!(
             event = "bus.codex.native_interrupt",
             thread_id = thread,
-            admitted = result.is_ok(),
-            "Codex app-server interrupt result"
+            confirmed = result.is_ok(),
+            "Codex app-server interrupt completion result"
         );
         session.rpc.take();
         Some(result)

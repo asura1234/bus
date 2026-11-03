@@ -78,6 +78,12 @@ pub enum ResponseResult {
     AgentPrompted {
         agent: AgentInfo,
     },
+    /// Strong native completion; ordinary key writes return only `Ok`.
+    AgentInterrupted {
+        terminal_id: String,
+        session_id: String,
+        turn_id: Option<String>,
+    },
     AgentList {
         agents: Vec<AgentInfo>,
     },

@@ -485,6 +485,8 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
         let Ok(mut ws) = tungstenite::accept(stream) else {
             return false;
         };
+        let mut interrupted = false;
+        let mut enumerated = false;
         while let Ok(frame) = ws.read() {
             let value: serde_json::Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
             let Some(id) = value.get("id") else { continue };
@@ -492,13 +494,20 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
             let result = match method {
                 "initialize" => serde_json::json!({"userAgent":"fixture"}),
                 "thread/read" => serde_json::json!({"thread":{
-                    "id":"session", "status":{"type":"active","activeFlags":[]},
+                    "id":"session", "status":if interrupted {serde_json::json!({"type":"idle"})} else {serde_json::json!({"type":"active","activeFlags":[]})},
                     "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
                 }}),
                 "thread/turns/list" => {
-                    serde_json::json!({"data":[{"id":"interrupt-turn","status":"inProgress","items":[]}],"nextCursor":null})
+                    serde_json::json!({"data":[{"id":"interrupt-turn","status":if interrupted {"interrupted"} else {"inProgress"},"items":[]}],"nextCursor":null})
                 }
-                "turn/interrupt" => serde_json::json!({}),
+                "turn/interrupt" => {
+                    interrupted = true;
+                    serde_json::json!({})
+                }
+                "thread/backgroundTerminals/list" => {
+                    enumerated = true;
+                    serde_json::json!({"data":[],"nextCursor":null})
+                }
                 other => panic!("unexpected interrupt operation {other}"),
             };
             if ws
@@ -511,7 +520,7 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
             {
                 return false;
             }
-            if method == "turn/interrupt" {
+            if enumerated && method == "thread/turns/list" {
                 return true;
             }
         }
@@ -539,7 +548,7 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
     let value = response.recv_timeout(WAIT).unwrap();
     let interrupted = native_peer.join().unwrap();
     assert!(
-        interrupted && value.contains("\"type\":\"ok\""),
+        interrupted && value.contains("\"type\":\"agent_interrupted\""),
         "interrupt must complete after dispatch returned: {value}"
     );
     assert!(
