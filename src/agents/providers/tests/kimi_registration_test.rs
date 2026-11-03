@@ -254,14 +254,14 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
         let model = ["alpha", "custom", "beta", "gamma"][random(&mut seed) % 4];
         let y = "y".repeat(1 + random(&mut seed) % 3);
         let mut units = Vec::new();
-        if random(&mut seed) % 3 == 0 {
-            if random(&mut seed) % 2 == 0 {
+        if random(&mut seed).is_multiple_of(3) {
+            if random(&mut seed).is_multiple_of(2) {
                 units.push(vec![format!("-{y}m{model}")]);
             } else {
                 units.push(vec![format!("-{y}m"), model.to_owned()]);
             }
         } else {
-            units.push(vec![if random(&mut seed) % 2 == 0 {
+            units.push(vec![if random(&mut seed).is_multiple_of(2) {
                 "--yolo".to_owned()
             } else {
                 format!("-{y}")
@@ -273,10 +273,10 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
                 _ => vec![format!("-m{model}")],
             });
         }
-        if random(&mut seed) % 2 == 0 {
+        if random(&mut seed).is_multiple_of(2) {
             units.push(vec![
                 "--output-format".into(),
-                if random(&mut seed) % 2 == 0 {
+                if random(&mut seed).is_multiple_of(2) {
                     "text"
                 } else {
                     "stream-json"
@@ -284,13 +284,13 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
                 .into(),
             ]);
         }
-        if random(&mut seed) % 2 == 0 {
+        if random(&mut seed).is_multiple_of(2) {
             units.push(vec!["--add-dir".into(), "/tmp".into()]);
         }
-        if random(&mut seed) % 2 == 0 {
+        if random(&mut seed).is_multiple_of(2) {
             units.push(vec!["--skills-dir".into(), "/tmp".into()]);
         }
-        if random(&mut seed) % 2 == 0 {
+        if random(&mut seed).is_multiple_of(2) {
             units.push(vec!["--auto".into()]);
         }
         for index in (1..units.len()).rev() {
