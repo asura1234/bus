@@ -1108,3 +1108,99 @@ fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() 
         1
     );
 }
+
+#[test]
+fn filtered_paged_room_keeps_optimistic_pending_and_failed_submissions() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    for index in 0..320 {
+        snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("older outgoing {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1000 + index,
+            )
+            .unwrap();
+    }
+    snapshot
+        .state
+        .set_room_history_filters(
+            room,
+            RoomHistoryFilters {
+                to_you: false,
+                from_you: true,
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    room_screen(&mut ui, 100, 32);
+    assert!(ui.history.load_older());
+    room_screen(&mut ui, 100, 32);
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .any(|line| line.text == "older outgoing 0"));
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    ui.input(
+        &RawInputEvent::Paste("local filtered send".into()),
+        false,
+        &mut Default::default(),
+    );
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    let pending = room_screen(&mut ui, 100, 32);
+    assert!(pending.contains("[x] You → *"), "{pending}");
+    assert!(pending.contains("[pending]"), "{pending}");
+    assert!(pending.contains("local filtered send"), "{pending}");
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .any(|line| line.text == "older outgoing 0"));
+    let submit = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(pending.command, BusCommand::Submit(..)))
+        .unwrap()
+        .id;
+    let earlier = ui
+        .pending
+        .iter()
+        .filter(|pending| pending.id < submit)
+        .map(|pending| pending.id)
+        .collect::<Vec<_>>();
+    for command_id in earlier {
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id,
+            result: Ok(()),
+        });
+    }
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: submit,
+        result: Err("rejected".into()),
+    });
+    let revision = ui.snapshot.revision;
+    let mut ack = (*ui.snapshot).clone();
+    ack.last_command_id = submit;
+    ui.receive_snapshot(Arc::new(ack));
+    ui.settle();
+    let failed = room_screen(&mut ui, 100, 32);
+    assert_eq!(ui.snapshot.revision, revision);
+    assert!(failed.contains("[x] You → *"), "{failed}");
+    assert!(failed.contains("[failed]"), "{failed}");
+    assert!(!failed.contains("[pending]"), "{failed}");
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .any(|line| line.text == "older outgoing 0"));
+    assert_visible_directions(&ui, false, true);
+}

@@ -1377,3 +1377,135 @@ fn filtered_large_request_archive_projects_only_recent_bodies() {
     assert!(history.cached().is_empty());
     assert!(!history.has_older());
 }
+
+#[test]
+fn filtered_submission_status_rejects_stale_job_without_a_revision_change() {
+    use super::super::LocalSendStatus;
+    let mut state = BusState::default();
+    let room = state.create_room("paged").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    let mut newest = None;
+    for index in 0..600 {
+        let id = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("outgoing {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1000 + index,
+            )
+            .unwrap()[0];
+        newest = Some(state.request(id).unwrap().prompt.id);
+    }
+    let filters = crate::messaging::model::RoomHistoryFilters {
+        to_you: false,
+        from_you: true,
+    };
+    let snapshot = snapshot(state, 7);
+    let prompt = newest.unwrap();
+    let pending = BTreeMap::from([(prompt, LocalSendStatus::Pending)]);
+    let failed = BTreeMap::from([(prompt, LocalSendStatus::Failed)]);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    history.request_lines_with_submissions(
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        filters,
+        pending.clone(),
+    );
+    let started = Instant::now();
+    while !history.poll() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "pending job did not complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // The completed Pending result is still in the mailbox. It must never be
+    // applied after the same snapshot's local submission status becomes Failed.
+    history.request_lines_with_submissions(
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        filters,
+        failed.clone(),
+    );
+    assert!(!history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("[pending]")));
+    let started = Instant::now();
+    loop {
+        history.request_lines_with_submissions(
+            Arc::clone(&snapshot),
+            room,
+            80,
+            2000,
+            &mut thumbnails,
+            filters,
+            failed.clone(),
+        );
+        if history.background.as_ref().unwrap().is_current(
+            7,
+            room,
+            80,
+            2000,
+            thumbnails.layout_key(),
+        ) {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "failed badge layout did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        history
+            .cached()
+            .iter()
+            .filter(|line| line.text.contains("[failed]"))
+            .count(),
+        1
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "outgoing 599"));
+    assert!(history.rebuilt <= 256);
+    assert!(history.load_older());
+    history.request_lines_with_submissions(
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        filters,
+        failed,
+    );
+    // A filter change rejects that completed/running outgoing page as well.
+    history.request_lines_with_submissions(
+        snapshot,
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        crate::messaging::model::RoomHistoryFilters {
+            to_you: true,
+            from_you: false,
+        },
+        pending,
+    );
+    assert!(history.cached().is_empty());
+}
