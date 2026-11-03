@@ -176,7 +176,10 @@ fn help_examples_manage_a_scratch_room_without_provider_processes() {
         .find(|room| room["id"] == id)
         .unwrap();
     assert_eq!(room["name"], "feature-work");
-    assert!(state["build"]["binary"].is_string());
+    assert!(state["build"]["client"]["binary"].is_string());
+    assert_eq!(state["build"]["client"]["sha"], env!("BUS_BUILD_SHA"));
+    assert!(state["build"]["server"]["binary"].is_string());
+    assert_eq!(state["build"]["server"]["sha"], env!("BUS_BUILD_SHA"));
     assert!(run(&["agent", "list", "--room", "feature-work"])["agents"]
         .as_array()
         .unwrap()

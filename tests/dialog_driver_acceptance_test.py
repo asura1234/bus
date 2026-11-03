@@ -438,7 +438,10 @@ class DialogDriverAcceptance(unittest.TestCase):
             terminal = terminal_module.Terminal([str(wrapper), "--dev", "--yolo"],
                                                 root / "project", env)
             state = wait_for("private Bus startup", lambda: control("state", optional=True), 45)
-            self.assertEqual(Path(state["build"]["binary"]).resolve(), copied.resolve())
+            self.assertEqual(Path(state["build"]["client"]["binary"]).resolve(), copied.resolve())
+            self.assertEqual(state["build"]["client"]["sha"], sha)
+            self.assertEqual(Path(state["build"]["server"]["binary"]).resolve(), copied.resolve())
+            self.assertEqual(state["build"]["server"]["sha"], sha)
             identity = []
             for name in ["client", "server"]:
                 starts = [json.loads(line) for file in (root / "data").rglob(name + ".jsonl")
