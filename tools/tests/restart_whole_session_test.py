@@ -40,11 +40,14 @@ def signal_client_group(client, sig):
         os.killpg(client.pid, sig)
     except ProcessLookupError:
         pass
-    except PermissionError:
+    except PermissionError as error:
         # macOS may report EPERM for a zombie-only group. Reap the leader and
         # ignore it only if the group disappeared; live-group errors still fail.
-        if client.poll() is None:
-            raise
+        # EPERM can precede waitpid reporting the leader's completed exit.
+        try:
+            client.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            raise error from None
         try:
             os.killpg(client.pid, 0)
         except ProcessLookupError:

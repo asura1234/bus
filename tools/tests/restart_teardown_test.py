@@ -101,14 +101,17 @@ def test_unreaped_exited_leader_without_members_can_be_cleaned(client):
     assert client.wait(timeout=5) == 0
 
 
-def test_exit_during_signal_allows_permission_error_for_missing_group(client, monkeypatch):
+@pytest.mark.parametrize("exit_observed", [False, True])
+def test_exit_during_signal_allows_permission_error_for_missing_group(
+        client, monkeypatch, exit_observed):
     killpg = os.killpg
 
     def exit_before_signal(pid, sig):
         if not sig:
             return killpg(pid, sig)
         client.stdin.close()
-        assert client.wait(timeout=5) == 0
+        if exit_observed:
+            assert client.wait(timeout=5) == 0
         raise PermissionError("macOS exited group leader")
 
     monkeypatch.setattr(os, "killpg", exit_before_signal)
