@@ -1,8 +1,17 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
 use super::{
-    Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, RequestId, RequestPhase,
-    RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
+    Author, BusState, DialogNoticeTo, ModelError, RequestId, RequestPhase, RuntimeStatus,
+    SubmissionOutcome, QUEUED_STALL_MS,
 };
+
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub(crate) enum DialogNoticeDelivery {
+    /// Saved before native I/O; a restart may lose its outcome entirely.
+    Unconfirmed {
+        since_ms: u64,
+    },
+    Confirmed,
+}
 
 /// Administrative closure provenance; native submission evidence stays on the request.
 #[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]

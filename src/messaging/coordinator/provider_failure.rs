@@ -46,6 +46,7 @@ impl Worker {
             // This is a read response. The transport's rejection bit concerns
             // PTY submission and is intentionally false for pane_not_found.
             Err(error) if error.code.as_deref() == Some("pane_not_found") => {
+                state.note_sessionless_pane_loss(agent.id);
                 // A close may have succeeded just before its state save
                 // failed. Keep its address through the idempotent close pass
                 // so that pass can durably record success and detach it.
@@ -61,6 +62,7 @@ impl Worker {
             _ => return Ok((false, None)),
         };
         if evidence.pane_id != pane || Some(&evidence.terminal_id) != terminal.as_ref() {
+            state.note_sessionless_pane_loss(agent.id);
             clear_stale_pane(state, agent)?;
             return Ok((false, None));
         }
@@ -103,12 +105,7 @@ pub(super) fn mark_lost_sessionless_turn(
     agent: &RoomAgent,
     infos: &[schema::AgentInfo],
 ) {
-    if agent.runtime_identity.session_id.is_some()
-        || agent.runtime_identity.pane_id.is_none()
-        || state
-            .agent(agent.id)
-            .is_none_or(|owner| owner.runtime_identity.pane_id.is_some())
-    {
+    if !state.has_sessionless_pane_loss(agent.id) {
         return;
     }
     if infos.iter().any(|info| {

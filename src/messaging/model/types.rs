@@ -566,15 +566,6 @@ pub(crate) struct CompletedReply {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) enum DialogNoticeDelivery {
-    /// Saved before native I/O; a restart may lose its outcome entirely.
-    Unconfirmed {
-        since_ms: u64,
-    },
-    Confirmed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -596,6 +587,9 @@ pub(crate) struct Request {
     /// Restart proved interruption; reconcile saved outcomes before closure.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupted_by_restore: bool,
+    /// Definite pane loss, scoped by expected_launch_id to this submission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lost_terminal_id: Option<String>,
     #[serde(default)]
     pub(crate) provider_retry_attempts: u32,
     pub(crate) expected_launch_id: Option<String>,
@@ -613,7 +607,7 @@ pub(crate) struct Request {
     /// A blocked-dialog episode outlives request/group settlement. Keep its
     /// native receipt and write clock independently of those transitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) dialog_delivery: Option<DialogNoticeDelivery>,
+    pub(crate) dialog_delivery: Option<super::DialogNoticeDelivery>,
     /// The provider turn's candidate final, not the request's completion result.
     pub(crate) pending_final: Option<PendingFinal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

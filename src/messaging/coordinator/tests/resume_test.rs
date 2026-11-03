@@ -1556,3 +1556,204 @@ fn restart_reconciliation_sessionless_submission_settles_after_terminal_loss() {
         );
     }
 }
+
+#[test]
+fn restart_reconciliation_retained_sessionless_loss_settles_after_later_failed_info() {
+    struct RemoveScratch(PathBuf);
+    impl Drop for RemoveScratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    struct SplitLoss {
+        infos: VecDeque<Vec<schema::AgentInfo>>,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        pane_missing: bool,
+    }
+    impl Transport for SplitLoss {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(crate::protocol::api::api_method_name(&method));
+            match method {
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList {
+                        agents: self.infos.pop_front().unwrap(),
+                    })
+                }
+                Method::PaneGet(_) => Err(TransportError {
+                    code: Some(
+                        if self.pane_missing {
+                            "pane_not_found"
+                        } else {
+                            "transport_error"
+                        }
+                        .into(),
+                    ),
+                    message: "old-pane read evidence".into(),
+                    definitely_rejected: false,
+                }),
+                _ => Ok(ResponseResult::Ok {}),
+            }
+        }
+    }
+    for evidence in [
+        "same-poll",
+        "split-wrong-owner",
+        "split-transport",
+        "split-owned",
+        "split-owned-reopen",
+        "split-new-launch",
+        "split-new-terminal",
+    ] {
+        let mut original = resumed_info(Provider::Codex);
+        original.terminal_id = "terminal".into();
+        original.agent_session = None;
+        let (mut worker, agent, room, dir, _) = fixture(
+            Provider::Codex,
+            vec![
+                Ok(ResponseResult::AgentList {
+                    agents: vec![original.clone()],
+                }),
+                Ok(ResponseResult::AgentInfo { agent: original }),
+                Ok(ResponseResult::Ok {}),
+            ],
+        );
+        let _scratch = RemoveScratch(dir.clone());
+        let mut state = worker.state.clone();
+        let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(agent, identity).unwrap();
+        worker.save(state).unwrap();
+        let submitted = queue(&mut worker, room, agent, "input before any SessionStart");
+        worker.poll().unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            worker.state.request(submitted).unwrap().phase,
+            RequestPhase::Submitting
+        );
+        assert!(worker.state.request(submitted).unwrap().uncertain_outcome);
+        let queued = queue(&mut worker, room, agent, "retain queued follower");
+        let follower = worker.state.request(queued).unwrap().clone();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let failed: schema::AgentInfo = serde_json::from_value(json!({
+            "terminal_id":"restored-terminal", "pane_id":"pane", "workspace_id":"workspace", "tab_id":"tab",
+            "focused":false, "revision":1, "agent_status":"unknown", "interactive_ready":false,
+            "native_resume":{"name":if evidence == "split-wrong-owner" { "foreign-owner".into() }
+                else { crate::messaging::identity::managed_name(room, agent) }, "agent":"codex",
+                "session_id":null, "command":"codex", "error":"Bus resume has no matching unstarted provider owner"}
+        })).unwrap();
+        let first = if evidence == "same-poll" {
+            vec![failed.clone()]
+        } else {
+            vec![]
+        };
+        drop(worker);
+        let mut worker = Worker::open(
+            dir.clone(),
+            Box::new(SplitLoss {
+                infos: vec![first, vec![failed.clone()]].into(),
+                calls: calls.clone(),
+                pane_missing: evidence != "split-transport",
+            }),
+        )
+        .unwrap();
+        worker.poll().unwrap().unwrap();
+        if matches!(evidence, "split-owned" | "split-owned-reopen") {
+            assert!(worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .runtime_identity
+                .pane_id
+                .is_none());
+            assert!(
+                !worker
+                    .state
+                    .request(submitted)
+                    .unwrap()
+                    .interrupted_by_restore
+            );
+            let saved = JsonStore::new(dir.join("state.json"))
+                .load()
+                .unwrap()
+                .unwrap();
+            assert!(
+                saved
+                    .agent(agent)
+                    .unwrap()
+                    .runtime_identity
+                    .pane_id
+                    .is_none(),
+                "first poll durably established old-pane loss"
+            );
+        }
+        if evidence == "split-owned-reopen" {
+            drop(worker);
+            worker = Worker::open(
+                dir.clone(),
+                Box::new(SplitLoss {
+                    infos: vec![vec![failed]].into(),
+                    calls: calls.clone(),
+                    pane_missing: true,
+                }),
+            )
+            .unwrap();
+        }
+        if matches!(evidence, "split-new-launch" | "split-new-terminal") {
+            let mut state = worker.state.clone();
+            let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+            if evidence == "split-new-launch" {
+                identity.launch_id = Some("successor-launch".into());
+            } else {
+                identity.terminal_id = Some("successor-terminal".into());
+            }
+            state.set_agent_runtime_identity(agent, identity).unwrap();
+            worker.save(state).unwrap();
+        }
+        let infos = worker.poll().unwrap().unwrap();
+        let now = io::now_ms().saturating_add(24 * 60 * 60 * 1_000);
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, now)
+            .unwrap();
+        worker.settle_requests().unwrap();
+        worker.expire_unconfirmed_submissions(now).unwrap();
+        let old = worker.state.request(submitted).unwrap();
+        if matches!(evidence, "same-poll" | "split-owned" | "split-owned-reopen") {
+            assert_eq!((old.phase, old.failure_reason.as_deref()),
+                (RequestPhase::Abandoned, Some("interrupted")),
+                "{evidence}: definite old-pane loss and later owned failure must compose across polls");
+        } else {
+            assert_eq!(old.phase, RequestPhase::Submitting, "{evidence}");
+            assert!(
+                old.failure_reason.is_none() && old.uncertain_outcome,
+                "{evidence}"
+            );
+        }
+        assert_eq!(worker.state.request(queued).unwrap(), &follower);
+        assert_eq!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .runtime_identity
+                .terminal_id
+                .as_deref(),
+            Some(if evidence == "split-new-terminal" {
+                "successor-terminal"
+            } else {
+                "terminal"
+            }),
+            "settlement must not grant a sessionless rebind"
+        );
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|name| name.contains("prompt_if")),
+            "uncertain input must never replay"
+        );
+    }
+}

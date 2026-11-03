@@ -22,6 +22,54 @@ impl BusState {
         }
     }
 
+    /// Remember definite pane loss on the submitted attempt, so a deferred
+    /// native resume result can prove interruption on a later poll or reopen.
+    pub(crate) fn note_sessionless_pane_loss(&mut self, agent: AgentId) {
+        let Some(owner) = self.agents.get(&agent) else {
+            return;
+        };
+        if owner.runtime_identity.session_id.is_some() {
+            return;
+        }
+        let (Some(terminal), Some(launch)) = (
+            owner.runtime_identity.terminal_id.as_ref(),
+            owner.runtime_identity.launch_id.as_ref(),
+        ) else {
+            return;
+        };
+        for request in self.requests.values_mut().filter(|request| {
+            request.agent_id == agent
+                && matches!(
+                    request.phase,
+                    RequestPhase::Submitting | RequestPhase::Active
+                )
+                && request.expected_launch_id.as_ref() == Some(launch)
+                && !request.interrupted_by_restore
+        }) {
+            request.lost_terminal_id = Some(terminal.clone());
+        }
+    }
+
+    pub(crate) fn has_sessionless_pane_loss(&self, agent: AgentId) -> bool {
+        let Some(owner) = self.agents.get(&agent) else {
+            return false;
+        };
+        let identity = &owner.runtime_identity;
+        identity.session_id.is_none()
+            && identity.pane_id.is_none()
+            && identity.terminal_id.is_some()
+            && identity.launch_id.is_some()
+            && self.unsettled_requests().any(|request| {
+                request.agent_id == agent
+                    && matches!(
+                        request.phase,
+                        RequestPhase::Submitting | RequestPhase::Active
+                    )
+                    && request.lost_terminal_id == identity.terminal_id
+                    && request.expected_launch_id == identity.launch_id
+            })
+    }
+
     /// Native terminal replacement or a successful restart receipt proves the
     /// execution was interrupted. A coordinator reconnect alone is no end.
     pub(crate) fn mark_restored_turn(&mut self, agent: AgentId) {

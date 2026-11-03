@@ -44,7 +44,7 @@ pub(crate) use idle_agents::MIN_IDLE_FOR_ALERT_MS;
 pub(crate) use interrupts::INTERRUPTED;
 #[cfg(test)]
 use payload::payload_matches;
-pub(crate) use recovery::{ManualRecovery, QueuedRejection};
+pub(crate) use recovery::{DialogNoticeDelivery, ManualRecovery, QueuedRejection};
 pub(crate) use request_outcomes::{classify_request_failure, RequestFailureClass};
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::BusState;
@@ -53,11 +53,11 @@ pub(crate) use {
     types::{
         is_developer_recipient, AgentId, AgentRecipients, AgentRuntimeIdentity, AgentStartup,
         Author, CallbackDisposition, CallbackEventKind, CallbackRejection, Compactions,
-        DialogNoticeDelivery, DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId,
-        Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room,
-        RoomHistoryFilters, RoomId, RoomKind, RuntimeStatus, StartupFailure, StartupRecovery,
-        SubmissionOutcome, AGENT_STARTUP_FAILED, BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS,
-        MASTER_ROOM_NAME, QUEUED_STALL_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
+        DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId, Provider,
+        ProviderCallback, Reply, Request, RequestId, RequestPhase, Room, RoomHistoryFilters,
+        RoomId, RoomKind, RuntimeStatus, StartupFailure, StartupRecovery, SubmissionOutcome,
+        AGENT_STARTUP_FAILED, BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS, MASTER_ROOM_NAME,
+        QUEUED_STALL_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };
 

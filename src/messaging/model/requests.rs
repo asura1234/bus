@@ -68,6 +68,7 @@ impl BusState {
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
         request_state.phase = RequestPhase::Submitting;
+        request_state.lost_terminal_id = None;
         request_state.submission_error = None;
         request_state.expected_launch_id = Some(launch_id.to_owned());
         request_state.submission_boundary = Some(callback_boundary);
@@ -537,6 +538,7 @@ impl BusState {
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
         request_state.phase = RequestPhase::Submitting;
+        request_state.lost_terminal_id = None;
         request_state.expected_launch_id = launch;
         request_state.group = Some(lead);
         request_state.steered = true;

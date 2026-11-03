@@ -166,6 +166,7 @@ impl BusState {
                     manual_recovery: None,
                     queued_rejection: None,
                     interrupted_by_restore: false,
+                    lost_terminal_id: None,
                     provider_retry_attempts: 0,
                     expected_launch_id: None,
                     submission_boundary: None,

@@ -210,6 +210,7 @@ impl BusState {
         request.failure_reason = None;
         request.queued_rejection = None;
         request.interrupted_by_restore = false;
+        request.lost_terminal_id = None;
         request.pending_final = None;
         request.completed_at_ms = None;
         request.group = None;
