@@ -157,7 +157,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
             .into_iter()
             .rev()
         {
-            if matches!(args[index].as_str(), "--yolo" | "-y") {
+            if kimi::launch::is_yolo_option(&args[index]) {
                 args.remove(index);
             }
         }
