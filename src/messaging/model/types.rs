@@ -617,7 +617,8 @@ pub(crate) struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) completed_reply: Option<CompletedReply>,
     pub(crate) completed_at_ms: Option<u64>,
-    /// Sent with `--queue`: waits for an idle agent and gets its own turn.
+    /// Independent turn: explicit `--queue` or an ordinary agent-authored
+    /// orchestrator request. Waits for idle and never coalesces.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) queue_only: bool,
     /// Bus-created input (such as a reply notice or first-turn system prompt),

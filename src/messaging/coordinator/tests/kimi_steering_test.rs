@@ -405,3 +405,69 @@ mod boundary_tests;
 
 #[path = "kimi_incident_replay_test.rs"]
 mod incident_replays;
+
+#[test]
+fn orchestrator_independent_kimi_requests_wait_for_separate_committed_turns() {
+    for restart in [false, true] {
+        let mut f = Fixture::in_room(Provider::Kimi, true);
+        let mut state = f.worker.state.clone();
+        let work = state.create_room("work").unwrap();
+        state.bind_orchestrator(f.agent, work).unwrap();
+        let sender = state
+            .create_agent(work, "worker", Provider::Codex, f.dir.clone(), None)
+            .unwrap();
+        f.worker.save(state).unwrap();
+        f.room = work;
+        let wire = home(&f);
+        let lead = running(&mut f, "old question", "1");
+        let mut state = f.worker.state.clone();
+        let queued = state
+            .submit_message_with(
+                work,
+                Draft {
+                    text: "worker question".into(),
+                    files: vec![],
+                    recipient_ids: [f.agent].into(),
+                },
+                Author::Agent(sender),
+                f.now,
+                false,
+            )
+            .unwrap()[0];
+        f.worker.save(state).unwrap();
+        f.deliver();
+        assert_eq!(
+            f.typed().len(),
+            1,
+            "must not issue native guidance for independent work"
+        );
+        if restart {
+            reopen(&mut f);
+        }
+        let first = native_turn(1, &f.typed()[0].0, &[], "old answer");
+        std::fs::write(&wire, &first).unwrap();
+        f.status(RuntimeStatus::Idle);
+        stop(&f);
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some("old answer"));
+        assert_eq!(f.reply(queued), None);
+        assert_eq!(f.request(queued).group, None);
+        f.deliver();
+        assert_eq!(f.typed().len(), 2);
+        assert!(!f.typed()[1].1);
+        let payload = f.typed()[1].0.clone();
+        f.started("2", &payload);
+        f.consume();
+        std::fs::write(
+            &wire,
+            format!("{first}{}", native_turn(2, &payload, &[], "worker answer")),
+        )
+        .unwrap();
+        stop(&f);
+        f.status(RuntimeStatus::Idle);
+        f.consume();
+        assert_eq!(f.reply(queued).as_deref(), Some("worker answer"));
+        assert_eq!(f.reply(lead).as_deref(), Some("old answer"));
+        assert_eq!(f.request(queued).provider_turn_id.as_deref(), Some("2"));
+    }
+}

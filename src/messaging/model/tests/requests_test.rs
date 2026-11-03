@@ -596,3 +596,234 @@ fn every_provider_empty_final_is_durable_and_has_no_room_publication() {
         }
     }
 }
+
+#[test]
+fn orchestrator_independent_admission_preserves_developer_worker_and_queue_neighbours() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Kimi] {
+        for orchestrator in [false, true] {
+            for (agent_authored, explicit_queue, generated) in [
+                (true, false, false),
+                (false, false, false),
+                (true, true, false),
+                (false, true, false),
+                (true, false, true),
+            ] {
+                let (mut state, work, sender, _) = state_with_room_and_agents();
+                let target_room = if orchestrator {
+                    state.ensure_master_room()
+                } else {
+                    work
+                };
+                let target = state
+                    .create_agent(target_room, "target", provider, "/repo".into(), None)
+                    .unwrap();
+                if orchestrator {
+                    state.bind_orchestrator(target, work).unwrap();
+                }
+                let identity = state.agent(sender).unwrap().runtime_identity.clone();
+                state.set_agent_runtime_identity(target, identity).unwrap();
+                let author = if agent_authored {
+                    Author::Agent(sender)
+                } else {
+                    Author::Developer
+                };
+                let send = |state: &mut BusState| {
+                    let draft = Draft {
+                        text: "same text".into(),
+                        files: vec![],
+                        recipient_ids: [target].into(),
+                    };
+                    if generated {
+                        state
+                            .submit_bus_message_with(
+                                work,
+                                draft,
+                                author.clone(),
+                                10,
+                                explicit_queue,
+                            )
+                            .unwrap()[0]
+                    } else {
+                        state
+                            .submit_message_with(work, draft, author.clone(), 10, explicit_queue)
+                            .unwrap()[0]
+                    }
+                };
+                let lead = send(&mut state);
+                let next = send(&mut state);
+                let independent = explicit_queue || (orchestrator && agent_authored && !generated);
+                let mut restored: BusState =
+                    serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+                assert_eq!(restored.coalesce_queue(lead).is_none(), independent,
+                    "{provider:?} orchestrator={orchestrator} agent={agent_authored} queue={explicit_queue} generated={generated}");
+                // Isolate steering from the coalescing assertion on the clone.
+                start_request(&mut state, lead, "launch-codex", 20);
+                state
+                    .observe_status(target, RuntimeStatus::Working, 22)
+                    .unwrap();
+                assert_eq!(
+                    state.next_steering(target),
+                    (!independent).then_some((next, lead))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn orchestrator_independent_boundary_stops_coalescing_from_both_sides() {
+    for agent_first in [false, true] {
+        let (mut state, work, sender, _) = state_with_room_and_agents();
+        let target = master_agent(&mut state, "orch");
+        state.bind_orchestrator(target, work).unwrap();
+        let mut requests = vec![];
+        for agent_authored in [agent_first, !agent_first] {
+            requests.push(
+                state
+                    .submit_message_with(
+                        work,
+                        Draft {
+                            text: "question".into(),
+                            files: vec![],
+                            recipient_ids: [target].into(),
+                        },
+                        if agent_authored {
+                            Author::Agent(sender)
+                        } else {
+                            Author::Developer
+                        },
+                        10,
+                        false,
+                    )
+                    .unwrap()[0],
+            );
+        }
+        assert!(state.coalesce_queue(requests[0]).is_none());
+        assert_eq!(state.queued_requests(target), requests);
+        assert!(state.request(requests[1]).unwrap().group.is_none());
+    }
+}
+
+#[test]
+fn orchestrator_independent_policy_is_per_recipient_in_a_shared_message() {
+    for orchestrator_first in [false, true] {
+        let (mut state, room, worker, sender) = state_with_room_and_agents();
+        let orch = master_agent(&mut state, "orch");
+        state.bind_orchestrator(orch, room).unwrap();
+        let mut identity = state.agent(worker).unwrap().runtime_identity.clone();
+        identity.launch_id = Some("launch-orch".into());
+        state.set_agent_runtime_identity(orch, identity).unwrap();
+        let worker_lead = submit_text(&mut state, room, worker, "worker task");
+        let orch_lead = submit_text(&mut state, room, orch, "orchestrator task");
+        start_request(&mut state, worker_lead, "launch-codex", 20);
+        start_request(&mut state, orch_lead, "launch-orch", 20);
+        for agent in [worker, orch] {
+            state
+                .observe_status(agent, RuntimeStatus::Working, 22)
+                .unwrap();
+        }
+        let recipients = if orchestrator_first {
+            [orch, worker]
+        } else {
+            [worker, orch]
+        };
+        let requests = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "shared report".into(),
+                    files: vec![],
+                    recipient_ids: recipients.into(),
+                },
+                Author::Agent(sender),
+                30,
+            )
+            .unwrap();
+        let request_for = |agent| {
+            *requests
+                .iter()
+                .find(|id| state.request(**id).unwrap().agent_id == agent)
+                .unwrap()
+        };
+        let (worker_request, orch_request) = (request_for(worker), request_for(orch));
+        assert_eq!(
+            state.request(worker_request).unwrap().prompt.id,
+            state.request(orch_request).unwrap().prompt.id
+        );
+        assert_eq!(
+            state.next_steering(worker),
+            Some((worker_request, worker_lead))
+        );
+        assert_eq!(
+            state.next_steering(orch),
+            None,
+            "orchestrator must queue regardless of recipient order"
+        );
+        state.begin_steering(worker_request, worker_lead).unwrap();
+        assert!(state.begin_steering(orch_request, orch_lead).is_err());
+        assert_eq!(
+            state.request(orch_request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert_eq!(state.request(orch_request).unwrap().group, None);
+    }
+}
+
+#[test]
+fn orchestrator_independent_policy_covers_legacy_queued_records_without_the_flag() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Kimi] {
+        let (mut state, room, sender, _) = state_with_room_and_agents();
+        let master = state.ensure_master_room();
+        let target = state
+            .create_agent(master, "orch", provider, "/repo".into(), None)
+            .unwrap();
+        state.bind_orchestrator(target, room).unwrap();
+        let identity = state.agent(sender).unwrap().runtime_identity.clone();
+        state.set_agent_runtime_identity(target, identity).unwrap();
+        let lead = submit_text(&mut state, room, target, "running task");
+        start_request(&mut state, lead, "launch-codex", 20);
+        state
+            .observe_status(target, RuntimeStatus::Working, 22)
+            .unwrap();
+        let mut queued = vec![];
+        for _ in 0..2 {
+            queued.push(
+                state
+                    .submit_message_from(
+                        room,
+                        Draft {
+                            text: "legacy question".into(),
+                            files: vec![],
+                            recipient_ids: [target].into(),
+                        },
+                        Author::Agent(sender),
+                        30,
+                    )
+                    .unwrap()[0],
+            );
+        }
+        let mut saved = serde_json::to_value(state).unwrap();
+        for id in &queued {
+            saved["requests"]
+                .as_object_mut()
+                .unwrap()
+                .get_mut(&id.0.to_string())
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("queue_only");
+        }
+        let mut restored: BusState = serde_json::from_value(saved).unwrap();
+        assert!(
+            !restored.request(queued[0]).unwrap().queue_only,
+            "old records default false"
+        );
+        assert_eq!(
+            restored.next_steering(target),
+            None,
+            "legacy request must not join the running turn"
+        );
+        assert!(restored.coalesce_queue(queued[0]).is_none());
+        assert_eq!(restored.queued_requests(target), queued.as_slice());
+    }
+}

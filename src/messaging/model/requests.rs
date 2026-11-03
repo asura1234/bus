@@ -10,6 +10,25 @@ mod rejection;
 mod submit;
 
 impl BusState {
+    fn agent_request_queues(&self, agent: AgentId, author: &Author, generated: bool) -> bool {
+        !generated
+            && matches!(author, Author::Agent(_))
+            && self
+                .agents
+                .get(&agent)
+                .is_some_and(|a| a.orchestrates.is_some())
+    }
+
+    // Older saved queues may not have the implicit queue_only flag yet.
+    fn can_join_turn(&self, request: &Request) -> bool {
+        !request.queue_only
+            && !self.agent_request_queues(
+                request.agent_id,
+                &request.prompt.author,
+                request.bus_generated,
+            )
+    }
+
     pub(crate) fn begin_submission(
         &mut self,
         request: RequestId,
@@ -499,7 +518,7 @@ impl BusState {
         {
             return None;
         }
-        (!queued.queue_only && queued.room_id == lead.room_id).then_some((first, lead.id))
+        (self.can_join_turn(queued) && queued.room_id == lead.room_id).then_some((first, lead.id))
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it
@@ -611,13 +630,13 @@ impl BusState {
 
     /// Joins the queued messages that piled up while the agent could not take
     /// them into `lead`'s prompt: consecutive ones from the queue front, up to
-    /// the first sent with `--queue` or from another room. Returns the text to type, each part
+    /// the first independent request or one from another room. Returns the text to type, each part
     /// marked with its sender and time, or `None` when `lead` goes alone.
     pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
         let request = self.requests.get(&lead)?;
         let (agent_id, room) = (request.agent_id, request.room_id);
         let queue = self.queues.get(&agent_id)?;
-        if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
+        if queue.first() != Some(&lead) || !self.can_join_turn(request) {
             return None;
         }
         let members: Vec<RequestId> = queue[1..]
@@ -626,7 +645,7 @@ impl BusState {
             .take_while(|id| {
                 self.requests
                     .get(id)
-                    .is_some_and(|r| !r.queue_only && r.room_id == room)
+                    .is_some_and(|r| self.can_join_turn(r) && r.room_id == room)
             })
             .collect();
         if members.is_empty() {

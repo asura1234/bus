@@ -128,6 +128,12 @@ impl BusState {
             // End a previously healthy episode before this enqueue can cross
             // the pressure threshold again.
             let request_id = RequestId(self.allocate_id());
+            // An ordinary agent request needs the orchestrator's own answer,
+            // not the final of unrelated work already running.
+            // Persist this per recipient so steering, coalescing and restart
+            // retain the independent-turn boundary. Bus-generated notifications
+            // keep their existing delivery policy.
+            let independent = self.agent_request_queues(agent_id, &prompt.author, bus_generated);
             self.requests.insert(
                 request_id,
                 Request {
@@ -154,7 +160,7 @@ impl BusState {
                     pending_final: None,
                     completed_reply: None,
                     completed_at_ms: None,
-                    queue_only,
+                    queue_only: queue_only || independent,
                     bus_generated,
                     group: None,
                     steered: false,
