@@ -19,11 +19,19 @@ fn setup() -> (Worker, RoomId, AgentId, AgentId, PathBuf) {
         .create_agent(master, "room-orch", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
     w.state.bind_orchestrator(orch, room).unwrap();
+    w.transport = Box::new(Located {
+        pane: Some(owned_pane_info()),
+        agent_owned: true,
+    });
     (w, room, sender, orch, dir)
 }
 
 fn caller() -> serde_json::Value {
-    json!({"launch_id":"owner-launch","pane_id":"w1:p2","agent_context":true})
+    let mut caller = process_caller();
+    caller["launch_id"] = json!("owner-launch");
+    caller["pane_id"] = json!("w1:p2");
+    caller["agent_context"] = json!(true);
+    caller
 }
 
 #[test]
@@ -321,16 +329,26 @@ fn sender_identity_request_id_replays_across_processes_only_for_the_same_author(
     assert!(retry.ok, "{retry:?}");
     assert_eq!(retry.result, first.result);
     assert_eq!(w.state.requests().count(), 1);
-    params["caller"] = json!({"launch_id":"orch-launch"});
+    params["caller"] = process_caller();
+    params["caller"]["launch_id"] = json!("orch-launch");
     w.state
         .set_agent_runtime_identity(
             orch,
             AgentRuntimeIdentity {
                 launch_id: Some("orch-launch".into()),
+                pane_id: Some("w1:orch".into()),
+                terminal_id: Some("term_orch".into()),
                 ..Default::default()
             },
         )
         .unwrap();
+    let mut pane = owned_pane_info();
+    pane.pane_id = "w1:orch".into();
+    pane.terminal_id = "term_orch".into();
+    w.transport = Box::new(Located {
+        pane: Some(pane),
+        agent_owned: true,
+    });
     let other = call(&mut w, "same-send", "message.send", params.clone());
     assert_eq!(other.error.unwrap().code, "id_conflict");
     params["text"] = json!("changed text");
@@ -339,4 +357,153 @@ fn sender_identity_request_id_replays_across_processes_only_for_the_same_author(
     assert_eq!(w.state.requests().count(), 1);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sender_identity_interrupt_follow_up_uses_the_recorded_developer_actor() {
+    let (mut w, room, target, _, dir) = setup();
+    w.state
+        .observe_status(target, RuntimeStatus::Idle, 1)
+        .unwrap();
+    let receipt = call(
+        &mut w,
+        "developer-interrupt",
+        "agent.interrupt",
+        json!({"agent":target.0.to_string()}),
+    );
+    assert!(receipt.ok, "{receipt:?}");
+    assert_eq!(receipt.result["author_id"], serde_json::Value::Null);
+    let params = json!({"room":room.0.to_string(),"to":[target.0.to_string()],"text":"after interrupt","caller":{"interrupt_request_id":"developer-interrupt"}});
+    let sent = call(&mut w, "interrupt-follow-up", "message.send", params);
+    assert!(sent.ok, "{sent:?}");
+    assert_eq!(
+        w.state.requests().last().unwrap().prompt.author,
+        Author::Developer
+    );
+    assert_eq!(w.store.load().unwrap().unwrap(), w.state);
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sender_identity_interrupt_context_cannot_be_forged_or_retargeted() {
+    let (mut w, room, target, orch, dir) = setup();
+    w.state
+        .observe_status(target, RuntimeStatus::Idle, 1)
+        .unwrap();
+    assert!(
+        call(
+            &mut w,
+            "valid-interrupt",
+            "agent.interrupt",
+            json!({"agent":target.0.to_string()})
+        )
+        .ok
+    );
+    assert!(
+        call(
+            &mut w,
+            "agent-interrupt",
+            "agent.interrupt",
+            json!({"agent":target.0.to_string(),"as":orch.0.to_string()})
+        )
+        .ok
+    );
+    assert!(
+        !call(
+            &mut w,
+            "failed-interrupt",
+            "agent.interrupt",
+            json!({"agent":"missing"})
+        )
+        .ok
+    );
+    assert!(call(&mut w, "not-an-interrupt", "message.send", json!({"room":room.0.to_string(),"as":orch.0.to_string(),"to":[target.0.to_string()],"text":"another command"})).ok);
+    for (proof, recipient) in [
+        ("missing", target),
+        ("failed-interrupt", target),
+        ("not-an-interrupt", target),
+        ("agent-interrupt", target),
+        ("valid-interrupt", orch),
+    ] {
+        let before = w.state.clone();
+        let sent = w.control_send(&json!({"room":room.0.to_string(),"to":[recipient.0.to_string()],"text":"untrusted follow-up","caller":{"interrupt_request_id":proof}}));
+        assert!(sent.unwrap_err().contains("pass --as <your name or id>"));
+        assert_eq!(w.state, before);
+    }
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sender_identity_exited_master_shell_does_not_reuse_its_inherited_launch() {
+    let (mut w, room, receiver, orch, dir) = setup();
+    w.state
+        .set_agent_runtime_identity(receiver, AgentRuntimeIdentity::default())
+        .unwrap();
+    w.state
+        .set_agent_runtime_identity(
+            orch,
+            AgentRuntimeIdentity {
+                launch_id: Some("exited-orch-launch".into()),
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for (agent_owned, exited) in [(false, false), (false, true), (true, true)] {
+        let mut pane = owned_pane_info();
+        pane.agent_process_exited = exited;
+        w.transport = Box::new(Located {
+            pane: Some(pane),
+            agent_owned,
+        });
+        let mut caller = process_caller();
+        caller["launch_id"] = json!("exited-orch-launch");
+        caller["pane_id"] = json!("w1:p2");
+        caller["agent_context"] = json!(true);
+        let before = w.state.clone();
+        let sent = w.control_send(&json!({"room":room.0.to_string(),"to":[receiver.0.to_string()],"text":"retained developer shell","caller":caller}));
+        assert_eq!(
+            w.state, before,
+            "released native pane reused its old agent: {sent:?}"
+        );
+        assert!(sent.unwrap_err().contains("pass --as <your name or id>"));
+    }
+    drop(w);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sender_identity_native_lookup_logs_the_refusal_cause_without_message_content() {
+    struct FailedLookup;
+    impl Transport for FailedLookup {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::PaneLocateProcess(_)));
+            Err(TransportError {
+                code: Some("caller_unknown".into()),
+                message: "stale process incarnation".into(),
+                definitely_rejected: true,
+            })
+        }
+    }
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut w, room, _, _, dir) = setup();
+        w.transport = Box::new(FailedLookup);
+        let before = w.state.clone();
+        let sent = w.control_send(&json!({"room":room.0.to_string(),"to":["orchestrator"],"text":"PRIVATE_SEND_BODY","caller":process_caller()}));
+        assert!(sent.unwrap_err().contains("pass --as <your name or id>"));
+        assert_eq!(w.state, before);
+        drop(w);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+    let logs = capture.text();
+    assert!(logs.contains("bus.send.caller_lookup_failed"), "{logs}");
+    assert!(
+        logs.contains("caller_unknown") && logs.contains("stale process incarnation"),
+        "{logs}"
+    );
+    assert!(!logs.contains("PRIVATE_SEND_BODY"), "{logs}");
 }

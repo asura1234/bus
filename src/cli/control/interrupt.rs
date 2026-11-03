@@ -82,6 +82,10 @@ pub(super) fn run(
         json!({"room": conversation.to_string(), "to": recipients, "text": text, "files": []});
     if let Some(author) = author {
         params["as"] = author;
+    } else {
+        // This operation already chose the developer. Bind to that receipt,
+        // rather than infer a different actor from the CLI process's pane.
+        params["caller"] = json!({"interrupt_request_id": receipt.id});
     }
     let sent = super::execute(
         ParsedCommand {

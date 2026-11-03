@@ -140,3 +140,72 @@ fn sender_identity_cli_external_shell_carries_process_identity() {
         .is_some());
     assert_eq!(request["params"]["caller"]["agent_context"], false);
 }
+
+#[test]
+fn sender_identity_cli_interrupt_follow_up_keeps_the_resolved_developer_actor() {
+    let root = crate::fixture_dirs::unique_temp_path("bus-interrupt-actor");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let listener = UnixListener::bind(root.join("control.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut requests = Vec::new();
+        while requests.len() < 2 && std::time::Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("{error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let result = if requests.is_empty() {
+                serde_json::json!({"room_id":7,"conversation_room_id":7,"author_id":null,"agents":[{"agent_id":2,"name":"receiver","outcome":"already_idle"}]})
+            } else {
+                serde_json::json!({"message_id":3,"request_ids":[4],"stage":"queued"})
+            };
+            let response =
+                serde_json::json!({"id":request["id"],"ok":true,"result":result,"error":null});
+            writeln!(stream, "{response}").unwrap();
+            requests.push(request);
+        }
+        requests
+    });
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("BUS_") || key.to_string_lossy().starts_with("HERDR_")
+        {
+            command.env_remove(key);
+        }
+    }
+    let output = command
+        .args(["agent", "interrupt", "receiver", "--text", "follow-up"])
+        .env("BUS_DATA_DIR", &root)
+        .env("BUS_LAUNCH_ID", "agent-launch")
+        .env("HERDR_PANE_ID", "w1:p2")
+        .output()
+        .unwrap();
+    let requests = server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["method"], "agent.interrupt");
+    assert_eq!(requests[1]["method"], "message.send");
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["result"]["author_id"], serde_json::Value::Null);
+    assert_eq!(
+        requests[1]["params"]["caller"]["interrupt_request_id"],
+        requests[0]["id"]
+    );
+    assert!(requests[1]["params"]["caller"].get("launch_id").is_none());
+    assert!(requests[1]["params"].get("as").is_none());
+}

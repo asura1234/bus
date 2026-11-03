@@ -31,6 +31,12 @@ impl Worker {
         };
         let caller: SendCaller =
             serde_json::from_value(caller.clone()).map_err(|_| UNKNOWN_CALLER.to_owned())?;
+        if caller.interrupt_request_id.is_some() {
+            return self
+                .developer_interrupt_follow_up(room, p, &caller)
+                .then_some(None)
+                .ok_or_else(|| UNKNOWN_CALLER.to_owned());
+        }
         if caller.launch_id.is_some() {
             let (agent, ambiguous) = {
                 let mut candidates = self.state.agents().filter(|agent| {
@@ -51,7 +57,12 @@ impl Worker {
                 return Err(UNKNOWN_CALLER.into());
             }
             if let Some(agent) = agent {
-                return Ok(Some(agent));
+                // Inherited hints survive provider exit. The native pane must
+                // still be owned by this same live agent incarnation.
+                let author = self.process_author(&caller)?;
+                return (author == Some(agent))
+                    .then_some(author)
+                    .ok_or_else(|| UNKNOWN_CALLER.to_owned());
             }
             // A stale launch cannot acquire a replacement's pane identity.
             return Err(UNKNOWN_CALLER.into());
@@ -59,11 +70,74 @@ impl Worker {
         self.process_author(&caller)
     }
 
+    /// Only the internal follow-up of a successful developer interrupt can
+    /// reuse its actor. Missing/failed receipts and other targets never qualify.
+    fn developer_interrupt_follow_up(&self, room: RoomId, p: &Value, caller: &SendCaller) -> bool {
+        if caller.launch_id.is_some()
+            || caller.pane_id.is_some()
+            || caller.process.is_some()
+            || caller.agent_context
+            || caller.bus_context
+        {
+            return false;
+        }
+        let Some(receipt) = caller
+            .interrupt_request_id
+            .as_ref()
+            .and_then(|id| self.control_receipts.get(id))
+            .filter(|r| r.request.method == "agent.interrupt" && r.response.ok)
+        else {
+            return false;
+        };
+        let result = &receipt.response.result;
+        if result.get("author_id") != Some(&Value::Null)
+            || result
+                .get("conversation_room_id")
+                .or_else(|| result.get("room_id"))
+                .and_then(Value::as_u64)
+                != Some(room.0)
+        {
+            return false;
+        }
+        let Some(targets) = p.get("to").and_then(Value::as_array) else {
+            return false;
+        };
+        let Some(rows) = result.get("agents").and_then(Value::as_array) else {
+            return false;
+        };
+        targets.iter().all(|target| {
+            rows.iter().any(|row| {
+                target
+                    .as_str()
+                    .zip(row["agent_id"].as_u64())
+                    .is_some_and(|(target, id)| target == id.to_string())
+                    && matches!(
+                        row["outcome"].as_str(),
+                        Some("already_idle" | "interrupting" | "stopped")
+                    )
+            })
+        })
+    }
+
     fn process_author(&mut self, caller: &SendCaller) -> Result<Option<AgentId>, String> {
         let process = caller.process.ok_or(UNKNOWN_CALLER)?;
         let location = match self.transport.request(Method::PaneLocateProcess(process)) {
             Ok(ResponseResult::CallerLocation { location }) => location,
-            _ => return Err(UNKNOWN_CALLER.into()),
+            Err(error) => {
+                tracing::debug!(event = "bus.send.caller_lookup_failed",
+                    error_code = ?error.code, detail = %error.message,
+                    caller_pid = process.pid, "Native caller lookup refused");
+                return Err(UNKNOWN_CALLER.into());
+            }
+            Ok(_) => {
+                tracing::debug!(
+                    event = "bus.send.caller_lookup_failed",
+                    error_code = "unexpected_response",
+                    caller_pid = process.pid,
+                    "Native caller lookup returned an unexpected response"
+                );
+                return Err(UNKNOWN_CALLER.into());
+            }
         };
         let Some(pane) = location.pane else {
             return if !location.agent_owned
@@ -88,7 +162,11 @@ impl Worker {
                 && agent.runtime_identity.terminal_id.as_ref() == Some(&pane.terminal_id)
         });
         if let Some(agent) = candidates.next() {
-            return if agent.deletion_pending || candidates.next().is_some() {
+            return if agent.deletion_pending
+                || candidates.next().is_some()
+                || !location.agent_owned
+                || pane.agent_process_exited
+            {
                 Err(UNKNOWN_CALLER.into())
             } else {
                 Ok(Some(agent.id))

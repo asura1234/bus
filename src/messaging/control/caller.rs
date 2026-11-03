@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct SendCaller {
+    /// Internal follow-ups reuse the actor of a successful interrupt receipt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) interrupt_request_id: Option<String>,
     pub(crate) launch_id: Option<String>,
     pub(crate) pane_id: Option<String>,
     pub(crate) agent_context: bool,
@@ -27,6 +30,7 @@ pub(super) fn capture() -> SendCaller {
         birth: process.birth,
     });
     SendCaller {
+        interrupt_request_id: None,
         launch_id,
         pane_id,
         agent_context,
