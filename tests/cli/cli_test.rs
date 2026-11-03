@@ -12,5 +12,8 @@ mod help;
 mod live_bus_env;
 #[path = "paths_test.rs"]
 mod paths;
+#[cfg(unix)]
+#[path = "sender_identity_test.rs"]
+mod sender_identity;
 #[path = "variant_test.rs"]
 mod variant;

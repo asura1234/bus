@@ -543,6 +543,37 @@ pub fn process_exists(pid: u32) -> bool {
     }
 }
 
+/// Only caller attribution uses this ordering; provider process facts are unchanged.
+pub(crate) fn caller_precedes_server_macos(
+    ancestor: crate::platform::ProcessInstance,
+    server: crate::platform::ProcessInstance,
+) -> Option<bool> {
+    let live = || {
+        crate::platform::process_still_live(ancestor.pid, ancestor.birth)
+            && crate::platform::process_still_live(server.pid, server.birth)
+    };
+    if !live() {
+        return None;
+    }
+    let ancestor_start = caller_monotonic_start(ancestor.pid)?;
+    let server_start = caller_monotonic_start(server.pid)?;
+    live().then_some(ancestor_start < server_start)
+}
+
+fn caller_monotonic_start(pid: u32) -> Option<u64> {
+    let pid = libc::pid_t::try_from(pid).ok()?;
+    let mut usage: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::proc_pid_rusage(
+            pid,
+            libc::RUSAGE_INFO_V2,
+            std::ptr::addr_of_mut!(usage).cast(),
+        )
+    };
+    (result == 0 && usage.ri_proc_start_abstime != 0 && usage.ri_proc_exit_abstime == 0)
+        .then_some(usage.ri_proc_start_abstime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

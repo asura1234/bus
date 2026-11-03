@@ -484,6 +484,12 @@ impl TerminalRuntime {
         (pid > 0).then_some(pid)
     }
 
+    /// Original PTY child incarnation, retained even after exit. Compare it
+    /// with live ancestry so a reused PID cannot acquire this pane's identity.
+    pub(crate) fn child_process_instance(&self) -> Option<crate::platform::ProcessInstance> {
+        self.child_instance
+    }
+
     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
         #[cfg(unix)]
         {

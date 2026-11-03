@@ -134,6 +134,9 @@ fn run_with_pause(
                 reply_author = command.params["as"].as_str().map(str::to_owned);
             }
             let sent = execute_with_pause(command, &mut *send, &mut pause);
+            if reply_author.is_none() {
+                reply_author = sent.result["author_id"].as_u64().map(|id| id.to_string());
+            }
             if follow && sent.ok {
                 let selector = match &reply_author {
                     Some(author) => {

@@ -102,6 +102,23 @@ pub fn process_ancestry(pid: u32) -> Vec<ProcessInstance> {
     chain
 }
 
+/// Caller-only proof from monotonic macOS start stamps. Unsupported or
+/// unreadable metadata is unknown; opaque incarnation stamps stay equality-only.
+pub(crate) fn caller_precedes_server(
+    ancestor: ProcessInstance,
+    server: ProcessInstance,
+) -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        process::caller_precedes_server_macos(ancestor, server)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (ancestor, server);
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
     Hangup,

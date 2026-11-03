@@ -123,17 +123,7 @@ impl Worker {
             return self.control_reply(p);
         }
         let room = self.control_room(required(p, "room")?)?;
-        let author = match p.get("as") {
-            None => None,
-            Some(selector) => Some(
-                self.control_author(
-                    room,
-                    selector
-                        .as_str()
-                        .ok_or("Author must be an agent name or ID")?,
-                )?,
-            ),
-        };
+        let author = self.send_author(room, p)?;
         if let Some(error) = self.master_send_refusal(room, author) {
             return Err(error);
         }
@@ -209,7 +199,11 @@ impl Worker {
                 "persisted",
             );
         }
-        Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
+        let mut receipt = json!({"message_id":message,"request_ids":ids,"stage":"queued"});
+        if author.is_some() && p.get("as").is_none() && p.get("caller").is_some() {
+            receipt["author_id"] = json!(author);
+        }
+        Ok(receipt)
     }
 
     /// Only new agent sends are restricted. Correlated answers take their room
@@ -236,16 +230,17 @@ impl Worker {
     }
 
     /// Preserve the send refusal's structured code without parsing error text.
-    pub(super) fn master_reserved_response(&self, command: &ControlRequest) -> Option<Response> {
+    pub(super) fn master_reserved_response(
+        &mut self,
+        command: &ControlRequest,
+    ) -> Option<Response> {
         if command.method != "message.send" || command.params.get("reply_to").is_some() {
             return None;
         }
         let room = self
             .control_room(required(&command.params, "room").ok()?)
             .ok()?;
-        let author = self
-            .control_author(room, required(&command.params, "as").ok()?)
-            .ok()?;
+        let author = self.send_author(room, &command.params).ok().flatten()?;
         self.master_send_refusal(room, Some(author))
             .map(|error| Response::failure(&command.id, "master_reserved", error))
     }
@@ -265,7 +260,7 @@ impl Worker {
 
     /// Resolve the same validated identity for both the mutation and its error
     /// diagnostic, so invalid selectors/flags cannot disclose another answer.
-    fn reply_context(&self, p: &Value) -> Result<(PromptId, AgentId), String> {
+    fn reply_context(&mut self, p: &Value) -> Result<(PromptId, AgentId), String> {
         if ["room", "to", "queue", "files"]
             .iter()
             .any(|key| p.get(key).is_some())
@@ -283,7 +278,9 @@ impl Worker {
             .next()
             .ok_or("Unknown reply-to message ID")?
             .room_id;
-        let author = self.control_author(room, required(p, "as")?)?;
+        let author = self
+            .send_author(room, p)?
+            .ok_or("A reply requires an agent caller; pass --as <your name or id>")?;
         if self
             .state
             .agent(author)
@@ -296,7 +293,7 @@ impl Worker {
 
     /// Classify a failed correlated send from durable domain state, without
     /// parsing error strings or changing the model's first-answer rules.
-    pub(super) fn reply_conflict_response(&self, command: &ControlRequest) -> Option<Response> {
+    pub(super) fn reply_conflict_response(&mut self, command: &ControlRequest) -> Option<Response> {
         if command.method != "message.send" || command.params.get("reply_to").is_none() {
             return None;
         }

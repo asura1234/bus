@@ -130,6 +130,8 @@ pub enum Method {
     PaneCurrent(PaneCurrentParams),
     #[serde(rename = "pane.get")]
     PaneGet(PaneTarget),
+    #[serde(rename = "pane.locate_process")]
+    PaneLocateProcess(super::ReportingProcess),
     #[serde(rename = "pane.focus")]
     PaneFocus(PaneTarget),
     #[serde(rename = "pane.input.set")]
@@ -215,6 +217,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneList(_) => "pane.list",
         Method::PaneCurrent(_) => "pane.current",
         Method::PaneGet(_) => "pane.get",
+        Method::PaneLocateProcess(_) => "pane.locate_process",
         Method::PaneFocus(_) => "pane.focus",
         Method::PaneInputSet(_) => "pane.input.set",
         Method::PaneLinkActivate(_) => "pane.link.activate",

@@ -14,8 +14,8 @@ restart; interrupt and deletion cancel them. Raw failure and retry/reset details
 belong to the client log. Permanent errors retain their terminal failure handling.
 
 Deleted participants render as `NAME [deleted]` in history and message status.
-Retired identities are never resumed runtimes. Stale recipient IDs may forward
-under the original-room rules; live names take precedence. Room history
+Retired identities are never resumed runtimes. Stale recipient IDs are refused rather than forwarded; names resolve to
+current live agents, or fail if no live match exists. Room history
 accepts a deleted room's numeric ID. Live room names resolve first; deleted names
 are a fallback when unambiguous among deleted rooms. An old archive
 that lacks identity tombstones remains readable with `Agent ID [deleted]` as the
@@ -45,8 +45,8 @@ Permanent retention cannot have a fixed total disk limit for an unlimited number
 of messages. The archive grows linearly with unique requests and notices, plus
 retry duplicates that startup compaction removes. Active message bodies retain a
 ten-minute settled window; routing data retains its recent/pending window. The
-canonical map retains one compact record per removed ID while stale-ID forwarding
-is supported. Message archival and pruning never prune that identity map.
+canonical map retains one compact record per removed ID for deletion labels and
+stale-selector diagnostics. Message archival and pruning never prune that identity map.
 Snapshots share the archive rather than cloning message bodies; the current
 implementation still indexes the full archive in memory. Startup, per-tick
 archive and delivery passes, and history rendering scan the merged archive, so

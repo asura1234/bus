@@ -31,7 +31,7 @@ fn retired_room_notes_is_absent_from_cli_and_help() {
 }
 
 #[test]
-fn reply_to_infers_the_conversation_and_requires_an_explicit_recipient_identity() {
+fn reply_to_infers_the_conversation_with_explicit_or_inferred_recipient_identity() {
     let parsed = command(&[
         "send",
         "--reply-to",
@@ -67,7 +67,13 @@ fn reply_to_infers_the_conversation_and_requires_an_explicit_recipient_identity(
         args.extend(extra);
         assert!(command(&args).is_err(), "{args:?}");
     }
-    assert!(command(&["send", "--reply-to", "123", "--text", "done"]).is_err());
+    assert!(command(&["send", "--reply-to", "123", "--text", "done"]).is_ok());
+}
+
+#[test]
+fn sender_identity_reply_to_without_as_defers_author_resolution_to_the_caller() {
+    let parsed = command(&["send", "--reply-to", "123", "--text", "done"]).unwrap();
+    assert_eq!(parsed.params, json!({"reply_to":"123","text":"done"}));
 }
 
 #[test]

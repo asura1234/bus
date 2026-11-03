@@ -1,4 +1,6 @@
+mod caller;
 mod client;
+pub(crate) use caller::SendCaller;
 mod protocol;
 pub(crate) mod server;
 pub(crate) use client::{request, request_with_timeout, undelivered};

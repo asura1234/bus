@@ -106,6 +106,9 @@ mod io;
 #[path = "close_test.rs"]
 mod close;
 
+#[path = "caller_test.rs"]
+mod caller;
+
 #[test]
 fn api_pane_report_agent_session_preserves_session_identity_and_detected_state() {
     let (mut app, public_pane_id) = app_with_test_workspace();

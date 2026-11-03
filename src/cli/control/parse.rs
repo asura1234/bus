@@ -72,7 +72,7 @@ pub(super) fn cli() -> Command {
                         .long("to")
                         .required_unless_present("reply-to"),
                 )
-                .arg(value_arg("reply-to").long("reply-to").requires("as"))
+                .arg(value_arg("reply-to").long("reply-to"))
                 .arg(
                     value_arg("text")
                         .long("text")
@@ -587,17 +587,20 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
                     format!("'{}'", value.replace('\'', "'\\''"))
                 }
             };
+            let author = args
+                .get_one::<String>("as")
+                .map(|author| format!(" --as={}", quote(author)))
+                .unwrap_or_default();
             return Err(format!(
-                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --async and --file. Use: bus send --reply-to {} --as={} --text '...'",
-                quote(message), quote(required(args, "as")?)
+                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --async and --file. Use: bus send --reply-to {}{} --text '...'",
+                quote(message), author
             ));
         }
-        return Ok((
-            json!({
-                "reply_to":message, "as":required(args,"as")?, "text":required(args,"text")?,
-            }),
-            false,
-        ));
+        let mut params = json!({"reply_to":message,"text":required(args,"text")?});
+        if let Some(author) = args.get_one::<String>("as") {
+            params["as"] = json!(author);
+        }
+        return Ok((params, false));
     }
     let recipients: Vec<_> = required(args, "to")?.split(',').collect();
     if recipients

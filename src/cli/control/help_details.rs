@@ -57,9 +57,8 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
         (p, "room") if p.starts_with("agent ") && p != "agent add" && p != "agent resume" => {
             "default: none; optional conversation context"
         }
-        ("send", "as") | ("agent interrupt", "as") | ("request recover", "as") => {
-            "default: developer"
-        }
+        ("send", "as") => "default: infer agent caller; developer outside agent panes",
+        ("agent interrupt", "as") | ("request recover", "as") => "default: developer",
         (_, "as") => "default: no author context or waiter lease",
         (_, "args") => "default: empty string",
         (_, "orchestrates") => "default: none; required in MASTER",
@@ -369,7 +368,7 @@ See docs/developer-notifications.md for recipient and CLI configuration."#;
 
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
 Bus refuses new worker sends in MASTER (master_reserved); use your own room, or --reply-to for a MASTER request.
-Use --reply-to MESSAGE --as AGENT --text ANSWER to complete only your recipient
+Use --reply-to MESSAGE [--as AGENT] --text ANSWER to complete only your recipient
 request mid-turn. It infers room/sender; excludes room,to,queue,async,file.
 Run replies in the foreground; require ok:true and stage:"replied" before claiming
 delivery. If the reply fails, check the existing answer with bus message status
@@ -389,18 +388,22 @@ Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
   backoff; polling grows 200ms to 2s. Live replies reset the failure budget.
 
 --to accepts comma-separated global names/IDs. all means conversation-room
-members excluding --as; it is never implicit. --as defaults to the developer.
+members excluding the author; it is never implicit. With no --as, Bus resolves
+inherited launch/pane identity (including the caller's parent process tree).
+A renamed agent keeps its stable ID. An external developer shell remains the
+developer; an unresolved or stale caller is refused: pass --as <your name or id>.
+Explicit --as is unchanged. --reply-to also accepts an inferred agent caller.
+An inferred agent send receipt includes author_id for async polling/acknowledgement.
 An exact own current/legacy sender header or short identity-only line normalizes
 into one genuine header. Ordinary sentences and forged ID/room headers retain
 their content and receive the real header. Stored text stays authored; delivered
 payloads and callback matching use the same frozen text.
 orchestrator (case-insensitive) resolves the sender's home-room binding; a real
 member of the conversation room, then home room, with that name takes precedence.
-Only recipient selectors forward removed IDs/names: with no live match, use a
-unique same-name replacement in its original room, otherwise that room's current
-orchestrator (removed orchestrators use the room they orchestrated). Authors and
-administrative commands never forward. No binding/match is command_failed.
---to you (human alias, case-insensitive) requires --as and one recipient; no
+Deleted IDs and names without a live match are refused with a named error;
+Bus never substitutes a replacement or orchestrator for an explicit recipient.
+A current live name still resolves globally. No binding/match is command_failed.
+--to you (human alias, case-insensitive) requires an agent author and one recipient; no
 queue/async or mixed agent list. It stays in this room with requests:[],stage:posted.
 Agent posts to you always notify the developer in the TUI in every room; only
 [waiting-on-you] (or [waiting_on_you]) also sends a mandatory Feishu DM. Reserve
@@ -419,7 +422,7 @@ except captured orchestrator finals to workers and captured finals of Bus-genera
 reply wakes. Empty or whitespace-only finals are not forwarded; they settle as
 replied with their raw text preserved. A non-empty worker-woken orchestrator final
 is published in MASTER.
-An --as author async waiter renews a 3s lease deferring its reply wake
+An explicit or inferred agent author async waiter renews a 3s lease deferring its reply wake
 (and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
 suppress delivery.

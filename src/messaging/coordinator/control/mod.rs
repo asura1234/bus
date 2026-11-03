@@ -5,6 +5,7 @@ mod inspect;
 mod messages;
 mod rooms;
 mod selectors;
+mod sender;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod ui_hits;
 
@@ -32,6 +33,7 @@ const CONTROL_RECEIPT_LIMIT: usize = 1024;
 pub(super) struct ControlReceipt {
     request: ControlRequest,
     response: Response,
+    inferred_sender: Option<Author>,
     at: std::time::Instant,
     bytes: usize,
 }
@@ -54,8 +56,8 @@ impl Worker {
                 "Request ID must contain 1–128 bytes",
             );
         }
-        if let Some(response) = self.replay_control_response(request) {
-            return response;
+        if self.control_receipts.contains_key(&request.id) {
+            return self.replay_control_receipt(request);
         }
         // Only a published, process-bound restart may request normal quit in
         // a non-dev session. Ordinary `quit` retains its dev-tier contract.
@@ -130,33 +132,19 @@ impl Worker {
         if mutation {
             self.control_receipt_bytes = self.control_receipt_bytes.saturating_add(reserve);
             self.control_receipt_order.push_back(request.id.clone());
+            let inferred_sender = self.receipt_sender(request, &response);
             self.control_receipts.insert(
                 request.id.clone(),
                 ControlReceipt {
                     request: request.clone(),
                     response: response.clone(),
+                    inferred_sender,
                     at: std::time::Instant::now(),
                     bytes: reserve,
                 },
             );
         }
         response
-    }
-
-    fn replay_control_response(&self, request: &ControlRequest) -> Option<Response> {
-        let receipt = self.control_receipts.get(&request.id)?;
-        Some(
-            if receipt.request.method == request.method && receipt.request.params == request.params
-            {
-                receipt.response.clone()
-            } else {
-                Response::failure(
-                    &request.id,
-                    "id_conflict",
-                    "Request ID already used with different parameters",
-                )
-            },
-        )
     }
 
     fn reserve_control_receipt(
@@ -491,7 +479,9 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "message.send",
         "send",
-        &["room", "to", "text", "files", "as", "queue", "reply_to"],
+        &[
+            "room", "to", "text", "files", "as", "queue", "reply_to", "caller",
+        ],
         true,
         Tier::Agent,
     ),

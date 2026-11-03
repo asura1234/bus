@@ -427,7 +427,7 @@ fn open_messaging_member_name_keeps_its_owner_after_duplicate_additions_are_reje
 }
 
 #[test]
-fn staffing_stale_id_forwards_only_to_same_room_replacement_or_its_orchestrator() {
+fn staffing_stale_id_refuses_both_room_orchestrator_and_same_name_replacement() {
     let (mut w, room, author, dir) = fixture();
     let old = add(&mut w, room, &dir, "owner");
     w.state.delete_agent(old, 100).unwrap();
@@ -437,8 +437,9 @@ fn staffing_stale_id_forwards_only_to_same_room_replacement_or_its_orchestrator(
     let orch = add(&mut w, master, &dir, "orch");
     w.state.bind_orchestrator(orch, room).unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "merge notice");
-    assert!(response.ok, "{response:?}");
-    assert_eq!(w.state.requests().last().unwrap().agent_id, orch);
+    assert!(!response.ok, "{response:?}");
+    assert!(error_message(&response).contains("deleted"));
+    assert_eq!(w.state.requests().count(), 0);
     assert!(w
         .state
         .create_agent(room, "owner", Provider::Codex, dir.clone(), None)
@@ -447,7 +448,11 @@ fn staffing_stale_id_forwards_only_to_same_room_replacement_or_its_orchestrator(
     let replacement = add(&mut w, room, &dir, "owner");
     let state: BusState = serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     w.state = state;
-    assert!(send(&mut w, room, author, &old.0.to_string(), "next notice").ok);
+    let refused = send(&mut w, room, author, &old.0.to_string(), "next notice");
+    assert!(!refused.ok);
+    assert!(error_message(&refused).contains("deleted"));
+    assert_eq!(w.state.requests().count(), 0);
+    assert!(send(&mut w, room, author, "owner", "current name").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, replacement);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -476,7 +481,7 @@ fn staffing_state_exposes_agent_queue_depth_and_oldest_age() {
 }
 
 #[test]
-fn staffing_tombstones_forward_names_but_never_authors_or_admin_commands() {
+fn staffing_tombstones_refuse_old_ids_while_current_names_remain_global() {
     let (mut w, room, author, dir) = fixture();
     let old = add(&mut w, room, &dir, "departed");
     w.state.delete_agent(old, 100).unwrap();
@@ -511,7 +516,7 @@ fn staffing_tombstones_forward_names_but_never_authors_or_admin_commands() {
         .ok
     );
     assert_eq!(w.state.requests().last().unwrap().agent_id, live);
-    // A retired numeric ID still retains its original-room affinity.
+    // A retired numeric ID never names a replacement.
     assert!(
         !send(
             &mut w,
@@ -580,7 +585,7 @@ fn removed_local_name_does_not_divert_a_unique_live_agent_elsewhere_to_the_orche
 }
 
 #[test]
-fn removed_orchestrator_id_forwards_to_the_rooms_current_orchestrator() {
+fn removed_orchestrator_id_is_refused_while_alias_resolves_the_current_orchestrator() {
     let (mut w, room, author, dir) = fixture();
     let master = w.state.master_room().unwrap().id;
     let first = add(&mut w, master, &dir, "orch-a");
@@ -589,14 +594,17 @@ fn removed_orchestrator_id_forwards_to_the_rooms_current_orchestrator() {
     let second = add(&mut w, master, &dir, "orch-b");
     w.state.bind_orchestrator(second, room).unwrap();
     let response = send(&mut w, room, author, &first.0.to_string(), "merge notice");
-    assert!(response.ok, "{response:?}");
+    assert!(!response.ok, "{response:?}");
+    assert!(error_message(&response).contains("deleted"));
+    assert_eq!(w.state.requests().count(), 0);
+    assert!(send(&mut w, room, author, "orchestrator", "current alias").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, second);
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn retired_orchestrator_id_keeps_its_work_room_when_its_name_is_reused_elsewhere() {
+fn retired_orchestrator_id_is_refused_when_its_name_is_reused_elsewhere() {
     let (mut w, room, author, dir) = fixture();
     let master = w.state.master_room().unwrap().id;
     let old = add(&mut w, master, &dir, "orch");
@@ -609,7 +617,10 @@ fn retired_orchestrator_id_keeps_its_work_room_when_its_name_is_reused_elsewhere
     w.state.bind_orchestrator(current, room).unwrap();
     w.state = serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "late room notice");
-    assert!(response.ok, "{response:?}");
+    assert!(!response.ok, "{response:?}");
+    assert!(error_message(&response).contains("deleted"));
+    assert_eq!(w.state.requests().count(), 0);
+    assert!(send(&mut w, room, author, "orchestrator", "current room alias").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, current);
     assert!(send(&mut w, room, author, "orch", "message to the live name").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, unrelated);
@@ -618,7 +629,7 @@ fn retired_orchestrator_id_keeps_its_work_room_when_its_name_is_reused_elsewhere
 }
 
 #[test]
-fn retired_numeric_id_keeps_replacement_ambiguity_after_storage_roundtrip() {
+fn retired_numeric_id_is_refused_even_with_ambiguous_replacements_after_storage_roundtrip() {
     let (mut w, room, author, dir) = fixture();
     let old = add(&mut w, room, &dir, "owner");
     w.state.delete_agent(old, 100).unwrap();
@@ -633,7 +644,7 @@ fn retired_numeric_id_keeps_replacement_ambiguity_after_storage_roundtrip() {
     w.state = w.store.load().unwrap().unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "late notice");
     assert!(!response.ok);
-    assert!(error_message(&response).contains("Ambiguous replacement"));
+    assert!(error_message(&response).contains("deleted"));
     let response = send(&mut w, room, author, "owner", "live ambiguity");
     assert!(!response.ok);
     assert!(error_message(&response).contains("Ambiguous"));

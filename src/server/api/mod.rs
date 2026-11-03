@@ -205,6 +205,7 @@ impl App {
             Method::PaneList(params) => self.handle_pane_list(id, params),
             Method::PaneCurrent(params) => self.handle_pane_current(id, params),
             Method::PaneGet(target) => self.handle_pane_get(id, target),
+            Method::PaneLocateProcess(process) => self.handle_pane_locate_process(id, process),
             Method::PaneFocus(target) => self.handle_pane_focus(id, target),
             Method::PaneInputSet(params) => self.handle_pane_input_set(id, params),
             Method::PaneLinkActivate(params) => self.handle_pane_link_activate(id, params),

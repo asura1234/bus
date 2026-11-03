@@ -48,6 +48,16 @@ pub(crate) fn request_with_timeout(
     ipc::validate_private_socket_directory(data_dir).map_err(|e| {
         format!("control_unavailable: connect to a private existing Bus data directory: {e}")
     })?;
+    let prepared = (request.method == "message.send"
+        && request.params.is_object()
+        && request.params.get("as").is_none()
+        && request.params.get("caller").is_none())
+    .then(|| {
+        let mut prepared = request.clone();
+        prepared.params["caller"] = serde_json::json!(super::caller::capture());
+        prepared
+    });
+    let request = prepared.as_ref().unwrap_or(request);
     let bytes = encode(request, MAX_REQUEST_BYTES)
         .map_err(|_| "request_too_large: request exceeds 256 KiB".to_string())?;
     let remaining = deadline.saturating_duration_since(Instant::now());
