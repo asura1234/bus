@@ -445,7 +445,12 @@ fn paused_worker_rejects_send_without_touching_native_transport() {
     let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
     let (commands, receiver) = mpsc::sync_channel(4);
     let (events, received) = mpsc::channel();
-    commands.send((1, BusCommand::Submit(room))).unwrap();
+    commands
+        .send((
+            1,
+            BusCommand::Submit(room, worker.state.room(room).unwrap().draft.clone()),
+        ))
+        .unwrap();
     commands.send((2, BusCommand::Shutdown)).unwrap();
     worker.run(receiver, events, snapshots);
     assert!(received.try_iter().any(|event| {
@@ -480,6 +485,43 @@ fn storage_retry_delay_doubles_and_stops_at_thirty_seconds() {
 }
 
 #[test]
+fn restart_replays_the_exact_submitted_draft_before_later_typing() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let (events, _) = mpsc::channel();
+    worker
+        .command(
+            BusCommand::SetRecipients(room, [agent].into_iter().collect()),
+            &events,
+        )
+        .unwrap();
+    let sent = crate::messaging::model::Draft {
+        text: "sent exactly once".into(),
+        files: vec![],
+        recipient_ids: [agent].into(),
+    };
+    worker
+        .command(BusCommand::Submit(room, sent), &events)
+        .unwrap();
+    worker
+        .command(
+            BusCommand::SetDraftText(room, "later typing".into()),
+            &events,
+        )
+        .unwrap();
+
+    let durable = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    let prompts = durable.requests().collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].prompt.text, "sent exactly once");
+    assert_eq!(durable.room(room).unwrap().draft.text, "later typing");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn journaled_drafts_and_sends_are_durable_and_survive_a_paused_full_save() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let (events, received) = mpsc::channel();
@@ -493,7 +535,12 @@ fn journaled_drafts_and_sends_are_durable_and_survive_a_paused_full_save() {
     worker
         .command(BusCommand::SetDraftText(room, "ship it".into()), &events)
         .unwrap();
-    worker.command(BusCommand::Submit(room), &events).unwrap();
+    worker
+        .command(
+            BusCommand::Submit(room, worker.state.room(room).unwrap().draft.clone()),
+            &events,
+        )
+        .unwrap();
     worker
         .command(BusCommand::SetDraftText(room, "next".into()), &events)
         .unwrap();

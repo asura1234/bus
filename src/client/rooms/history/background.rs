@@ -1,7 +1,10 @@
 //! One coalescing worker owns expensive layouts. Compose only exchanges Arcs.
 use super::super::thumbnails::Thumbnails;
-use super::{History, Line};
-use crate::messaging::{coordinator::BusSnapshot, model::RoomId};
+use super::{History, Line, LocalSendStatus};
+use crate::messaging::{
+    coordinator::BusSnapshot,
+    model::{PromptId, RoomId},
+};
 use crate::protocol::kitty::HostCellSize;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -29,6 +32,7 @@ struct Job {
     key: Key,
     generation: u64,
     snapshot: Arc<BusSnapshot>,
+    submissions: BTreeMap<PromptId, LocalSendStatus>,
     now: u64,
 }
 
@@ -178,6 +182,21 @@ impl Background {
             _thread: thread,
         })
     }
+
+    fn apply_completed(&mut self, key: Key) {
+        let completed = {
+            let mut mailbox = self
+                .shared
+                .mailbox
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            self.shared.ready.store(false, Ordering::Relaxed);
+            mailbox.result.take()
+        };
+        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
+            self.layouts.insert(layout.key.room, layout);
+        }
+    }
 }
 
 impl Drop for Background {
@@ -217,6 +236,7 @@ impl History {
         self.projected = 0;
     }
 
+    #[cfg(test)]
     pub(in crate::client::rooms) fn request_lines(
         &mut self,
         snapshot: Arc<BusSnapshot>,
@@ -224,6 +244,25 @@ impl History {
         width: u16,
         now: u64,
         thumbnails: &mut Thumbnails,
+    ) {
+        self.request_lines_with_submissions(
+            snapshot,
+            room,
+            width,
+            now,
+            thumbnails,
+            Default::default(),
+        );
+    }
+
+    pub(in crate::client::rooms) fn request_lines_with_submissions(
+        &mut self,
+        snapshot: Arc<BusSnapshot>,
+        room: RoomId,
+        width: u16,
+        now: u64,
+        thumbnails: &mut Thumbnails,
+        submissions: BTreeMap<PromptId, LocalSendStatus>,
     ) {
         static REQUEST: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.request");
@@ -239,6 +278,7 @@ impl History {
                     now,
                     thumbnails,
                     room.history_filters,
+                    &submissions,
                 );
             }
             return;
@@ -250,12 +290,9 @@ impl History {
             minute: now / 60_000,
             cell: thumbnails.layout_key(),
         };
-        // A live visited room keeps its completed rows, even while its inputs
-        // change. Deletion releases both these rows and the worker's cache.
         background
             .layouts
             .retain(|id, _| snapshot.state.room(*id).is_some());
-        // Never show another room's rows while this room's first layout loads.
         if background.displayed_room != Some(room) {
             self.lines = background
                 .layouts
@@ -267,18 +304,7 @@ impl History {
                 .map_or_else(Default::default, |layout| layout.filters);
             background.displayed_room = Some(room);
         }
-        let completed = {
-            let mut mailbox = background
-                .shared
-                .mailbox
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            background.shared.ready.store(false, Ordering::Relaxed);
-            mailbox.result.take()
-        };
-        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
-            background.layouts.insert(layout.key.room, layout);
-        }
+        background.apply_completed(key);
         if let Some(layout) = background
             .layouts
             .get(&room)
@@ -298,7 +324,6 @@ impl History {
             background.requested = Some(key);
             return;
         }
-        // Keep the same room's last complete layout during a resize or update.
         if let Some(layout) = background.layouts.get(&room) {
             self.lines = Arc::clone(&layout.lines);
             self.displayed_filters = layout.filters;
@@ -306,8 +331,6 @@ impl History {
         if background.requested == Some(key) {
             return;
         }
-        // Poll/draft revisions must not starve a cold layout by cancelling it
-        // before it can finish. Only room/geometry changes cancel running work.
         let generation = if background
             .requested
             .is_some_and(|previous| previous.same_geometry(key))
@@ -321,6 +344,7 @@ impl History {
             key,
             generation,
             snapshot,
+            submissions,
             now,
         };
         let mut mailbox = background
@@ -371,6 +395,7 @@ fn run(shared: Arc<Shared>) {
             job.now,
             &mut thumbnails,
             room.history_filters,
+            &job.submissions,
         );
         #[cfg(test)]
         shared.progress.finished.fetch_add(1, Ordering::Relaxed);

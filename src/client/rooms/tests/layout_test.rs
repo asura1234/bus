@@ -131,9 +131,7 @@ fn nothing_is_drawn_under_the_composer() {
         );
         ui.error = None;
 
-        ui.send_intent = Some(room);
         assert_composer_on_last_row(&mut ui, cols, rows, "pending send");
-        ui.send_intent = None;
     }
 
     // An agent notice goes to the client log, not the screen.

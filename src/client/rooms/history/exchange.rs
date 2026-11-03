@@ -2,7 +2,8 @@
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
 use super::{
-    History, LayoutKey, Line, LinkScope, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone,
+    rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
+    RowKind, ThumbnailRow, Tone,
 };
 use crate::messaging::model::{
     AgentId, Author, BusState, Prompt, Request, RequestId, Room, RoomId,
@@ -77,6 +78,7 @@ impl History {
             now,
             thumbnails,
             Default::default(),
+            &Default::default(),
         )
     }
 
@@ -89,13 +91,14 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
         filters: crate::messaging::model::RoomHistoryFilters,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
     ) -> &[Line] {
         static LINES: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.lines");
         static REBUILD: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
-        self.prepare_source(state, room, revision);
+        self.prepare_source(state, room, revision, submissions);
         let key = (
             self.signature,
             room.id,
@@ -103,15 +106,9 @@ impl History {
             now / 60_000,
             thumbnails.layout_key(),
             filters,
+            submission_signature(submissions),
         );
-        if self.key.is_some_and(|previous| {
-            previous.0 == key.0
-                && previous.1 == key.1
-                && previous.2 == key.2
-                && previous.4 == key.4
-                && previous.5 == key.5
-                && (previous.3 == key.3 || self.age_valid.contains(&now))
-        }) {
+        if self.reusable_layout(key, now) {
             self.key = Some(key);
             return &self.lines;
         }
@@ -158,6 +155,7 @@ impl History {
                 width,
                 now,
                 thumbnails,
+                submissions,
             );
 
             self.push_reply_lines(
@@ -193,7 +191,13 @@ impl History {
         &self.lines
     }
 
-    fn prepare_source(&mut self, state: &BusState, room: &Room, revision: u64) {
+    fn prepare_source(
+        &mut self,
+        state: &BusState,
+        room: &Room,
+        revision: u64,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+    ) {
         self.rebuilt = 0;
         self.rendered = 0;
         self.projected = 0;
@@ -205,7 +209,7 @@ impl History {
                 let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
                 self.markdown.retain(|source, _| shown.contains(source));
             }
-            self.signature = signature(state, room);
+            self.signature = signature(state, room, submissions);
             self.source = Some((revision, room.id));
         }
     }
@@ -220,6 +224,7 @@ impl History {
         width: u16,
         now: u64,
         thumbnails: &mut Thumbnails,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
     ) {
         let start = lines.len();
         let header_timer = super::phases::HEADER.start();
@@ -245,6 +250,16 @@ impl History {
             .flatten();
         if attention.is_some() {
             header.push(("  [Needs developer]".into(), Tone::Text));
+        }
+        if let Some(status) = submissions.get(&prompt.id) {
+            header.push((
+                match status {
+                    super::LocalSendStatus::Pending => "  [pending]",
+                    super::LocalSendStatus::Failed => "  [failed]",
+                }
+                .into(),
+                Tone::Muted,
+            ));
         }
         header.push((
             format!("  {}", timestamp(prompt.submitted_at_ms, now)),
@@ -555,28 +570,6 @@ fn blank_row(anchor: RowAnchor) -> Line {
     }
 }
 
-/// Which layout input changed, for the rebuild's slow-operation detail.
-fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str {
-    let Some((signature, room, width, minute, thumbnails, filters)) = previous else {
-        return "first";
-    };
-    if room != next.1 {
-        "room"
-    } else if width != next.2 {
-        "width"
-    } else if signature != next.0 {
-        "content"
-    } else if thumbnails != next.4 {
-        "thumbnails"
-    } else if filters != next.5 {
-        "filters"
-    } else if minute != next.3 {
-        "minute"
-    } else {
-        "unchanged"
-    }
-}
-
 fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Developer => "You".into(),
@@ -625,8 +618,20 @@ fn exchange_reply(request: Option<&Request>) -> (&str, Option<RequestId>) {
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
-fn signature(state: &BusState, room: &Room) -> u64 {
+fn signature(
+    state: &BusState,
+    room: &Room,
+    submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (prompt, status) in submissions {
+        prompt.0.hash(&mut hash);
+        match status {
+            super::LocalSendStatus::Pending => 0_u8,
+            super::LocalSendStatus::Failed => 1_u8,
+        }
+        .hash(&mut hash);
+    }
     for request in state.requests().filter(|r| r.room_id == room.id) {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);

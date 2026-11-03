@@ -991,8 +991,7 @@ fn option_enter_sends_the_draft_to_wait_for_each_agents_own_turn() {
     assert!(ui
         .pending
         .iter()
-        .any(|pending| matches!(pending.command, BusCommand::SubmitQueued(id) if id == room)));
-    assert!(!ui.send_queued);
+        .any(|pending| matches!(pending.command, BusCommand::SubmitQueued(id, _) if id == room)));
 
     let local = ui.locals.get_mut(&room).unwrap();
     local.text.insert("now");
@@ -1002,7 +1001,7 @@ fn option_enter_sends_the_draft_to_wait_for_each_agents_own_turn() {
     assert!(ui
         .pending
         .iter()
-        .any(|pending| matches!(pending.command, BusCommand::Submit(id) if id == room)));
+        .any(|pending| matches!(pending.command, BusCommand::Submit(id, _) if id == room)));
 }
 
 #[test]

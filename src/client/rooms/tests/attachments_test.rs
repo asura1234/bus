@@ -459,3 +459,28 @@ fn valid_images_attach_by_drop_pasted_path_and_pasted_data_as_before() {
     assert!(!room_screen(&mut ui, 100, 30).contains("Could not attach"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn failed_home_relative_attachment_can_be_removed_by_its_chip() {
+    let (mut ui, room, _) = fixture();
+    let raw = "~/bus-review-missing-attachment.md";
+    ui.queue(BusCommand::AttachFile(room, raw.into()), Effect::Files(room));
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: 1,
+        result: Err("missing".into()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = 1;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert_eq!(ui.failed.len(), 1);
+    ui.compute_view(100, 30);
+    let remove = ui.view.hits.iter().find_map(|hit| match &hit.action {
+        render::Action::RemoveFile(path) => Some(path.clone()),
+        _ => None,
+    }).expect("the failed attachment must expose its remove action");
+    ui.action(render::Action::RemoveFile(remove));
+    assert!(ui.failed.is_empty(), "clicking the failed attachment chip must discard its retry command");
+    assert!(ui.current_draft_files(room).is_empty(), "the removed failed attachment must stay out of the next draft");
+}

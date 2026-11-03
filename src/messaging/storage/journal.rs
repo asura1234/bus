@@ -10,7 +10,7 @@
 //! and every full save folds them in.
 use serde::{Deserialize, Serialize};
 
-use crate::messaging::model::{BusState, ModelError, RoomId};
+use crate::messaging::model::{BusState, Draft, ModelError, RoomId};
 
 const JOURNAL_VERSION: u64 = 1;
 
@@ -27,12 +27,20 @@ pub(crate) enum JournalOp {
         queued: bool,
         now_ms: u64,
     },
+    SubmitDraft {
+        room: RoomId,
+        draft: Draft,
+        queued: bool,
+        now_ms: u64,
+    },
 }
 
 impl JournalOp {
     fn room(&self) -> RoomId {
         match self {
-            Self::DraftText { room, .. } | Self::Submit { room, .. } => *room,
+            Self::DraftText { room, .. }
+            | Self::Submit { room, .. }
+            | Self::SubmitDraft { room, .. } => *room,
         }
     }
 
@@ -49,6 +57,14 @@ impl JournalOp {
                 queued: false,
                 now_ms,
             } => state.submit_draft(*room, *now_ms).map(drop),
+            Self::SubmitDraft {
+                room,
+                draft,
+                queued,
+                now_ms,
+            } => state
+                .submit_draft_exact(*room, draft.clone(), *now_ms, *queued)
+                .map(drop),
         }
     }
 }
