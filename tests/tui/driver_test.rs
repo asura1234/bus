@@ -14,29 +14,14 @@ use std::process::{Command, Output};
 #[path = "native_restart_test.rs"]
 mod native_restart;
 
+#[path = "reply_restart_test.rs"]
+mod reply_restart;
+
 #[path = "startup_test.rs"]
 mod startup;
 
 #[path = "wait_outcome_test.rs"]
 mod wait_outcome;
-
-#[test]
-fn reply_delivery_survives_actual_server_restart_mid_request() {
-    let output = Command::new("python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tools/acceptance/reply_restart_test.py"
-        ))
-        .args(["--binary", env!("CARGO_BIN_EXE_bus")])
-        .output()
-        .expect("run isolated reply restart scenario");
-    assert!(
-        output.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// Each test drives its own session; names stay unique across test processes.
 fn session_name(tag: &str) -> String {
