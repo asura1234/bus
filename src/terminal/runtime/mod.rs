@@ -181,7 +181,7 @@ pub struct TerminalRuntime {
     /// it set. Only then is Claude's `Try "..."` shape a placeholder.
     startup_suggestion_open: Arc<AtomicBool>,
     #[cfg(test)]
-    launch_test_barrier: Arc<Mutex<Option<(bool, Arc<shell_launch::LaunchTestBarrier>)>>>,
+    launch_test_barrier: Arc<Mutex<Option<Arc<shell_launch::LaunchTestBarrier>>>>,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,

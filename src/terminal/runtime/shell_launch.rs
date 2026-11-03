@@ -171,6 +171,12 @@ impl LaunchTestBarrier {
         self.pre_enter.as_deref().unwrap_or(self).hold();
     }
 
+    fn after_enter(&self) {
+        if self.pre_enter.is_some() {
+            self.hold();
+        }
+    }
+
     pub(crate) fn verification_reached(&self) -> bool {
         self.pre_enter.as_deref().unwrap_or(self).reached()
     }
@@ -202,7 +208,7 @@ impl TerminalRuntime {
             pre_enter: after_enter.then(|| std::sync::Arc::new(LaunchTestBarrier::default())),
             ..Default::default()
         });
-        *self.launch_test_barrier.lock().unwrap() = Some((after_enter, barrier.clone()));
+        *self.launch_test_barrier.lock().unwrap() = Some(barrier.clone());
         barrier
     }
 
@@ -303,7 +309,7 @@ struct ShellLaunch {
     transaction: LaunchTransaction,
     id: u64,
     #[cfg(test)]
-    barrier: Option<(bool, std::sync::Arc<LaunchTestBarrier>)>,
+    barrier: Option<std::sync::Arc<LaunchTestBarrier>>,
 }
 
 impl ShellLaunch {
@@ -332,14 +338,14 @@ impl ShellLaunch {
             .launch_shell_prompt_generation(&self.probe.token);
         self.phase(LaunchPhase::Verifying, cycle)?;
         #[cfg(test)]
-        if let Some((_, barrier)) = &self.barrier {
+        if let Some(barrier) = &self.barrier {
             barrier.before_enter();
         }
         self.phase(LaunchPhase::Submitting, cycle)?;
         self.writer.write(Bytes::from_static(b"\r"))?;
         #[cfg(test)]
-        if let Some((true, barrier)) = &self.barrier {
-            barrier.hold();
+        if let Some(barrier) = &self.barrier {
+            barrier.after_enter();
         }
         lease.restored();
         self.phase(LaunchPhase::Submitted, cycle)?;
