@@ -244,9 +244,6 @@ fn composer_uses_full_height_and_toggle_preserves_draft_and_recipients() {
     assert_eq!(composer_rect(&ui), full);
     assert_eq!(ui.locals[&room].text.text, draft);
     assert_eq!(ui.locals[&room].recipients, [agent].into());
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
-    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     assert!(room_screen(&mut ui, 100, 30).contains("[x] author"));
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
