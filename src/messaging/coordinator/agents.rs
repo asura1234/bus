@@ -1,7 +1,7 @@
 //! Owned agent launch, deletion and terminal identity checks.
 use super::{
-    mpsc, schema, AgentId, AgentRuntimeIdentity, Author, BusEvent, Draft, LeftOpenReason,
-    LeftOpenTerminal, Method, Provider, ResponseResult, RoomId, RoomKind, Worker,
+    deletion_identity, mpsc, schema, AgentId, AgentRuntimeIdentity, Author, BusEvent, Draft,
+    LeftOpenReason, LeftOpenTerminal, Method, Provider, ResponseResult, RoomId, RoomKind, Worker,
     MASTER_AGENT_NEEDS_ROOM,
 };
 use crate::agents::providers::{codex, hook_json::HookContext, launch, spool};
@@ -159,21 +159,10 @@ impl Worker {
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let identity = &agent.runtime_identity;
         let (Some(pane), Some(terminal)) = (&identity.pane_id, &identity.terminal_id) else {
-            if identity == &AgentRuntimeIdentity::default()
-                || identity.pane_id.is_none() && identity.terminal_id.is_some()
-            {
-                // A known terminal's pane is detached only after authoritative
-                // absence/replacement evidence or a successful guarded close.
+            if deletion_identity::has_no_terminal_to_close(identity) {
                 return Ok(None);
             }
-            // Tab creation can time out before AgentStart is issued. No provider
-            // input was sent without a returned terminal identity. Remove only
-            // the placeholder after a fresh native lookup proves it owns nothing;
-            // never guess which shell a lost tab-create response may have made.
-            if identity.pane_id.is_none()
-                && identity.terminal_id.is_none()
-                && identity.session_id.is_none()
-            {
+            if deletion_identity::needs_native_absence_check(identity) {
                 let name = identity::managed_name(agent.room_id, id);
                 if self.native_ownership_released(&name) {
                     return Ok(None);

@@ -2,6 +2,7 @@
 pub(crate) mod agents;
 pub(crate) mod attention;
 mod automatic_input;
+mod deletion_identity;
 mod delivery;
 mod disk_space;
 mod error_pipe;
