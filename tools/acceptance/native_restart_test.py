@@ -45,8 +45,8 @@ def restart_directory(run_dir, retain_failure, *, reply=False):
     if not retain_failure:
         yield root
         return
-    if root.parent != Path("/private/tmp") or not root.name.startswith("bus-rf-"):
-        raise ValueError("retained restart root must be a new bus-rf-* child of /private/tmp")
+    if root.parent != Path("/private/tmp") or not root.name.startswith("brf-"):
+        raise ValueError("retained restart root must be a new brf-* child of /private/tmp")
     root.mkdir(mode=0o700)  # Never adopt or delete an existing directory/symlink.
     owned = root.stat()
     try:
