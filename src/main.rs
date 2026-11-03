@@ -97,17 +97,13 @@ fn main() -> io::Result<()> {
             Ok(())
         }
         // Detached helper spawned by `bus restart` before the server is stopped.
-        Some("--restart-handoff") if raw_args.len() == 2 => {
+        Some("--restart-handoff") if raw_args.len() == 3 => {
             configure_session(&raw_args);
-            cli::restart::run_handoff_entry()
-        }
-        // Headless coordinator for the session a restart just brought back.
-        Some("--session-coordinator") if raw_args.len() == 2 => {
-            configure_session(&raw_args);
-            cli::restart::run_session_coordinator()
+            cli::restart::run_handoff_entry(&raw_args[2])
         }
         _ => cli::run(&raw_args[1..]),
-    }
+    }?;
+    cli::restart::resume_after_quit()
 }
 
 /// Applies the daemon session selected through the environment before a hidden entry runs.

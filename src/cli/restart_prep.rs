@@ -30,19 +30,10 @@ pub(super) fn begin_handoff(
                 &refused_record(request, new_binary, old_binary, old_sha, "unknown", &error),
             )
         })?;
-    let (old_binary, old_sha) = serving.map_err(|error| {
-        record_refused(
-            root,
-            &refused_record(
-                request,
-                new_binary,
-                Path::new(""),
-                "unknown",
-                &identity.sha,
-                &error,
-            ),
-        )
-    })?;
+    let (old_binary, old_sha) = serving.unwrap_or_else(|_| (PathBuf::new(), "unknown".into()));
+    let tui = rollback_tui(root, request, new_binary, &identity, &old_binary, &old_sha)?;
+    let old_binary = tui.backup_binary;
+    let old_sha = tui.sha;
     let recorded = restart_record::read_recorded_launch(&restart_record::build_path(root))
         .map_err(|error| {
             record_refused(
@@ -86,6 +77,11 @@ pub(super) fn begin_handoff(
         )
     })?;
     let plan = HandoffPlan {
+        id: format!(
+            "{}:{}",
+            std::process::id(),
+            crate::messaging::storage::io::now_ns()
+        ),
         root: root.to_path_buf(),
         old_binary,
         new_binary: new_binary.to_path_buf(),
@@ -95,6 +91,7 @@ pub(super) fn begin_handoff(
             request.as_who.as_deref(),
             std::env::var("USER").ok().as_deref(),
         ),
+        tui: tui.process,
         session_id: launch.session_id,
         explicit_data_dir: launch.explicit_data_dir,
         dev: launch.dev,
@@ -116,9 +113,39 @@ pub(super) fn begin_handoff(
     publish_handoff(root, request, &plan)
 }
 
+fn rollback_tui(
+    root: &Path,
+    request: &RestartRequest,
+    new_binary: &Path,
+    identity: &restart_record::Identity,
+    old_binary: &Path,
+    old_sha: &str,
+) -> io::Result<restart_record::TuiBuild> {
+    let tui = restart_record::read_tui_build(root).filter(|tui| {
+        restart_record::valid_build_sha(&tui.sha)
+            && crate::platform::process_still_live(tui.process.pid, tui.process.birth)
+    }).ok_or_else(|| record_refused(root, &refused_record(
+        request, new_binary, old_binary, old_sha, &identity.sha,
+        "the running TUI has no whole-session restart receipt; quit with Ctrl+Q, then run the new binary with the same --dev, --yolo and resume/session settings",
+    )))?;
+    let previous = super::run_identity(&tui.backup_binary)
+        .and_then(|stdout| restart_record::parse_identity(&stdout))
+        .map_err(|error| record_refused(root, &refused_record(
+            request, new_binary, old_binary, old_sha, &identity.sha,
+            &format!("cannot validate the saved rollback binary: {error}; quit with Ctrl+Q and resume the new binary manually"),
+        )))?;
+    if previous.sha != tui.sha {
+        return Err(record_refused(root, &refused_record(
+            request, new_binary, old_binary, old_sha, &identity.sha,
+            "saved rollback binary SHA differs from the running TUI; quit with Ctrl+Q and resume the new binary manually",
+        )));
+    }
+    Ok(tui)
+}
+
 fn publish_handoff(root: &Path, request: &RestartRequest, plan: &HandoffPlan) -> io::Result<()> {
     let new_binary = &plan.new_binary;
-    let pid = match super::spawn_helper() {
+    let pid = match super::spawn_helper(plan) {
         Ok(pid) => pid,
         Err(error) => {
             return Err(record_refused(
@@ -171,18 +198,14 @@ fn publish_handoff(root: &Path, request: &RestartRequest, plan: &HandoffPlan) ->
     Ok(())
 }
 
-/// The binary and SHA the running server recorded. Never the invoking CLI.
+/// Server identity for refusal diagnostics. Rollback uses the live TUI's backup.
 pub(super) fn serving_target(root: &Path) -> Result<(PathBuf, String), String> {
     let path = restart_record::build_path(root);
-    let binary = restart_record::read_build_binary(&path).ok_or_else(|| {
-        "cannot restart: the running server has no recorded binary to roll back to".to_owned()
-    })?;
+    let binary = restart_record::read_build_binary(&path)
+        .ok_or_else(|| "the running server has no recorded binary".to_owned())?;
     let sha = restart_record::read_build_sha(&path)
         .filter(|sha| restart_record::valid_build_sha(sha))
-        .ok_or_else(|| {
-            "cannot restart: the running server has no recorded build SHA to roll back to"
-                .to_owned()
-        })?;
+        .ok_or_else(|| "the running server has no recorded build SHA".to_owned())?;
     Ok((binary, sha))
 }
 

@@ -42,8 +42,14 @@ bus stop does, and exits; bus resume relaunches each agent into its saved conver
 ui hits lists the room UI's clickable regions as of its last frame, each with a stable
 name (room:NAME, agent:NAME, new-room, settings, color-blind, composer, files, ...) and its
 cells; the TUI driver clicks them by name. Only the dev variant (./run dev) has it.
-restart (`bus --dev restart --binary PATH --confirm`) replaces the running server
-with another Bus binary on the same session. It is refused without `--dev` and
+restart (`bus --dev restart --binary PATH --confirm`) saves and quits the whole
+Bus, then relaunches PATH in the same terminal with the recorded flags and session.
+Both the server and TUI/coordinator must run PATH's build SHA before success is
+recorded. An unhealthy replacement relaunches the saved previous binary instead.
+Agents resume their saved provider sessions. Use the absolute binary path agents
+already call (for example `target/debug/bus`); other CLI paths are not rewritten.
+The initial `stage:handoff` receipt only means queuing; read `restarts/log.jsonl`
+for the outcome and any manual recovery command. It is refused without `--dev` and
 omitted from `bus --help`. Before it, every room's orchestrator asks working agents
 to pause (commit and push, stop builds and tests, release slot locks, then stop)
 and waits for each to confirm. After the outcome notice, tell them to resume.

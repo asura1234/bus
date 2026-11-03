@@ -1,9 +1,4 @@
-//! `bus --dev restart`: an orchestrator replaces the running server with another binary.
-//!
-//! The public command preflights and spawns a detached helper, then returns.
-//! The helper outlives the server it stops. It starts the new binary on the
-//! same session and rolls back to the old binary when that server never
-//! becomes healthy.
+//! Developer restart: save and quit, then relaunch the whole session in its terminal.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,33 +9,21 @@ use crate::utils::restart_record::{self, Identity, RestartLog, RestartMarker, MI
 
 #[path = "restart_prep.rs"]
 mod prep;
+#[path = "restart_session.rs"]
+mod session;
+pub(crate) use session::{resume_after_quit, run_handoff_entry};
 
 const CONFIRM: &str = "This command changes or removes work; add --confirm to proceed";
 pub(crate) const HEALTH_TIMEOUT: Duration = Duration::from_secs(45);
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
-const COORDINATOR_WAIT: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct HandoffPlan {
-    pub(crate) root: PathBuf,
-    pub(crate) old_binary: PathBuf,
-    pub(crate) new_binary: PathBuf,
-    pub(crate) old_sha: String,
-    pub(crate) new_sha: String,
-    pub(crate) who: String,
-    pub(crate) session_id: Option<String>,
-    pub(crate) explicit_data_dir: bool,
-    pub(crate) dev: bool,
-    pub(crate) yolo: bool,
-}
+pub(crate) use restart_record::HandoffPlan;
 
 pub(crate) trait HandoffIo {
     fn stop(&mut self) -> Result<(), String>;
     fn start(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<u32, String>;
     fn healthy(&mut self, pid: u32, expected_sha: &str) -> Result<(), String>;
     fn kill(&mut self, pid: u32);
-    fn control_socket_up(&mut self) -> bool;
-    fn spawn_coordinator(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<(), String>;
     fn now_ms(&self) -> u64;
 }
 
@@ -193,110 +176,19 @@ fn host_free_bytes(root: &Path) -> Result<u64, String> {
         .map_err(|error| format!("could not read free disk space: {error}"))
 }
 
-fn spawn_helper() -> Result<u32, String> {
+fn spawn_helper(plan: &HandoffPlan) -> Result<u32, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("could not find this bus binary: {error}"))?;
     let mut command = Command::new(exe);
     command
         .arg("--restart-handoff")
+        .arg(serde_json::to_string(plan).map_err(|error| error.to_string())?)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     detach(&mut command);
     spawn_detached(&mut command)
         .map_err(|error| format!("could not start the restart helper: {error}"))
-}
-
-pub(crate) fn run_handoff_entry() -> io::Result<()> {
-    let root = crate::utils::env::bus_data_dir()
-        .ok_or_else(|| io::Error::other("BUS_DATA_DIR is required for a restart handoff"))?;
-    let _ = crate::utils::logging::init_file_logging_at(
-        root.clone(),
-        "herdr-server.log",
-        &super::logging_options(),
-    );
-    let bytes = std::fs::read(restart_record::handoff_path(&root)).map_err(|error| {
-        io::Error::other(format!("restart handoff request is missing: {error}"))
-    })?;
-    let plan: HandoffPlan = serde_json::from_slice(&bytes).map_err(|error| {
-        io::Error::other(format!("restart handoff request is invalid: {error}"))
-    })?;
-    let _ = prep::assign_restart_lock(&root, std::process::id());
-    if let Some(live) = crate::platform::process_instance(std::process::id()) {
-        let _ = restart_record::write_json(
-            &restart_record::handoff_pid_path(&root),
-            &restart_record::LivePid {
-                pid: live.pid,
-                birth: live.birth,
-            },
-        );
-    }
-    let mut effects = LiveHandoff;
-    execute_handoff(&plan, &mut effects);
-    prep::release_restart_lock(&root);
-    let _ = std::fs::remove_file(restart_record::handoff_path(&root));
-    let _ = std::fs::remove_file(restart_record::handoff_pid_path(&root));
-    let persist = restart_record::persist_error_path(&root);
-    if persist.exists() {
-        let detail = std::fs::read_to_string(&persist).unwrap_or_default();
-        return Err(io::Error::other(format!(
-            "restart record was not stored: {detail}"
-        )));
-    }
-    Ok(())
-}
-
-pub(crate) fn run_session_coordinator() -> io::Result<()> {
-    let root = crate::utils::env::bus_data_dir()
-        .ok_or_else(|| io::Error::other("BUS_DATA_DIR is required for a session coordinator"))?;
-    let logging = crate::utils::logging::init_file_logging_at(
-        crate::utils::paths::data_dir_for(Some(crate::messaging::coordinator::DEFAULT_SESSION)),
-        "herdr-client.log",
-        &super::logging_options(),
-    );
-    crate::utils::logging::startup("client", &logging);
-    let handle = crate::messaging::coordinator::BusHandle::start(
-        root.clone(),
-        crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
-            crate::messaging::coordinator::DEFAULT_SESSION.into(),
-        )),
-    )
-    .map_err(io::Error::other)?;
-    if let Some(live) = crate::platform::process_instance(std::process::id()) {
-        let _ = restart_record::write_json(
-            &restart_record::coordinator_pid_path(&root),
-            &restart_record::LivePid {
-                pid: live.pid,
-                birth: live.birth,
-            },
-        );
-    }
-    park_until_terminate();
-    drop(handle);
-    if let Some(record) =
-        restart_record::read_live_pid(&restart_record::coordinator_pid_path(&root))
-    {
-        if record.pid == std::process::id() {
-            let _ = std::fs::remove_file(restart_record::coordinator_pid_path(&root));
-        }
-    }
-    Ok(())
-}
-
-fn park_until_terminate() {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    if ctrlc::set_handler(move || {
-        let _ = sender.send(());
-    })
-    .is_err()
-    {
-        // A handler can be installed only once. Stay up so this process keeps
-        // the coordinator lock; the default SIGTERM still ends the process.
-        loop {
-            std::thread::sleep(Duration::from_secs(3600));
-        }
-    }
-    let _ = receiver.recv();
 }
 
 /// Stop, swap, and record. Injected effects keep the tests off a real server.
@@ -309,17 +201,14 @@ pub(crate) fn execute_handoff(plan: &HandoffPlan, effects: &mut impl HandoffIo) 
         return finish(
             plan,
             effects,
-            "rolled_back",
+            "quit_failed",
             &plan.old_binary,
             format!("could not stop the server: {error}"),
         );
     }
     match effects.start(&plan.new_binary, plan) {
         Ok(pid) => match effects.healthy(pid, &plan.new_sha) {
-            Ok(()) => match ensure_coordinator(effects, plan, &plan.new_binary) {
-                Ok(()) => finish(plan, effects, "restarted", &plan.new_binary, String::new()),
-                Err(error) => rollback(plan, effects, pid, format!("coordinator: {error}")),
-            },
+            Ok(()) => finish(plan, effects, "restarted", &plan.new_binary, String::new()),
             Err(reason) => rollback(plan, effects, pid, reason),
         },
         Err(reason) => rollback(plan, effects, 0, reason),
@@ -360,26 +249,6 @@ fn rollback(
     }
 }
 
-fn ensure_coordinator(
-    effects: &mut impl HandoffIo,
-    plan: &HandoffPlan,
-    binary: &Path,
-) -> Result<(), String> {
-    if effects.control_socket_up() {
-        return Ok(());
-    }
-    match effects.spawn_coordinator(binary, plan) {
-        Ok(()) => Ok(()),
-        Err(error)
-            if error.contains("Another Bus coordinator owns this data directory")
-                && effects.control_socket_up() =>
-        {
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
 fn finish(
     plan: &HandoffPlan,
     effects: &mut impl HandoffIo,
@@ -387,16 +256,17 @@ fn finish(
     serving: &Path,
     mut reason: String,
 ) -> RestartLog {
-    if matches!(outcome, "restarted" | "rolled_back" | "rollback_failed") {
-        if let Err(error) = ensure_coordinator(effects, plan, serving) {
-            if outcome != "restarted" {
-                reason = if reason.is_empty() {
-                    format!("coordinator: {error}")
-                } else {
-                    format!("{reason}; coordinator: {error}")
-                };
-            }
-        }
+    match outcome {
+        "restarted" => {}
+        "rolled_back" => reason.push_str("; the previous build is healthy; no additional TUI launch is needed"),
+        "quit_failed" => reason.push_str(&format!(
+            "; inspect and save/quit the old Bus before retrying restart; if its TUI has exited, resume the previous build with `{}`",
+            restart_record::reattach_command(&marker_for(plan, &plan.old_binary))
+        )),
+        _ => reason.push_str(&format!(
+            "; no healthy replacement TUI was confirmed; finish manually: `{}`",
+            restart_record::reattach_command(&marker_for(plan, serving))
+        )),
     }
     let _ = restart_record::write_json(
         &restart_record::marker_path(&plan.root),
@@ -494,151 +364,6 @@ fn server_answered_within(socket: &Path, timeout: Duration) -> bool {
     )
 }
 
-struct LiveHandoff;
-
-impl HandoffIo for LiveHandoff {
-    fn stop(&mut self) -> Result<(), String> {
-        stop_if_listening(
-            super::launch::is_server_listening(),
-            super::stop::stop_active_server,
-        )
-    }
-
-    fn start(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<u32, String> {
-        let _ = std::fs::remove_file(crate::utils::paths::server_startup_error_path());
-        let mut command = server_command(binary, plan);
-        command.arg("server");
-        spawn_detached(&mut command).map_err(|error| {
-            format!(
-                "could not start {binary}: {error}",
-                binary = binary.display()
-            )
-        })
-    }
-
-    fn healthy(&mut self, pid: u32, expected_sha: &str) -> Result<(), String> {
-        let root = crate::utils::env::bus_data_dir()
-            .ok_or_else(|| "BUS_DATA_DIR is required".to_owned())?;
-        let deadline = Instant::now() + HEALTH_TIMEOUT;
-        loop {
-            if crate::platform::process_instance(pid).is_none() {
-                let startup =
-                    std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
-                        .unwrap_or_default();
-                return Err(if startup.trim().is_empty() {
-                    format!("server process {pid} exited")
-                } else {
-                    startup.trim().to_owned()
-                });
-            }
-            let sha = restart_record::read_build_sha(&restart_record::build_path(&root));
-            if super::launch::is_server_listening()
-                && sha.as_deref() == Some(expected_sha)
-                && server_answered(&restarted_api_socket())
-            {
-                return Ok(());
-            }
-            if let Some(error) =
-                std::fs::read_to_string(crate::utils::paths::server_startup_error_path())
-                    .ok()
-                    .filter(|error| !error.trim().is_empty())
-            {
-                return Err(error.trim().to_owned());
-            }
-            if Instant::now() >= deadline {
-                return Err(format!(
-                    "server did not become healthy within {}s",
-                    HEALTH_TIMEOUT.as_secs()
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    fn kill(&mut self, pid: u32) {
-        kill_pid(pid);
-    }
-
-    fn control_socket_up(&mut self) -> bool {
-        let Some(root) = crate::utils::env::bus_data_dir() else {
-            return false;
-        };
-        crate::platform::ipc::connect_local_stream(&root.join("control.sock")).is_ok()
-    }
-
-    fn spawn_coordinator(&mut self, binary: &Path, plan: &HandoffPlan) -> Result<(), String> {
-        let mut command = server_command(binary, plan);
-        command.arg("--session-coordinator");
-        let pid = spawn_detached(&mut command)
-            .map_err(|error| format!("could not start the coordinator: {error}"))?;
-        let deadline = Instant::now() + COORDINATOR_WAIT;
-        while Instant::now() < deadline {
-            if self.control_socket_up() {
-                return Ok(());
-            }
-            if crate::platform::process_instance(pid).is_none() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        if self.control_socket_up() {
-            return Ok(());
-        }
-        Err("headless coordinator did not open control.sock".to_owned())
-    }
-
-    fn now_ms(&self) -> u64 {
-        crate::utils::time::now_ms()
-    }
-}
-
-fn server_command(binary: &Path, plan: &HandoffPlan) -> Command {
-    let mut command = Command::new(binary);
-    command
-        .env_remove(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR)
-        .env_remove(crate::utils::env::SOCKET_PATH_ENV_VAR)
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env(
-            "HERDR_SESSION",
-            crate::messaging::coordinator::DEFAULT_SESSION,
-        )
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    if let Ok(cwd) = std::env::current_dir() {
-        command.env(crate::utils::env::STARTUP_CWD_ENV_VAR, cwd);
-    }
-    apply_recorded_launch(&mut command, plan);
-    detach(&mut command);
-    command
-}
-
-/// The helper inherits the restart command's environment. Put the resolved
-/// launch flags on the child explicitly, or a missing `--yolo` on the restart
-/// command clears the mode the running server recorded.
-fn apply_recorded_launch(command: &mut Command, plan: &HandoffPlan) {
-    command.env("BUS_DATA_DIR", &plan.root);
-    if plan.explicit_data_dir {
-        command.env_remove("BUS_SESSION_ID");
-    } else if let Some(session_id) = &plan.session_id {
-        command.env("BUS_SESSION_ID", session_id);
-    } else {
-        command.env_remove("BUS_SESSION_ID");
-    }
-    if plan.dev {
-        command.env("BUS_DEV", "1");
-        command.env("BUS_LOG", crate::utils::logging::DEV_FILTER);
-    } else {
-        command.env_remove("BUS_DEV");
-        command.env_remove("BUS_LOG");
-    }
-    if plan.yolo {
-        command.env(crate::utils::env::YOLO_ENV_VAR, "1");
-    } else {
-        command.env_remove(crate::utils::env::YOLO_ENV_VAR);
-    }
-}
-
 fn detach(command: &mut Command) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     crate::platform::detach_server_daemon_command(command);
@@ -677,20 +402,21 @@ fn kill_pid(pid: u32) {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-    use std::process::Command;
 
     fn sha(byte: u8) -> String {
         format!("{byte:02x}").repeat(20)
     }
 
-    fn plan(root: &Path) -> HandoffPlan {
+    pub(super) fn plan(root: &Path) -> HandoffPlan {
         HandoffPlan {
+            id: "test-attempt".into(),
             root: root.to_path_buf(),
             old_binary: PathBuf::from("/old/bus"),
             new_binary: PathBuf::from("/new/bus"),
             old_sha: sha(0x11),
             new_sha: sha(0x22),
             who: "agent:9 user:ada".into(),
+            tui: restart_record::LivePid { pid: 99, birth: 1 },
             session_id: Some("abc".into()),
             explicit_data_dir: false,
             dev: true,
@@ -705,9 +431,6 @@ mod tests {
         healthy_shas: Vec<String>,
         health_error: String,
         killed: Vec<u32>,
-        control_up: bool,
-        coordinator_error: Option<String>,
-        coordinators: Vec<PathBuf>,
         now: u64,
     }
 
@@ -731,20 +454,6 @@ mod tests {
         fn kill(&mut self, pid: u32) {
             self.killed.push(pid);
         }
-        fn control_socket_up(&mut self) -> bool {
-            self.control_up
-        }
-        fn spawn_coordinator(&mut self, binary: &Path, _plan: &HandoffPlan) -> Result<(), String> {
-            self.coordinators.push(binary.to_path_buf());
-            if let Some(error) = self.coordinator_error.clone() {
-                if error.contains("Another Bus coordinator owns this data directory") {
-                    self.control_up = true;
-                }
-                return Err(error);
-            }
-            self.control_up = true;
-            Ok(())
-        }
         fn now_ms(&self) -> u64 {
             self.now
         }
@@ -758,9 +467,6 @@ mod tests {
             healthy_shas: Vec::new(),
             health_error: "socket timeout".into(),
             killed: Vec::new(),
-            control_up: false,
-            coordinator_error: None,
-            coordinators: Vec::new(),
             now: 42,
         }
     }
@@ -779,7 +485,6 @@ mod tests {
         assert_eq!(record.new_sha, plan.new_sha);
         assert_eq!(record.who, plan.who);
         assert!(effects.killed.is_empty());
-        assert_eq!(effects.coordinators, vec![plan.new_binary.clone()]);
         assert!(!restart_record::marker_path(&root).exists());
         let logged = std::fs::read_to_string(restart_record::log_path(&root)).unwrap();
         assert!(logged.contains("\"outcome\":\"restarted\""));
@@ -799,20 +504,36 @@ mod tests {
         effects.starts.push_back(Ok(7));
         effects.starts.push_back(Ok(8));
         effects.healthy_shas.push(plan.old_sha.clone());
-        effects.control_up = true;
         let record = execute_handoff(&plan, &mut effects);
         assert_eq!(record.outcome, "rolled_back");
         assert!(record.reason.contains("socket timeout"));
+        assert!(record.reason.contains("previous build is healthy"));
+        assert!(!record.reason.contains("finish manually"));
         assert_eq!(effects.killed, vec![7]);
         assert_eq!(
             effects.started,
             vec![plan.new_binary.clone(), plan.old_binary.clone()]
         );
-        assert!(
-            effects.coordinators.is_empty(),
-            "the old client still owns the coordinator"
-        );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn quit_failure_keeps_recovery_on_the_old_build_and_requires_inspection_first() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-quit-recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let plan = plan(&root);
+        let record = finish(
+            &plan,
+            &mut fake(),
+            "quit_failed",
+            &plan.new_binary,
+            "save failed".into(),
+        );
+        assert!(record.reason.contains("inspect and save/quit the old Bus"));
+        assert!(record.reason.contains("if its TUI has exited"));
+        assert!(record.reason.contains("/old/bus --dev resume abc"));
+        assert!(!record.reason.contains("/new/bus --dev resume"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -829,7 +550,6 @@ mod tests {
         assert!(record
             .reason
             .contains("rollback failed: old binary missing"));
-        assert_eq!(effects.coordinators, vec![plan.old_binary.clone()]);
         let notice = restart_record::notice_text(&record);
         assert!(notice.is_none());
         std::fs::remove_dir_all(&root).unwrap();
@@ -848,27 +568,6 @@ mod tests {
         assert!(effects.killed.contains(&8), "{:?}", effects.killed);
         let notice = restart_record::notice_text(&record);
         assert!(notice.is_none());
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn handoff_rejects_success_without_messaging_coordinator() {
-        let root = crate::utils::test_temp::unique_temp_path("handoff-no-coord");
-        std::fs::create_dir_all(&root).unwrap();
-        let plan = plan(&root);
-        let mut effects = fake();
-        effects.starts.push_back(Ok(7));
-        effects.starts.push_back(Ok(8));
-        effects.healthy_shas.push(plan.new_sha.clone());
-        effects.healthy_shas.push(plan.old_sha.clone());
-        effects.coordinator_error = Some("coordinator could not start".into());
-        let record = execute_handoff(&plan, &mut effects);
-        assert_eq!(record.outcome, "rolled_back");
-        assert_eq!(effects.killed, vec![7]);
-        assert_eq!(
-            effects.started,
-            vec![plan.new_binary.clone(), plan.old_binary.clone()]
-        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -927,7 +626,6 @@ mod tests {
         let mut effects = fake();
         effects.starts.push_back(Ok(7));
         effects.healthy_shas.push(plan.new_sha.clone());
-        effects.control_up = true;
         let record = execute_handoff(&plan, &mut effects);
         assert_eq!(record.outcome, "restarted");
         let saved = std::fs::read_to_string(restart_record::persist_error_path(&root)).unwrap();
@@ -1078,27 +776,10 @@ mod tests {
         let plan = plan(&root);
         let mut effects = fake();
         effects.stop = Err("did not stop within 15000ms".into());
-        effects.control_up = true;
         let record = execute_handoff(&plan, &mut effects);
-        assert_eq!(record.outcome, "rolled_back");
+        assert_eq!(record.outcome, "quit_failed");
         assert!(record.reason.contains("could not stop"));
         assert!(effects.started.is_empty());
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn an_existing_coordinator_is_not_a_failure() {
-        let root = crate::utils::test_temp::unique_temp_path("handoff-coord");
-        std::fs::create_dir_all(&root).unwrap();
-        let plan = plan(&root);
-        let mut effects = fake();
-        effects.starts.push_back(Ok(4));
-        effects.healthy_shas.push(plan.new_sha.clone());
-        effects.coordinator_error =
-            Some("Another Bus coordinator owns this data directory, or it is inaccessible".into());
-        let record = execute_handoff(&plan, &mut effects);
-        assert_eq!(record.outcome, "restarted");
-        assert!(record.reason.is_empty(), "{}", record.reason);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1208,54 +889,6 @@ mod tests {
             "{yolo_help}"
         );
         assert!(crate::cli::help::DEV_HELP.contains("bus --dev restart"));
-    }
-
-    #[test]
-    fn server_command_applies_recorded_yolo_when_this_process_has_none() {
-        let mut kept = plan(Path::new("/tmp/bus-restart-flags"));
-        kept.yolo = true;
-        kept.dev = true;
-        kept.explicit_data_dir = false;
-        kept.session_id = Some("abc".into());
-        let command = server_command(Path::new("/tmp/bus"), &kept);
-        let env = command_env(&command);
-        assert_eq!(env_var(&env, "BUS_YOLO"), Some("1"));
-        assert_eq!(env_var(&env, "BUS_DEV"), Some("1"));
-        assert_eq!(env_var(&env, "BUS_SESSION_ID"), Some("abc"));
-
-        let mut cleared = kept.clone();
-        cleared.yolo = false;
-        cleared.dev = false;
-        cleared.explicit_data_dir = true;
-        cleared.session_id = Some("abc".into());
-        let command = server_command(Path::new("/tmp/bus"), &cleared);
-        let env = command_env(&command);
-        assert_eq!(env_var(&env, "BUS_YOLO"), None);
-        assert_eq!(env_var(&env, "BUS_DEV"), None);
-        assert_eq!(env_var(&env, "BUS_SESSION_ID"), None);
-        assert_eq!(
-            env_var(&env, "BUS_DATA_DIR"),
-            Some("/tmp/bus-restart-flags")
-        );
-    }
-
-    fn env_var<'a>(
-        env: &'a std::collections::BTreeMap<String, Option<String>>,
-        key: &str,
-    ) -> Option<&'a str> {
-        env.get(key).and_then(|value| value.as_deref())
-    }
-
-    fn command_env(command: &Command) -> std::collections::BTreeMap<String, Option<String>> {
-        command
-            .get_envs()
-            .map(|(key, value)| {
-                (
-                    key.to_string_lossy().into_owned(),
-                    value.map(|value| value.to_string_lossy().into_owned()),
-                )
-            })
-            .collect()
     }
 
     #[test]

@@ -31,8 +31,6 @@ pub enum ClientError {
     HostOutput(io::Error),
     /// Protocol error (framing, deserialization).
     Protocol(protocol::FramingError),
-    /// The server restarted and this client has to be started again.
-    RestartAttach { message: String },
 }
 
 impl std::fmt::Display for ClientError {
@@ -65,7 +63,6 @@ impl std::fmt::Display for ClientError {
             ClientError::ConnectionLost(err) => write!(f, "lost connection to server: {err}"),
             ClientError::HostOutput(err) => write!(f, "host terminal output failed: {err}"),
             ClientError::Protocol(err) => write!(f, "protocol error: {err}"),
-            ClientError::RestartAttach { message } => write!(f, "{message}"),
         }
     }
 }

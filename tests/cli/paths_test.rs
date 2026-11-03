@@ -311,86 +311,51 @@ fn notify_you_help_explains_developer_recipient_and_mandatory_notifications() {
 }
 
 #[test]
-fn headless_restart_failure_reaches_the_client_log_before_outcome_consumption() {
-    use std::process::{Child, Stdio};
-    use std::time::{Duration, Instant};
-    struct ScratchCoordinator {
-        child: Child,
-        root: std::path::PathBuf,
-    }
-    impl Drop for ScratchCoordinator {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-            let _ = std::fs::remove_dir_all(&self.root);
-        }
-    }
-    let root = isolated_home("noerr-headless");
+fn restart_helper_setup_failure_persists_outcome_and_original_client_log_cause() {
+    let root = isolated_home("restart-setup-error");
     let home = root.join("home");
-    let restarts = root.join("restarts");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&restarts).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for path in [&root, &home, &restarts] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let outcome = restarts.join("outcome.json");
-    std::fs::write(&outcome, serde_json::to_vec(&serde_json::json!({
-        "at_ms":1000,"who":"user:headless-test","old_sha":"a".repeat(40),"new_sha":"b".repeat(40),
-        "old_binary":"/old","new_binary":"/new","outcome":"rolled_back","reason":"HEADLESS_RESTART_CAUSE_SENTINEL"
-    })).unwrap()).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
-    command
-        .arg("--session-coordinator")
-        .env("BUS_DATA_DIR", &root)
+    let plan = serde_json::json!({
+        "id":"setup-error", "root":root, "old_binary":"/old/bus", "new_binary":"/new/bus",
+        "old_sha":"a".repeat(40), "new_sha":"b".repeat(40), "who":"test",
+        "tui":{"pid":0,"birth":0}, "session_id":null, "explicit_data_dir":true, "dev":false, "yolo":false
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["--restart-handoff", &plan.to_string()])
+        .current_dir(&root)
+        .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("HOME", &home)
         .env("USERPROFILE", &home)
+        .env("BUS_DATA_DIR", &root)
+        .env("HERDR_SESSION", "bus")
         .env("PATH", "/usr/bin:/bin")
-        .env("BUS_LOG", "bus=info")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    for key in [
-        "BUS_SESSION_ID",
-        "BUS_DEV",
-        "HERDR_ENV",
-        "HERDR_SESSION",
-        "HERDR_SOCKET_PATH",
-        "HERDR_CLIENT_SOCKET_PATH",
-        "HERDR_CONFIG_PATH",
-    ] {
-        command.env_remove(key);
-    }
-    let mut scratch = ScratchCoordinator {
-        child: command.spawn().unwrap(),
-        root,
-    };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while outcome.exists() {
-        assert!(
-            scratch.child.try_wait().unwrap().is_none(),
-            "headless coordinator exited before consuming its outcome"
-        );
-        assert!(
-            Instant::now() < deadline,
-            "headless coordinator did not consume outcome"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let path = scratch
-        .root
-        .join("herdr-config/sessions/bus/herdr-client.log");
-    let log = std::fs::read_to_string(&path).unwrap_or_default();
+        .output()
+        .unwrap();
     assert!(
-        log.contains("HEADLESS_RESTART_CAUSE_SENTINEL"),
-        "headless consumption must retain its diagnostic in the client log: {}: {log}",
-        path.display()
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("restarts/outcome.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["outcome"], "relaunch_failed");
+    assert!(record["reason"]
+        .as_str()
+        .unwrap()
+        .contains("restart helper was not assigned the lock"));
+    assert!(record["reason"].as_str().unwrap().contains("/old/bus"));
+    let log =
+        std::fs::read_to_string(root.join("herdr-config/sessions/bus/herdr-client.log")).unwrap();
     assert!(
-        log.contains("rolled_back") && log.contains("user:headless-test"),
+        log.contains("restart helper was not assigned the lock"),
         "{log}"
     );
+    std::fs::remove_dir_all(root).unwrap();
 }

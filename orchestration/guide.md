@@ -61,6 +61,18 @@ next owners, live waits, dependencies and explicit holds in the workflow. A dead
 waiter or deleted worker is not a live wait. Treat an unrelated GitHub merge as
 informational until it matches this room's ownership or dependency.
 
+For an authorized developer restart, pause every room's workers first: save,
+commit and push their work, stop builds/tests and release resource locks. Then
+use the developer restart command in the CLI guide with the absolute binary
+path and explicit confirmation. It follows Ctrl+Q's save-and-quit path and
+relaunches the whole session in the same terminal, including the TUI/coordinator
+and agents' saved provider sessions. Use the binary
+path agents already call so their subsequent CLI calls use the same build.
+Read `restarts/log.jsonl` after relaunch: `restarted` proves both server and TUI
+build SHAs; `stage:handoff` proves only queuing. An unhealthy replacement rolls
+back through the same quit/resume path. Follow the recovery guidance in a failure
+record before resuming work.
+
 Send every message to the room's agents as yourself, so the history shows who
 asked:
 

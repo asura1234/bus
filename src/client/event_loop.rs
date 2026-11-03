@@ -132,13 +132,7 @@ pub(super) async fn run_client_loop(
         match driver.handle_event(event, now, &mut client_timer) {
             Ok(true) => return Ok(()),
             Ok(false) => {}
-            Err(error) => match driver.recover_restart(&event_tx, &error) {
-                Some(Ok(())) => {}
-                Some(Err(message)) => {
-                    return Err(ClientError::RestartAttach { message });
-                }
-                None => return Err(error),
-            },
+            Err(error) => return Err(error),
         }
     }
     // Clean exit (Ctrl+Q). Send Detach before closing.
@@ -169,32 +163,6 @@ struct ClientLoopDriver {
     will_query_host_cell_size: bool,
     /// Identifies the reader whose events belong to the active connection.
     connection_id: u64,
-    /// Identity retained at attachment, not re-read when a queued loss arrives.
-    attached_server: Option<crate::utils::restart_record::BuildStamp>,
-}
-
-struct AttachFailure {
-    message: String,
-    closed_early: bool,
-}
-
-fn connection_closed_early(error: &ClientError) -> bool {
-    match error {
-        ClientError::ConnectionLost(error) | ClientError::ConnectionFailed(error) => {
-            io_closed_early(error)
-        }
-        _ => false,
-    }
-}
-
-fn io_closed_early(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::UnexpectedEof
-            | io::ErrorKind::ConnectionReset
-            | io::ErrorKind::BrokenPipe
-            | io::ErrorKind::NotConnected
-    )
 }
 
 fn start_client_loop(
@@ -245,6 +213,9 @@ fn start_client_loop(
             .map_err(ClientError::ConnectionLost)?;
     }
 
+    if state.shell.is_some() {
+        crate::client::restart::record_ready(handshake.server.as_ref());
+    }
     Ok(ClientLoopDriver {
         state,
         write_stream,
@@ -256,7 +227,6 @@ fn start_client_loop(
         #[cfg(unix)]
         will_query_host_cell_size: cell_size_query,
         connection_id: 0,
-        attached_server: handshake.server,
     })
 }
 
@@ -381,146 +351,6 @@ fn start_host_readers(
 }
 
 impl ClientLoopDriver {
-    /// Reconnects to an active or completed replacement. `None` means this loss is
-    /// not a restart and the caller should surface the original error.
-    fn recover_restart(
-        &mut self,
-        event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
-        error: &ClientError,
-    ) -> Option<Result<(), String>> {
-        // A restart stop sends ServerShutdown after the socket closes. That is
-        // the same loss as ConnectionLost, even if the helper already finished.
-        if !matches!(
-            error,
-            ClientError::ConnectionLost(_) | ClientError::ServerShutdown { .. }
-        ) {
-            return None;
-        }
-        let previous_pid = self.attached_server.as_ref().and_then(|server| server.pid);
-        let target = crate::client::restart::restart_target(previous_pid)?;
-        let marker = match crate::client::restart::wait_for_restart(
-            crate::client::restart::RECONNECT_WAIT,
-            target,
-            || crate::client::restart::restart_target(previous_pid),
-            || crate::client::restart::replacement_server_ready(previous_pid),
-        ) {
-            Ok(marker) => marker,
-            Err(marker) => {
-                return Some(Err(crate::client::restart::record_attach_failure(
-                    self.attached_server.as_ref(),
-                    &marker,
-                    "the server did not become ready",
-                )));
-            }
-        };
-        if let Err(failure) = self.attach_restarted_server(event_tx) {
-            if !failure.closed_early {
-                return Some(Err(crate::client::restart::record_attach_failure(
-                    self.attached_server.as_ref(),
-                    &marker,
-                    &failure.message,
-                )));
-            }
-            // Readiness opens and drops one socket. One more handshake is the
-            // next accept on that same server.
-            std::thread::sleep(Duration::from_millis(50));
-            if let Err(failure) = self.attach_restarted_server(event_tx) {
-                let marker = crate::client::restart::restart_target(previous_pid).unwrap_or(marker);
-                return Some(Err(crate::client::restart::record_attach_failure(
-                    self.attached_server.as_ref(),
-                    &marker,
-                    &failure.message,
-                )));
-            }
-        }
-        Some(Ok(()))
-    }
-
-    fn attach_restarted_server(
-        &mut self,
-        event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>,
-    ) -> Result<(), AttachFailure> {
-        let socket = crate::utils::socket_paths::client_socket_path();
-        let mut stream = match crate::platform::ipc::connect_local_stream(&socket) {
-            Ok(stream) => stream,
-            Err(connect) => {
-                return Err(AttachFailure {
-                    message: connect.to_string(),
-                    closed_early: io_closed_early(&connect),
-                });
-            }
-        };
-        let (cols, rows) = self.state.reported_size;
-        let (cell_width_px, cell_height_px) = self.state.reported_cell_size;
-        let exact = self.state.pixel_geometry_exact;
-        let surface = self
-            .state
-            .shell
-            .as_ref()
-            .map(|shell| shell.surface_size(cols, rows))
-            .unwrap_or(crate::protocol::wire::ClientSurfaceSize {
-                cols: cols.max(1),
-                rows: rows.max(1),
-            });
-        let handshake = handshake::do_handshake(
-            &mut stream,
-            cell_width_px,
-            cell_height_px,
-            exact,
-            surface,
-            false,
-            self.state.mouse_capture_active,
-        )
-        .map_err(|handshake_error| AttachFailure {
-            message: handshake_error.to_string(),
-            closed_early: connection_closed_early(&handshake_error),
-        })?;
-        let max_frame_size = if self.state.kitty_graphics_enabled {
-            MAX_GRAPHICS_FRAME_SIZE
-        } else {
-            crate::protocol::wire::MAX_FRAME_SIZE
-        };
-        let connection_id = self.connection_id.wrapping_add(1);
-        let transport =
-            match start_endpoint_transport(stream, (), event_tx, max_frame_size, connection_id) {
-                Ok(transport) => transport,
-                Err(connect) => {
-                    return Err(AttachFailure {
-                        message: connect.to_string(),
-                        closed_early: connection_closed_early(&connect),
-                    });
-                }
-            };
-        self.write_stream = endpoint::ServerConnection::new(transport);
-        self.connection_id = connection_id;
-        if self.state.shell.is_some()
-            && self
-                .write_stream
-                .send(&ClientMessage::ClientShellFocus { focused: true })
-                .is_err()
-        {
-            return Err(AttachFailure {
-                message: "could not focus the new server".into(),
-                closed_early: false,
-            });
-        }
-        if self
-            .resize(cols, rows, cell_width_px, cell_height_px, exact)
-            .is_err()
-        {
-            return Err(AttachFailure {
-                message: "could not resize onto the new server".into(),
-                closed_early: false,
-            });
-        }
-        if let Some(shell) = self.state.shell.as_mut() {
-            shell.set_bus_server_build(handshake.server.as_ref());
-        }
-        self.state.request_repaint();
-        self.attached_server = handshake.server;
-        Ok(())
-    }
-
     fn handle_event(
         &mut self,
         event: ClientLoopEvent,

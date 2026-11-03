@@ -234,10 +234,9 @@ grants are dropped. private/orchestrator-credentials.json is no longer read; del
 
 ## Developer restart for orchestrators
 
-`bus --dev restart --binary PATH --confirm` replaces the running server and keeps this session. Without `--dev` it is refused and hidden from `bus --help`.
-Before it, every room's orchestrator asks its working agents to pause: commit and push, stop builds and tests, release slot locks, then stop.
-Wait for each confirmation, then restart. After the outcome notice, tell them to resume.
-Details: `bus --dev restart --help`.
+`bus --dev restart --binary PATH --confirm` saves/quits the whole Bus and resumes PATH in the same terminal/session, with recorded --dev/--yolo/data-root flags and provider sessions. Before it, every room pauses its workers: commit/push, stop builds/tests, release slot locks, then confirm. Check the final outcome before telling them to resume. `stage:handoff` means queued; only `restarts/log.jsonl` outcome `restarted` proves both server and TUI/coordinator run PATH's build SHA (package versions do not identify builds).
+
+An unhealthy replacement relaunches the saved previous binary; a healthy rollback needs no additional TUI launch. For quit failure, inspect/save the old UI before retrying; follow the conditional recovery guidance in the log. Use the absolute CLI path agents already call (such as target/debug/bus), containing the new build; other binaries and agent instructions are not rewritten. After rollback, restore that CLI path to the old build before agents resume work. For a TUI predating this support, Ctrl+Q then run PATH with the original flags and `resume SESSION`; an explicit-root session instead uses its original absolute BUS_DATA_DIR and flags without resume. Without --dev the tool is refused/hidden. Details: `bus --dev restart --help`.
 
 ## Repository status and acceptance
 Repository status reporting belongs to the agent/harness; Bus never polls hosts

@@ -66,7 +66,6 @@ fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
             #[cfg(unix)]
             will_query_host_cell_size: false,
             connection_id: 0,
-            attached_server: None,
         },
         sent,
     )
@@ -129,114 +128,6 @@ fn sidebar_width_change_clamped_to_the_same_geometry_sends_no_resize() {
 #[cfg(unix)]
 #[path = "slow_terminal_test.rs"]
 mod slow_terminal;
-
-#[cfg(unix)]
-#[test]
-fn a_restart_stop_shutdown_is_not_a_final_client_exit() {
-    use interprocess::local_socket::traits::Listener as _;
-
-    let _lock = crate::utils::config::test_config_env_lock().lock().unwrap();
-    crate::utils::paths::clear_explicit_session_for_test();
-    let root = crate::utils::test_temp::unique_temp_path("restart-shutdown");
-    std::fs::create_dir_all(&root).unwrap();
-    let socket = root.join("client.sock");
-    let sha = "ab".repeat(20);
-    crate::utils::restart_record::write_json(
-        &crate::utils::restart_record::build_path(&root),
-        &serde_json::json!({ "sha": sha, "binary": "/tmp/bus", "pid": 22 }),
-    )
-    .unwrap();
-    crate::utils::restart_record::write_json(
-        &crate::utils::restart_record::marker_path(&root),
-        &crate::utils::restart_record::RestartMarker {
-            binary: "/tmp/bus".into(),
-            session_id: None,
-            explicit_data_dir: true,
-            data_dir: root.display().to_string(),
-            dev: true,
-            yolo: false,
-        },
-    )
-    .unwrap();
-    let saved = [
-        ("BUS_DATA_DIR", std::env::var_os("BUS_DATA_DIR")),
-        (
-            crate::utils::env::SOCKET_PATH_ENV_VAR,
-            std::env::var_os(crate::utils::env::SOCKET_PATH_ENV_VAR),
-        ),
-        (
-            crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
-            std::env::var_os(crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR),
-        ),
-    ];
-    std::env::set_var("BUS_DATA_DIR", &root);
-    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
-    std::env::set_var(
-        crate::utils::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
-        &socket,
-    );
-    let listener = crate::platform::ipc::bind_local_listener(&socket).unwrap();
-    let accept = std::thread::spawn(move || {
-        for _ in 0..6 {
-            if listener.accept().is_err() {
-                break;
-            }
-        }
-    });
-    let (mut driver, _) = driver(80);
-    driver.attached_server = Some(crate::utils::restart_record::BuildStamp {
-        sha: sha.clone(),
-        binary: Some("/tmp/bus".into()),
-        pid: Some(11),
-    });
-    let pending = crate::utils::restart_record::outcome_path(&root);
-    let server_outcome = crate::utils::restart_record::RestartLog {
-        at_ms: 1,
-        who: "user:fixture".into(),
-        old_sha: sha.clone(),
-        new_sha: sha.clone(),
-        old_binary: "/tmp/bus".into(),
-        new_binary: "/tmp/bus".into(),
-        outcome: "restarted".into(),
-        reason: String::new(),
-    };
-    crate::utils::restart_record::write_json(&pending, &server_outcome).unwrap();
-    let (event_tx, _event_rx) = crate::utils::perf::queue::channel(8);
-    let error = ClientError::ServerShutdown {
-        reason: Some("server is shutting down".into()),
-    };
-    let result = driver.recover_restart(&event_tx, &error);
-    let message = result.unwrap().unwrap_err();
-    assert!(message.contains("could not stay attached"), "{message}");
-    assert!(!message.contains("did not become ready"), "{message}");
-    let text = std::fs::read_to_string(crate::utils::restart_record::log_path(&root)).unwrap();
-    assert_eq!(
-        text.lines().count(),
-        1,
-        "one terminal failure per client recovery"
-    );
-    let failure: crate::utils::restart_record::RestartLog =
-        serde_json::from_str(text.trim()).unwrap();
-    assert_eq!(failure.outcome, "client_attach_failed");
-    assert!(failure.who.starts_with("client:"));
-    assert_eq!(failure.old_sha, sha);
-    assert!(!failure.reason.is_empty());
-    assert_eq!(
-        crate::utils::restart_record::read_outcome(&pending).unwrap(),
-        Some(server_outcome)
-    );
-    for _ in 0..6 {
-        let _ = crate::platform::ipc::connect_local_stream(&socket);
-    }
-    let _ = accept.join();
-    for (key, value) in saved {
-        match value {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-    }
-    let _ = std::fs::remove_dir_all(&root);
-}
 
 #[test]
 fn a_shutdown_queued_by_the_replaced_connection_does_not_end_the_client() {
