@@ -1,7 +1,10 @@
 //! Contract/corpus checks only. These do not run a lifecycle reducer or driver.
 use super::{
     identity::{EndpointIdentity, NativeId, ObservationToken, SourceCursor},
-    input::{Capabilities, InputAssessment, OperationScope, Readiness, Support, WriteReceipt},
+    input::{
+        Capabilities, InputAssessment, OperationScope, Readiness, Support, WriteDisposition,
+        WriteReceipt,
+    },
     native::{
         ErrorEvidence, FactEnvelope, InputPart, NativeEvent, NativeReset, NativeTime, Outcome,
         ReadProgress,
@@ -121,11 +124,15 @@ fn native_errors_preserve_nested_json_and_native_reset_provenance() {
     };
     assert!(error.raw["cause"]["error"]["detail"].is_array());
     assert_eq!(error.http_status, Some(429));
+    assert_eq!(error.retryable, Some(false));
     assert!(error.native_reset.is_none(), "no invented reset deadline");
     let future = ErrorEvidence {
         raw: json!({"message": "original", "future": {"items": [null, 7, "文"]}}),
         message: None,
         code: Some("future.code".into()),
+        name: None,
+        retryable: None,
+        causes: vec![],
         http_status: None,
         native_reset: Some(NativeReset {
             at_ms: 21_601_000,
@@ -139,6 +146,120 @@ fn native_errors_preserve_nested_json_and_native_reset_provenance() {
         decoded.raw.is_object(),
         "raw failure must not become [object Object]"
     );
+}
+
+#[test]
+fn interrupted_native_causes_preserve_metadata_without_claiming_operator_stop() {
+    let cause = json!({
+        "raw": {"name": "AbortError", "retryable": false},
+        "message": "native operation aborted",
+        "code": "aborted",
+        "name": "AbortError",
+        "retryable": false,
+        "causes": [{
+            "raw": {"code": "connection_closed", "retryable": true},
+            "message": "connection closed",
+            "code": "connection_closed",
+            "retryable": true,
+            "causes": [{
+                "raw": {"message": "cause without retry metadata"},
+                "message": "cause without retry metadata",
+                "code": null,
+                "http_status": null,
+                "native_reset": null
+            }],
+            "http_status": null,
+            "native_reset": null
+        }],
+        "http_status": null,
+        "native_reset": null
+    });
+    let wire = json!({"kind": "interrupted", "detail": {"cause": cause}});
+    let outcome: Outcome = serde_json::from_value(wire.clone()).unwrap();
+    let Outcome::Interrupted { cause: Some(error) } = &outcome else {
+        panic!("native interruption with a transport cause");
+    };
+    assert_eq!(error.name.as_deref(), Some("AbortError"));
+    assert_eq!(error.retryable, Some(false));
+    assert_eq!(error.causes[0].retryable, Some(true));
+    assert_eq!(error.causes[0].causes[0].retryable, None);
+    assert_eq!(serde_json::to_value(&outcome).unwrap(), wire);
+    assert_ne!(outcome, Outcome::Cancelled);
+    let no_cause = Outcome::Interrupted { cause: None };
+    assert_eq!(
+        serde_json::from_value::<Outcome>(serde_json::to_value(&no_cause).unwrap()).unwrap(),
+        no_cause,
+        "a native interruption need not supply a cause or an operator stop intent"
+    );
+}
+
+#[test]
+fn reserved_zero_byte_operation_does_not_invent_a_native_attempt() {
+    let corpus = corpus();
+    let case = &corpus.cases[20];
+    assert!(case.native_events.is_empty());
+    assert_eq!(case.baseline["attempt_scope"], json!([]));
+    assert!(matches!(
+        &case.write_receipts[0].disposition,
+        WriteDisposition::DefinitelyUnwritten(_)
+    ));
+    assert_eq!(case.expected.native_attempt, "none");
+    assert_eq!(case.expected.request, "retry_held");
+    assert_eq!(
+        case.budget_oracle.as_ref().unwrap()["reserved_operations"],
+        3
+    );
+}
+
+#[test]
+fn accepted_input_attribution_fixture_includes_the_owned_first_failure() {
+    let corpus = corpus();
+    let case = &corpus.cases[21];
+    let NativeEvent::InputAccepted {
+        input: first,
+        parts: first_parts,
+        ..
+    } = &case.native_events[0]
+    else {
+        panic!("first accepted input");
+    };
+    let NativeEvent::InputAccepted {
+        input: second,
+        parts: second_parts,
+        ..
+    } = &case.native_events[1]
+    else {
+        panic!("second accepted input");
+    };
+    let NativeEvent::InputCommitObserved {
+        input,
+        attempt: failed,
+        outcome: Outcome::Failed(_),
+    } = &case.native_events[2]
+    else {
+        panic!("attributable first-input failure before the next attempt starts");
+    };
+    let NativeEvent::AttemptStarted {
+        attempt: next,
+        inputs,
+    } = &case.native_events[3]
+    else {
+        panic!("second attempt starts independently after the first fails");
+    };
+    assert_eq!(
+        serde_json::to_value(failed).unwrap(),
+        case.baseline["attempt_scope"][0]
+    );
+    assert_eq!(input, first);
+    assert_ne!(first, second);
+    assert_eq!(
+        first_parts, second_parts,
+        "text cannot disambiguate the inputs"
+    );
+    assert_ne!(failed, next);
+    assert_eq!(inputs.as_slice(), std::slice::from_ref(second));
+    assert_eq!(case.expected.native_attempt, "open");
+    assert_eq!(case.expected.request, "native_accepted");
 }
 
 #[test]

@@ -126,12 +126,14 @@
                         "nested"
                       ]
                     }
-                  }
+                  },
+                  "retryable": false
                 },
                 "message": "429 You've reached your 5-hour usage limit.",
                 "code": "provider.api_error",
                 "http_status": 429,
-                "native_reset": null
+                "native_reset": null,
+                "retryable": false
               }
             }
           }
@@ -342,12 +344,14 @@
                         "nested"
                       ]
                     }
-                  }
+                  },
+                  "retryable": false
                 },
                 "message": "429 You've reached your 5-hour usage limit.",
                 "code": "provider.api_error",
                 "http_status": 429,
-                "native_reset": null
+                "native_reset": null,
+                "retryable": false
               }
             }
           }
@@ -373,12 +377,14 @@
                         "nested"
                       ]
                     }
-                  }
+                  },
+                  "retryable": false
                 },
                 "message": "429 You've reached your 5-hour usage limit.",
                 "code": "provider.api_error",
                 "http_status": 429,
-                "native_reset": null
+                "native_reset": null,
+                "retryable": false
               }
             }
           }
@@ -974,7 +980,7 @@
         "readiness": {
           "kind": "candidate_ready"
         },
-        "native_attempt": "definitely_unwritten",
+        "native_attempt": "none",
         "request": "retry_held",
         "attention": "retry_guard_refused",
         "uncertain_input_replay": false
@@ -1037,6 +1043,33 @@
                 "detail": "  native input\n\nkeeps spacing  "
               }
             ]
+          }
+        },
+        {
+          "kind": "input_commit_observed",
+          "detail": {
+            "input": {
+              "namespace": "prompt",
+              "value": "p1"
+            },
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "synthetic first attempt failed",
+                  "retryable": false
+                },
+                "message": "synthetic first attempt failed",
+                "code": "synthetic_failure",
+                "http_status": null,
+                "native_reset": null,
+                "retryable": false
+              }
+            }
           }
         },
         {

@@ -16,6 +16,16 @@ pub(crate) struct ErrorEvidence {
     pub(crate) raw: Value,
     pub(crate) message: Option<String>,
     pub(crate) code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
+    /// A native assertion, never the common scheduler's retry decision.
+    /// None preserves the difference between absent metadata and false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retryable: Option<bool>,
+    /// Native cause order/nesting survives normalization without requiring a
+    /// reducer to decode provider-specific fields in raw payloads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) causes: Vec<ErrorEvidence>,
     pub(crate) http_status: Option<u16>,
     pub(crate) native_reset: Option<NativeReset>,
 }
@@ -26,8 +36,8 @@ pub(crate) struct ErrorEvidence {
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub(crate) enum Outcome {
     Completed,
-    Failed(ErrorEvidence),
-    Interrupted,
+    Failed(Box<ErrorEvidence>),
+    Interrupted { cause: Option<Box<ErrorEvidence>> },
     Cancelled,
     Incomplete,
 }

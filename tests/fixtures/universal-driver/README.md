@@ -22,6 +22,8 @@ captures; later driver tests must supply labelled producer-derived focus/cells.
 Native records, transport receipts and source-read progress remain distinct.
 Equal ID values in different namespaces cannot alias; incomplete trailing bytes
 must survive without UTF-8 coercion; raw nested errors cannot become a string.
+Optional native names, retryability and ordered cause chains remain facts, not
+retry decisions. A native interruption and its cause do not prove operator stop.
 An enqueued/written stop operation is not native completion. Callback absence
 does not downgrade a declared lifecycle capability to absent.
 
