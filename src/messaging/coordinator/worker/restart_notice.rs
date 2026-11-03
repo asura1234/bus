@@ -17,14 +17,15 @@ impl Worker {
             let interrupted: Vec<_> = self
                 .state
                 .agents()
-                .filter(|agent| {
-                    self.restart_outcome_at.is_some() || !self.resume_rebound.contains(&agent.id)
-                })
+                .filter(|agent| !agent.restore_pending_receipt)
                 .map(|agent| agent.id)
                 .collect();
             for agent in interrupted {
                 state.mark_restored_turn(agent);
             }
+            // Persist receipt acknowledgement with the interruption markers.
+            // A coordinator reopen cannot lose the successor exclusion.
+            state.acknowledge_native_rebinds();
         }
         // A post error must keep outcome.json. The next tick warns and retries.
         // Nothing to deliver (no live work-room orchestrator) may delete it.

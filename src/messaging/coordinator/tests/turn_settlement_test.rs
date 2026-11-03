@@ -20,9 +20,9 @@ fn reload(fixture: &mut Fixture) {
 fn restart(fixture: &mut Fixture) {
     reload(fixture);
     let mut state = fixture.worker.state.clone();
+    state.note_native_rebind(fixture.agent);
     state.mark_restored_turn(fixture.agent);
     fixture.worker.save(state).unwrap();
-    fixture.worker.resume_rebound.insert(fixture.agent);
 }
 
 fn server_restart(fixture: &mut Fixture) {
@@ -1845,5 +1845,236 @@ fn provider_flake_reset_diagnostics_follow_successful_persistence_once() {
         "provider=ClaudeCode".into(),
     ] {
         assert!(rows[0].contains(&field), "missing {field}: {}", rows[0]);
+    }
+}
+
+#[test]
+fn restart_reconciliation_recovers_distinct_committed_steering_final() {
+    for restored in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        let rollout = f.dir.join("rollout-finished-steering.jsonl");
+        let lead = f.send("finish the first task", false);
+        f.deliver();
+        let lead_payload = f.typed().last().unwrap().0.clone();
+        f.record(
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+            "turn_id":"turn-1","prompt":"finish the first task","transcript_path":rollout}),
+        );
+        f.consume();
+        f.status(RuntimeStatus::Working);
+        let member = f.send("answer the independent followup", false);
+        f.deliver();
+        let member_payload = f.typed().last().unwrap().0.clone();
+        assert!(f.request(member).steered && !f.request(member).trusted_start_bound);
+        append(
+            &rollout,
+            &codex_turn(
+                &rollout_at(&f, 1),
+                "turn-1",
+                &lead_payload,
+                Some("first committed answer"),
+            ),
+        );
+        append(
+            &rollout,
+            &codex_turn(
+                &rollout_at(&f, 2),
+                "turn-2",
+                &member_payload,
+                Some("second committed answer"),
+            ),
+        );
+        f.record(json!({"hook_event_name":"Stop","session_id":"session",
+            "turn_id":"turn-1","last_assistant_message":"first committed answer","transcript_path":rollout}));
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some("first committed answer"));
+        assert!(f.request(lead).pending_final.is_some());
+        if restored {
+            restart_lifecycle_reopen(&mut f, true);
+            f.worker.tick().unwrap();
+        } else {
+            f.status(RuntimeStatus::Idle);
+            f.worker.settle_requests().unwrap();
+        }
+        let outcomes: Vec<_> = [lead, member]
+            .into_iter()
+            .map(|id| {
+                (
+                    f.request(id).phase,
+                    f.reply(id),
+                    f.request(id).failure_reason.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                (
+                    RequestPhase::Completed,
+                    Some("first committed answer".into()),
+                    None
+                ),
+                (
+                    RequestPhase::Completed,
+                    Some("second committed answer".into()),
+                    None
+                ),
+            ],
+            "restored={restored}: every committed turn retains its own reply"
+        );
+    }
+}
+
+#[test]
+fn restart_reconciliation_settles_the_pre_stop_started_successor() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "first task before restart", "turn-1");
+    let member = f.send("followup started before restart", false);
+    f.deliver();
+    assert!(f.request(member).steered && !f.request(member).trusted_start_bound);
+    let queued = f.send("fresh queued task", true);
+    f.stopped("turn-1", "first task completed");
+    f.started("turn-2", "followup started before restart");
+    restart_lifecycle_reopen(&mut f, true);
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(lead).as_deref(), Some("first task completed"));
+    assert_eq!(
+        f.request(member).provider_turn_id.as_deref(),
+        Some("turn-2")
+    );
+    assert_eq!(
+        (f.request(member).phase, f.request(member).failure_reason.as_deref()),
+        (RequestPhase::Abandoned, Some("interrupted")),
+        "the saved Started belongs to the replaced execution, not a surviving turn; owner={:?}, queued={:?}",
+        f.worker.state.agent(f.agent).unwrap().current_request, f.request(queued).phase,
+    );
+    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+}
+
+#[test]
+fn restart_reconciliation_late_second_receipt_preserves_post_rebind_work() {
+    for coordinator_reopen in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        let first = running(&mut f, "first interrupted task", "turn-1");
+        server_restart(&mut f);
+        f.status(RuntimeStatus::Idle);
+        f.worker.settle_requests().unwrap();
+        assert_eq!(
+            f.request(first).failure_reason.as_deref(),
+            Some("interrupted")
+        );
+        let second = running(&mut f, "second interrupted task", "turn-2");
+        let queued = f.send("delivered after second terminal replacement", true);
+        f.worker.transport = restart_lifecycle_transport(&f, true);
+        f.worker.tick().unwrap();
+        assert_eq!(
+            f.request(second).failure_reason.as_deref(),
+            Some("interrupted")
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(queued)
+        );
+        assert_eq!(f.request(queued).phase, RequestPhase::Active);
+        if coordinator_reopen {
+            restart_lifecycle_reopen(&mut f, true);
+        }
+        f.now += 1;
+        restart_lifecycle_receipt(&f, "restarted");
+        f.worker.tick().unwrap();
+        assert_eq!(
+            (
+                f.request(queued).phase,
+                f.request(queued).failure_reason.as_deref()
+            ),
+            (RequestPhase::Active, None),
+            "the later health receipt belongs to the already-reconciled second restart",
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(queued)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_reconciliation_settles_earlier_independent_kimi_inputs() {
+    let mut f = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&f);
+    std::fs::write(&wire, "").unwrap();
+    let first = running(&mut f, "older independent input", "0");
+    let second = f.send("newer independent input", false);
+    f.deliver();
+    f.started("1", "newer independent input");
+    f.consume();
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(second)
+    );
+    for id in [first, second] {
+        assert_eq!(f.request(id).phase, RequestPhase::Active);
+        assert!(f.request(id).trusted_start_bound);
+        assert_eq!(f.request(id).group, None);
+    }
+    let queued = f.send("pending after both old inputs", true);
+    restart_lifecycle_reopen(&mut f, true);
+    f.worker.tick().unwrap();
+    let outcomes: Vec<_> = [first, second]
+        .into_iter()
+        .map(|id| (f.request(id).phase, f.request(id).failure_reason.clone()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (RequestPhase::Abandoned, Some("interrupted".into())),
+            (RequestPhase::Abandoned, Some("interrupted".into())),
+        ],
+        "every outstanding submitted root belongs to the replaced execution; queued={:?}",
+        f.request(queued).phase
+    );
+    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+}
+
+#[test]
+fn restart_reconciliation_logs_only_durable_interrupted_closures_once() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "lead interrupted by restore", "turn-1");
+    let member = f.send("steering interrupted by restore", false);
+    f.deliver();
+    restart(&mut f);
+    f.status(RuntimeStatus::Idle);
+    f.worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        assert!(f.worker.settle_requests().is_err());
+        assert!(
+            !capture.text().contains("bus.message.recovered"),
+            "no closure before persistence"
+        );
+        assert!(!f.request(lead).settled());
+        assert!(!f.request(member).settled());
+        f.worker.settle_requests().unwrap();
+        f.worker.settle_requests().unwrap();
+    });
+    let log = capture.text();
+    let rows: Vec<_> = log
+        .lines()
+        .filter(|l| l.contains("bus.message.recovered") && l.contains("interrupted"))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "each durable affected request logs once: {log}"
+    );
+    for id in [lead, member] {
+        assert!(
+            rows.iter()
+                .any(|line| line.contains(&format!("request_id={}", id.0))
+                    && line.contains(&format!("lead_id={}", lead.0))),
+            "{log}"
+        );
     }
 }

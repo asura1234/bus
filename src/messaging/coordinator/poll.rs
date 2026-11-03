@@ -50,7 +50,7 @@ impl Worker {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
                 {
-                    self.resume_rebound.insert(agent.id);
+                    state.note_native_rebind(agent.id);
                     rebound.push(rebind_agent(&mut state, agent, info)?);
                 }
             }
@@ -64,6 +64,7 @@ impl Worker {
             let status = polled_status(agent, info);
             let (missing, exit_evidence) =
                 self.observe_missing_binary(&mut state, agent, status, info)?;
+            super::provider_failure::mark_lost_sessionless_turn(&mut state, agent, &infos);
             if !missing {
                 observe_exit(
                     self.transport.as_mut(),

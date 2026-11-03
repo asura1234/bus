@@ -121,6 +121,7 @@ pub(crate) fn recoveries(previous: &BusState, next: &BusState) {
         };
         let reason = match request.failure_reason.as_deref() {
             Some(reason @ ("reply_not_captured" | "agent_unavailable")) => reason,
+            Some("interrupted") if old.interrupted_by_restore => "interrupted",
             Some(reason) if reason.starts_with("provider_error:") => "provider_error",
             _ => continue,
         };

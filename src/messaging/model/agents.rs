@@ -49,6 +49,7 @@ impl BusState {
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
                 codex_rollout: None,
+                restore_pending_receipt: false,
                 claude_shells: None,
                 startup: None,
                 details_disclosed: false,

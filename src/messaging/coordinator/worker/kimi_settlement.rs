@@ -157,7 +157,7 @@ impl super::Worker {
                 request.agent_id == agent
                     && Some(request.id) != current
                     && request.group.is_none()
-                    && request.trusted_start_bound
+                    && (request.trusted_start_bound || request.interrupted_by_restore)
             })
             .map(|request| request.id)
             .collect();

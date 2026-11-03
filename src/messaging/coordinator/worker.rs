@@ -32,8 +32,6 @@ pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
-    /// Agents whose native resume already owns their restart reconciliation.
-    pub(super) resume_rebound: BTreeSet<AgentId>,
     /// The restart outcome whose requests were captured by a surviving coordinator.
     pub(super) restart_outcome_at: Option<u64>,
     pub(super) store: JsonStore,
@@ -153,7 +151,6 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
-            resume_rebound: BTreeSet::new(),
             restart_outcome_at: None,
             state,
             store,

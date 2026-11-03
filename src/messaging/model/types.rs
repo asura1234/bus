@@ -373,6 +373,9 @@ pub(crate) struct RoomAgent {
     /// Validated Codex rollout location learned from this agent's hooks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) codex_rollout: Option<PathBuf>,
+    /// Protect post-rebind delivery until its late restart receipt is consumed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) restore_pending_receipt: bool,
     /// Observed shell boundary for this launch/session, saved with callbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) claude_shells: Option<ClaudeShells>,

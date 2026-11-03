@@ -1,26 +1,53 @@
 //! One restart outcome notice for each work room's orchestrator.
-use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase, RoomKind};
+use super::{
+    AgentId, BusState, PendingFinal, RecordedTurnEnd, Request, RequestId, RequestPhase, RoomKind,
+};
 use crate::utils::restart_record::{notice_text, RestartLog};
 
 impl BusState {
+    pub(crate) fn note_native_rebind(&mut self, agent: AgentId) {
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            owner.restore_pending_receipt = true;
+        }
+    }
+
+    pub(crate) fn acknowledge_native_rebinds(&mut self) {
+        for owner in self.agents.values_mut() {
+            owner.restore_pending_receipt = false;
+        }
+    }
+
     /// Native terminal replacement or a successful restart receipt proves the
     /// execution was interrupted. A coordinator reconnect alone is no end.
     pub(crate) fn mark_restored_turn(&mut self, agent: AgentId) {
         let Some(owner) = self.agents.get(&agent) else {
             return;
         };
-        let Some(id) = owner.current_request else {
-            return;
-        };
-        if owner
-            .provider_retry
-            .as_ref()
-            .is_some_and(|hold| hold.lead == id)
-        {
-            return;
-        }
-        if let Some(request) = self.requests.get_mut(&id) {
-            request.interrupted_by_restore = true;
+        let held = owner.provider_retry.as_ref().map(|hold| hold.lead);
+        let answered_anchor = owner.current_request.filter(|id| {
+            self.requests
+                .get(id)
+                .is_some_and(|r| r.settled() && r.pending_final.is_some())
+        });
+        // Callback consumption can re-anchor steering or reveal independent
+        // Kimi roots. Mark the submitted snapshot, never later queued delivery.
+        let submitted: Vec<_> = self
+            .unsettled_requests()
+            .filter(|r| {
+                r.agent_id == agent
+                    && matches!(r.phase, RequestPhase::Submitting | RequestPhase::Active)
+            })
+            .map(|r| r.id)
+            .chain(answered_anchor)
+            .collect();
+        for id in submitted {
+            if let Some(request) = self
+                .requests
+                .get_mut(&id)
+                .filter(|r| !held.is_some_and(|lead| r.id == lead || r.group == Some(lead)))
+            {
+                request.interrupted_by_restore = true;
+            }
         }
     }
 
@@ -31,7 +58,7 @@ impl BusState {
         &mut self,
         agent: AgentId,
         now_ms: u64,
-        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+        mut recorded_end: impl FnMut(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
         let id = owner.current_request?;
@@ -49,10 +76,7 @@ impl BusState {
         if self.agents.get(&agent)?.current_request != Some(id) {
             return Some(id);
         }
-        let recorded = recorded_end(self.requests.get(&id)?);
-        if recorded.is_some() {
-            self.consume_recorded_end(agent, id, now_ms, recorded, "restored-turn", false, "", "")?;
-        }
+        self.recover_restored_answers(agent, id, now_ms, &mut recorded_end)?;
         let owner = self.agents.get(&agent)?;
         if owner.current_request != Some(id)
             || owner
@@ -68,11 +92,69 @@ impl BusState {
         self.close_turn_with_reason(id, now_ms, super::INTERRUPTED.into())
             .ok()?;
         if let Some(mut answered) = answered {
-            answered.phase = RequestPhase::Completed;
             answered.pending_final = None;
             self.requests.insert(id, answered);
         }
         Some(id)
+    }
+
+    fn recover_restored_answers(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+        recorded_end: &mut impl FnMut(&Request) -> Option<RecordedTurnEnd>,
+    ) -> Option<()> {
+        let lead = self.requests.get(&id)?.clone();
+        let members = self.group_members(id);
+        let recorded = recorded_end(&lead);
+        if let Some(RecordedTurnEnd::Final {
+            turn_id, prompts, ..
+        }) = &recorded
+        {
+            self.bind_recorded_turn_inputs(agent, turn_id, prompts);
+            self.complete_pending_final(agent, now_ms).ok()?;
+        }
+        for member in &members {
+            let Some(member) = self.requests.get(member).filter(|r| !r.settled()).cloned() else {
+                continue;
+            };
+            self.recover_steered_answer(&lead, &member, &members, recorded_end(&member), now_ms);
+        }
+        // A consumed final on an answered anchor is not a missing reply.
+        // Recover every independent member before delivering/closing the lead.
+        if !self.requests.get(&id)?.settled() {
+            match recorded {
+                Some(RecordedTurnEnd::Final {
+                    turn_id,
+                    text,
+                    prompts,
+                }) => {
+                    let answer = PendingFinal {
+                        callback_id: format!("restored-turn:{turn_id}"),
+                        text,
+                        received_at_ms: now_ms,
+                        provider_session_id: lead.provider_session_id.clone(),
+                        provider_turn_id: Some(turn_id),
+                    };
+                    self.deliver_recorded_final(agent, id, answer, &prompts, now_ms);
+                }
+                Some(other) => {
+                    self.consume_recorded_end(
+                        agent,
+                        id,
+                        now_ms,
+                        Some(other),
+                        "restored-turn",
+                        false,
+                        "",
+                        "",
+                    );
+                }
+                None => {}
+            }
+        }
+        Some(())
     }
 
     /// Posts safe successful-restart metadata to each live work room's orchestrator.

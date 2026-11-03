@@ -96,6 +96,31 @@ impl Worker {
     }
 }
 
+/// Definite old-pane loss plus native-owned failed resume proves interruption,
+/// even when the sessionless guard correctly refuses to grant a fresh rebind.
+pub(super) fn mark_lost_sessionless_turn(
+    state: &mut BusState,
+    agent: &RoomAgent,
+    infos: &[schema::AgentInfo],
+) {
+    if agent.runtime_identity.session_id.is_some()
+        || agent.runtime_identity.pane_id.is_none()
+        || !state
+            .agent(agent.id)
+            .is_some_and(|owner| owner.runtime_identity.pane_id.is_none())
+    {
+        return;
+    }
+    if infos.iter().any(|info| {
+        Some(info.terminal_id.as_str()) != agent.runtime_identity.terminal_id.as_deref()
+            && super::resume::native_attempt(agent, info)
+                .is_some_and(|attempt| attempt.error.is_some())
+    }) {
+        state.note_native_rebind(agent.id);
+        state.mark_restored_turn(agent.id);
+    }
+}
+
 fn clear_stale_pane(state: &mut BusState, agent: &RoomAgent) -> Result<(), String> {
     let mut identity = agent.runtime_identity.clone();
     identity.pane_id = None;

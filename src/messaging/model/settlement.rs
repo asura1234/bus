@@ -4,6 +4,8 @@ use super::{
     RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
+mod previous_kimi;
+
 /// How the provider's own record says a turn ended, for a turn whose
 /// completion callback never came.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,7 +163,7 @@ impl BusState {
 
     /// A transcript can claim the input in a distinct turn even without its
     /// submit hook. Recover that turn's answer independently of the old lead.
-    fn recover_steered_answer(
+    pub(super) fn recover_steered_answer(
         &mut self,
         lead: &Request,
         member: &Request,
@@ -408,32 +410,6 @@ impl BusState {
         )
     }
 
-    /// A later Kimi Started can precede the earlier turn's wire flush. Settle
-    /// that independent request without replacing the newest current owner.
-    pub(crate) fn settle_previous_kimi_request(
-        &mut self,
-        agent: AgentId,
-        id: RequestId,
-        now_ms: u64,
-        recorded: Option<RecordedTurnEnd>,
-    ) -> Option<RequestId> {
-        let owner = self.agents.get(&agent)?;
-        let request = self.requests.get(&id)?;
-        if owner.provider != super::Provider::Kimi
-            || request.agent_id != agent
-            || request.group.is_some()
-            || !request.trusted_start_bound
-            || request.settled()
-        {
-            return None;
-        }
-        let current = owner.current_request;
-        self.agents.get_mut(&agent)?.current_request = Some(id);
-        let settled = self.settle_kimi_ended_request(agent, now_ms, |_| recorded);
-        self.agents.get_mut(&agent)?.current_request = current;
-        settled
-    }
-
     /// An owned Kimi wire commit ends the turn even while its screen still
     /// looks busy or blocked. Process exit without a commit keeps its grace.
     fn settle_kimi_ended_request(
@@ -566,7 +542,7 @@ impl BusState {
     /// prompts, hold it: Codex may have run it as a turn of its own (found in
     /// review of #112), so otherwise it leaves the group as
     /// `reply_not_captured` rather than take another turn's answer.
-    fn deliver_recorded_final(
+    pub(super) fn deliver_recorded_final(
         &mut self,
         agent: AgentId,
         id: RequestId,
@@ -610,7 +586,11 @@ impl BusState {
             member.group = None;
             member.phase = RequestPhase::Abandoned;
             member.completed_at_ms = Some(now_ms);
-            member.failure_reason = Some("reply_not_captured".to_owned());
+            member.failure_reason = Some(if member.interrupted_by_restore {
+                super::INTERRUPTED.to_owned()
+            } else {
+                "reply_not_captured".to_owned()
+            });
         }
         let session = self.requests.get(&id)?.provider_session_id.clone();
         if let Some(turn) = answer.provider_turn_id.as_deref() {

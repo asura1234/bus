@@ -1342,7 +1342,9 @@ fn restart_replacement_preserves_replies_retry_holds_and_only_closes_submitted_g
             )),
             _ => None,
         };
-        worker.state.settle_restored_turn(agent, now, |_| recorded);
+        worker
+            .state
+            .settle_restored_turn(agent, now, |_| recorded.clone());
         if outcome == "retry" {
             assert!(worker.state.agent(agent).unwrap().provider_retry.is_some());
             assert_eq!(
@@ -1375,6 +1377,16 @@ fn restart_replacement_preserves_replies_retry_holds_and_only_closes_submitted_g
                 );
             }
             assert!(worker.state.request(member).unwrap().settled(), "{outcome}");
+            assert_eq!(
+                worker
+                    .state
+                    .request(member)
+                    .unwrap()
+                    .failure_reason
+                    .as_deref(),
+                Some("interrupted"),
+                "{outcome}"
+            );
         }
         assert_eq!(worker.state.queued_requests(agent), &[pending]);
         drop(worker);
@@ -1417,4 +1429,130 @@ fn prepare_kimi_restart_home(dir: &std::path::Path) {
     .unwrap();
     // A real interrupted process left an open prompt, with no end commit.
     std::fs::write(session.join("agents/main/wire.jsonl"), "").unwrap();
+}
+
+#[test]
+fn restart_reconciliation_sessionless_submission_settles_after_terminal_loss() {
+    struct RemoveScratch(PathBuf);
+    impl Drop for RemoveScratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    struct LostSessionlessTerminal {
+        info: schema::AgentInfo,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        pane_missing: bool,
+    }
+    impl Transport for LostSessionlessTerminal {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(crate::protocol::api::api_method_name(&method));
+            match method {
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList {
+                        agents: vec![self.info.clone()],
+                    })
+                }
+                Method::PaneGet(_) if self.pane_missing => Err(TransportError {
+                    code: Some("pane_not_found".into()),
+                    message: "the old terminal no longer exists".into(),
+                    definitely_rejected: false,
+                }),
+                Method::PaneGet(_) => Err(TransportError {
+                    code: Some("transport_error".into()),
+                    message: "read evidence unavailable".into(),
+                    definitely_rejected: false,
+                }),
+                _ => Ok(ResponseResult::Ok {}),
+            }
+        }
+    }
+    for evidence in ["owned-loss", "wrong-owner", "transport-failure"] {
+        let mut original = resumed_info(Provider::Codex);
+        original.terminal_id = "terminal".into();
+        original.agent_session = None;
+        let (mut worker, agent, room, dir, _) = fixture(
+            Provider::Codex,
+            vec![
+                Ok(ResponseResult::AgentList {
+                    agents: vec![original.clone()],
+                }),
+                Ok(ResponseResult::AgentInfo { agent: original }),
+                Ok(ResponseResult::Ok {}),
+            ],
+        );
+        let _scratch = RemoveScratch(dir.clone());
+        let mut state = worker.state.clone();
+        let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(agent, identity).unwrap();
+        worker.save(state).unwrap();
+        let submitted = queue(&mut worker, room, agent, "first input before SessionStart");
+        worker.poll().unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().current_request,
+            Some(submitted)
+        );
+        assert_eq!(
+            worker.state.request(submitted).unwrap().phase,
+            RequestPhase::Submitting
+        );
+        assert!(worker.state.request(submitted).unwrap().uncertain_outcome);
+        let queued = queue(&mut worker, room, agent, "retained followup");
+        let follower = worker.state.request(queued).unwrap().prompt.text.clone();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let failed = serde_json::from_value(json!({
+        "terminal_id":"restored-terminal", "pane_id":"pane", "workspace_id":"workspace", "tab_id":"tab",
+        "focused":false, "revision":1, "agent_status":"unknown", "interactive_ready":false,
+        "native_resume":{"name":if evidence == "wrong-owner" { "another-owner".into() } else { crate::messaging::identity::managed_name(room, agent) },"agent":"codex",
+            "session_id":null,"command":"codex","error":"Bus resume has no matching unstarted provider owner"}
+    })).unwrap();
+        drop(worker);
+        let mut worker = Worker::open(
+            dir.clone(),
+            Box::new(LostSessionlessTerminal {
+                info: failed,
+                calls: calls.clone(),
+                pane_missing: evidence != "transport-failure",
+            }),
+        )
+        .unwrap();
+        let infos = worker.poll().unwrap().unwrap();
+        let now = io::now_ms().saturating_add(24 * 60 * 60 * 1_000);
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, now)
+            .unwrap();
+        worker.settle_requests().unwrap();
+        worker.expire_unconfirmed_submissions(now).unwrap();
+        let original = worker.state.request(submitted).unwrap();
+        if evidence == "owned-loss" {
+            assert!(original.settled() && original.failure_reason.as_deref().is_some_and(|s| !s.is_empty()),
+        "submitted request needs a clear terminal outcome after its exact old terminal disappeared; phase={:?}, reason={:?}, owner={:?}",
+        original.phase, original.failure_reason, worker.state.agent(agent).unwrap().status);
+            assert_eq!(original.failure_reason.as_deref(), Some("interrupted"));
+        } else {
+            assert_eq!(original.phase, RequestPhase::Submitting, "{evidence}");
+            assert!(
+                original.failure_reason.is_none() && original.uncertain_outcome,
+                "{evidence}"
+            );
+        }
+        assert_eq!(
+            worker.state.request(queued).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert_eq!(worker.state.request(queued).unwrap().prompt.text, follower);
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|name| name.contains("prompt_if")),
+            "uncertain input must never replay"
+        );
+    }
 }
