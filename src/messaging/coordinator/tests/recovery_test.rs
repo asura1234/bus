@@ -5,6 +5,7 @@ fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
     for ownership_lookup in [
         native_agents(Some("bus-r1-a2".into())),
         Err(TransportError {
+            timestamps: Default::default(),
             message: "server busy".into(),
             code: None,
             definitely_rejected: false,
@@ -190,6 +191,7 @@ fn unsupported_native_close_requires_server_restart_and_never_falls_back() {
         let (mut worker, agent, _, dir, calls) = fixture(
             Provider::Codex,
             vec![Err(TransportError {
+                timestamps: Default::default(),
                 message: "RAW_API_DETAIL unknown_method: pane.close_if_identity; expected one of many API variants".repeat(20),
                 code: Some(code.into()),
                 definitely_rejected: true,
@@ -216,6 +218,7 @@ fn unsupported_native_close_requires_server_restart_and_never_falls_back() {
 fn deletion_transport_details_stay_out_of_user_errors() {
     for result in [
         Err(TransportError {
+            timestamps: Default::default(),
             message: "RAW_API_DETAIL terminal driver details".repeat(100),
             code: Some("terminal_stop_failed".into()),
             definitely_rejected: false,
@@ -246,6 +249,7 @@ fn successful_deletion_retry_clears_previous_worker_snapshot_error() {
             Provider::Codex,
             vec![
                 Err(TransportError {
+                    timestamps: Default::default(),
                     message: "temporary stop failure".into(),
                     code: Some("terminal_stop_failed".into()),
                     definitely_rejected: true,
@@ -505,6 +509,7 @@ fn delete_leaves_open_a_restored_terminal_whose_provider_session_moved() {
             identity_changed(),
             restored_list(),
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "pane not found".into(),
                 code: Some("pane_not_found".into()),
                 definitely_rejected: true,
@@ -560,6 +565,7 @@ fn delete_keeps_an_agent_whose_restored_terminal_runs_its_own_session() {
             identity_changed(),
             restored_list(),
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "pane not found".into(),
                 code: Some("pane_not_found".into()),
                 definitely_rejected: true,

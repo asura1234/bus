@@ -626,6 +626,7 @@ impl Transport for UnreadableScreen {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
             Method::AgentGet(_) => Err(TransportError {
+                timestamps: Default::default(),
                 code: None,
                 message: "native server unavailable".into(),
                 definitely_rejected: false,

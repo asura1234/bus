@@ -88,6 +88,7 @@ pub(in crate::server::api) fn wait_for_output(
                 serde_json::to_string(&ErrorResponse {
                     id: request_id,
                     error: ErrorBody {
+                        timestamps: None,
                         code: "internal_error".into(),
                         message: "failed to decode pane read result".into(),
                     },
@@ -120,6 +121,7 @@ pub(in crate::server::api) fn wait_for_output(
                 serde_json::to_string(&ErrorResponse {
                     id: request_id,
                     error: ErrorBody {
+                        timestamps: None,
                         code: "timeout".into(),
                         message: "timed out waiting for output match".into(),
                     },
@@ -459,6 +461,7 @@ pub(super) fn agent_from_response(
     let value: serde_json::Value = serde_json::from_str(response).map_err(|_| ErrorResponse {
         id: request_id.into(),
         error: ErrorBody {
+            timestamps: None,
             code: "internal_error".into(),
             message: "failed to decode agent response".into(),
         },
@@ -467,6 +470,7 @@ pub(super) fn agent_from_response(
         let error = serde_json::from_value(value["error"].clone()).map_err(|_| ErrorResponse {
             id: request_id.into(),
             error: ErrorBody {
+                timestamps: None,
                 code: "internal_error".into(),
                 message: "failed to decode agent error".into(),
             },
@@ -479,6 +483,7 @@ pub(super) fn agent_from_response(
     serde_json::from_value(value["result"]["agent"].clone()).map_err(|_| ErrorResponse {
         id: request_id.into(),
         error: ErrorBody {
+            timestamps: None,
             code: "internal_error".into(),
             message: "failed to decode agent result".into(),
         },
@@ -518,6 +523,7 @@ fn agent_wait_timeout(
     serde_json::to_string(&ErrorResponse {
         id: request_id,
         error: ErrorBody {
+            timestamps: None,
             code: code.into(),
             message,
         },
@@ -529,6 +535,7 @@ pub(super) fn agent_wait_not_running(request_id: String) -> std::io::Result<Stri
     serde_json::to_string(&ErrorResponse {
         id: request_id,
         error: ErrorBody {
+            timestamps: None,
             code: "agent_not_running".into(),
             message: "agent is no longer running in the target pane".into(),
         },
@@ -601,6 +608,7 @@ pub(in crate::server::api) fn wait_for_event(
                 serde_json::to_string(&ErrorResponse {
                     id: request_id,
                     error: ErrorBody {
+                        timestamps: None,
                         code: "timeout".into(),
                         message: "timed out waiting for event match".into(),
                     },
@@ -628,6 +636,7 @@ fn event_match_subscription(
         _ => Err(ErrorResponse {
             id: request_id.into(),
             error: ErrorBody {
+                timestamps: None,
                 code: "unsupported_event_wait_match".into(),
                 message: "events.wait currently supports pane agent status matches".into(),
             },

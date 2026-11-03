@@ -116,6 +116,7 @@ impl Transport for NoTabs {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         assert!(matches!(method, Method::TabCreate(_)), "{method:?}");
         Err(TransportError {
+            timestamps: Default::default(),
             code: None,
             message: "no tabs in tests".into(),
             definitely_rejected: true,

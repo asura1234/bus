@@ -15,6 +15,8 @@ impl RoomAgent {
             Some("provider_binary_missing")
         } else if !self.hook_setup_confirmed {
             Some("hook_setup_unconfirmed")
+        } else if self.dialog {
+            Some("agent_dialog")
         } else if self.status != RuntimeStatus::Idle {
             Some(match self.status {
                 RuntimeStatus::Blocked => "agent_blocked",

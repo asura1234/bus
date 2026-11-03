@@ -388,6 +388,7 @@ fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_un
                 "must not replay a native write"
             );
             Err(TransportError {
+                timestamps: Default::default(),
                 code: Some("terminal_observation_unavailable".into()),
                 message: "Agent screen remains unreadable".into(),
                 definitely_rejected: true,

@@ -248,6 +248,7 @@ impl HeadlessServer {
             return serde_json::to_string(&schema::ErrorResponse {
                 id,
                 error: schema::ErrorBody {
+                    timestamps: None,
                     code: "invalid_params".into(),
                     message: "notification title is empty".into(),
                 },

@@ -641,31 +641,35 @@ fn complete_agent_prompt_with_timestamps(
         pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Native prompt submission completed; this is not model acceptance");
+    let fail = |code: &str, message: String| {
+        encode_error_body(
+            id.clone(),
+            crate::protocol::api::schema::ErrorBody {
+                code: code.into(),
+                message,
+                timestamps: Some(timestamps),
+            },
+        )
+    };
     match completed {
         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent, timestamps }),
         Ok(Err(err)) if crate::terminal::runtime::PromptNotShown::composer_busy(&err) => {
-            encode_error(
-                id,
-                crate::protocol::api::AGENT_COMPOSER_BUSY,
-                err.to_string(),
-            )
+            fail(crate::protocol::api::AGENT_COMPOSER_BUSY, err.to_string())
         }
-        Ok(Err(err)) if not_shown(&err) => encode_error(
-            id,
+        Ok(Err(err)) if not_shown(&err) => fail(
             crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
             err.to_string(),
         ),
         Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
-            encode_error(id, "timeout", err.to_string())
+            fail("timeout", err.to_string())
         }
-        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => encode_error(
-            id,
+        Ok(Err(err)) => fail("agent_prompt_failed", err.to_string()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => fail(
             "timeout",
-            "Native prompt submission exceeded its hard deadline",
+            "Native prompt submission exceeded its hard deadline".into(),
         ),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            encode_error(id, "agent_prompt_failed", "pty actor closed")
+            fail("agent_prompt_failed", "pty actor closed".into())
         }
     }
 }

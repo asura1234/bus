@@ -1,6 +1,6 @@
 use super::latency::{elapsed, hour_with_offset, percentiles, snapshot, HourKey};
+use crate::messaging::model::NativeSubmissionTimestamps;
 use crate::messaging::model::{AgentId, BusState, DeliveryLatency, Provider, RequestId, RoomId};
-use crate::protocol::api::schema::NativeSubmissionTimestamps;
 
 fn singapore_hour(ms: u64) -> HourKey {
     hour_with_offset(ms, 8 * 3600).unwrap()
@@ -118,7 +118,18 @@ fn snapshot_aggregates_ready_bus_phases_by_provider_recipient_and_hour() {
 
 #[test]
 fn legacy_requests_have_no_latency_samples() {
-    let state = BusState::new();
+    let mut state = BusState::new();
+    let room = state.create_room("legacy").unwrap();
+    let agent = state
+        .create_agent(room, "legacy", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    let request = add_request(&mut state, room, agent, 1_793_577_600_000, 1, true);
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][request.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("latency");
+    let state = serde_json::from_value(document).unwrap();
     let report = snapshot(&state, singapore_hour);
     assert!(report.all.hours.is_empty());
     assert!(report.slowest.is_empty());
@@ -129,6 +140,26 @@ fn legacy_requests_have_no_latency_samples() {
 #[test]
 fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
     let root = crate::utils::test_temp::unique_temp_path("dashboard-latency-routes");
+    let mut state = BusState::new();
+    let room = state.create_room("legacy").unwrap();
+    let agent = state
+        .create_agent(room, "legacy", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    let request = add_request(&mut state, room, agent, 1_793_577_600_000, 1, true);
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][request.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("latency");
+    document["requests"][request.0.to_string()]["prompt"]["text"] =
+        serde_json::Value::String("SENTINEL_LEGACY_CONTENT".into());
+    let state = serde_json::from_value(document).unwrap();
+    let path = root.join("state.json");
+    crate::messaging::storage::state_store::JsonStore::new(path.clone())
+        .save(&state)
+        .unwrap();
+    let before = std::fs::read(&path).unwrap();
+
     let page = super::response_for(&root, "GET", "/latency");
     assert_eq!(page.status, "200 OK");
     assert!(String::from_utf8(page.body)
@@ -137,8 +168,11 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
     let data = super::response_for(&root, "GET", "/latency/data");
     assert_eq!(data.status, "200 OK");
     let body: serde_json::Value = serde_json::from_slice(&data.body).unwrap();
-    assert!(body["metrics"].is_null());
-    assert!(!root.exists());
+    assert_eq!(body["metrics"]["all"]["phases"]["accepted_to_box"]["n"], 0);
+    let raw = String::from_utf8(data.body).unwrap();
+    assert!(!raw.contains("SENTINEL_LEGACY_CONTENT"));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(!root.join("state.journal.json").exists());
     assert_eq!(
         super::response_for(&root, "POST", "/latency/data").status,
         "405 Method Not Allowed"
@@ -174,4 +208,94 @@ fn provider_slowest_drilldown_retains_requests_outside_global_top_fifty() {
         report.provider_slowest["codex"][0].request_id,
         codex_request.0
     );
+}
+
+#[test]
+fn delivery_latency_native_total_excludes_composer_wait_between_attempts() {
+    use crate::messaging::model::{AgentRuntimeIdentity, RuntimeStatus, SubmissionOutcome};
+
+    let mut state = BusState::new();
+    let room = state.create_room("latency retries").unwrap();
+    let agent = state
+        .create_agent(room, "codex", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("latency-launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    let accepted = 1_793_577_600_000;
+    state
+        .observe_status(agent, RuntimeStatus::Idle, accepted)
+        .unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    state
+        .set_draft_text(room, "retry after the composer is available")
+        .unwrap();
+    let request = state.submit_draft(room, accepted).unwrap()[0];
+    state.record_queued(request, accepted + 5).unwrap();
+
+    state
+        .begin_submission(request, "latency-launch", 0)
+        .unwrap();
+    state.record_picked(request, accepted + 10, false).unwrap();
+    state
+        .record_native_requested(request, accepted + 15)
+        .unwrap();
+    state
+        .record_submission(request, SubmissionOutcome::ComposerBusy)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Blocked, accepted + 20)
+        .unwrap();
+
+    let second_native_request = accepted + 60_000;
+    state
+        .observe_status(agent, RuntimeStatus::Idle, second_native_request)
+        .unwrap();
+    state
+        .begin_submission(request, "latency-launch", 0)
+        .unwrap();
+    state
+        .record_picked(request, second_native_request, true)
+        .unwrap();
+    state
+        .record_native_requested(request, second_native_request)
+        .unwrap();
+    state
+        .record_native_timestamps(
+            request,
+            NativeSubmissionTimestamps {
+                server_accepted_at_ms: Some(second_native_request + 5),
+                writer_queued_at_ms: Some(second_native_request + 10),
+                paste_started_at_ms: Some(second_native_request + 15),
+                text_written_at_ms: Some(second_native_request + 20),
+                paste_completed_at_ms: Some(second_native_request + 30),
+                composer_owned_at_ms: Some(second_native_request + 40),
+                enter_sent_at_ms: Some(second_native_request + 50),
+                enter_written_at_ms: Some(second_native_request + 60),
+                native_confirmed_at_ms: Some(second_native_request + 100),
+            },
+        )
+        .unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+
+    let report = snapshot(&state, singapore_hour);
+    assert_eq!(report.all.phases["native_total"].n, 1);
+    assert_eq!(report.all.phases["native_total"].p50, Some(100));
 }

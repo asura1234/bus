@@ -119,6 +119,7 @@ impl Transport for FailedLaunchNative {
                 if self.close_failures > 0 {
                     self.close_failures -= 1;
                     return Err(TransportError {
+                timestamps: Default::default(),
                         code: Some("terminal_stop_failed".into()), message: "cannot stop".into(),
                         definitely_rejected: true,
                     });
@@ -1072,6 +1073,7 @@ impl Transport for ShellRetryNative {
                 self.starts.lock().unwrap().push(params.start.clone());
                 if self.uncertain {
                     return Err(TransportError {
+                        timestamps: Default::default(),
                         code: None,
                         message: "lost launch response".into(),
                         definitely_rejected: false,
@@ -1770,6 +1772,7 @@ fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
                 Method::AgentStartIfIdentity(_) => Err(TransportError {
+                    timestamps: Default::default(),
                     code: Some("agent_shell_integration_unavailable".into()),
                     message: "no shell editor".into(),
                     definitely_rejected: true,

@@ -219,6 +219,7 @@ pub(in crate::messaging::coordinator) fn queue(
 
 pub(super) fn identity_changed() -> Result<ResponseResult, TransportError> {
     Err(TransportError {
+        timestamps: Default::default(),
         message: "identity changed".into(),
         code: Some("terminal_identity_changed".into()),
         definitely_rejected: true,
@@ -349,6 +350,7 @@ impl Transport for NativeBoundClose {
             Ok(ResponseResult::Ok {})
         } else {
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "terminal_identity_changed".into(),
                 code: Some("terminal_identity_changed".into()),
                 definitely_rejected: true,

@@ -569,7 +569,7 @@ impl Worker {
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
-        self.note_native_requested(request, io::now_ms())?;
+        self.note_native_requested(request, io::now_ms());
         let started = std::time::Instant::now();
         let response =
             self.transport
@@ -622,7 +622,8 @@ impl Worker {
         request: RequestId,
     ) -> Result<(), String> {
         self.trace_provider_retry(agent, request);
-        self.note_native_requested(request, io::now_ms())
+        self.note_native_requested(request, io::now_ms());
+        Ok(())
     }
 }
 
@@ -631,7 +632,7 @@ fn native_response_timestamps(
 ) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
     match response {
         Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
-        _ => Default::default(),
+        Err(error) => error.timestamps,
     }
 }
 
@@ -641,7 +642,7 @@ fn record_native_timestamps(
     timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
 ) -> Result<(), String> {
     state
-        .record_native_timestamps(request, timestamps)
+        .record_native_timestamps(request, timestamps.into())
         .map_err(|error| error.to_string())
 }
 
