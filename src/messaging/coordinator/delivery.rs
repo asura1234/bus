@@ -80,6 +80,7 @@ impl Worker {
             self.save(state)?;
         }
         self.expire_queued_now()?;
+        self.restore_orchestrator_queue_order()?;
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());
         self.withdrawn_at.retain(|id, at| {
@@ -210,6 +211,25 @@ impl Worker {
             if state.recover_idle_request(request, io::now_ms()).is_ok() {
                 let _ = self.save(state);
             }
+        }
+        Ok(())
+    }
+
+    fn restore_orchestrator_queue_order(&mut self) -> Result<(), String> {
+        // Expiry can defer refused reply wakes. Restore only inbox ordering;
+        // keep the existing background-owner release at its earlier boundary.
+        let mut state = self.state.clone();
+        let inboxes: Vec<_> = state
+            .agents()
+            .filter(|agent| agent.orchestrates.is_some())
+            .map(|agent| agent.id)
+            .collect();
+        let mut changed = false;
+        for agent in inboxes {
+            changed |= state.prioritize_orchestrator_dialogs(agent);
+        }
+        if changed {
+            self.save(state)?;
         }
         Ok(())
     }
