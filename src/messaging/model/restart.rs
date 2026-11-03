@@ -11,7 +11,12 @@ impl BusState {
         }
     }
 
-    pub(crate) fn acknowledge_native_rebinds(&mut self) {
+    pub(crate) fn restart_receipt_seen(&self, at_ms: u64) -> bool {
+        self.last_restart_receipt_at_ms == Some(at_ms)
+    }
+
+    pub(crate) fn acknowledge_native_rebinds(&mut self, at_ms: u64) {
+        self.last_restart_receipt_at_ms = Some(at_ms);
         for owner in self.agents.values_mut() {
             owner.restore_pending_receipt = false;
         }

@@ -2078,3 +2078,66 @@ fn restart_reconciliation_logs_only_durable_interrupted_closures_once() {
         );
     }
 }
+
+#[test]
+fn restart_reconciliation_retained_receipt_after_saved_ack_preserves_successor() {
+    for boundary in ["same-worker", "consumed-reopen", "retained-reopen"] {
+        let mut f = Fixture::new(Provider::Codex);
+        let old = running(&mut f, "old interrupted execution", "turn-1");
+        let successor = f.send("fresh successor after native replacement", true);
+        f.worker.transport = restart_lifecycle_transport(&f, true);
+        f.worker.tick().unwrap();
+        assert_eq!(
+            f.request(old).failure_reason.as_deref(),
+            Some("interrupted")
+        );
+        assert_eq!(f.request(successor).phase, RequestPhase::Active);
+        assert!(
+            f.worker
+                .state
+                .agent(f.agent)
+                .unwrap()
+                .restore_pending_receipt
+        );
+
+        f.now += 1;
+        restart_lifecycle_receipt(&f, "restarted");
+        let path = crate::utils::restart_record::outcome_path(&f.dir);
+        let receipt = std::fs::read(&path).unwrap();
+        f.worker.announce_recorded_restart().unwrap();
+        assert!(!path.exists());
+        assert_eq!(f.request(successor).phase, RequestPhase::Active);
+        assert!(
+            !f.worker
+                .state
+                .agent(f.agent)
+                .unwrap()
+                .restore_pending_receipt
+        );
+
+        if boundary != "consumed-reopen" {
+            // Reconstruct the exact reachable crash cut after the receipt's
+            // durable state save but before its following outcome-file unlink.
+            // Only the identical disk receipt is retained; no model field changes.
+            std::fs::write(&path, &receipt).unwrap();
+        }
+        if boundary != "same-worker" {
+            // The same restored terminal is still alive: this is coordinator
+            // reconnect, not a second replacement that could mask replay.
+            restart_lifecycle_reopen(&mut f, true);
+        }
+        f.worker.tick().unwrap();
+        assert_eq!(
+            (
+                f.request(successor).phase,
+                f.request(successor).failure_reason.as_deref()
+            ),
+            (RequestPhase::Active, None),
+            "boundary={boundary}: an already acknowledged receipt must not interrupt its successor"
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(successor)
+        );
+    }
+}

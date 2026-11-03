@@ -14,6 +14,9 @@ use {
 pub(crate) struct BusState {
     pub(super) next_id: u64,
     pub(super) next_status_revision: u64,
+    /// Successful restart receipt committed with its interrupted request snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) last_restart_receipt_at_ms: Option<u64>,
     pub(super) rooms: BTreeMap<RoomId, Room>,
     #[serde(deserialize_with = "deserialize_agents")]
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
@@ -127,6 +130,7 @@ impl BusState {
     /// other model change still needs an atomic save before delivery resumes.
     pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
         if self.next_id != previous.next_id
+            || self.last_restart_receipt_at_ms != previous.last_restart_receipt_at_ms
             || self.retired_agents != previous.retired_agents
             || self.rooms != previous.rooms
             || self.routing_before_ms != previous.routing_before_ms
@@ -168,6 +172,7 @@ impl BusState {
         Self {
             next_id: 1,
             next_status_revision: 1,
+            last_restart_receipt_at_ms: None,
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),
             retired_agents: BTreeMap::new(),

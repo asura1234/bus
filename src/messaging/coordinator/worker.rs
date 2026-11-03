@@ -32,8 +32,6 @@ pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
-    /// The restart outcome whose requests were captured by a surviving coordinator.
-    pub(super) restart_outcome_at: Option<u64>,
     pub(super) store: JsonStore,
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
@@ -151,7 +149,6 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
-            restart_outcome_at: None,
             state,
             store,
             data_dir,
