@@ -9,7 +9,7 @@ impl BusUi {
     /// before that press's command is finished, so a quick second press
     /// would be undone by the first press's echo. A stepper value whose
     /// command is still pending stays as shown; the final echo matches it.
-    fn receive_settings(&mut self, mut settings: crate::messaging::prefs::settings::BusSettings) {
+    pub(in crate::client::rooms) fn receive_settings(&mut self, mut settings: crate::messaging::prefs::settings::BusSettings) {
         let pending = |is: fn(&BusCommand) -> bool| {
             self.pending
                 .iter()
@@ -30,7 +30,7 @@ impl BusUi {
         self.settings = settings;
     }
 
-    fn receive_dev_focus(&mut self, room: RoomId, agent: Option<AgentId>) {
+    pub(in crate::client::rooms) fn receive_dev_focus(&mut self, room: RoomId, agent: Option<AgentId>) {
         if self.form.is_some() || self.rename.is_some() {
             return;
         }
