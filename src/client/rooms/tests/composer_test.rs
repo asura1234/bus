@@ -774,16 +774,37 @@ fn composer_removed_attachment_is_excluded_from_the_next_send() {
 
 #[test]
 fn composer_pending_attachment_uses_the_validated_canonical_path() {
+    const CHILD_HOME: &str = "BUS_COMPOSER_ATTACHMENT_TEST_HOME";
+    let Some(private_home) = std::env::var_os(CHILD_HOME) else {
+        let home = crate::utils::test_temp::unique_temp_path("bus-composer-home");
+        std::fs::create_dir(&home).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "client::rooms::tests::composer_pending_attachment_uses_the_validated_canonical_path",
+                "--test-threads=1",
+            ])
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env(CHILD_HOME, &home)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+        assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    };
+    let home = std::path::PathBuf::from(private_home);
+    assert_eq!(std::env::home_dir().unwrap(), home);
     let (ui, room, agent) = fixture();
     let mut seed = ui.snapshot.state.clone();
     seed.set_draft_recipients(room, [agent]).unwrap();
     let dir = crate::utils::test_temp::unique_temp_path("bus-composer-pending-path");
-    let fixture_dir = std::env::current_dir().unwrap().join("temp").join(format!("composer-home-path-{}", std::process::id()));
+    let fixture_dir = home.join("attachments");
     std::fs::create_dir_all(&fixture_dir).unwrap();
     let file = fixture_dir.join("context.md");
     std::fs::write(&file, "attachment").unwrap();
-    let home = std::env::home_dir().unwrap();
-    let relative = file.strip_prefix(&home).expect("the owner's worktree is under its HOME");
+    let relative = file.strip_prefix(&home).expect("the attachment fixture is within its private HOME");
     let raw = std::path::PathBuf::from(format!("~/{}", relative.display()));
     let canonical = file.canonicalize().unwrap();
     let (handle, commands) = BusHandle::start_for_test(dir.join("data"), &seed);
