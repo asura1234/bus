@@ -685,6 +685,8 @@ fn ctrl_c_clears_new_draft_without_cancelling_the_pending_send() {
     local.text.insert("on its way");
     ui.text_changed(room);
     ui.request_send(room);
+    ui.locals.get_mut(&room).unwrap().text.insert("next draft");
+    ui.text_changed(room);
     key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(ui.quitting.is_none());
     assert!(ui.locals[&room].text.text.is_empty());
