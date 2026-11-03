@@ -6,6 +6,7 @@ use super::{
     RequestId, RuntimeStatus, StoragePause, Transport,
 };
 use crate::agents::providers::spool;
+use crate::messaging::model::RequestPhase;
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
@@ -32,14 +33,8 @@ pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
-    /// Current requests loaded when this coordinator process opened.
-    pub(super) resume_requests: BTreeMap<AgentId, RequestId>,
-    /// Agents whose native resume already owns their restart reconciliation.
-    pub(super) resume_rebound: BTreeSet<AgentId>,
-    /// Requests interrupted by native resume or a recorded restart.
-    pub(super) restart_requests: BTreeMap<AgentId, RequestId>,
-    /// The restart outcome whose requests were captured by a surviving coordinator.
-    pub(super) restart_outcome_at: Option<u64>,
+    /// Latest native-server generation observed by this coordinator.
+    pub(super) serving_generation: u64,
     pub(super) store: JsonStore,
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
@@ -134,10 +129,6 @@ impl Worker {
             .expire_stalled_queued_requests(io::now_ms())
             .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
-        let resume_requests = state
-            .agents()
-            .filter_map(|agent| agent.current_request.map(|request| (agent.id, request)))
-            .collect();
         let codex_rollouts = saved_rollouts(&state);
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
@@ -161,10 +152,7 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
-            resume_requests,
-            resume_rebound: BTreeSet::new(),
-            restart_requests: BTreeMap::new(),
-            restart_outcome_at: None,
+            serving_generation: 0,
             state,
             store,
             data_dir,
@@ -653,12 +641,45 @@ impl Worker {
                 }
             };
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
-            let settled = self
-                .restart_requests
-                .get(&agent)
-                .copied()
+            let current = state.agent(agent).and_then(|owner| owner.current_request);
+            let stale_members: Vec<_> = state
+                .requests()
+                .filter(|request| {
+                    Some(request.id) != current
+                        && matches!(
+                            request.phase,
+                            RequestPhase::Submitting | RequestPhase::Active
+                        )
+                        && request
+                            .delivery_epoch
+                            .as_ref()
+                            .is_some_and(|epoch| epoch.generation < self.serving_generation)
+                })
+                .map(|request| request.id)
+                .collect();
+            for id in stale_members {
+                state
+                    .abandon_generation_member(id, observed_at_ms)
+                    .map_err(|error| error.to_string())?;
+                changed = true;
+            }
+            let settled = state
+                .agent(agent)
+                .and_then(|owner| owner.current_request)
+                .filter(|request| {
+                    state
+                        .request(*request)
+                        .and_then(|request| request.delivery_epoch.as_ref())
+                        .is_some_and(|epoch| epoch.generation < self.serving_generation)
+                })
                 .and_then(|request| {
-                    state.settle_restarted_request(agent, request, observed_at_ms, recorded_end)
+                    state.settle_generation_request(
+                        agent,
+                        request,
+                        self.serving_generation,
+                        observed_at_ms,
+                        recorded_end,
+                    )
                 })
                 .or_else(|| state.settle_ended_request(agent, observed_at_ms, recorded_end));
             changed |= settled.is_some();

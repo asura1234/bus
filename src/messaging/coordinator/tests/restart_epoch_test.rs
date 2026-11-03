@@ -1,0 +1,506 @@
+use super::*;
+
+#[derive(Clone, Copy, Debug)]
+enum EpochMode {
+    Server,
+    Full,
+    Manual,
+}
+
+#[derive(Clone, Copy)]
+enum Receipt {
+    Early,
+    Late,
+    Replay,
+}
+
+fn epoch_transport(fixture: &Fixture, rebind: bool, generation: u64) -> Box<dyn Transport> {
+    let kind = crate::messaging::identity::provider_kind(fixture.provider).label();
+    let info = serde_json::from_value(json!({
+        "generation": generation,
+        "terminal_id": if rebind { "restored-terminal" } else { "terminal" },
+        "pane_id": if rebind { "restored-pane" } else { "pane" },
+        "name": crate::messaging::identity::managed_name(fixture.room, fixture.agent),
+        "agent": kind, "agent_status": "idle", "interactive_ready": true,
+        "workspace_id": "workspace", "tab_id": "tab", "focused": false, "revision": 1,
+        "agent_session": {"source": crate::messaging::identity::managed_source(fixture.provider),
+            "agent": kind, "kind": "id", "value": "session"}
+    }))
+    .unwrap();
+    Box::new(RestartLifecycleNative {
+        methods: fixture.native.clone(),
+        info,
+    })
+}
+
+fn epoch_reopen(fixture: &mut Fixture, rebind: bool, generation: u64) {
+    let placeholder = Worker::open(
+        fixture.dir.join("epoch-placeholder"),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        epoch_transport(fixture, rebind, generation),
+    )
+    .unwrap();
+}
+
+fn observe_epoch(fixture: &mut Fixture, generation: u64) {
+    fixture.worker.transport = epoch_transport(fixture, false, generation);
+    fixture.worker.tick().unwrap();
+}
+
+fn hold_transient_error(fixture: &mut Fixture, request: RequestId) {
+    let mut document = serde_json::to_value(&fixture.worker.state).unwrap();
+    document["agents"][fixture.agent.0.to_string()]["provider_retry"] = json!({
+        "lead": request,
+        "attempts": 1,
+        "retry_at_ms": u64::MAX,
+        "quota": false,
+        "queued": true,
+    });
+    fixture
+        .worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+}
+
+fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after: bool) {
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for bound in [false, true] {
+            for transient_hold in [false, true] {
+                if transient_hold && provider == Provider::Cursor {
+                    continue;
+                }
+                let mut f = Fixture::new(provider);
+                let turn = if provider == Provider::Kimi {
+                    "1"
+                } else {
+                    "turn-1"
+                };
+                if provider == Provider::Kimi {
+                    super::kimi_steering_tests::home(&f);
+                }
+                f.worker.transport = epoch_transport(&f, false, 1);
+                f.worker.tick().unwrap();
+                assert_eq!(f.worker.serving_generation, 1);
+                let old = if current {
+                    if bound || transient_hold {
+                        running(&mut f, "old generation request", turn)
+                    } else {
+                        let id = f.send("old awaiting-start request", false);
+                        f.deliver();
+                        id
+                    }
+                } else {
+                    f.send("queued retry lead", true)
+                };
+                if transient_hold {
+                    if !current {
+                        f.deliver();
+                    }
+                    hold_transient_error(&mut f, old);
+                }
+                let queued = (!queue_after).then(|| f.send("queued before resume", true));
+                match mode {
+                    EpochMode::Server => f.worker.transport = epoch_transport(&f, false, 2),
+                    EpochMode::Full | EpochMode::Manual => epoch_reopen(&mut f, true, 2),
+                }
+                if matches!(receipt, Receipt::Early) {
+                    restart_lifecycle_receipt(&f, "restarted");
+                }
+                let queued = queue_after
+                    .then(|| f.send("queued after resume", true))
+                    .or(queued);
+                f.worker.tick().unwrap();
+                if matches!(receipt, Receipt::Late | Receipt::Replay) {
+                    restart_lifecycle_receipt(&f, "restarted");
+                    f.worker.tick().unwrap();
+                }
+                assert_ne!(f.request(old).phase, RequestPhase::Queued);
+                let request = f.request(old);
+                if transient_hold {
+                    assert_ne!(
+                        request.phase,
+                        RequestPhase::Abandoned,
+                        "{provider:?}/{mode:?}"
+                    );
+                    assert_eq!(
+                        f.worker
+                            .state
+                            .agent(f.agent)
+                            .unwrap()
+                            .provider_retry
+                            .as_ref()
+                            .map(|hold| hold.lead),
+                        Some(old)
+                    );
+                } else if current {
+                    assert_eq!(request.phase, RequestPhase::Abandoned);
+                    assert_eq!(
+                        request.failure_reason.as_deref(),
+                        Some("reply_not_captured")
+                    );
+                } else {
+                    assert_ne!(request.phase, RequestPhase::Abandoned);
+                }
+                if current && !transient_hold {
+                    if let Some(queued) = queued {
+                        assert_ne!(
+                            f.request(queued).phase,
+                            RequestPhase::Queued,
+                            "{provider:?}/{mode:?}/bound={bound}/hold={transient_hold}: {:?}",
+                            f.request(queued)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+macro_rules! epoch_case {
+    ($name:ident, $mode:ident, $current:expr, $receipt:ident, $queue:ident) => {
+        #[test]
+        fn $name() {
+            epoch_ordering(EpochMode::$mode, $current, Receipt::$receipt, $queue);
+        }
+    };
+}
+
+epoch_case!(restart_epoch_c01, Server, true, Early, false);
+epoch_case!(restart_epoch_c02, Server, true, Early, true);
+epoch_case!(restart_epoch_c03, Server, true, Late, false);
+epoch_case!(restart_epoch_c04, Server, true, Late, true);
+epoch_case!(restart_epoch_c05, Server, true, Replay, false);
+epoch_case!(restart_epoch_c06, Server, true, Replay, true);
+epoch_case!(restart_epoch_c07, Server, false, Early, false);
+epoch_case!(restart_epoch_c08, Server, false, Early, true);
+epoch_case!(restart_epoch_c09, Server, false, Late, false);
+epoch_case!(restart_epoch_c10, Server, false, Late, true);
+epoch_case!(restart_epoch_c11, Server, false, Replay, false);
+epoch_case!(restart_epoch_c12, Server, false, Replay, true);
+epoch_case!(restart_epoch_c13, Full, true, Early, false);
+epoch_case!(restart_epoch_c14, Full, true, Early, true);
+epoch_case!(restart_epoch_c15, Full, true, Late, false);
+epoch_case!(restart_epoch_c16, Full, true, Late, true);
+epoch_case!(restart_epoch_c17, Full, true, Replay, false);
+epoch_case!(restart_epoch_c18, Full, true, Replay, true);
+epoch_case!(restart_epoch_c19, Full, false, Early, false);
+epoch_case!(restart_epoch_c20, Full, false, Early, true);
+epoch_case!(restart_epoch_c21, Full, false, Late, false);
+epoch_case!(restart_epoch_c22, Full, false, Late, true);
+epoch_case!(restart_epoch_c23, Full, false, Replay, false);
+epoch_case!(restart_epoch_c24, Full, false, Replay, true);
+epoch_case!(restart_epoch_c25, Manual, true, Early, false);
+epoch_case!(restart_epoch_c26, Manual, true, Early, true);
+epoch_case!(restart_epoch_c27, Manual, true, Late, false);
+epoch_case!(restart_epoch_c28, Manual, true, Late, true);
+epoch_case!(restart_epoch_c29, Manual, true, Replay, false);
+epoch_case!(restart_epoch_c30, Manual, true, Replay, true);
+epoch_case!(restart_epoch_c31, Manual, false, Early, false);
+epoch_case!(restart_epoch_c32, Manual, false, Early, true);
+epoch_case!(restart_epoch_c33, Manual, false, Late, false);
+epoch_case!(restart_epoch_c34, Manual, false, Late, true);
+epoch_case!(restart_epoch_c35, Manual, false, Replay, false);
+epoch_case!(restart_epoch_c36, Manual, false, Replay, true);
+
+#[test]
+fn restart_epoch_c37_pre_stop_final_stays_identical() {
+    let mut f = Fixture::new(Provider::Codex);
+    let old = running(&mut f, "finish before restart", "turn-1");
+    f.stopped("turn-1", "exact pre-stop answer");
+    f.consume();
+    epoch_reopen(&mut f, true, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(old).as_deref(), Some("exact pre-stop answer"));
+}
+
+#[test]
+fn restart_epoch_c38_consumed_codex_rollout_recovers_without_fresh_hook() {
+    let mut f = Fixture::new(Provider::Codex);
+    let rollout = f.dir.join("rollout-before-stop.jsonl");
+    let old = f.send("finish before restart without Stop", false);
+    f.deliver();
+    f.record(json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"finish before restart without Stop","transcript_path":rollout}));
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    let typed = f.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&f, 1),
+            "turn-1",
+            &typed,
+            Some("committed final"),
+        ),
+    );
+    epoch_reopen(&mut f, true, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(old).as_deref(), Some("committed final"));
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_epoch_c39_owned_kimi_wire_wins_before_interruption_fallback() {
+    let mut f = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&f);
+    let old = running(&mut f, "finish on the Kimi wire", "1");
+    let prompt = f.worker.state.render_request_payload(old).unwrap();
+    let rows = [
+        json!({"type":"turn.prompt","agentId":"main","turnId":1,"promptId":"p1","input":[{"type":"text","text":prompt}]}),
+        json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"text","text":"Kimi final"}]}}}),
+        json!({"type":"agent.turn.ended","turnId":1,"outcome":"done"}),
+        json!({"type":"turn.ended","agentId":"main","turnId":1,"reason":"completed"}),
+        json!({"type":"prompt.completed","agentId":"main","promptId":"p1","reason":"completed"}),
+    ];
+    std::fs::write(
+        wire,
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    epoch_reopen(&mut f, true, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(old).as_deref(), Some("Kimi final"));
+}
+
+#[test]
+fn restart_epoch_c40_mixed_group_filters_each_delivery_generation() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = running(&mut f, "old lead", "turn-1");
+    let newer = f.send("current-generation member", false);
+    f.deliver();
+    let identity = f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .runtime_identity
+        .clone();
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["requests"][old.0.to_string()]["delivery_epoch"] = json!({
+        "generation": 1,
+        "terminal_id": identity.terminal_id,
+        "pane_id": identity.pane_id,
+    });
+    document["requests"][newer.0.to_string()]["delivery_epoch"] = json!({
+        "generation": 2,
+        "terminal_id": identity.terminal_id,
+        "pane_id": identity.pane_id,
+    });
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(newer).phase,
+        RequestPhase::Active,
+        "{:?}",
+        f.request(newer)
+    );
+}
+
+#[test]
+fn restart_epoch_c41_same_server_reload_keeps_live_turn() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = running(&mut f, "same generation live turn", "turn-1");
+    epoch_reopen(&mut f, false, 1);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
+    f.stopped("turn-1", "completed after reload");
+    f.consume();
+    assert_eq!(f.reply(old).as_deref(), Some("completed after reload"));
+}
+
+#[test]
+fn restart_epoch_c42_refusal_does_not_advance_or_close_live_work() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = f.send("live awaiting start", false);
+    f.deliver();
+    f.worker.transport = epoch_transport(&f, false, 1);
+    restart_lifecycle_receipt(&f, "refused");
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
+}
+
+#[test]
+fn restart_epoch_c43_rollback_reconciles_the_interrupted_execution() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = f.send("rollback interrupted request", false);
+    f.deliver();
+    f.worker.transport = epoch_transport(&f, false, 1);
+    f.worker.tick().unwrap();
+    f.worker.transport = epoch_transport(&f, false, 2);
+    restart_lifecycle_receipt(&f, "rolled_back");
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+}
+
+#[test]
+fn restart_epoch_c44_later_server_interruption_has_its_own_generation() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = f.send("request before independent server restart", false);
+    f.deliver();
+    epoch_reopen(&mut f, true, 1);
+    f.worker.tick().unwrap();
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+}
+
+#[test]
+fn restart_epoch_c45_retry_hold_keeps_identity_and_uses_new_generation() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = running(&mut f, "retry after transient failure", "turn-1");
+    hold_transient_error(&mut f, old);
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .provider_retry
+        .is_some());
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.request(old).delivery_epoch.as_ref().unwrap().generation,
+        1
+    );
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .provider_retry
+        .is_some());
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["agents"][f.agent.0.to_string()]["provider_retry"]["retry_at_ms"] = json!(0);
+    document["agents"][f.agent.0.to_string()]["provider_retry"]["queued"] = json!(false);
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.request(old).delivery_epoch.as_ref().unwrap().generation,
+        2
+    );
+}
+
+#[test]
+fn restart_epoch_c46_explicit_final_is_not_replayed_by_receipts() {
+    let mut f = Fixture::new(Provider::Codex);
+    let old = running(&mut f, "finish explicitly", "turn-1");
+    f.stopped("turn-1", "one answer only");
+    f.consume();
+    restart_lifecycle_receipt(&f, "restarted");
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(old).as_deref(), Some("one answer only"));
+}
+
+#[test]
+fn restart_epoch_c47_save_failure_blocks_new_input_until_reconciled() {
+    let mut f = Fixture::new(Provider::Codex);
+    let old = f.send("request before durable restart", false);
+    f.deliver();
+    let queued = f.send("queued behind durable restart", true);
+    let before = f.typed().len();
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    assert!(f.worker.tick().is_err());
+    assert_eq!(f.typed().len(), before);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+}
+
+#[test]
+fn restart_epoch_c48_legacy_unknown_metadata_reconciles_at_native_change() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = f.send("legacy request without delivery metadata", false);
+    f.deliver();
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["requests"][old.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("delivery_epoch");
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    assert!(f.request(old).delivery_epoch.is_none());
+    epoch_reopen(&mut f, true, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+}
+
+#[test]
+fn restart_epoch_c49_owned_transient_error_creates_hold_not_abandonment() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let old = running(&mut f, "hold transient failure", "turn-1");
+    let rollout = f.dir.join("rollout-transient-error.jsonl");
+    std::fs::write(
+        &rollout,
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1",
+            "last_agent_message":null,"error":{"message":"Selected model is at capacity.",
+            "codex_error_info":"server_overloaded"}}})
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["agents"][f.agent.0.to_string()]["codex_rollout"] = json!(rollout.clone());
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    f.worker.codex_rollouts.insert(f.agent, rollout);
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .map(|hold| hold.lead),
+        Some(old)
+    );
+    assert_ne!(f.request(old).phase, RequestPhase::Abandoned);
+}
+
+#[test]
+fn restart_epoch_c50_reordered_receipt_cannot_capture_new_epoch_work() {
+    let mut f = Fixture::new(Provider::Codex);
+    let old = f.send("old epoch request", false);
+    f.deliver();
+    let queued = f.send("new epoch successor", true);
+    epoch_reopen(&mut f, true, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(f.request(queued).phase, RequestPhase::Active);
+    restart_lifecycle_receipt(&f, "restarted");
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(queued).phase, RequestPhase::Active);
+}

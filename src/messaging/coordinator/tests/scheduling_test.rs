@@ -62,7 +62,8 @@ impl Transport for FreshLaunchNative {
                     agents: vec![self.info.clone()],
                 })
             }
-            Method::AgentPromptIfUnbound(params) => {
+            Method::AgentPromptIfUnbound(params)
+            | Method::AgentPromptIfUnboundAtGeneration(params) => {
                 assert!(self.polls > 1, "must wait for native launch readiness");
                 let state = JsonStore::new(self.state_path.clone())
                     .load()
@@ -174,7 +175,10 @@ impl Transport for PollingNative {
                     agents: vec![self.info.clone()],
                 })
             }
-            Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_) => {
+            Method::AgentPromptIfIdle(_)
+            | Method::AgentPromptIfIdleAtGeneration(_)
+            | Method::AgentPromptIfUnbound(_)
+            | Method::AgentPromptIfUnboundAtGeneration(_) => {
                 self.submitted.send(()).unwrap();
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),

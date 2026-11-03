@@ -579,6 +579,13 @@ pub(crate) struct QueuedRejection {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct DeliveryEpoch {
+    pub(crate) generation: u64,
+    pub(crate) terminal_id: String,
+    pub(crate) pane_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -599,6 +606,8 @@ pub(crate) struct Request {
     pub(crate) queued_rejection: Option<QueuedRejection>,
     #[serde(default)]
     pub(crate) provider_retry_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) delivery_epoch: Option<DeliveryEpoch>,
     pub(crate) expected_launch_id: Option<String>,
     pub(crate) submission_boundary: Option<u64>,
     pub(crate) submission_status_revision: u64,

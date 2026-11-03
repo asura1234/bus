@@ -98,8 +98,12 @@ pub enum Method {
     AgentPrompt(AgentPromptParams),
     #[serde(rename = "agent.prompt_if_idle")]
     AgentPromptIfIdle(AgentPromptIfIdleParams),
+    #[serde(rename = "agent.prompt_if_idle_at_generation")]
+    AgentPromptIfIdleAtGeneration(AgentPromptIfIdleParams),
     #[serde(rename = "agent.prompt_if_unbound")]
     AgentPromptIfUnbound(AgentPromptIfUnboundParams),
+    #[serde(rename = "agent.prompt_if_unbound_at_generation")]
+    AgentPromptIfUnboundAtGeneration(AgentPromptIfUnboundParams),
     #[serde(rename = "agent.wait")]
     AgentWait(AgentWaitParams),
     #[serde(rename = "pane.split")]
@@ -201,7 +205,9 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentStartIfIdentity(_) => "agent.start_if_identity",
         Method::AgentPrompt(_) => "agent.prompt",
         Method::AgentPromptIfIdle(_) => "agent.prompt_if_idle",
+        Method::AgentPromptIfIdleAtGeneration(_) => "agent.prompt_if_idle_at_generation",
         Method::AgentPromptIfUnbound(_) => "agent.prompt_if_unbound",
+        Method::AgentPromptIfUnboundAtGeneration(_) => "agent.prompt_if_unbound_at_generation",
         Method::AgentWait(_) => "agent.wait",
         Method::PaneSplit(_) => "pane.split",
         Method::PaneSwap(_) => "pane.swap",

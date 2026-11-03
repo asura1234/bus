@@ -55,14 +55,16 @@ pub(crate) fn maximum_budget(delay: Duration, text: &[u8]) -> Duration {
 /// any provider, so reserve the largest applicable paste delay for its text.
 pub(crate) fn method_budget(method: &Method) -> Option<Duration> {
     let (delay, text) = match method {
-        Method::AgentPromptIfIdle(params) => (
+        Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => (
             submit_delay(params.expected_agent == "codex", params.text.len()),
             params.text.as_bytes(),
         ),
-        Method::AgentPromptIfUnbound(params) => (
-            submit_delay(true, params.text.len()),
-            params.text.as_bytes(),
-        ),
+        Method::AgentPromptIfUnbound(params) | Method::AgentPromptIfUnboundAtGeneration(params) => {
+            (
+                submit_delay(true, params.text.len()),
+                params.text.as_bytes(),
+            )
+        }
         Method::AgentPrompt(params) => (
             submit_delay(true, params.text.len()).max(SUBMIT_DELAY),
             params.text.as_bytes(),

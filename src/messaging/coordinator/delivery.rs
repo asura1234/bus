@@ -278,9 +278,14 @@ impl Worker {
             &instructions,
         );
         std::fs::write(&attempted, io::now_ms().to_string()).map_err(|e| e.to_string())?;
-        let result = self
-            .transport
-            .request(submission_method(agent, text, terminal, pane, false));
+        let result = self.transport.request(submission_method(
+            agent,
+            text,
+            terminal,
+            pane,
+            false,
+            self.serving_generation,
+        ));
         match result {
             Ok(ResponseResult::AgentPrompted { .. }) => {
                 self.own_turns.insert(agent.id, std::time::Instant::now());
@@ -441,7 +446,16 @@ impl Worker {
         let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
             .map_err(|e| e.to_string())?;
         state
-            .begin_submission(request, launch, boundary)
+            .begin_submission_with_epoch(
+                request,
+                launch,
+                boundary,
+                Some(crate::messaging::model::DeliveryEpoch {
+                    generation: self.serving_generation,
+                    terminal_id: terminal.clone(),
+                    pane_id: pane.clone(),
+                }),
+            )
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
@@ -460,7 +474,7 @@ impl Worker {
             payload_bytes = text.len(),
             "Bus payload metadata"
         );
-        let method = submission_method(agent, text, terminal, pane, steer);
+        let method = submission_method(agent, text, terminal, pane, steer, self.serving_generation);
         let outcome = match self.transport.request(method) {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: identity.session_id.clone(),
@@ -554,7 +568,15 @@ impl Worker {
             .render_request_payload(request)
             .ok_or("Missing queued request")?;
         state
-            .begin_steering(request, lead)
+            .begin_steering_with_epoch(
+                request,
+                lead,
+                Some(crate::messaging::model::DeliveryEpoch {
+                    generation: self.serving_generation,
+                    terminal_id: terminal.clone(),
+                    pane_id: pane.clone(),
+                }),
+            )
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
@@ -569,6 +591,7 @@ impl Worker {
                 expected_agent: launch::provider_kind(agent.provider).into(),
                 expected_session_id: session.clone(),
                 steer: true,
+                expected_generation: None,
             },
         )) {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
@@ -609,9 +632,10 @@ fn submission_method(
     terminal: &str,
     pane: &str,
     steer: bool,
+    generation: u64,
 ) -> Method {
     if let Some(session) = &agent.runtime_identity.session_id {
-        Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
+        Method::AgentPromptIfIdleAtGeneration(schema::AgentPromptIfIdleParams {
             target: pane.to_owned(),
             text,
             expected_terminal_id: terminal.to_owned(),
@@ -619,14 +643,16 @@ fn submission_method(
             expected_agent: launch::provider_kind(agent.provider).into(),
             expected_session_id: session.clone(),
             steer,
+            expected_generation: Some(generation),
         })
     } else {
-        Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
+        Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
             target: pane.to_owned(),
             text,
             expected_terminal_id: terminal.to_owned(),
             expected_pane_id: pane.to_owned(),
             expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+            expected_generation: Some(generation),
         })
     }
 }

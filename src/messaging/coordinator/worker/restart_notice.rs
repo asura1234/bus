@@ -10,20 +10,6 @@ impl Worker {
         let Some(record) = crate::utils::restart_record::read_outcome(&path)? else {
             return Ok(());
         };
-        if matches!(record.outcome.as_str(), "restarted" | "rolled_back")
-            && self.restart_outcome_at != Some(record.at_ms)
-        {
-            self.restart_requests = self
-                .state
-                .agents()
-                .filter_map(|agent| {
-                    let current = agent.current_request?;
-                    (self.restart_outcome_at.is_some() || !self.resume_rebound.contains(&agent.id))
-                        .then_some((agent.id, current))
-                })
-                .collect();
-            self.restart_outcome_at = Some(record.at_ms);
-        }
         let mut state = self.state.clone();
         // A post error must keep outcome.json. The next tick warns and retries.
         // Nothing to deliver (no live work-room orchestrator) may delete it.

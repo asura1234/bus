@@ -450,6 +450,7 @@ mod tests {
                 expected_agent: "codex".into(),
                 expected_session_id: "s".into(),
                 steer: false,
+                expected_generation: None,
             },
         ));
         assert!(outcome.unwrap_err().definitely_rejected);

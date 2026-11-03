@@ -125,23 +125,27 @@ impl Worker {
         };
         let text = clear_command(agent.provider).to_string();
         let method = match &identity.session_id {
-            Some(session) => Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
-                target: pane.clone(),
-                text: text.clone(),
-                expected_terminal_id: terminal.clone(),
-                expected_pane_id: pane.clone(),
-                expected_agent: launch::provider_kind(agent.provider).into(),
-                expected_session_id: session.clone(),
-                steer: false,
-            }),
+            Some(session) => {
+                Method::AgentPromptIfIdleAtGeneration(schema::AgentPromptIfIdleParams {
+                    target: pane.clone(),
+                    text: text.clone(),
+                    expected_terminal_id: terminal.clone(),
+                    expected_pane_id: pane.clone(),
+                    expected_agent: launch::provider_kind(agent.provider).into(),
+                    expected_session_id: session.clone(),
+                    steer: false,
+                    expected_generation: Some(self.serving_generation),
+                })
+            }
             // Codex starts its provider session with the first turn.
             None if agent.provider == Provider::Codex => {
-                Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
+                Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
                     target: pane.clone(),
                     text: text.clone(),
                     expected_terminal_id: terminal.clone(),
                     expected_pane_id: pane.clone(),
                     expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+                    expected_generation: Some(self.serving_generation),
                 })
             }
             None => return Err("The agent has no provider session yet".into()),

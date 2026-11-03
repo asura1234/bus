@@ -21,8 +21,12 @@ fn confirmation_expiry(method: &Method) -> Duration {
     // Provider paste delay varies on ConPTY. Keep the withdrawal reserve
     // while advancing beyond the declared confirmation window.
     let text = match method {
-        Method::AgentPromptIfIdle(params) => params.text.as_bytes(),
-        Method::AgentPromptIfUnbound(params) => params.text.as_bytes(),
+        Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+            params.text.as_bytes()
+        }
+        Method::AgentPromptIfUnbound(params) | Method::AgentPromptIfUnboundAtGeneration(params) => {
+            params.text.as_bytes()
+        }
         _ => panic!("expected guarded prompt"),
     };
     method_budget(method).unwrap() - withdrawal_budget(text) + Duration::from_millis(100)
@@ -75,6 +79,7 @@ fn provider_fixture(
             expected_agent: label.into(),
             expected_session_id: "session".into(),
             steer: false,
+            expected_generation: None,
         })
     } else {
         Method::AgentPromptIfUnbound(AgentPromptIfUnboundParams {
@@ -83,6 +88,7 @@ fn provider_fixture(
             expected_terminal_id: info.terminal_id,
             expected_pane_id: info.pane_id,
             expected_managed_name: "bus-r1-a2".into(),
+            expected_generation: None,
         })
     };
     (app, method, writes)

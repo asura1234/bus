@@ -466,7 +466,9 @@ fn several_recipients_reply_to_requester_without_waking_room_orchestrator() {
 struct BusyDraft(Arc<Mutex<Vec<String>>>);
 impl Transport for BusyDraft {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        let Method::AgentPromptIfIdle(prompt) = method else {
+        let (Method::AgentPromptIfIdle(prompt) | Method::AgentPromptIfIdleAtGeneration(prompt)) =
+            method
+        else {
             panic!("busy draft must use idle guard: {method:?}")
         };
         self.0.lock().unwrap().push(prompt.text);

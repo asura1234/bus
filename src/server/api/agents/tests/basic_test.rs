@@ -102,6 +102,7 @@ fn claude_agent_with_input(
         expected_agent: "claude".into(),
         expected_session_id: "session".into(),
         steer: false,
+        expected_generation: None,
     };
     (app, params, writes)
 }
@@ -260,8 +261,11 @@ impl App {
         use crate::protocol::api::schema::Method;
         let target = match method {
             Method::AgentPrompt(params) => &params.target,
-            Method::AgentPromptIfIdle(params) => &params.target,
-            Method::AgentPromptIfUnbound(params) => &params.target,
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+                &params.target
+            }
+            Method::AgentPromptIfUnbound(params)
+            | Method::AgentPromptIfUnboundAtGeneration(params) => &params.target,
             _ => return None,
         };
         let resolved = self.resolve_agent_target(target).ok()?;

@@ -4,6 +4,7 @@ use super::{
     io, launch, resume, schema, AgentId, BTreeMap, BusState, Duration, Path, PathBuf,
     ResponseResult, RoomAgent, RuntimeStatus, Worker,
 };
+use crate::messaging::model::DeliveryEpoch;
 
 impl Worker {
     pub(super) fn poll(&mut self) -> Result<Option<Vec<schema::AgentInfo>>, String> {
@@ -40,7 +41,11 @@ impl Worker {
             );
             self.poll_failures = 0;
         }
+        if let Some(generation) = infos.iter().map(|info| info.generation).max() {
+            self.serving_generation = generation;
+        }
         let mut state = self.state.clone();
+        migrate_legacy_requests(&mut state, &infos, self.serving_generation)?;
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
         let observed_agents: Vec<_> = self.state.agents().cloned().collect();
@@ -50,7 +55,6 @@ impl Worker {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
                 {
-                    self.note_restored_request(agent);
                     rebound.push(rebind_agent(&mut state, agent, info)?);
                 }
             }
@@ -143,16 +147,6 @@ impl Worker {
         Duration::from_millis(500 << self.poll_failures.saturating_sub(1).min(2))
     }
 
-    pub(in crate::messaging::coordinator) fn note_restored_request(&mut self, agent: &RoomAgent) {
-        self.resume_rebound.insert(agent.id);
-        let Some(request) = self.resume_requests.get(&agent.id).copied() else {
-            return;
-        };
-        if agent.current_request == Some(request) {
-            self.restart_requests.insert(agent.id, request);
-        }
-    }
-
     fn observe_native_unavailable(&mut self) -> Result<(), String> {
         let mut state = self.state.clone();
         for id in self.state.agents().map(|a| a.id) {
@@ -162,6 +156,56 @@ impl Worker {
         }
         self.apply_poll(state)
     }
+}
+
+fn migrate_legacy_requests(
+    state: &mut BusState,
+    infos: &[schema::AgentInfo],
+    generation: u64,
+) -> Result<(), String> {
+    let legacy: Vec<_> = state
+        .requests()
+        .filter(|request| {
+            request.delivery_epoch.is_none()
+                && matches!(
+                    request.phase,
+                    super::RequestPhase::Submitting | super::RequestPhase::Active
+                )
+        })
+        .map(|request| request.id)
+        .collect();
+    for id in legacy {
+        let request = state.request(id).cloned().ok_or("Unknown legacy request")?;
+        let agent = state
+            .agent(request.agent_id)
+            .cloned()
+            .ok_or("Unknown agent")?;
+        let info = polled_agent(state, &agent, infos);
+        let same_identity = info.is_some_and(|info| {
+            agent.runtime_identity.terminal_id.as_deref() == Some(info.terminal_id.as_str())
+                && agent.runtime_identity.pane_id.as_deref() == Some(info.pane_id.as_str())
+        });
+        let (terminal_id, pane_id) = if same_identity {
+            let info = info.unwrap();
+            (info.terminal_id.clone(), info.pane_id.clone())
+        } else {
+            (
+                agent.runtime_identity.terminal_id.unwrap_or_default(),
+                agent.runtime_identity.pane_id.unwrap_or_default(),
+            )
+        };
+        state
+            .stamp_delivery_epoch(
+                id,
+                DeliveryEpoch {
+                    generation: if same_identity { generation } else { 0 },
+                    terminal_id,
+                    pane_id,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn rebind_agent(

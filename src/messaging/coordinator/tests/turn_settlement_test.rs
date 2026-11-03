@@ -19,8 +19,7 @@ fn reload(fixture: &mut Fixture) {
 
 fn restart(fixture: &mut Fixture) {
     reload(fixture);
-    let agent = fixture.worker.state.agent(fixture.agent).unwrap().clone();
-    fixture.worker.note_restored_request(&agent);
+    fixture.worker.serving_generation = 2;
 }
 
 fn server_restart(fixture: &mut Fixture) {
@@ -40,6 +39,7 @@ fn server_restart(fixture: &mut Fixture) {
     )
     .unwrap();
     fixture.worker.announce_recorded_restart().unwrap();
+    fixture.worker.serving_generation = 2;
 }
 
 struct RestartLifecycleNative {
@@ -1780,3 +1780,6 @@ fn provider_flake_reset_diagnostics_follow_successful_persistence_once() {
         assert!(rows[0].contains(&field), "missing {field}: {}", rows[0]);
     }
 }
+
+#[path = "restart_epoch_test.rs"]
+mod restart_epoch_tests;
