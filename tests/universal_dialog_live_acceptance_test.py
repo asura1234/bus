@@ -394,7 +394,10 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
             terminal = terminal_helper.Terminal([str(copied), "--dev"], root / "project", env)
             started = True
             state = wait("private Bus startup", lambda: control("state", optional=True), 45)["result"]
-            self.assertEqual(Path(state["build"]["binary"]).resolve(), copied)
+            self.assertEqual(Path(state["build"]["client"]["binary"]).resolve(), copied)
+            self.assertEqual(state["build"]["client"]["sha"], sha)
+            self.assertEqual(Path(state["build"]["server"]["binary"]).resolve(), copied)
+            self.assertEqual(state["build"]["server"]["sha"], sha)
             self.assertFalse(state["launch"]["yolo"])
             identity = []
             for role in ["client", "server"]:
