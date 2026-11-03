@@ -5,6 +5,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::messaging::storage::state_store::JsonStore;
+
+mod clock;
 mod launch_metrics;
 mod latency;
 mod metrics;
@@ -110,27 +112,7 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
                 .label
                 .rsplit_once(' ')
                 .map_or("unknown offset", |(_, offset)| offset);
-            let zone = std::env::var("TZ")
-                .ok()
-                .filter(|zone| !zone.is_empty())
-                .or_else(|| {
-                    std::fs::read_link("/etc/localtime").ok().and_then(|path| {
-                        path.to_str()?
-                            .split_once("zoneinfo/")
-                            .map(|(_, zone)| zone.to_owned())
-                    })
-                });
-            let timezone = format!(
-                "Server local time: {} ({offset})",
-                zone.as_deref().unwrap_or("system timezone")
-            );
-            let data =
-                serde_json::json!({"generated_at_ms":now,"timezone":timezone,"metrics":metrics});
-            Response {
-                status: "200 OK",
-                content_type: "application/json; charset=utf-8",
-                body: data.to_string().into_bytes(),
-            }
+            data_envelope(serde_json::json!(metrics), None, now, offset)
         }
         "/data" => {
             let now = crate::utils::time::now_ms();
@@ -152,28 +134,49 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
                 .label
                 .rsplit_once(' ')
                 .map_or("unknown offset", |(_, offset)| offset);
-            let zone = std::env::var("TZ")
-                .ok()
-                .filter(|zone| !zone.is_empty())
-                .or_else(|| {
-                    std::fs::read_link("/etc/localtime").ok().and_then(|path| {
-                        path.to_str()?
-                            .split_once("zoneinfo/")
-                            .map(|(_, zone)| zone.to_owned())
-                    })
-                });
-            let timezone = format!(
-                "Server local time: {} ({offset})",
-                zone.as_deref().unwrap_or("system timezone")
-            );
-            let data = serde_json::json!({"generated_at_ms":now,"timezone":timezone,"metrics":metrics,"launches":launches});
-            Response {
-                status: "200 OK",
-                content_type: "application/json; charset=utf-8",
-                body: data.to_string().into_bytes(),
-            }
+            data_envelope(
+                serde_json::json!(metrics),
+                Some(serde_json::json!(launches)),
+                now,
+                offset,
+            )
         }
         _ => Response::empty("404 Not Found"),
+    }
+}
+
+fn data_envelope(
+    metrics: serde_json::Value,
+    launches: Option<serde_json::Value>,
+    now: u64,
+    offset: &str,
+) -> Response {
+    let zone = std::env::var("TZ")
+        .ok()
+        .filter(|zone| !zone.is_empty())
+        .or_else(|| {
+            std::fs::read_link("/etc/localtime").ok().and_then(|path| {
+                path.to_str()?
+                    .split_once("zoneinfo/")
+                    .map(|(_, zone)| zone.to_owned())
+            })
+        });
+    let timezone = format!(
+        "Server local time: {} ({offset})",
+        zone.as_deref().unwrap_or("system timezone")
+    );
+    let mut data = serde_json::json!({
+        "generated_at_ms": now,
+        "timezone": timezone,
+        "metrics": metrics,
+    });
+    if let (Some(object), Some(launches)) = (data.as_object_mut(), launches) {
+        object.insert("launches".to_owned(), launches);
+    }
+    Response {
+        status: "200 OK",
+        content_type: "application/json; charset=utf-8",
+        body: data.to_string().into_bytes(),
     }
 }
 
