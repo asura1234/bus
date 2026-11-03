@@ -14,12 +14,23 @@ pub(crate) struct NativePrompt<'a> {
     pub expected_turn: Option<&'a str>,
 }
 
+/// Positive native completion, including the provider turn generation observed.
+pub(crate) struct NativeInterruptCompletion {
+    pub turn_id: Option<String>,
+}
+
 pub(crate) trait NativeInput: Send + Sync {
     fn launch(&self, argv: &[String]) -> io::Result<Vec<String>>;
     /// Must be nonblocking: this is queried on the App dispatch thread.
     fn has_session(&self) -> bool;
     fn prompt(&self, input: NativePrompt<'_>) -> Option<io::Result<()>>;
-    fn interrupt(&self, thread: &str, deadline: Instant) -> Option<io::Result<()>>;
+    /// None permits typed fallback. Some(Err) is unconfirmed and must never
+    /// replay keys or be promoted to completion by a visual idle observation.
+    fn interrupt(
+        &self,
+        thread: &str,
+        deadline: Instant,
+    ) -> Option<io::Result<NativeInterruptCompletion>>;
 }
 
 pub(crate) type NativeInputHandle = Arc<dyn NativeInput>;
@@ -76,15 +87,19 @@ impl NativeInput for PaneCodex {
             })
     }
 
-    fn interrupt(&self, thread: &str, deadline: Instant) -> Option<io::Result<()>> {
+    fn interrupt(
+        &self,
+        thread: &str,
+        deadline: Instant,
+    ) -> Option<io::Result<NativeInterruptCompletion>> {
         self.0
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .as_mut()
             .and_then(|runtime| {
-                runtime
-                    .interrupt(thread, deadline)
-                    .map(|result| result.map(|_| ()))
+                runtime.interrupt(thread, deadline).map(|result| {
+                    result.map(|turn_id| NativeInterruptCompletion { turn_id })
+                })
             })
     }
 }

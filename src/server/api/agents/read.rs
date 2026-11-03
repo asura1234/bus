@@ -115,6 +115,13 @@ impl App {
     }
 }
 
+pub(super) enum KeyCompletion {
+    Typed(std::io::Result<()>),
+    Native(std::io::Result<crate::terminal::runtime::native_input::NativeInterruptCompletion>),
+}
+
+pub(super) type KeyJob = Box<dyn FnOnce() -> KeyCompletion + Send>;
+
 fn agent_keys_job(
     runtime: &crate::terminal::TerminalRuntime,
     id: String,
@@ -125,8 +132,19 @@ fn agent_keys_job(
         .map_err(|key| encode_error(id.clone(), "invalid_key", format!("unsupported key {key}")))?;
     let bytes = Bytes::from(encoded.into_iter().flatten().collect::<Vec<u8>>());
     let sender = runtime.submission_handle(true);
-    let submit: Box<dyn FnOnce() -> std::io::Result<()> + Send> =
-        Box::new(move || sender.try_send_developer_bytes(bytes));
+    let submit: KeyJob =
+        Box::new(move || KeyCompletion::Typed(sender.try_send_developer_bytes(bytes)));
+    let identity = native.as_ref().map(|agent| {
+        (
+            agent.terminal_id.clone(),
+            agent
+                .agent_session
+                .as_ref()
+                .expect("validated interrupt")
+                .value
+                .clone(),
+        )
+    });
     #[cfg(unix)]
     let submit = if let Some(agent) = native {
         super::codex_native::interrupt_job(runtime, &agent, submit)
@@ -136,7 +154,25 @@ fn agent_keys_job(
     #[cfg(not(unix))]
     let _ = native;
     Ok(Box::new(move || match submit() {
-        Ok(()) => encode_success(id, ResponseResult::Ok {}),
-        Err(err) => encode_error(id, "agent_send_keys_failed", err.to_string()),
+        KeyCompletion::Typed(Ok(())) => encode_success(id, ResponseResult::Ok {}),
+        KeyCompletion::Typed(Err(err)) => {
+            encode_error(id, "agent_send_keys_failed", err.to_string())
+        }
+        KeyCompletion::Native(Ok(completed)) => {
+            let (terminal_id, session_id) = identity.expect("validated native interrupt");
+            encode_success(
+                id,
+                ResponseResult::AgentInterrupted {
+                    terminal_id,
+                    session_id,
+                    turn_id: completed.turn_id,
+                },
+            )
+        }
+        KeyCompletion::Native(Err(_)) => encode_error(
+            id,
+            "agent_interrupt_unconfirmed",
+            "Native interrupt is unconfirmed; work may still be running",
+        ),
     }))
 }

@@ -6521,6 +6521,33 @@
               "type": "object"
             },
             {
+              "description": "Strong native completion; ordinary key writes return only `Ok`.",
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                },
+                "terminal_id": {
+                  "type": "string"
+                },
+                "turn_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "const": "agent_interrupted",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "terminal_id",
+                "session_id"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "agents": {
                   "items": {

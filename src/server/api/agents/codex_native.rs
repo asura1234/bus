@@ -156,8 +156,8 @@ fn fallback(native_only: bool, message: &str) -> Result<Option<InputCompletion>,
 pub(super) fn interrupt_job(
     runtime: &TerminalRuntime,
     agent: &AgentInfo,
-    fallback: Box<dyn FnOnce() -> io::Result<()> + Send>,
-) -> Box<dyn FnOnce() -> io::Result<()> + Send> {
+    fallback: super::read::KeyJob,
+) -> super::read::KeyJob {
     let Some(native) = runtime.native_input() else {
         return fallback;
     };
@@ -168,5 +168,8 @@ pub(super) fn interrupt_job(
         .value
         .clone();
     let deadline = Instant::now() + std::time::Duration::from_secs(2);
-    Box::new(move || native.interrupt(&thread, deadline).unwrap_or_else(fallback))
+    Box::new(move || match native.interrupt(&thread, deadline) {
+        Some(result) => super::read::KeyCompletion::Native(result),
+        None => fallback(),
+    })
 }
