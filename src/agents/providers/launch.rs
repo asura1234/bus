@@ -157,8 +157,12 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
             .into_iter()
             .rev()
         {
-            if kimi::launch::is_yolo_option(&args[index]) {
-                args.remove(index);
+            match kimi::launch::normalize_yolo_option(&args[index]) {
+                Some(Some(replacement)) => args[index] = replacement,
+                Some(None) => {
+                    args.remove(index);
+                }
+                None => {}
             }
         }
     }

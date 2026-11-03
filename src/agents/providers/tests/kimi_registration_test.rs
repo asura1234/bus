@@ -121,6 +121,16 @@ fn kimi_yolo_normalizes_resume_argv_and_replays_saved_options_normally() {
         (vec!["-y"], vec!["--auto"], vec!["-y"]),
         (vec!["-yy"], vec!["--auto"], vec!["-yy"]),
         (
+            vec!["-ymVALUE"],
+            vec!["--auto", "-mVALUE"],
+            vec!["-ymVALUE"],
+        ),
+        (
+            vec!["-ym", "VALUE"],
+            vec!["--auto", "-m", "VALUE"],
+            vec!["-ym", "VALUE"],
+        ),
+        (
             vec!["--model", "--yolo", "--output-format", "-y"],
             vec!["--auto", "--model", "--yolo", "--output-format", "-y"],
             vec!["--model", "--yolo", "--output-format", "-y"],
@@ -171,6 +181,9 @@ fn kimi_mixed_mode_guard_checks_only_option_positions() {
         vec!["-y", "--auto"],
         vec!["--auto", "-yy"],
         vec!["-yy", "--auto"],
+        vec!["--auto", "-ymVALUE"],
+        vec!["-ymVALUE", "--auto"],
+        vec!["--auto", "-ym", "VALUE"],
     ] {
         let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
         assert!(super::kimi::launch::validate_run_permissions(&args).is_err());

@@ -166,6 +166,12 @@ fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
         ("--yolo", vec!["--auto"], vec!["--yolo"]),
         ("-y", vec!["--auto"], vec!["-y"]),
         ("-yy", vec!["--auto"], vec!["-yy"]),
+        ("-ymVALUE", vec!["--auto", "-mVALUE"], vec!["-ymVALUE"]),
+        (
+            "-ym VALUE",
+            vec!["--auto", "-m", "VALUE"],
+            vec!["-ym", "VALUE"],
+        ),
         (
             "--model synthetic --yolo --output-format text",
             vec!["--auto", "--model", "synthetic", "--output-format", "text"],

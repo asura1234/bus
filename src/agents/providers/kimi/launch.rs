@@ -365,16 +365,29 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
     Ok(changed)
 }
 
+pub(crate) fn normalize_yolo_option(name: &str) -> Option<Option<String>> {
+    if name == "--yolo" {
+        return Some(None);
+    }
+    let flags = name.strip_prefix('-')?;
+    let short = flags.strip_prefix("y")?;
+    let trailing = short.trim_start_matches('y');
+    if trailing.is_empty() {
+        return Some(None);
+    }
+    trailing
+        .strip_prefix('m')
+        .filter(|_| !flags.starts_with('-'))
+        .map(|_| Some(format!("-{trailing}")))
+}
+
 pub(crate) fn is_yolo_option(name: &str) -> bool {
-    name == "--yolo"
-        || name
-            .strip_prefix('-')
-            .is_some_and(|flags| !flags.is_empty() && flags.chars().all(|flag| flag == 'y'))
+    normalize_yolo_option(name).is_some()
 }
 
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
     if is_yolo_option(name) {
-        return Some(0);
+        return Some(usize::from(name.ends_with('m')));
     }
     match name {
         "-S" | "--session" | "--agent-file" | "--agent" | "-m" | "--model" | "--output-format"
