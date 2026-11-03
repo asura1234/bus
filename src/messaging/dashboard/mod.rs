@@ -193,6 +193,7 @@ fn serve_connection(
     authority: &str,
     token: &str,
 ) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
     let headers = read_headers(stream)?;
     let response = http_response(root, &headers, authority, token);
     stream.set_write_timeout(Some(REQUEST_DEADLINE))?;

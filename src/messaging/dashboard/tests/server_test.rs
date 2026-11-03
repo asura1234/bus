@@ -219,3 +219,41 @@ fn dashboard_health_names_the_build_that_embeds_the_page() {
     assert_eq!(body["token"], "test-nonce");
     assert_eq!(body["build"], env!("BUS_BUILD_SHA"));
 }
+
+#[test]
+fn dashboard_nonblocking_accept_preserves_fragmented_headers() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut client = TcpStream::connect(address).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    client.write_all(b"GET /health HTTP/1.1\r\n").unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    dispatch_connection(
+        stream,
+        "/nonexistent-dashboard-test".into(),
+        address.to_string(),
+        "fragmented-nonce".into(),
+    );
+    let mut byte = [0u8];
+    let pending = client.peek(&mut byte);
+    assert!(
+        matches!(&pending, Err(error) if matches!(
+            error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        )),
+        "HTTP worker closed or responded before the complete headers arrived: {pending:?}"
+    );
+    client
+        .write_all(format!("Host: {address}\r\n\r\n").as_bytes())
+        .unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response:?}");
+    assert!(response.contains("fragmented-nonce"), "{response:?}");
+}
