@@ -10,26 +10,31 @@ impl Worker {
         let Some(record) = crate::utils::restart_record::read_outcome(&path)? else {
             return Ok(());
         };
-        if matches!(record.outcome.as_str(), "restarted" | "rolled_back")
-            && self.restart_outcome_at != Some(record.at_ms)
-        {
-            self.restart_requests = self
+        let reconcile = matches!(record.outcome.as_str(), "restarted" | "rolled_back")
+            && self.restart_outcome_at != Some(record.at_ms);
+        let mut state = self.state.clone();
+        if reconcile {
+            let interrupted: Vec<_> = self
                 .state
                 .agents()
-                .filter_map(|agent| {
-                    let current = agent.current_request?;
-                    (self.restart_outcome_at.is_some() || !self.resume_rebound.contains(&agent.id))
-                        .then_some((agent.id, current))
+                .filter(|agent| {
+                    self.restart_outcome_at.is_some() || !self.resume_rebound.contains(&agent.id)
                 })
+                .map(|agent| agent.id)
                 .collect();
-            self.restart_outcome_at = Some(record.at_ms);
+            for agent in interrupted {
+                state.mark_restored_turn(agent);
+            }
         }
-        let mut state = self.state.clone();
         // A post error must keep outcome.json. The next tick warns and retries.
         // Nothing to deliver (no live work-room orchestrator) may delete it.
         let posted = state.announce_restart(&record, crate::messaging::storage::io::now_ms())?;
-        if posted {
+        if posted || reconcile {
+            // Persist interruption before consuming its only durable receipt.
             self.save(state)?;
+        }
+        if reconcile {
+            self.restart_outcome_at = Some(record.at_ms);
         }
         if path.exists() {
             std::fs::remove_file(&path).map_err(|error| error.to_string())?;

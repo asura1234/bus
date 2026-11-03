@@ -50,7 +50,7 @@ impl Worker {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
                     || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
                 {
-                    self.note_restored_request(agent);
+                    self.resume_rebound.insert(agent.id);
                     rebound.push(rebind_agent(&mut state, agent, info)?);
                 }
             }
@@ -105,7 +105,7 @@ impl Worker {
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
                 previous_terminal_id = ?previous, terminal_id = current,
-                "Reconnected the saved provider conversation; request ownership preserved");
+                "Reconnected the saved provider conversation; replaced execution awaits reconciliation");
         }
         self.notify_dialogs(waits)?;
         Ok(Some(infos))
@@ -143,16 +143,6 @@ impl Worker {
         Duration::from_millis(500 << self.poll_failures.saturating_sub(1).min(2))
     }
 
-    pub(in crate::messaging::coordinator) fn note_restored_request(&mut self, agent: &RoomAgent) {
-        self.resume_rebound.insert(agent.id);
-        let Some(request) = self.resume_requests.get(&agent.id).copied() else {
-            return;
-        };
-        if agent.current_request == Some(request) {
-            self.restart_requests.insert(agent.id, request);
-        }
-    }
-
     fn observe_native_unavailable(&mut self) -> Result<(), String> {
         let mut state = self.state.clone();
         for id in self.state.agents().map(|a| a.id) {
@@ -169,6 +159,14 @@ fn rebind_agent(
     agent: &RoomAgent,
     info: &schema::AgentInfo,
 ) -> Result<(AgentId, Option<String>, String), String> {
+    if agent
+        .runtime_identity
+        .terminal_id
+        .as_deref()
+        .is_some_and(|previous| previous != info.terminal_id)
+    {
+        state.mark_restored_turn(agent.id);
+    }
     let mut identity = agent.runtime_identity.clone();
     identity.terminal_id = Some(info.terminal_id.clone());
     identity.pane_id = Some(info.pane_id.clone());

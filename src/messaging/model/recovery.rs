@@ -11,6 +11,13 @@ pub(crate) struct ManualRecovery {
     pub(crate) at_ms: u64,
 }
 
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct QueuedRejection {
+    /// The first definite refusal, not renewed by retries or unrelated turns.
+    pub(crate) at_ms: u64,
+    pub(crate) reason: String,
+}
+
 impl BusState {
     /// Only request.recover uses this boundary. Automatic callers keep their
     /// own causes and never acquire an operator's manual recovery provenance.

@@ -572,13 +572,6 @@ pub(crate) enum DialogNoticeDelivery {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct QueuedRejection {
-    /// The first definite refusal, not renewed by retries or unrelated turns.
-    pub(crate) at_ms: u64,
-    pub(crate) reason: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -596,7 +589,10 @@ pub(crate) struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) manual_recovery: Option<super::ManualRecovery>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) queued_rejection: Option<QueuedRejection>,
+    pub(crate) queued_rejection: Option<super::QueuedRejection>,
+    /// Restart proved interruption; reconcile saved outcomes before closure.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) interrupted_by_restore: bool,
     #[serde(default)]
     pub(crate) provider_retry_attempts: u32,
     pub(crate) expected_launch_id: Option<String>,

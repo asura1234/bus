@@ -32,12 +32,8 @@ pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
-    /// Current requests loaded when this coordinator process opened.
-    pub(super) resume_requests: BTreeMap<AgentId, RequestId>,
     /// Agents whose native resume already owns their restart reconciliation.
     pub(super) resume_rebound: BTreeSet<AgentId>,
-    /// Requests interrupted by native resume or a recorded restart.
-    pub(super) restart_requests: BTreeMap<AgentId, RequestId>,
     /// The restart outcome whose requests were captured by a surviving coordinator.
     pub(super) restart_outcome_at: Option<u64>,
     pub(super) store: JsonStore,
@@ -134,10 +130,6 @@ impl Worker {
             .expire_stalled_queued_requests(io::now_ms())
             .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
-        let resume_requests = state
-            .agents()
-            .filter_map(|agent| agent.current_request.map(|request| (agent.id, request)))
-            .collect();
         let codex_rollouts = saved_rollouts(&state);
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
@@ -161,9 +153,7 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
-            resume_requests,
             resume_rebound: BTreeSet::new(),
-            restart_requests: BTreeMap::new(),
             restart_outcome_at: None,
             state,
             store,
@@ -653,14 +643,7 @@ impl Worker {
                 }
             };
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
-            let settled = self
-                .restart_requests
-                .get(&agent)
-                .copied()
-                .and_then(|request| {
-                    state.settle_restarted_request(agent, request, observed_at_ms, recorded_end)
-                })
-                .or_else(|| state.settle_ended_request(agent, observed_at_ms, recorded_end));
+            let settled = state.settle_ended_request(agent, observed_at_ms, recorded_end);
             changed |= settled.is_some();
         }
         if changed {

@@ -4,8 +4,6 @@ use super::{
     RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
-mod restart;
-
 /// How the provider's own record says a turn ended, for a turn whose
 /// completion callback never came.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +33,12 @@ impl BusState {
         now_ms: u64,
         mut recorded_end: impl FnMut(&Request) -> Option<RecordedTurnEnd>,
     ) -> bool {
+        if self
+            .settle_restored_turn(agent, now_ms, &mut recorded_end)
+            .is_some()
+        {
+            return true;
+        }
         let Some(owner) = self.agents.get(&agent).filter(|a| {
             matches!(a.status, RuntimeStatus::Idle | RuntimeStatus::Unavailable)
                 && !a.dialog
@@ -482,7 +486,7 @@ impl BusState {
         )
     }
 
-    fn consume_recorded_end(
+    pub(super) fn consume_recorded_end(
         &mut self,
         agent: AgentId,
         id: RequestId,

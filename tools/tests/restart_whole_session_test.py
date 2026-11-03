@@ -31,6 +31,30 @@ def wait_for(predicate, detail, seconds=60):
     raise AssertionError(detail())
 
 
+def signal_client_group(client, sig):
+    # Keep the leader unreaped until signalling: it pins the owned group ID,
+    # and live members may remain after the leader exits. Never reuse a reaped PID.
+    if client.returncode is not None:
+        return
+    try:
+        os.killpg(client.pid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError as error:
+        # macOS may report EPERM for a zombie-only group. Reap the leader and
+        # ignore it only if the group disappeared; live-group errors still fail.
+        # EPERM can precede waitpid reporting the leader's completed exit.
+        try:
+            client.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            raise error from None
+        try:
+            os.killpg(client.pid, 0)
+        except ProcessLookupError:
+            return
+        raise
+
+
 def alternate_build(source, target, different_version=False):
     """Synthetic identity fixture: same code, another embedded SHA (no rebuild)."""
     identity = json.loads(subprocess.check_output([str(source), "--identity"]))
@@ -167,14 +191,11 @@ def run_restart(root, source, variant, host):
                            capture_output=True, timeout=20, check=False)
         except subprocess.TimeoutExpired:
             pass
-        try:
-            os.killpg(client.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        signal_client_group(client, signal.SIGTERM)
         try:
             client.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            os.killpg(client.pid, signal.SIGKILL)
+            signal_client_group(client, signal.SIGKILL)
             client.wait(timeout=5)
         for name in ("build.json", "coordinator.pid", "handoff.pid"):
             pid = read_json(data / "restarts" / name).get("pid")

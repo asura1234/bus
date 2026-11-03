@@ -1,8 +1,80 @@
 //! One restart outcome notice for each work room's orchestrator.
-use super::{BusState, RoomKind};
+use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase, RoomKind};
 use crate::utils::restart_record::{notice_text, RestartLog};
 
 impl BusState {
+    /// Native terminal replacement or a successful restart receipt proves the
+    /// execution was interrupted. A coordinator reconnect alone is no end.
+    pub(crate) fn mark_restored_turn(&mut self, agent: AgentId) {
+        let Some(owner) = self.agents.get(&agent) else {
+            return;
+        };
+        let Some(id) = owner.current_request else {
+            return;
+        };
+        if owner
+            .provider_retry
+            .as_ref()
+            .is_some_and(|hold| hold.lead == id)
+        {
+            return;
+        }
+        if let Some(request) = self.requests.get_mut(&id) {
+            request.interrupted_by_restore = true;
+        }
+    }
+
+    /// Runs after durable callbacks. A replaced process cannot finish an old
+    /// execution, but its already-recorded answer/error wins over interruption.
+    /// Only submitted work closes; pending messages and provider retry holds stay.
+    pub(crate) fn settle_restored_turn(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+    ) -> Option<RequestId> {
+        let owner = self.agents.get(&agent)?;
+        let id = owner.current_request?;
+        if owner.deletion_pending
+            || owner.session_binding_invalidated
+            || owner
+                .provider_retry
+                .as_ref()
+                .is_some_and(|hold| hold.lead == id)
+            || !self.requests.get(&id)?.interrupted_by_restore
+        {
+            return None;
+        }
+        self.complete_pending_final(agent, now_ms).ok()?;
+        if self.agents.get(&agent)?.current_request != Some(id) {
+            return Some(id);
+        }
+        let recorded = recorded_end(self.requests.get(&id)?);
+        if recorded.is_some() {
+            self.consume_recorded_end(agent, id, now_ms, recorded, "restored-turn", false, "", "")?;
+        }
+        let owner = self.agents.get(&agent)?;
+        if owner.current_request != Some(id)
+            || owner
+                .provider_retry
+                .as_ref()
+                .is_some_and(|hold| hold.lead == id)
+        {
+            return Some(id);
+        }
+        // A replied anchor can still own unclaimed steering. Its answer is
+        // immutable; only the remaining submitted requests are interrupted.
+        let answered = self.requests.get(&id).filter(|r| r.settled()).cloned();
+        self.close_turn_with_reason(id, now_ms, super::INTERRUPTED.into())
+            .ok()?;
+        if let Some(mut answered) = answered {
+            answered.phase = RequestPhase::Completed;
+            answered.pending_final = None;
+            self.requests.insert(id, answered);
+        }
+        Some(id)
+    }
+
     /// Posts safe successful-restart metadata to each live work room's orchestrator.
     /// Failed outcomes and arbitrary diagnostic reasons go only to the client log.
     /// `Ok(false)` means there was nothing to deliver. A post error leaves the

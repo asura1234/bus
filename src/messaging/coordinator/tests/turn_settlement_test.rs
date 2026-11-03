@@ -19,8 +19,10 @@ fn reload(fixture: &mut Fixture) {
 
 fn restart(fixture: &mut Fixture) {
     reload(fixture);
-    let agent = fixture.worker.state.agent(fixture.agent).unwrap().clone();
-    fixture.worker.note_restored_request(&agent);
+    let mut state = fixture.worker.state.clone();
+    state.mark_restored_turn(fixture.agent);
+    fixture.worker.save(state).unwrap();
+    fixture.worker.resume_rebound.insert(fixture.agent);
 }
 
 fn server_restart(fixture: &mut Fixture) {
@@ -40,6 +42,71 @@ fn server_restart(fixture: &mut Fixture) {
     )
     .unwrap();
     fixture.worker.announce_recorded_restart().unwrap();
+}
+
+#[test]
+fn restart_request_receipt_preserves_a_durable_provider_retry_hold() {
+    for reopen in [false, true] {
+        let mut fixture = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut fixture, "retry after a transient failure", "turn-1");
+        fixture.record(
+            json!({"hook_event_name":"StopFailure","session_id":"session",
+            "prompt_id":"turn-1","error":"rate_limit"}),
+        );
+        fixture.consume();
+        let held = fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .provider_retry
+            .clone();
+        assert!(held.is_some());
+        let queued = fixture.send("keep queued behind the retry", true);
+        if reopen {
+            reload(&mut fixture);
+        }
+        server_restart(&mut fixture);
+        fixture.status(RuntimeStatus::Idle);
+        fixture.worker.settle_requests().unwrap();
+        let owner = fixture.worker.state.agent(fixture.agent).unwrap();
+        assert_eq!(owner.provider_retry, held, "reopen={reopen}");
+        assert_eq!(owner.current_request, Some(lead), "reopen={reopen}");
+        assert!(!fixture.request(lead).settled(), "reopen={reopen}");
+        assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+        assert_eq!(fixture.typed_content().len(), 1, "never replay on restore");
+    }
+}
+
+#[test]
+fn restart_request_receipt_survives_another_coordinator_stop_before_settlement() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(
+        &mut fixture,
+        "interrupted before receipt settlement",
+        "turn-1",
+    );
+    let queued = fixture.send("pending across both coordinator stops", true);
+    server_restart(&mut fixture);
+    assert!(!crate::utils::restart_record::outcome_path(&fixture.dir).exists());
+    reload(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert!(fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
 
 struct RestartLifecycleNative {
@@ -223,7 +290,7 @@ fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_ev
                 fixture.worker.settle_requests().unwrap();
                 let request = fixture.request(interrupted);
                 if request.phase != RequestPhase::Abandoned
-                    || request.failure_reason.as_deref() != Some("reply_not_captured")
+                    || request.failure_reason.as_deref() != Some("interrupted")
                     || fixture
                         .worker
                         .state
@@ -285,7 +352,7 @@ fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_f
             assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
             assert_eq!(
                 fixture.request(request).failure_reason.as_deref(),
-                Some("reply_not_captured")
+                Some("interrupted")
             );
         }
         fixture.deliver();

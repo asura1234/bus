@@ -19,8 +19,7 @@ pub(super) fn saved_rollouts(state: &BusState) -> BTreeMap<AgentId, PathBuf> {
 
 /// How Codex recorded the end of `request`'s turn in its rollout: the bound
 /// turn, or else the one turn that ran the typed prompt after it was sent.
-/// Why nothing could be read or attributed is logged, since the request then
-/// closes as `reply_not_captured`.
+/// Log why nothing could be read or attributed before fallback settlement.
 pub(super) fn recorded_codex_end(
     rollout: &Path,
     request: &crate::messaging::model::Request,
