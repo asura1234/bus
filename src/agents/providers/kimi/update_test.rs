@@ -168,6 +168,11 @@ fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
         ("-yy", vec!["--auto"], vec!["-yy"]),
         ("-ymVALUE", vec!["--auto", "-mVALUE"], vec!["-ymVALUE"]),
         (
+            "-ymcustom --yolo",
+            vec!["--auto", "-mcustom"],
+            vec!["-ymcustom", "--yolo"],
+        ),
+        (
             "-ym VALUE",
             vec!["--auto", "-m", "VALUE"],
             vec!["-ym", "VALUE"],
