@@ -261,6 +261,7 @@ impl Transport for RecordedEditorUncertainty {
         let response = Native(self.0.clone()).request(method)?;
         if input {
             Err(TransportError {
+                timestamps: Default::default(),
                 code: None,
                 message: self.1.clone(),
                 definitely_rejected: false,

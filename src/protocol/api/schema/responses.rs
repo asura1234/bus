@@ -28,6 +28,8 @@ pub struct ErrorResponse {
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamps: Option<NativeSubmissionTimestamps>,
 }
 
 // Built once per API response and serialized immediately; variant size does not matter.

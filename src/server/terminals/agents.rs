@@ -335,46 +335,57 @@ impl App {
     ) -> crate::protocol::api::schema::ErrorBody {
         match err {
             AgentStartError::InvalidName => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "invalid_agent_name".into(),
                 message: INVALID_AGENT_NAME_MESSAGE.into(),
             },
             AgentStartError::UnsupportedKind(kind) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "unsupported_agent_kind".into(),
                 message: format!("unsupported interactive agent kind {kind}"),
             },
             AgentStartError::InvalidArgument => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "invalid_agent_argument".into(),
                 message: "agent arguments cannot be encoded safely for the target shell".into(),
             },
             AgentStartError::InvalidTimeout => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "invalid_agent_timeout".into(),
                 message: INVALID_AGENT_TIMEOUT_MESSAGE.into(),
             },
             AgentStartError::TargetNotFound(target) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_pane_not_found".into(),
                 message: format!("agent target pane {target} not found"),
             },
             AgentStartError::TargetBusy(target) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_pane_busy".into(),
                 message: format!("agent target pane {target} is not an available shell. Wait for its prompt; answer any shell startup question in the terminal, then retry the launch."),
             },
             AgentStartError::ShellStarting(target) => self.shell_wait_error_body(&target),
             AgentStartError::TargetUnavailableBeforeInput(target) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_pane_unavailable_before_input".into(),
                 message: format!("agent target pane {target} has no live terminal; no launch input was sent"),
             },
             AgentStartError::TargetUnavailable(target) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_pane_unavailable".into(),
                 message: format!("agent target pane {target} has no live terminal"),
             },
             AgentStartError::NoShellEditor(message) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_shell_integration_unavailable".into(), message,
             },
             AgentStartError::InputFailed(message) => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_start_input_failed".into(),
                 message,
             },
             AgentStartError::DuplicateName { name, candidates } => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_name_taken".into(),
                 message: format!(
                     "agent name {name} is already used; candidates: {}",
@@ -407,6 +418,7 @@ impl App {
             })
             .unwrap_or_else(|| "(pane unavailable)".into());
         crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
             code: if expired { "agent_shell_waiting" } else { "agent_shell_starting" }.into(),
             message: format!(
                 "Shell waiting for input or prompt confirmation{}. Last visible line: {last_line}. Answer any shell startup question, then resume this agent.",
@@ -421,11 +433,13 @@ impl App {
     ) -> crate::protocol::api::schema::ErrorBody {
         match err {
             TerminalTargetError::NotFound { target } => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_not_found".into(),
                 message: format!("agent target {target} not found"),
             },
             TerminalTargetError::Ambiguous { target, candidates } => {
                 crate::protocol::api::schema::ErrorBody {
+                    timestamps: None,
                     code: "agent_target_ambiguous".into(),
                     message: format!(
                         "agent target {target} is ambiguous; candidates: {}",
@@ -443,19 +457,23 @@ impl App {
         match err {
             AgentRenameError::Target(err) => self.agent_target_error_body(err),
             AgentRenameError::InvalidName => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "invalid_agent_name".into(),
                 message: INVALID_AGENT_NAME_MESSAGE.into(),
             },
             AgentRenameError::NotAgent => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_not_found".into(),
                 message: "agent target does not currently host an agent".into(),
             },
             AgentRenameError::PendingLaunch => crate::protocol::api::schema::ErrorBody {
+                timestamps: None,
                 code: "agent_launch_pending".into(),
                 message: "agent name cannot change while startup is pending".into(),
             },
             AgentRenameError::DuplicateName { name, candidates } => {
                 crate::protocol::api::schema::ErrorBody {
+                    timestamps: None,
                     code: "agent_name_taken".into(),
                     message: format!(
                         "agent name {name} is already used; candidates: {}",

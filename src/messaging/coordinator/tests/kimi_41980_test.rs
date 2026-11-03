@@ -105,6 +105,7 @@ impl Transport for TimedOutSteering {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         Native(self.0.clone()).request(method)?;
         Err(TransportError {
+            timestamps: Default::default(),
             code: Some("submission_unconfirmed".into()),
             message: incident()["source"]["detail"].as_str().unwrap().into(),
             definitely_rejected: false,

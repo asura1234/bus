@@ -182,9 +182,10 @@ impl BusState {
                     completed_at_ms: None,
                     latency: DeliveryLatency {
                         accepted_at_ms: Some(now_ms),
-                        ready_at_enqueue: self.agents.get(&agent_id).is_some_and(|agent| {
-                            agent.status == crate::messaging::model::RuntimeStatus::Idle
-                        }),
+                        ready_at_enqueue: self
+                            .agents
+                            .get(&agent_id)
+                            .is_some_and(|agent| agent.wait_reason().is_none()),
                         ..Default::default()
                     },
                     queue_only,

@@ -450,6 +450,7 @@ impl Transport for ExitProbe {
             })).unwrap() }),
             // An unreadable pane still reports the exit, without a snapshot.
             Method::PaneRead(_) => Err(TransportError {
+                timestamps: Default::default(),
                 code: Some("pane_not_found".into()),
                 message: "pane not found".into(),
                 definitely_rejected: true,

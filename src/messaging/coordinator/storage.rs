@@ -40,47 +40,88 @@ impl Worker {
         Ok(())
     }
 
-    pub(super) fn note_requests_queued(&mut self, ids: &[RequestId]) -> Result<(), String> {
+    pub(super) fn note_requests_queued(&mut self, ids: &[RequestId]) {
         let at_ms = io::now_ms();
         for id in ids {
             let mut state = self.state.clone();
-            state.record_queued(*id, at_ms).map_err(|e| e.to_string())?;
-            let room = state.request(*id).ok_or("Missing queued request")?.room_id;
-            self.journal(
-                state,
-                JournalOp::DeliveryTimestamps {
-                    room,
-                    request_id: *id,
-                    queued_at_ms: Some(at_ms),
-                    native_requested_at_ms: None,
-                },
-            )?;
+            let Some(room) = state.request(*id).map(|request| request.room_id) else {
+                continue;
+            };
+            if state.record_queued(*id, at_ms).is_err() {
+                continue;
+            }
+            if self
+                .journal(
+                    state.clone(),
+                    JournalOp::DeliveryTimestamps {
+                        room,
+                        request_id: *id,
+                        queued_at_ms: Some(at_ms),
+                        native_requested_at_ms: None,
+                        reply_delivered_at_ms: None,
+                    },
+                )
+                .is_err()
+            {
+                continue;
+            }
+            let completed_at_ms = io::now_ms();
+            let mut completed = state.clone();
+            if completed.finish_queued(*id, at_ms, completed_at_ms).is_ok() {
+                let _ = self.journal(
+                    completed,
+                    JournalOp::DeliveryTimestamps {
+                        room,
+                        request_id: *id,
+                        queued_at_ms: Some(completed_at_ms),
+                        native_requested_at_ms: None,
+                        reply_delivered_at_ms: None,
+                    },
+                );
+            }
         }
-        Ok(())
     }
 
-    pub(super) fn note_native_requested(
-        &mut self,
-        id: RequestId,
-        at_ms: u64,
-    ) -> Result<(), String> {
+    pub(super) fn note_native_requested(&mut self, id: RequestId, at_ms: u64) {
         let mut state = self.state.clone();
-        state
-            .record_native_requested(id, at_ms)
-            .map_err(|e| e.to_string())?;
-        let room = state
-            .request(id)
-            .ok_or("Missing submitting request")?
-            .room_id;
-        self.journal(
-            state,
-            JournalOp::DeliveryTimestamps {
-                room,
-                request_id: id,
-                queued_at_ms: None,
-                native_requested_at_ms: Some(at_ms),
-            },
-        )
+        let Some(room) = state.request(id).map(|request| request.room_id) else {
+            return;
+        };
+        if state.record_native_requested(id, at_ms).is_err() {
+            return;
+        }
+        if self
+            .journal(
+                state.clone(),
+                JournalOp::DeliveryTimestamps {
+                    room,
+                    request_id: id,
+                    queued_at_ms: None,
+                    native_requested_at_ms: Some(at_ms),
+                    reply_delivered_at_ms: None,
+                },
+            )
+            .is_err()
+        {
+            return;
+        }
+        let completed_at_ms = io::now_ms();
+        let mut completed = state.clone();
+        if completed
+            .finish_native_requested(id, at_ms, completed_at_ms)
+            .is_ok()
+        {
+            let _ = self.journal(
+                completed,
+                JournalOp::DeliveryTimestamps {
+                    room,
+                    request_id: id,
+                    queued_at_ms: None,
+                    native_requested_at_ms: Some(completed_at_ms),
+                    reply_delivered_at_ms: None,
+                },
+            );
+        }
     }
 
     /// Commits `state` and makes it durable. A state that differs from the
@@ -132,9 +173,6 @@ impl Worker {
         mut state: BusState,
         stamp_new_replies: bool,
     ) -> Result<(), String> {
-        if stamp_new_replies {
-            state.mark_new_replies_delivered(&self.durable_state, io::now_ms());
-        }
         if let Err(error) = self.store.save(&state) {
             if crate::utils::error_pipe::is_suppressed() {
                 tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
@@ -142,6 +180,43 @@ impl Worker {
             }
             self.pause_storage(&error);
             return Err(self.storage_notice().into());
+        }
+        if stamp_new_replies {
+            let at_ms = io::now_ms();
+            let new_replies: Vec<RequestId> = state
+                .requests()
+                .filter(|request| {
+                    request.completed_reply.is_some()
+                        && self
+                            .durable_state
+                            .request(request.id)
+                            .and_then(|old| old.completed_reply.as_ref())
+                            .is_none()
+                })
+                .map(|request| request.id)
+                .collect();
+            for id in new_replies {
+                let mut delivered = state.clone();
+                delivered.record_reply_delivered(id, at_ms);
+                let Some(room) = delivered.request(id).map(|request| request.room_id) else {
+                    continue;
+                };
+                if self
+                    .journal(
+                        delivered.clone(),
+                        JournalOp::DeliveryTimestamps {
+                            room,
+                            request_id: id,
+                            queued_at_ms: None,
+                            native_requested_at_ms: None,
+                            reply_delivered_at_ms: Some(at_ms),
+                        },
+                    )
+                    .is_ok()
+                {
+                    state = delivered;
+                }
+            }
         }
         diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
         diagnostics::recoveries(&self.durable_state, &state);

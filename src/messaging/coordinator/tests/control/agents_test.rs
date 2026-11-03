@@ -877,6 +877,7 @@ fn agent_clear_keeps_reset_intent_only_while_the_reset_may_have_been_typed() {
                 panic!("unexpected request: {method:?}");
             };
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "identity changed".into(),
                 code: None,
                 definitely_rejected: self.0,
@@ -997,6 +998,7 @@ fn rejected_launch_creation_releases_waiters_without_a_pane_or_session() {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             assert!(matches!(method, Method::TabCreate(_)));
             Err(TransportError {
+                timestamps: Default::default(),
                 code: Some("tab_create_failed".into()),
                 message: "login shell is not executable".into(),
                 definitely_rejected: true,

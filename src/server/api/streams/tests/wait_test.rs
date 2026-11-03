@@ -5,6 +5,7 @@ fn agent_wait_probe_only_translates_agent_disappearance() {
     let disappeared = agent_wait_probe_error(ErrorResponse {
         id: "wait".into(),
         error: ErrorBody {
+            timestamps: None,
             code: "agent_not_found".into(),
             message: "missing".into(),
         },
@@ -17,6 +18,7 @@ fn agent_wait_probe_only_translates_agent_disappearance() {
     let unavailable = agent_wait_probe_error(ErrorResponse {
         id: "wait".into(),
         error: ErrorBody {
+            timestamps: None,
             code: "server_unavailable".into(),
             message: "timed out waiting for app response".into(),
         },
@@ -35,6 +37,7 @@ fn spawn_pane_not_found_app() -> (ApiRequestSender, std::thread::JoinHandle<()>)
             let response = serde_json::to_string(&ErrorResponse {
                 id: msg.request.id,
                 error: ErrorBody {
+                    timestamps: None,
                     code: "pane_not_found".into(),
                     message: "pane pane_gone not found".into(),
                 },

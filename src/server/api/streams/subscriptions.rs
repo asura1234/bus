@@ -223,6 +223,7 @@ impl ActiveSubscription {
                     return Err(ErrorResponse {
                         id: request_id.to_string(),
                         error: ErrorBody {
+                            timestamps: None,
                             code: "invalid_regex".into(),
                             message: err.to_string(),
                         },
@@ -522,6 +523,7 @@ fn pane_read(
     let value: serde_json::Value = serde_json::from_str(&response).map_err(|_| ErrorResponse {
         id: request_id.clone(),
         error: ErrorBody {
+            timestamps: None,
             code: "internal_error".into(),
             message: "failed to decode pane read response".into(),
         },
@@ -530,6 +532,7 @@ fn pane_read(
         return serde_json::from_value(value).map_err(|_| ErrorResponse {
             id: request_id,
             error: ErrorBody {
+                timestamps: None,
                 code: "internal_error".into(),
                 message: "failed to decode pane read error".into(),
             },
@@ -538,6 +541,7 @@ fn pane_read(
     serde_json::from_value(value["result"]["read"].clone()).map_err(|_| ErrorResponse {
         id: request_id,
         error: ErrorBody {
+            timestamps: None,
             code: "internal_error".into(),
             message: "failed to decode pane read result".into(),
         },
@@ -562,6 +566,7 @@ fn pane_get(
     let value: serde_json::Value = serde_json::from_str(&response).map_err(|_| ErrorResponse {
         id: request_id.clone(),
         error: ErrorBody {
+            timestamps: None,
             code: "internal_error".into(),
             message: "failed to decode pane get response".into(),
         },
@@ -571,6 +576,7 @@ fn pane_get(
             serde_json::from_value::<ErrorResponse>(value).map_err(|_| ErrorResponse {
                 id: request_id,
                 error: ErrorBody {
+                    timestamps: None,
                     code: "internal_error".into(),
                     message: "failed to decode pane get error".into(),
                 },
@@ -580,6 +586,7 @@ fn pane_get(
     serde_json::from_value(value["result"]["pane"].clone()).map_err(|_| ErrorResponse {
         id: request_id,
         error: ErrorBody {
+            timestamps: None,
             code: "internal_error".into(),
             message: "failed to decode pane get result".into(),
         },

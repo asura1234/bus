@@ -127,6 +127,7 @@ fn failed_deletion_retry_returns_one_left_open_result_without_chat() {
         Provider::Codex,
         vec![
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "server busy".into(),
                 code: None,
                 definitely_rejected: false,

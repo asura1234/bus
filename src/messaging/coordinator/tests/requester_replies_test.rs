@@ -471,6 +471,7 @@ impl Transport for BusyDraft {
         };
         self.0.lock().unwrap().push(prompt.text);
         Err(TransportError {
+            timestamps: Default::default(),
             message: "developer draft".into(),
             code: Some(crate::protocol::api::AGENT_COMPOSER_BUSY.into()),
             definitely_rejected: true,

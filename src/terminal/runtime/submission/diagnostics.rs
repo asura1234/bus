@@ -42,6 +42,22 @@ impl Diagnostics {
         );
     }
 
+    pub(super) fn editor_installed(&self, bytes: usize) {
+        let at_ms = crate::utils::time::now_ms();
+        self.record(|timestamps| {
+            timestamps.text_written_at_ms.get_or_insert(at_ms);
+        });
+        tracing::info!(target: "bus::terminal::submission", event = "bus.terminal.submission.editor_installed", at_ms, bytes, "Bus input installed through native editor");
+    }
+
+    pub(super) fn ownership_verified(&self) {
+        self.record(|timestamps| {
+            timestamps
+                .composer_owned_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+        });
+    }
+
     pub(super) fn claim_refusal(&self) -> bool {
         !self.refusal_recorded.replace(true)
     }

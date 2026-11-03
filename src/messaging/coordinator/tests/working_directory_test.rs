@@ -213,6 +213,7 @@ impl Transport for MissingPane {
                 Ok(ResponseResult::AgentList { agents: Vec::new() })
             }
             Method::PaneGet(_) => Err(TransportError {
+                timestamps: Default::default(),
                 code: Some("pane_not_found".into()),
                 message: "pane not found".into(),
                 definitely_rejected: false,
