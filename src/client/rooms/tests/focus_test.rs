@@ -72,6 +72,32 @@ fn dev_room_focus_returns_to_room_without_replacing_drafts_or_persistent_state()
 }
 
 #[test]
+fn dev_focus_ack_preserves_a_form_opened_after_the_request() {
+    let (mut ui, first, second, _a, b) = fixture();
+    ui.form = Some(Form::Files(Editor::default()));
+    let Some(Form::Files(editor)) = &mut ui.form else {
+        panic!("file form was not opened");
+    };
+    editor.text = "typed-after-focus-request.txt".into();
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+    });
+
+    assert_eq!(ui.room, Some(first));
+    assert!(ui.terminal.is_none());
+    let Some(Form::Files(editor)) = &ui.form else {
+        panic!("newer file form was discarded");
+    };
+    assert_eq!(editor.text, "typed-after-focus-request.txt");
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::FocusTerminal(id) if id == b)));
+}
+
+#[test]
 fn dev_quit_runs_the_ui_save_and_quit_and_dev_settings_apply() {
     let (mut ui, _first, _second, _a, _b) = fixture();
     assert!(ui.quitting.is_none());

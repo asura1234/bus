@@ -132,6 +132,7 @@ fn overflow_mixed_file_chips_keep_full_path_inspection_and_removal() {
         effect: Effect::Files(room),
         enqueued: true,
         result: Some(Err("missing".into())),
+        form_generation: None,
     });
     ui.compute_view(100, 30);
     let next = ui

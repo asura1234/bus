@@ -277,7 +277,7 @@ impl BusUi {
                 id.is_some() && Some(name.as_str()) == self.settings.error_orchestrator.as_deref()
             })
             .unwrap_or(0);
-        self.form = Some(Form::ErrorOrchestrator { selected });
+        self.set_form(Form::ErrorOrchestrator { selected });
     }
     pub(super) fn choose_error_orchestrator(
         &mut self,
@@ -296,7 +296,7 @@ impl BusUi {
         let name = id.map(|_| name);
         self.settings.error_orchestrator = name.clone();
         self.queue(BusCommand::SetErrorOrchestrator(name), Effect::None);
-        self.form = Some(Form::Settings);
+        self.set_form(Form::Settings);
     }
     pub(super) fn error_orchestrator_key(&mut self, code: crossterm::event::KeyCode) {
         use crossterm::event::KeyCode;
