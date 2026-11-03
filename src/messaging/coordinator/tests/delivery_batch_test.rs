@@ -163,21 +163,22 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
     let typed = fixture.typed()[0].0.clone();
-    fixture.started("worker-turn", &typed);
-    assert_eq!(fixture.request(member).phase, RequestPhase::Queued);
-    assert_eq!(fixture.request(member).group, None);
+    assert_eq!(test_prompt_content(&typed), "developer follow-up");
+    fixture.started("master-turn", &typed);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
+    assert_eq!(fixture.request(lead).group, None);
     let unread: Vec<_> = [work, master]
         .into_iter()
         .map(|id| fixture.worker.state.room(id).unwrap().unread_count)
         .collect();
-    fixture.stopped("worker-turn", "dialog answered");
+    fixture.stopped("master-turn", "follow-up answered");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
     let typed = fixture.typed()[1].0.clone();
-    assert_eq!(test_prompt_content(&typed), "developer follow-up");
-    fixture.started("master-turn", &typed);
-    fixture.stopped("master-turn", "follow-up answered");
+    assert_eq!(test_prompt_content(&typed), "a real dialog needs help");
+    fixture.started("worker-turn", &typed);
+    fixture.stopped("worker-turn", "dialog answered");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     for ((room, request, reply), unread) in [
