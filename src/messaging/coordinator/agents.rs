@@ -743,10 +743,6 @@ impl Worker {
         orchestrator: Option<&OrchestratorSpec>,
     ) -> Result<std::path::PathBuf, String> {
         let orchestrates = orchestrator.map(|spec| spec.room);
-        // Before anything else, so the CLI and the form get the same answer.
-        if orchestrator.is_some() {
-            orchestrator::check_new_orchestrator(input.provider)?;
-        }
         let cwd = launch::canonical_directory(&input.cwd)?;
         if input.provider == Provider::Codex {
             codex::launch::validate_project_trust(&cwd)?;

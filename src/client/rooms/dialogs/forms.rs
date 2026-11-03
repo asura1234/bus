@@ -72,12 +72,12 @@ impl Form {
     }
 }
 
-/// The providers the Add agent form offers, in order. A MASTER agent is an
-/// orchestrator, and Codex cannot be one (`orchestrator::check_new_orchestrator`).
+/// The providers the Add agent form offers, preserving each form's default.
 pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
     if orchestrator {
         &[
             Provider::ClaudeCode,
+            Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi,

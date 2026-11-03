@@ -1041,7 +1041,7 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
 }
 
 #[test]
-fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
+fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
     let (mut ui, master, _, other, _) = master_fixture();
     // The offered providers are the form's clickable provider rows.
     let choices = |ui: &mut BusUi| {
@@ -1063,65 +1063,37 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
         choices(&mut ui),
         [
             Provider::ClaudeCode,
+            Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi
         ]
     );
-    // Arrow keys cycle only through the offered providers.
-    for code in [
-        KeyCode::Down,
-        KeyCode::Down,
-        KeyCode::Up,
-        KeyCode::Up,
-        KeyCode::Up,
-    ] {
-        key(&mut ui, code, KeyModifiers::NONE);
-        let Some(forms::Form::Agent {
-            provider_cursor, ..
-        }) = &ui.form
-        else {
-            panic!("agent form closed")
-        };
-        assert_ne!(*provider_cursor, Provider::Codex);
-    }
-    // Codex forced in anyway is refused with the explanation, and nothing is sent.
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert!(matches!(
+        &ui.form,
+        Some(forms::Form::Agent {
+            provider_cursor: Provider::Codex,
+            ..
+        })
+    ));
     ui.action(render::Action::Provider(Provider::Codex));
     if let Some(forms::Form::Agent { cwd, .. }) = &mut ui.form {
         *cwd = editor::Editor::new("/repo".into());
     }
-    let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL));
-    assert!(!ui.pending.iter().any(|p| matches!(
-        p.command,
-        BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(..)
-    )));
-    let screen = room_screen(&mut ui, 120, 40);
-    assert!(!screen.contains("does not start"), "{screen}");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+    assert!(ui.error.is_none(), "{:?}", ui.error);
     assert!(
-        !screen.contains("a new turn when a background command exits"),
-        "{screen}"
-    );
-    assert!(
-        !screen.contains("Claude Code or Cursor as the orchestrator"),
-        "{screen}"
-    );
-    let logs = capture.text();
-    assert!(logs.contains("bus.form.validation_failed"), "{logs}");
-    assert!(logs.contains("field=\"model\""), "{logs}");
-    assert!(logs.contains("path=\"/repo\""), "{logs}");
-    assert!(
-        logs.contains(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED),
-        "{logs}"
-    );
-    assert!(
-        matches!(ui.form, Some(forms::Form::Agent { .. })),
-        "the form stays open"
+        ui.pending.iter().any(|p| matches!(
+            &p.command,
+            BusCommand::AddOrchestrator(input, spec)
+                if input.provider == Provider::Codex && spec.room == other
+        )),
+        "the form submits the Codex orchestrator with its work-room binding"
     );
 
     // A work room's form still offers Codex, and a Codex worker may resume.
-    ui.form = None;
-    ui.error = None;
+    let (mut ui, _, _, other, _) = master_fixture();
     ui.open_room(other);
     ui.action(render::Action::NewAgent);
     typed(&mut ui, "codex-worker");

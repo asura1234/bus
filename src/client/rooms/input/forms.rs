@@ -440,14 +440,6 @@ impl BusUi {
             );
             return;
         }
-        // The MASTER form never offers Codex; this keeps the form and
-        // the coordinator, which refuses it too, in step.
-        if let (Some(_), Some(provider)) = (orchestrates, provider) {
-            if let Err(error) = crate::messaging::orchestration::check_new_orchestrator(provider) {
-                log_rejection("model", &error);
-                return;
-            }
-        }
         let system_prompt = prompt.map(|prompt| prompt.editor.text);
         if system_prompt
             .as_ref()
