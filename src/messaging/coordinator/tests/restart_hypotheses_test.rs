@@ -281,7 +281,6 @@ fn restart_hypothesis_legacy_deferred_across_known_generation_advance() {
         "no input admitted while legacy native info is absent"
     );
     save_hypothesis(&f, "legacy-owned-witness-g1-before-restart");
-    let legacy_g2 = hypothesis_info(&f, f.agent, 2, "terminal", "pane", "session");
     let witness_g2 = hypothesis_info(
         &f,
         witness,
@@ -290,6 +289,22 @@ fn restart_hypothesis_legacy_deferred_across_known_generation_advance() {
         "witness-pane",
         "witness-session",
     );
+    // The server transition is known before this agent's native info returns.
+    // Its old execution must not become current merely because polling repeats.
+    f.worker.transport = Box::new(HypothesisNative {
+        calls: f.native.clone(),
+        infos: vec![witness_g2.clone()],
+    });
+    f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(
+        f.typed().len(),
+        1,
+        "no input while the native agent is absent"
+    );
+    save_hypothesis(&f, "legacy-g2-known-before-native-reattribution");
+    let legacy_g2 = hypothesis_info(&f, f.agent, 2, "terminal", "pane", "session");
     f.worker.transport = Box::new(HypothesisNative {
         calls: f.native.clone(),
         infos: vec![legacy_g2, witness_g2],

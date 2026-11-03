@@ -165,6 +165,8 @@ fn migrate_legacy_requests(
     infos: &[schema::AgentInfo],
     generation: u64,
 ) -> Result<(), String> {
+    let generation_advanced =
+        generation > 0 && infos.iter().any(|info| info.generation > generation);
     let legacy: Vec<_> = state
         .unsettled_requests()
         .filter(|request| {
@@ -178,9 +180,10 @@ fn migrate_legacy_requests(
         .collect();
     for (id, agent) in legacy {
         let owner = state.agent(agent).ok_or("Unknown legacy agent")?;
-        let Some(info) = polled_agent(state, owner, infos) else {
+        let info = polled_agent(state, owner, infos);
+        if info.is_none() && !generation_advanced {
             continue;
-        };
+        }
         let (Some(terminal), Some(pane)) = (
             &owner.runtime_identity.terminal_id,
             &owner.runtime_identity.pane_id,
@@ -188,12 +191,12 @@ fn migrate_legacy_requests(
             continue;
         };
         let epoch = DeliveryEpoch {
-            generation: if terminal == &info.terminal_id && pane == &info.pane_id {
-                if generation == 0 {
-                    info.generation
-                } else {
-                    generation
-                }
+            generation: if generation_advanced {
+                generation
+            } else if let Some(info) =
+                info.filter(|info| terminal == &info.terminal_id && pane == &info.pane_id)
+            {
+                info.generation
             } else {
                 0
             },
