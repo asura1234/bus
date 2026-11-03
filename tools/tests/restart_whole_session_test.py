@@ -31,6 +31,21 @@ def wait_for(predicate, detail, seconds=60):
     raise AssertionError(detail())
 
 
+def signal_client_group(client, sig):
+    # poll() reaps an exited leader before its PID can become a stale group ID.
+    if client.poll() is not None:
+        return
+    try:
+        os.killpg(client.pid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS may report EPERM if the leader exits between poll and killpg.
+        # A permission failure for a still-running child remains a real error.
+        if client.poll() is None:
+            raise
+
+
 def alternate_build(source, target, different_version=False):
     """Synthetic identity fixture: same code, another embedded SHA (no rebuild)."""
     identity = json.loads(subprocess.check_output([str(source), "--identity"]))
@@ -167,14 +182,11 @@ def run_restart(root, source, variant, host):
                            capture_output=True, timeout=20, check=False)
         except subprocess.TimeoutExpired:
             pass
-        try:
-            os.killpg(client.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        signal_client_group(client, signal.SIGTERM)
         try:
             client.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            os.killpg(client.pid, signal.SIGKILL)
+            signal_client_group(client, signal.SIGKILL)
             client.wait(timeout=5)
         for name in ("build.json", "coordinator.pid", "handoff.pid"):
             pid = read_json(data / "restarts" / name).get("pid")
