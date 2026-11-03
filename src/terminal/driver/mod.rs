@@ -1,6 +1,7 @@
 //! Provider-independent terminal observation and input. Neither caller needs
 //! a dialog parser or an agent state to read and answer a terminal prompt.
 mod blocker;
+pub(crate) mod contracts;
 mod grid;
 pub(crate) mod input;
 mod press;

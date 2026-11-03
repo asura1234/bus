@@ -1,0 +1,1250 @@
+{
+  "schema_version": 1,
+  "source_ref": "a9ed8e0a805ee6b1901bbdecd885c682f869fbe6",
+  "reviewed_set": "0a705e503fd31ec165e822febf1698bd4b822b9952ee3282efc75af0aa5a66e1",
+  "provenance": "Synthetic normalized contract records and reviewed oracles; not captured provider output or an implementation result.",
+  "endpoint": {
+    "terminal": "terminal-1",
+    "pane": "pane-1",
+    "launch": "launch-1",
+    "session": "session-1"
+  },
+  "source": {
+    "stream": "synthetic-native",
+    "identity": "file-1",
+    "through": {
+      "unit": "bytes",
+      "value": 0
+    }
+  },
+  "capabilities": {
+    "native_lifecycle": "present",
+    "generic_lifecycle": "absent",
+    "operations": [
+      {
+        "kind": "submit",
+        "keys": [
+          "enter"
+        ],
+        "native_acknowledgment": "present"
+      },
+      {
+        "kind": "steer",
+        "keys": [
+          "ctrl+s"
+        ],
+        "native_acknowledgment": "present"
+      },
+      {
+        "kind": "stop",
+        "keys": [
+          "esc"
+        ],
+        "native_acknowledgment": "present"
+      },
+      {
+        "kind": "read_draft",
+        "keys": [
+          "ctrl+g"
+        ],
+        "native_acknowledgment": "absent"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "A01",
+      "title": "Peripheral privacy banner above independently focused composer",
+      "synthetic_surface": "Help improve a tool [Opt out] [Opt in]\n╭────────────────╮\n│ ❯              │\n╰────────────────╯",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "none",
+        "request": "queued",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A02",
+      "title": "Unknown border and weekly-footer decoration",
+      "synthetic_surface": "╭────────────────╮\n│ ❯              │\n╰ Weekly limit left: 1% ── unknown model ╯",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "none",
+        "request": "queued",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A03",
+      "title": "Owned nested quota error without a reset timestamp",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "You've reached your 5-hour usage limit.",
+                  "cause": {
+                    "status": 429,
+                    "error": {
+                      "code": "quota",
+                      "detail": [
+                        "native",
+                        "nested"
+                      ]
+                    }
+                  }
+                },
+                "message": "429 You've reached your 5-hour usage limit.",
+                "code": "provider.api_error",
+                "http_status": 429,
+                "native_reset": null
+              }
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "failed",
+        "request": "retry_held",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      },
+      "budget_oracle": {
+        "root_owner": "retained-request",
+        "first_confirmed_failure_at_ms": 1000,
+        "ordinary_deadline_at_ms": 901000,
+        "reserved_operations": 0,
+        "outside_window_used": false,
+        "callback_increments_count": false,
+        "restart_renews_window": false,
+        "pre_dispatch_intent_required": true
+      }
+    },
+    {
+      "id": "A04",
+      "title": "Monthly failure with restored draft; calendar hint cannot schedule",
+      "synthetic_surface": "Monthly limit\n> [Pasted text #1]",
+      "native_events": [
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "Monthly capacity unavailable"
+                },
+                "message": "Monthly capacity unavailable",
+                "code": "upgrade",
+                "http_status": 429,
+                "native_reset": null
+              }
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "draft"
+        },
+        "native_attempt": "failed",
+        "request": "retry_held",
+        "attention": "draft_protected",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A05",
+      "title": "Live endpoint permanent auth failure is attention, not endpoint loss",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "Authentication denied"
+                },
+                "message": "Authentication denied",
+                "code": "unauthorized",
+                "http_status": 401,
+                "native_reset": null
+              }
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "failed",
+        "request": "retained_attention",
+        "attention": "permanent_failure",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A06",
+      "title": "Quoted quota and opaque native JSON remain distinct",
+      "synthetic_surface": "Explain: \"429 five-hour usage limit\"\n❯",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "none",
+        "request": "queued",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A07",
+      "title": "Outer commit precedes delayed inner failure",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "input_commit_observed",
+          "detail": {
+            "input": {
+              "namespace": "prompt",
+              "value": "p1"
+            },
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "You've reached your 5-hour usage limit.",
+                  "cause": {
+                    "status": 429,
+                    "error": {
+                      "code": "quota",
+                      "detail": [
+                        "native",
+                        "nested"
+                      ]
+                    }
+                  }
+                },
+                "message": "429 You've reached your 5-hour usage limit.",
+                "code": "provider.api_error",
+                "http_status": 429,
+                "native_reset": null
+              }
+            }
+          }
+        },
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "inner-iteration",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "You've reached your 5-hour usage limit.",
+                  "cause": {
+                    "status": 429,
+                    "error": {
+                      "code": "quota",
+                      "detail": [
+                        "native",
+                        "nested"
+                      ]
+                    }
+                  }
+                },
+                "message": "429 You've reached your 5-hour usage limit.",
+                "code": "provider.api_error",
+                "http_status": 429,
+                "native_reset": null
+              }
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "failed",
+        "request": "retry_held",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A08",
+      "title": "Equal numeric IDs in different namespaces and foreign launch",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "inner-iteration",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "completed"
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "unknown",
+          "detail": "evidence_required"
+        },
+        "native_attempt": "unresolved",
+        "request": "retained",
+        "attention": "evidence_required",
+        "uncertain_input_replay": false
+      },
+      "endpoint": {
+        "terminal": "terminal-1",
+        "pane": "pane-1",
+        "launch": "foreign-launch",
+        "session": "session-1"
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "evidence_unavailable",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A09",
+      "title": "Background inventory does not reopen settled foreground work",
+      "synthetic_surface": "[1 task running]\n❯",
+      "native_events": [
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "completed"
+            }
+          }
+        },
+        {
+          "kind": "background_observed",
+          "detail": {
+            "tasks": [
+              {
+                "namespace": "background",
+                "value": "b1"
+              }
+            ]
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "completed",
+        "request": "queued",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A10",
+      "title": "Open foreground attempt with an empty composer",
+      "synthetic_surface": "❯",
+      "native_events": [
+        {
+          "kind": "attempt_started",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "inputs": [
+              {
+                "namespace": "prompt",
+                "value": "p1"
+              }
+            ]
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "working",
+        "readiness": {
+          "kind": "busy"
+        },
+        "native_attempt": "open",
+        "request": "active",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A11",
+      "title": "Accepted steer queue retains ordered parts before start",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "input_accepted",
+          "detail": {
+            "input": {
+              "namespace": "prompt",
+              "value": "p2"
+            },
+            "attempt": null,
+            "parts": [
+              {
+                "kind": "text",
+                "detail": "first\n"
+              },
+              {
+                "kind": "attachment",
+                "detail": {
+                  "native_id": {
+                    "namespace": "attachment",
+                    "value": "img1"
+                  },
+                  "raw": {
+                    "media": "image"
+                  }
+                }
+              },
+              {
+                "kind": "text",
+                "detail": "second  "
+              }
+            ]
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "working",
+        "readiness": {
+          "kind": "busy"
+        },
+        "native_attempt": "queued_native",
+        "request": "native_accepted",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A12",
+      "title": "Capacity error in owned rollout without Stop",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "attempt_end_observed",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "outcome": {
+              "kind": "failed",
+              "detail": {
+                "raw": {
+                  "message": "Selected model is at capacity"
+                },
+                "message": "Selected model is at capacity",
+                "code": "server_overloaded",
+                "http_status": 503,
+                "native_reset": null
+              }
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "failed",
+        "request": "retry_held",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A13",
+      "title": "Unknown focused dialog is never chat input",
+      "synthetic_surface": "Future decision\n> Allow once\n  Refuse",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "needs_attention",
+          "detail": "focused_control"
+        },
+        "native_attempt": "none",
+        "request": "queued",
+        "attention": "focused_control",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A14",
+      "title": "Future native event and banner keep opaque evidence",
+      "synthetic_surface": "An unseen future surface",
+      "native_events": [
+        {
+          "kind": "unrecognized",
+          "detail": {
+            "native_kind": "future.event.v9",
+            "payload": {
+              "nested": [
+                1,
+                {
+                  "unknown": "value"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "unknown",
+          "detail": "unclassified_surface"
+        },
+        "native_attempt": "unresolved",
+        "request": "retained",
+        "attention": "unclassified_surface",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A15",
+      "title": "Lifecycle present but expected certificate unavailable",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "unknown",
+          "detail": "missing_certificate"
+        },
+        "native_attempt": "unresolved",
+        "request": "retained",
+        "attention": "missing_certificate",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "evidence_unavailable",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A16",
+      "title": "Positive endpoint loss retains ownership and attention",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "unavailable",
+        "readiness": {
+          "kind": "unknown",
+          "detail": "endpoint_lost"
+        },
+        "native_attempt": "unresolved",
+        "request": "retained",
+        "attention": "endpoint_lost",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_lost",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A17",
+      "title": "Long foreign draft with hidden prefix stays protected",
+      "synthetic_surface": "❯ …hidden prefix… visible draft 文\n[Pasted text #7]",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "draft"
+        },
+        "native_attempt": "none",
+        "request": "queued",
+        "attention": "draft_protected",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A18",
+      "title": "Possible write with missing acknowledgment is retained",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [
+        {
+          "operation_id": "op-A18",
+          "disposition": {
+            "kind": "uncertain",
+            "detail": "ack lost after possible write"
+          }
+        }
+      ],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "needs_attention",
+          "detail": "submission_uncertain"
+        },
+        "native_attempt": "unconfirmed",
+        "request": "uncertain",
+        "attention": "submission_uncertain",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A19",
+      "title": "Persisted scoped operation and budget do not restart",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [
+        {
+          "operation_id": "op-before-restart",
+          "disposition": {
+            "kind": "enqueued"
+          }
+        }
+      ],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "needs_attention",
+          "detail": "submission_uncertain"
+        },
+        "native_attempt": "unconfirmed",
+        "request": "uncertain",
+        "attention": "submission_uncertain",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      },
+      "budget_oracle": {
+        "root_owner": "retained-request",
+        "first_confirmed_failure_at_ms": 1000,
+        "ordinary_deadline_at_ms": 901000,
+        "reserved_operations": 2,
+        "outside_window_used": false,
+        "callback_increments_count": false,
+        "restart_renews_window": false,
+        "pre_dispatch_intent_required": true
+      }
+    },
+    {
+      "id": "A20",
+      "title": "Stop key receipt and visual Idle do not prove native stop",
+      "synthetic_surface": "❯",
+      "native_events": [],
+      "write_receipts": [
+        {
+          "operation_id": "stop-A20",
+          "disposition": {
+            "kind": "written"
+          }
+        }
+      ],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "needs_attention",
+          "detail": "stop_pending"
+        },
+        "native_attempt": "open",
+        "request": "stop_pending",
+        "attention": "stop_pending",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A21",
+      "title": "Definite zero-byte rejection consumes a reserved retry operation",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [
+        {
+          "operation_id": "retry-A21",
+          "disposition": {
+            "kind": "definitely_unwritten",
+            "detail": "frame changed after reservation"
+          }
+        }
+      ],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "definitely_unwritten",
+        "request": "retry_held",
+        "attention": "retry_guard_refused",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      },
+      "budget_oracle": {
+        "root_owner": "retained-request",
+        "first_confirmed_failure_at_ms": 1000,
+        "ordinary_deadline_at_ms": 901000,
+        "reserved_operations": 3,
+        "outside_window_used": false,
+        "callback_increments_count": false,
+        "restart_renews_window": false,
+        "pre_dispatch_intent_required": true
+      }
+    },
+    {
+      "id": "A22",
+      "title": "Distinct native accepted inputs keep attribution across failure",
+      "synthetic_surface": "",
+      "native_events": [
+        {
+          "kind": "input_accepted",
+          "detail": {
+            "input": {
+              "namespace": "prompt",
+              "value": "p1"
+            },
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "1"
+            },
+            "parts": [
+              {
+                "kind": "text",
+                "detail": "  native input\n\nkeeps spacing  "
+              }
+            ]
+          }
+        },
+        {
+          "kind": "input_accepted",
+          "detail": {
+            "input": {
+              "namespace": "prompt",
+              "value": "p2"
+            },
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "2"
+            },
+            "parts": [
+              {
+                "kind": "text",
+                "detail": "  native input\n\nkeeps spacing  "
+              }
+            ]
+          }
+        },
+        {
+          "kind": "attempt_started",
+          "detail": {
+            "attempt": {
+              "namespace": "outer-turn",
+              "value": "2"
+            },
+            "inputs": [
+              {
+                "namespace": "prompt",
+                "value": "p2"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "attempt_linked",
+          "detail": {
+            "attempt": {
+              "namespace": "inner-iteration",
+              "value": "1"
+            },
+            "parent": {
+              "namespace": "outer-turn",
+              "value": "2"
+            }
+          }
+        }
+      ],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "working",
+        "readiness": {
+          "kind": "busy"
+        },
+        "native_attempt": "open",
+        "request": "native_accepted",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "owned_attempt",
+        "attempt_scope": [
+          {
+            "namespace": "outer-turn",
+            "value": "1"
+          }
+        ],
+        "input_scope": [
+          {
+            "namespace": "prompt",
+            "value": "p1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A23",
+      "title": "Bus composer optimistic-clear neighbour remains independent",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "idle",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "none",
+        "request": "queued",
+        "attention": null,
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "covered_quiescent",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A24",
+      "title": "Absent lifecycle authority never downgrades from a lost certificate",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "candidate_ready"
+        },
+        "native_attempt": "unsupported",
+        "request": "queued",
+        "attention": "lifecycle_unsupported",
+        "uncertain_input_replay": false
+      },
+      "capabilities": {
+        "native_lifecycle": "absent",
+        "generic_lifecycle": "absent",
+        "operations": [
+          {
+            "kind": "submit",
+            "keys": [
+              "enter"
+            ],
+            "native_acknowledgment": "present"
+          },
+          {
+            "kind": "steer",
+            "keys": [
+              "ctrl+s"
+            ],
+            "native_acknowledgment": "present"
+          },
+          {
+            "kind": "stop",
+            "keys": [
+              "esc"
+            ],
+            "native_acknowledgment": "present"
+          },
+          {
+            "kind": "read_draft",
+            "keys": [
+              "ctrl+g"
+            ],
+            "native_acknowledgment": "absent"
+          }
+        ]
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "unsupported",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    },
+    {
+      "id": "A25",
+      "title": "Pending trailing bytes and a confirmed source gap are distinct",
+      "synthetic_surface": "",
+      "native_events": [],
+      "write_receipts": [],
+      "read_progress": [
+        {
+          "kind": "pending_tail",
+          "detail": {
+            "last_complete": {
+              "stream": "synthetic-native",
+              "identity": "file-1",
+              "through": {
+                "unit": "bytes",
+                "value": 0
+              }
+            },
+            "fragment": [
+              123,
+              34,
+              120,
+              34,
+              58,
+              240,
+              159
+            ]
+          }
+        },
+        {
+          "kind": "evidence_gap",
+          "detail": {
+            "last_complete": {
+              "stream": "synthetic-native",
+              "identity": "file-1",
+              "through": {
+                "unit": "bytes",
+                "value": 0
+              }
+            },
+            "reason": "unverified replacement",
+            "retained": [
+              255,
+              0,
+              123
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "public_state": "blocked",
+        "readiness": {
+          "kind": "unknown",
+          "detail": "source_gap"
+        },
+        "native_attempt": "unresolved",
+        "request": "retained",
+        "attention": "source_gap",
+        "uncertain_input_replay": false
+      },
+      "baseline": {
+        "endpoint_evidence": "verified_live",
+        "lifecycle_evidence": "evidence_unavailable",
+        "attempt_scope": [],
+        "input_scope": []
+      }
+    }
+  ]
+}
