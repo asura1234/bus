@@ -698,7 +698,9 @@ fn cold_resume_preserves_uncertain_request_and_settles_its_original_reply_once()
     let mut worker = Worker::open(dir.clone(), Box::new(transport)).unwrap();
     worker.poll().unwrap();
     worker.submit_ready().unwrap();
-    assert_eq!(worker.state.request(request).unwrap(), &before);
+    let mut restored = before;
+    restored.interrupted_by_restore = true;
+    assert_eq!(worker.state.request(request).unwrap(), &restored);
     assert_eq!(
         worker.state.request(queued).unwrap().phase,
         RequestPhase::Queued
