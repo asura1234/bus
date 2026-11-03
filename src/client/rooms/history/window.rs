@@ -1,16 +1,75 @@
 //! Newest-first filtered history windows. Older records are requested on scroll.
 use super::{
     exchange::{explicitly_to_you, visible_request},
-    groups::Exchange,
-    History,
+    groups::{Exchange, Exchanges, Window},
+    History, LayoutKey, MarkdownSource,
 };
 use crate::messaging::model::{Author, BusState, Prompt, Room};
 use crate::messaging::model::{RoomHistoryFilters, RoomId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const PAGE_RECORDS: usize = 256;
 
 impl History {
+    pub(super) fn layout_reusable(&self, key: LayoutKey, now: u64) -> bool {
+        self.key.is_some_and(|previous| {
+            previous.0 == key.0
+                && previous.1 == key.1
+                && previous.2 == key.2
+                && previous.4 == key.4
+                && previous.5 == key.5
+                && previous.6 == key.6
+                && (previous.3 == key.3 || self.age_valid.contains(&now))
+        })
+    }
+
+    pub(super) fn prepare_window_source<'a>(
+        &mut self,
+        state: &'a BusState,
+        room: &'a Room,
+        revision: u64,
+        filters: RoomHistoryFilters,
+        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+    ) -> Window<'a> {
+        self.select_window(room.id, filters);
+        let recent = (filters != Default::default())
+            .then(|| recent_exchanges(state, room, self.record_limit));
+        if let Some((_, has_older)) = &recent {
+            self.rebuilt = 0;
+            self.rendered = 0;
+            self.projected = 0;
+            // A filtered revision examines only its bounded newest window.
+            self.signature = revision ^ (self.record_limit as u64).rotate_left(32);
+            self.has_older = *has_older;
+        } else {
+            self.prepare_source(state, room, revision, submissions);
+            self.has_older = false;
+        }
+        recent
+    }
+
+    pub(super) fn retain_window_markdown(
+        &mut self,
+        state: &BusState,
+        room: RoomId,
+        active_markdown: BTreeSet<MarkdownSource>,
+        filtered: bool,
+    ) {
+        if filtered {
+            // Keep older warm blocks for lazy scrollback. Pruning every old
+            // block on toggle would make the first page scale with all history.
+            self.room_markdown
+                .entry(room)
+                .or_default()
+                .extend(active_markdown);
+        } else {
+            self.room_markdown.insert(room, active_markdown);
+            self.room_markdown.retain(|id, _| state.room(*id).is_some());
+            let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
+            self.markdown.retain(|source, _| shown.contains(source));
+        }
+    }
+
     pub(super) fn select_window(&mut self, room: RoomId, filters: RoomHistoryFilters) {
         if self.window_room != Some((room, filters)) {
             self.window_room = Some((room, filters));
@@ -36,7 +95,7 @@ pub(super) fn recent_exchanges<'a>(
     state: &'a BusState,
     room: &'a Room,
     limit: usize,
-) -> (BTreeMap<(u64, u64), Exchange<'a>>, bool) {
+) -> (Exchanges<'a>, bool) {
     let mut requests = state.recent_requests(u64::MAX).peekable();
     let mut notices = state.notices(room.id).rev().peekable();
     let mut exchanges = BTreeMap::new();

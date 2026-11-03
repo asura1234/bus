@@ -253,18 +253,6 @@ impl History {
         self.displayed_filters
     }
 
-    fn reusable_layout(&self, key: LayoutKey, now: u64) -> bool {
-        self.key.is_some_and(|previous| {
-            previous.0 == key.0
-                && previous.1 == key.1
-                && previous.2 == key.2
-                && previous.4 == key.4
-                && previous.5 == key.5
-                && previous.6 == key.6
-                && (previous.3 == key.3 || self.age_valid.contains(&now))
-        })
-    }
-
     pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {
         self.lines.get(index).map(|line| line.anchor)
     }

@@ -185,6 +185,57 @@ impl Background {
             .is_some_and(|layout| layout.reusable(key, now))
     }
 
+    fn take_completed(&mut self, key: Key) -> Option<Layout> {
+        let mut mailbox = self
+            .shared
+            .mailbox
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.shared.ready.store(false, Ordering::Relaxed);
+        mailbox
+            .result
+            .take()
+            .filter(|layout| layout.key.same_geometry(key))
+    }
+
+    fn enqueue(
+        &mut self,
+        key: Key,
+        snapshot: Arc<BusSnapshot>,
+        now: u64,
+        submissions: BTreeMap<PromptId, LocalSendStatus>,
+    ) {
+        if self.requested == Some(key) {
+            return;
+        }
+        // Poll/draft revisions must not starve a cold layout by cancelling it
+        // before it can finish. Only room/geometry changes cancel running work.
+        let generation = if self
+            .requested
+            .is_some_and(|previous| previous.same_geometry(key))
+        {
+            self.shared.generation.load(Ordering::Relaxed)
+        } else {
+            self.shared.generation.fetch_add(1, Ordering::Relaxed) + 1
+        };
+        self.requested = Some(key);
+        let job = Job {
+            key,
+            generation,
+            snapshot,
+            submissions,
+            now,
+        };
+        let mut mailbox = self
+            .shared
+            .mailbox
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // At most one running job and one pending job, even during resize storms.
+        mailbox.next = Some(job);
+        self.shared.wake.notify_one();
+    }
+
     fn start() -> Result<Self, String> {
         let shared = Arc::new(Shared::default());
         let worker = Arc::clone(&shared);
@@ -330,16 +381,7 @@ impl History {
                 .map_or_else(Default::default, |layout| layout.filters);
             background.displayed_room = Some(room);
         }
-        let completed = {
-            let mut mailbox = background
-                .shared
-                .mailbox
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            background.shared.ready.store(false, Ordering::Relaxed);
-            mailbox.result.take()
-        };
-        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
+        if let Some(layout) = background.take_completed(key) {
             self.lines = Arc::clone(&layout.lines);
             self.displayed_filters = layout.filters;
             self.loaded_limit = layout.key.limit;
@@ -383,33 +425,7 @@ impl History {
             };
             self.displayed_filters = layout.filters;
         }
-        if background.requested == Some(key) {
-            return;
-        }
-        let generation = if background
-            .requested
-            .is_some_and(|previous| previous.same_geometry(key))
-        {
-            background.shared.generation.load(Ordering::Relaxed)
-        } else {
-            background.shared.generation.fetch_add(1, Ordering::Relaxed) + 1
-        };
-        background.requested = Some(key);
-        let job = Job {
-            key,
-            generation,
-            snapshot,
-            submissions,
-            now,
-        };
-        let mut mailbox = background
-            .shared
-            .mailbox
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        // At most one running job and one pending job, even during resize storms.
-        mailbox.next = Some(job);
-        background.shared.wake.notify_one();
+        background.enqueue(key, snapshot, now, submissions);
     }
 }
 
