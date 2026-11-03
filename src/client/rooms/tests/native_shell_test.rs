@@ -678,17 +678,20 @@ fn ctrl_c_release_and_modified_copy_chords_do_not_quit_bus() {
 }
 
 #[test]
-fn ctrl_c_keeps_a_draft_that_is_already_being_sent_and_stays_open() {
+fn ctrl_c_clears_new_draft_without_cancelling_the_pending_send() {
     let (mut ui, room, agent) = fixture();
     let local = ui.locals.get_mut(&room).unwrap();
     local.recipients.insert(agent);
     local.text.insert("on its way");
     ui.text_changed(room);
     ui.request_send(room);
+    ui.locals.get_mut(&room).unwrap().text.insert("next draft");
+    ui.text_changed(room);
     key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(ui.quitting.is_none());
-    assert_eq!(ui.locals[&room].text.text, "on its way");
-    assert!(!ui
+    assert!(ui.locals[&room].text.text.is_empty());
+    assert_eq!(ui.submissions.len(), 1);
+    assert!(ui
         .pending
         .iter()
         .any(|p| matches!(&p.command, BusCommand::SetDraftText(_, text) if text.is_empty())));
@@ -755,9 +758,8 @@ fn paste_and_composition_never_send_while_enter_and_newline_have_distinct_meanin
     key(&mut ui, KeyCode::Enter, KeyModifiers::SHIFT);
     key(&mut ui, KeyCode::Char('j'), KeyModifiers::CONTROL);
     assert_eq!(ui.locals[&room].text.text, "hello\nworld文\n\n");
-    assert!(ui.send_intent.is_none());
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(ui.send_intent, Some(room));
+    assert_eq!(ui.submissions.len(), 1);
 }
 
 #[test]
@@ -779,7 +781,6 @@ fn path_drop_attaches_literal_multiple_paths_without_changing_draft_or_recipient
             .count(),
         2
     );
-    assert!(ui.send_intent.is_none());
 }
 
 #[test]

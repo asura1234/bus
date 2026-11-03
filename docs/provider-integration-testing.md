@@ -248,42 +248,32 @@ native records before recovery; do not blindly resend.
 
 ## Real-model messaging matrix
 
-Create two work rooms. `provider-matrix` has one non-Codex orchestrator in
+Create two work rooms. `provider-matrix` has one orchestrator in
 MASTER and real Codex, Claude, and new-provider workers. `provider-claude`
 has its own Claude orchestrator in MASTER and a new-provider worker. An
 orchestrator binds exactly one work room for its whole life, and a work room
 has at most one orchestrator, so `new-orch` stays on `provider-matrix` and
 `claude-orch` stays on `provider-claude`. Record each `room create` result's
 `room_id`. `--room` and `--orchestrates` accept that ID or the room's unique
-name. Use real models and unique markers for each cell. A new Codex
-orchestrator is refused before hook setup and is not saved. Expect `ok: false`
-and this `error.message`:
-
-`Codex cannot be an orchestrator yet: an orchestrator dispatches work with bus send --async in the background and must be woken when it finishes, but Codex does not start a new turn when a background command exits (openai/codex issues 32188, 50079). Use Claude Code or Cursor as the orchestrator; Codex works fine as a worker.`
-
-Record that refusal. Do not expect `ok: true` or `{agent_id, stage: "launching"}`,
-and do not claim the orchestrator cells passed. The orchestrator is another
-provider listed by `sbus agent add --help`. The check allows every provider
-except Codex, including Grok. If the new provider is Codex, use Claude, Cursor,
-or Grok for `new-orch`.
-The block below records the Codex orchestrator refusal, then each other role's
-successful add. Use the first-add rule for that provider and for this project's
+name. Use real models and unique markers for each cell. Codex is available as
+an orchestrator. Its background-command completion does not wake it; use
+foreground bounded waits or ordinary worker messages for those cells.
+Use the first-add rule for the selected provider and for this project's
 hook file, and run each saved name only until the first `ok: true`.
 
 `claude-worker` is Claude. The command below is the one add. `--consent-hooks`
 would not change the result. If an unconsented add of that name already
 returned `ok: true`, do not run the command again.
 
-`codex-worker` is the first Codex add unless `.codex/hooks.json` is already
-current. While it is missing or not current, run the command once without
+`codex-worker` uses the Codex hook rule. If `new-orch` already installed current
+hooks, skip the missing-hook check. Otherwise run the command once without
 `--consent-hooks`, expect
 `Project hook setup requires --consent-hooks: MESSAGE (PATH)`, then run the
 command as written. Once the file is current, the unconsented add succeeds
 and saves the agent; do not run a second add of `codex-worker`.
 
-`new-orch` is not Codex. The hook rule for its provider applies only after
-the orchestrator check allows the add. `new-peer` and `codex-worker` are the
-Codex adds that can succeed. Claude, and Codex or Cursor whose hook file is
+The hook rule applies to `new-orch`, including when it is Codex.
+Claude, and Codex or Cursor whose hook file is
 already current, succeed on one worker add. Grok whose `.grok/hooks/bus.json`
 is already current fails the unconsented worker add with
 `Setup confirmation required for PATH. MESSAGE` and does not save the agent;
@@ -308,10 +298,7 @@ from `new-peer`.
 ```sh
 sbus room create provider-matrix
 # Expect ok:true and {room_id:NUMBER}.
-# Refused before hook setup. ok:false, agent not saved. Not an orchestrator-cell pass.
-sbus agent add --room master --name codex-orch --provider codex \
-  --orchestrates provider-matrix --pwd "$scratch/project"
-# ORCH is not codex. Claude, Cursor, or Grok, as agent add --help lists them.
+# ORCH is any supported provider, including Codex.
 sbus agent add --room master --name new-orch --provider ORCH \
   --orchestrates provider-matrix --pwd "$scratch/project" --consent-hooks
 sbus agent add --room provider-matrix --name codex-worker --provider codex \

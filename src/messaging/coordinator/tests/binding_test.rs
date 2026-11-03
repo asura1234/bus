@@ -1,6 +1,78 @@
 use super::*;
 
 #[test]
+fn deletion_of_an_unstarted_launch_requires_authoritative_native_absence() {
+    struct Inspect(Option<schema::AgentInfo>);
+    impl Transport for Inspect {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentList(_)));
+            match &self.0 {
+                Some(info) => Ok(ResponseResult::AgentList {
+                    agents: vec![info.clone()],
+                }),
+                None => Err(TransportError {
+                    code: None,
+                    message: "native lookup unavailable".into(),
+                    definitely_rejected: false,
+                }),
+            }
+        }
+    }
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for mode in 0..3 {
+            let (mut worker, agent, room, dir, calls) = fixture(provider, vec![]);
+            worker
+                .state
+                .set_agent_runtime_identity(
+                    agent,
+                    AgentRuntimeIdentity {
+                        launch_id: Some("launch".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            worker.save(worker.state.clone()).unwrap();
+            if mode == 0 {
+                worker.transport = Box::new(FakeTransport {
+                    replies: vec![Ok(ResponseResult::AgentList { agents: vec![] })].into(),
+                    calls: Arc::clone(&calls),
+                    state_path: dir.join("state.json"),
+                });
+            } else {
+                let mut info = native_info("owned-pane", "codex", "owned-session");
+                info.name = Some(crate::messaging::identity::managed_name(room, agent));
+                worker.transport = Box::new(Inspect((mode == 1).then_some(info)));
+            }
+            let (events, _) = mpsc::channel();
+            let result = worker.command(BusCommand::DeleteAgent(agent), &events);
+            assert_eq!(
+                result.is_ok(),
+                mode == 0,
+                "{provider:?} mode={mode}: {result:?}"
+            );
+            let saved = JsonStore::new(dir.join("state.json"))
+                .load()
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.agent(agent).is_none(), mode == 0);
+            assert!(!calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.starts_with("pane.close")));
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
 fn deletion_retry_reconciles_launch_attested_initial_session_without_callbacks_or_delivery() {
     for provider in [Provider::ClaudeCode, Provider::Cursor, Provider::Codex] {
         let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);

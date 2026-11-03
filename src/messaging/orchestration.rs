@@ -296,21 +296,6 @@ pub(crate) fn write_prompt(spool: &Path, text: &str) -> Result<PathBuf, String> 
     Ok(path)
 }
 
-/// Why Codex cannot be added as an orchestrator.
-pub(crate) const CODEX_ORCHESTRATOR_REFUSED: &str = "Codex cannot be an orchestrator yet: an orchestrator dispatches work with bus send --async in the background and must be woken when it finishes, but Codex does not start a new turn when a background command exits (openai/codex issues 32188, 50079). Use Claude Code or Cursor as the orchestrator; Codex works fine as a worker.";
-
-/// Checks the provider of a new orchestrator. An orchestrator waits on its
-/// workers through background `bus send --async` commands and relies on the
-/// provider starting a new turn when one exits; Codex does not, so it would
-/// never wake. Only new adds come here: Codex orchestrators already in a saved
-/// session keep loading and resuming, and Codex workers are unaffected.
-pub(crate) fn check_new_orchestrator(provider: Provider) -> Result<(), String> {
-    if provider == Provider::Codex {
-        return Err(CODEX_ORCHESTRATOR_REFUSED.into());
-    }
-    Ok(())
-}
-
 /// The Bus-owned launch arguments that deliver the prompt, or `None` when the
 /// provider cannot take it at launch: Bus then sends it as the first message.
 /// `adopted` means the launch resumes a session that started outside Bus.

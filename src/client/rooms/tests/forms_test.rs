@@ -267,7 +267,6 @@ fn help_enter_is_local_and_preserves_room_context() {
     assert!(ui.locals[&room].text.text.is_empty());
     assert_eq!(ui.locals[&room].recipients, [agent].into());
     assert_eq!(serde_json::to_value(&ui.snapshot.state).unwrap(), before);
-    assert!(ui.send_intent.is_none());
     assert!(ui
         .pending
         .iter()
@@ -295,7 +294,6 @@ fn help_scrolls_on_short_terminals_without_sending() {
     assert!(room_screen(&mut ui, 60, 12).contains("Ctrl+Q"));
     key(&mut ui, KeyCode::Home, KeyModifiers::NONE);
     assert_eq!(room_screen(&mut ui, 60, 12), start);
-    assert!(ui.send_intent.is_none());
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.form.is_none());
 }
@@ -307,9 +305,10 @@ fn help_only_intercepts_the_whole_composer_command() {
         ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
         ui.locals.get_mut(&room).unwrap().text.insert(text);
         key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(ui.send_intent, Some(room));
+        assert_eq!(ui.submissions.len(), 1);
         assert!(ui.form.is_none());
-        assert_eq!(ui.locals[&room].text.text, text);
+        assert_eq!(ui.locals[&room].text.text, "");
+        assert_eq!(ui.submissions[0].draft.text, text);
     }
 }
 
@@ -324,12 +323,11 @@ fn help_cancels_same_room_unsent_intent_before_it_can_become_an_agent_prompt() {
         .insert("original prompt");
     ui.text_changed(room);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(ui.send_intent, Some(room));
+    assert_eq!(ui.submissions.len(), 1);
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("/help".into());
     ui.text_changed(room);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(room_screen(&mut ui, 100, 30).contains("Keyboard shortcuts"));
-    assert!(ui.send_intent.is_none());
     let mut snapshot = (*ui.snapshot).clone();
     for pending in &mut ui.pending {
         pending.result = Some(Ok(()));
@@ -340,7 +338,7 @@ fn help_cancels_same_room_unsent_intent_before_it_can_become_an_agent_prompt() {
     assert!(!ui
         .pending
         .iter()
-        .any(|p| matches!(p.command, BusCommand::Submit(_))));
+        .any(|p| matches!(p.command, BusCommand::Submit(..))));
     assert!(ui.locals[&room].text.text.is_empty());
 }
 

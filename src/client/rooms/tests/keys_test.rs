@@ -112,7 +112,6 @@ fn stash_backslash_enter_and_ctrl_g_use_composer_chords() {
     key(&mut ui, KeyCode::Char('\\'), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(ui.locals[&room].text.text, "\n");
-    assert!(ui.send_intent.is_none());
     let mut outcome = crate::client::compositor::ClientShellInput::default();
     ui.input(
         &RawInputEvent::Key(TerminalKey::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
@@ -355,17 +354,26 @@ fn enter_retry_after_failed_queued_send_uses_immediate_delivery() {
     ui.receive_snapshot(Arc::new(snapshot));
     key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::ALT);
-    let failed_save = ui.pending.front().expect("draft save").id;
+    let saved = ui.pending.front().expect("draft save").id;
     ui.receive_event(BusEvent::CommandFinished {
-        command_id: failed_save,
+        command_id: saved,
+        result: Ok(()),
+    });
+    let failed_submit = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(pending.command, BusCommand::SubmitQueued(..)))
+        .expect("queued submit")
+        .id;
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: failed_submit,
         result: Err("Storage paused; retrying".into()),
     });
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.last_command_id = failed_save;
+    snapshot.last_command_id = failed_submit;
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
     ui.settle();
-    assert!(ui.send_intent.is_none());
     assert_eq!(ui.locals[&room].text.text, "x");
 
     ui.receive_event(BusEvent::StorageRecovered);
@@ -385,7 +393,7 @@ fn enter_retry_after_failed_queued_send_uses_immediate_delivery() {
     assert!(
         ui.pending
             .iter()
-            .any(|pending| { matches!(pending.command, BusCommand::Submit(id) if id == room) }),
+            .any(|pending| { matches!(pending.command, BusCommand::Submit(id, _) if id == room) }),
         "Enter should submit immediately after recovery, got {:?}",
         ui.pending
     );

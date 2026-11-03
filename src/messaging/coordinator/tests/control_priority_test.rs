@@ -239,6 +239,7 @@ fn a_delete_reply_publishes_removal_before_the_following_tick() {
                     agent,
                     AgentRuntimeIdentity {
                         launch_id: Some("unconfirmed-launch".into()),
+                        session_id: Some("unconfirmed-session".into()),
                         ..Default::default()
                     },
                 )

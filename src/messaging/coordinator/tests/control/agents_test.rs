@@ -92,32 +92,24 @@ fn agent_add_requires_consent_only_when_project_hooks_would_change() {
 }
 
 #[test]
-fn codex_is_refused_as_an_orchestrator_but_not_as_a_worker() {
+fn codex_orchestrators_and_workers_reach_the_native_launch() {
     let _providers = provider_binaries();
     let (mut worker, _room, _agent, dir) = fixture();
     worker.state.create_room("second").unwrap();
+    worker.state.create_room("codex-first").unwrap();
+    worker.state.create_room("codex-resume-room").unwrap();
     // Allowed adds get as far as opening a tab, which tests refuse.
     worker.transport = Box::new(NoTabs);
     let cwd = dir.to_string_lossy().to_string();
-    let agents_before = worker.state.agents().count();
-    for (id, args) in [("plain", ""), ("resume", "resume --last")] {
-        let rejected = call(
-            &mut worker,
-            id,
-            "agent.add",
-            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"test","extra_args":args,"consent_project_hooks":true}),
-        );
-        assert!(!rejected.ok, "{id}: {rejected:?}");
-        assert_eq!(
-            error_message(&rejected),
-            crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED,
-            "{id}"
-        );
-    }
-    assert_eq!(worker.state.agents().count(), agents_before);
-    // Claude Code and Cursor orchestrators, and Codex workers (resuming too),
-    // reach the launch.
     for (id, params) in [
+        (
+            "codex-orch",
+            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"codex-first","consent_project_hooks":true}),
+        ),
+        (
+            "codex-orch-resume",
+            json!({"room":"master","name":"codex-orch-resume","provider":"codex","cwd":cwd,"orchestrates":"codex-resume-room","extra_args":"resume 01a10f9e-71ac-79e2-81b2-56f26341e7e5","consent_project_hooks":true}),
+        ),
         (
             "claude-orch",
             json!({"room":"master","name":"claude-orch","provider":"claude","cwd":cwd,"orchestrates":"test","consent_project_hooks":true}),

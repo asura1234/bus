@@ -50,18 +50,8 @@ impl BusUi {
             return;
         };
         let width = main.width.saturating_sub(4);
-        // Nothing is ever drawn below the composer. Only the Ctrl+R recall
-        // search titles the composer's top border.
         let title = self.composer_title(room.id);
-        let recipients = super::super::recipients::layout(
-            local.recipients.iter().filter_map(|id| {
-                self.snapshot
-                    .state
-                    .agent(*id)
-                    .map(|agent| (agent.id, agent.name.as_str()))
-            }),
-            width,
-        );
+        let recipients = self.recipient_layout(local, width);
         let chat_search = self.chat_search.clone();
         let layout = self.composer_layout(view, main, local, &recipients);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
@@ -69,15 +59,16 @@ impl BusUi {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
-        let visible_anchor = (!self.history_follow_tail)
-            .then(|| self.history.anchor_at(self.main_scroll))
-            .flatten();
-        self.history.request_lines(
-            Arc::clone(&self.snapshot),
+        let visible_anchor = self.visible_history_anchor();
+        let (snapshot, submissions) = self.history_projection();
+        Self::request_room_history(
+            &mut self.history,
+            &mut self.thumbnails,
+            snapshot,
             room.id,
             width,
             now,
-            &mut self.thumbnails,
+            submissions,
         );
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
@@ -118,7 +109,7 @@ impl BusUi {
             .skip(self.main_scroll)
             .take(usize::from(view.history.height));
         let links = visible_links(&mut self.link_paths, visible);
-        self.history_rows(view, content, &links);
+        self.paint_history_rows(view, content, &links);
         if !title.is_empty() && view.composer_box.height > 0 {
             view.row(
                 Rect::new(layout.x, view.composer_box.y, width, 1),
@@ -133,12 +124,48 @@ impl BusUi {
         let files = self.draft_files(room);
         self.file_scroll = self.file_scroll.min(files.len().saturating_sub(1));
         file_rows(view, &files, self.file_scroll, layout);
-        // Pointers report only moves: drop a path whose chip left a still pointer.
         if view.file_path_at(self.detail_at.0, self.detail_at.1) != self.detail_path {
             self.detail_path = None;
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+    }
+
+    fn recipient_layout(&self, local: &LocalRoom, width: u16) -> RecipientLayout {
+        super::super::recipients::layout(
+            local.recipients.iter().filter_map(|id| {
+                self.snapshot
+                    .state
+                    .agent(*id)
+                    .map(|agent| (agent.id, agent.name.as_str()))
+            }),
+            width,
+        )
+    }
+
+    fn paint_history_rows(&self, view: &mut View, content: &[Line], links: &[Vec<Candidate>]) {
+        self.history_rows(view, content, links);
+    }
+
+    fn visible_history_anchor(&self) -> Option<super::super::history::RowAnchor> {
+        (!self.history_follow_tail)
+            .then(|| self.history.anchor_at(self.main_scroll))
+            .flatten()
+    }
+
+    fn request_room_history(
+        history: &mut super::super::history::History,
+        thumbnails: &mut super::super::thumbnails::Thumbnails,
+        snapshot: Arc<crate::messaging::coordinator::BusSnapshot>,
+        room: RoomId,
+        width: u16,
+        now: u64,
+        submissions: std::collections::BTreeMap<
+            crate::messaging::model::PromptId,
+            super::super::LocalSendStatus,
+        >,
+    ) {
+        history.request_lines_with_submissions(snapshot, room, width, now, thumbnails, submissions);
     }
 
     /// The Ctrl+R recall search, which has no panel of its own.
@@ -490,18 +517,7 @@ impl BusUi {
     }
 
     fn draft_files(&self, room: &Room) -> Vec<PathBuf> {
-        let mut files = room.draft.files.clone();
-        for pending in &self.failed {
-            if let crate::messaging::coordinator::BusCommand::AttachFile(id, path) =
-                &pending.command
-            {
-                if *id != room.id {
-                    continue;
-                }
-                files.push(PathBuf::from(path));
-            }
-        }
-        files
+        self.current_draft_files(room.id)
     }
 
     fn file_detail_view(&self, view: &mut View, layout: RoomLayout) {

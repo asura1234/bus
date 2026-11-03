@@ -101,7 +101,12 @@ fn delivery_logs_explain_queued_hook_gate_once_without_prompt_contents() {
         worker
             .command(BusCommand::SetRecipients(room, [agent].into()), &events)
             .unwrap();
-        worker.command(BusCommand::Submit(room), &events).unwrap();
+        worker
+            .command(
+                BusCommand::Submit(room, worker.state.room(room).unwrap().draft.clone()),
+                &events,
+            )
+            .unwrap();
         for _ in 0..3 {
             worker.submit_ready().unwrap();
         }
@@ -168,7 +173,12 @@ fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
         worker.save(worker.state.clone()).unwrap();
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (events, received) = mpsc::channel();
-        commands.send((1, BusCommand::Submit(room))).unwrap();
+        commands
+            .send((
+                1,
+                BusCommand::Submit(room, worker.state.room(room).unwrap().draft.clone()),
+            ))
+            .unwrap();
         if !during_poll {
             commands.send((2, BusCommand::DeleteAgent(agent))).unwrap();
             commands.send((3, BusCommand::Shutdown)).unwrap();

@@ -125,8 +125,8 @@ See [agent launch arguments](../docs/launch-args.md#interactive-provider-launch)
 
 Orchestrators run async sends as background tool calls (Claude Code Bash:
 run_in_background; Cursor: background shell with timeout 0), then inspect the
-combined output when woken. Codex cannot wake on background command completion;
-new Codex MASTER orchestrators are refused, but saved ones still resume.
+combined output when woken. Codex orchestrators use foreground bounded waits or
+ordinary worker messages: background command completion does not wake Codex.
 
 Worker events wake the work-room orchestrator through ordinary agent messages.
 A wake is only the one real notice: an explicit result not already delivered, or

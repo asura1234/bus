@@ -54,8 +54,6 @@ fn yolo_resumed_codex_master_uses_current_run_without_persisting() {
     let mut state = BusState::new();
     let room = state.create_room("saved-work").unwrap();
     let master = state.ensure_master_room();
-    // A saved MASTER fixture bypasses only new-agent admission, which remains refused.
-    assert!(crate::messaging::orchestration::check_new_orchestrator(Provider::Codex).is_err());
     let agent = state
         .create_agent(
             master,
