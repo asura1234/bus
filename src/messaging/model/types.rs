@@ -311,6 +311,9 @@ pub(crate) struct AgentStartup {
     pub(crate) started_at_ms: u64,
     /// The startup diagnostic has been reported, including recoverable shell waits.
     pub(crate) reported: bool,
+    /// Absence is an exit only after this launch's provider was observed.
+    #[serde(default)]
+    pub(crate) process_observed: bool,
     /// The native attempt's terminal, independent of a later runtime rebind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_terminal_id: Option<String>,

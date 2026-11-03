@@ -263,18 +263,14 @@ impl TerminalRuntime {
     }
 
     fn launch_prompt_witness(&self) -> Option<(u64, u64)> {
-        if let Some(integration) = &self.shell_integration {
-            return self
-                .terminal
-                .launch_shell_prompt_witness(integration.token());
-        }
-        #[cfg(test)]
-        return self
-            .launch_transaction
-            .id()
-            .map(|id| (self.shell_prompt_generation(), id));
-        #[cfg(not(test))]
-        None
+        // Only the shell's report of this attempt is a return. A bare prompt
+        // mark, including an editor redraw before the provider is acquired, is
+        // not. Runtimes without integration do not invent a witness from the
+        // prompt generation; that would end pending startup on a redraw.
+        self.shell_integration.as_ref().and_then(|integration| {
+            self.terminal
+                .launch_shell_prompt_witness(integration.token())
+        })
     }
 
     pub(crate) fn has_launch_return_witness(&self) -> bool {

@@ -546,6 +546,7 @@ fn confirmed_room_resume_clears_the_previous_startup_error() {
                     command: "codex".into(),
                     started_at_ms: 1,
                     reported: true,
+                    process_observed: false,
                     native_terminal_id: None,
                     recovery: None,
                     failure: None,
