@@ -3,7 +3,7 @@ use super::storage::remove_spooled;
 use super::{
     control_dispatch, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BTreeSet, BusCommand,
     BusEvent, BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf,
-    RequestId, RequestPhase, RuntimeStatus, StoragePause, Transport,
+    RequestId, RuntimeStatus, StoragePause, Transport,
 };
 use crate::agents::providers::spool;
 use crate::messaging::perf;
@@ -564,8 +564,8 @@ impl Worker {
         let mut state = self.state.clone();
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
-        let mut settled_groups = Vec::new();
         for (agent, observed_at_ms) in agents {
+            changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
             let rollout = self.codex_rollouts.get(&agent);
             let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
                 .unwrap_or_else(|error| {
@@ -583,51 +583,12 @@ impl Worker {
                 }
             };
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
-            if let Some(lead) = state.settle_ended_request(agent, observed_at_ms, recorded_end) {
-                changed = true;
-                // Use the previous group: transcript recovery can detach an
-                // unproven follower while completing the rest of the group.
-                let mut members = self.state.group_members(lead);
-                members.push(lead);
-                members.retain(|id| {
-                    self.state.request(*id).is_some_and(|request| {
-                        !matches!(
-                            request.phase,
-                            RequestPhase::Completed | RequestPhase::Abandoned
-                        )
-                    })
-                });
-                settled_groups.push((lead, members));
-            }
+            changed |= state
+                .settle_ended_request(agent, observed_at_ms, recorded_end)
+                .is_some();
         }
         if changed {
             self.save(state)?;
-            // Only a successful durable save is evidence of abandonment.
-            for (lead, members) in settled_groups {
-                let _group = tracing::info_span!("bus.settlement", lead_id = lead.0).entered();
-                for id in members {
-                    let reason = self.state.request(id).and_then(|request| {
-                        match request.failure_reason.as_deref() {
-                            Some(reason @ ("reply_not_captured" | "agent_unavailable")) => {
-                                Some(reason)
-                            }
-                            Some(reason) if reason.starts_with("provider_error:") => {
-                                Some("provider_error")
-                            }
-                            _ => None,
-                        }
-                    });
-                    if let Some(reason) = reason {
-                        diagnostics::request_with_lead(
-                            &self.state,
-                            id,
-                            "bus.message.recovered",
-                            reason,
-                            lead.0,
-                        );
-                    }
-                }
-            }
         }
         Ok(())
     }
