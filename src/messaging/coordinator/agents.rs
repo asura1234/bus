@@ -166,6 +166,19 @@ impl Worker {
                 // absence/replacement evidence or a successful guarded close.
                 return Ok(None);
             }
+            // Tab creation can time out before AgentStart is issued. No provider
+            // input was sent without a returned terminal identity. Remove only
+            // the placeholder after a fresh native lookup proves it owns nothing;
+            // never guess which shell a lost tab-create response may have made.
+            if identity.pane_id.is_none()
+                && identity.terminal_id.is_none()
+                && identity.session_id.is_none()
+            {
+                let name = identity::managed_name(agent.room_id, id);
+                if self.native_ownership_released(&name) {
+                    return Ok(None);
+                }
+            }
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
         if agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
