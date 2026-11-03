@@ -594,6 +594,9 @@ pub(crate) struct Request {
     pub(crate) manual_recovery: Option<super::ManualRecovery>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) queued_rejection: Option<QueuedRejection>,
+    /// Native terminal replaced; reconcile saved outcomes before interruption.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) interrupted_by_restore: bool,
     #[serde(default)]
     pub(crate) provider_retry_attempts: u32,
     pub(crate) expected_launch_id: Option<String>,

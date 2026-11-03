@@ -104,7 +104,7 @@ impl Worker {
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
                 previous_terminal_id = ?previous, terminal_id = current,
-                "Reconnected the saved provider conversation; request ownership preserved");
+                "Reconnected the saved provider conversation; replaced execution awaits reconciliation");
         }
         self.notify_dialogs(waits)?;
         Ok(Some(infos))
@@ -158,6 +158,14 @@ fn rebind_agent(
     agent: &RoomAgent,
     info: &schema::AgentInfo,
 ) -> Result<(AgentId, Option<String>, String), String> {
+    if agent
+        .runtime_identity
+        .terminal_id
+        .as_deref()
+        .is_some_and(|previous| previous != info.terminal_id)
+    {
+        state.mark_restored_turn(agent.id);
+    }
     let mut identity = agent.runtime_identity.clone();
     identity.terminal_id = Some(info.terminal_id.clone());
     identity.pane_id = Some(info.pane_id.clone());

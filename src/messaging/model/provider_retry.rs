@@ -209,6 +209,7 @@ impl BusState {
         request.submission_error = None;
         request.failure_reason = None;
         request.queued_rejection = None;
+        request.interrupted_by_restore = false;
         request.pending_final = None;
         request.completed_at_ms = None;
         request.group = None;

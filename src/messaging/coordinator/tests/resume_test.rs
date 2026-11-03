@@ -1169,3 +1169,245 @@ fn startup_timeout_sessionless_resume_rebinds_every_provider() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn restart_replacement_settles_interrupted_request_and_preserves_queue() {
+    for provider in [Provider::Codex, Provider::Kimi] {
+        for bound in [false, true] {
+            let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+            if provider == Provider::Kimi {
+                prepare_kimi_restart_home(&dir);
+            }
+            let old = queue(&mut worker, room, agent, "cut off by restart");
+            worker.state.begin_submission(old, "launch", 0).unwrap();
+            worker
+                .state
+                .record_submission(
+                    old,
+                    crate::messaging::model::SubmissionOutcome::Confirmed {
+                        provider_session_id: Some("session".into()),
+                        provider_turn_id: None,
+                    },
+                )
+                .unwrap();
+            let mut saved = serde_json::to_value(&worker.state).unwrap();
+            saved["requests"][old.0.to_string()]["trusted_start_bound"] = json!(bound);
+            saved["requests"][old.0.to_string()]["provider_turn_id"] = json!(bound.then_some("0"));
+            worker.save(serde_json::from_value(saved).unwrap()).unwrap();
+            let first = queue(&mut worker, room, agent, "first pending");
+            let second = queue(&mut worker, room, agent, "second pending");
+            worker.transport = Box::new(FakeTransport {
+                replies: vec![Ok(ResponseResult::AgentList {
+                    agents: vec![resumed_info(provider)],
+                })]
+                .into(),
+                calls: Arc::new(Mutex::new(vec![])),
+                state_path: dir.join("state.json"),
+            });
+            worker.poll().unwrap();
+            // Restore evidence must survive another coordinator crash before settlement.
+            drop(worker);
+            let mut worker = reopen_saved(&dir);
+            worker.settle_requests().unwrap();
+            let closed = worker.state.request(old).unwrap();
+            assert_eq!(
+                closed.failure_reason.as_deref(),
+                Some("interrupted"),
+                "{provider:?}, bound={bound}"
+            );
+            assert_eq!(closed.phase, RequestPhase::Abandoned);
+            assert!(worker.state.agent(agent).unwrap().current_request.is_none());
+            assert_eq!(worker.state.queued_requests(agent), &[first, second]);
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn restart_coordinator_without_terminal_replacement_preserves_active_request() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Kimi, vec![]);
+    let old = queue(&mut worker, room, agent, "still running in same terminal");
+    worker.state.begin_submission(old, "launch", 0).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    let mut info = resumed_info(Provider::Kimi);
+    info.terminal_id = "terminal".into();
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+        calls: Arc::new(Mutex::new(vec![])),
+        state_path: dir.join("state.json"),
+    });
+    worker.poll().unwrap();
+    worker.settle_requests().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(old)
+    );
+    assert!(worker.state.request(old).unwrap().failure_reason.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn restart_replacement_preserves_replies_retry_holds_and_only_closes_submitted_group() {
+    for outcome in [
+        "interrupted",
+        "spooled-final",
+        "recorded-final",
+        "retry",
+        "answered",
+    ] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let old = queue(&mut worker, room, agent, "original");
+        worker.state.begin_submission(old, "launch", 0).unwrap();
+        worker
+            .state
+            .record_submission(
+                old,
+                crate::messaging::model::SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("session".into()),
+                    provider_turn_id: Some("old-turn".into()),
+                },
+            )
+            .unwrap();
+        let mut saved = serde_json::to_value(&worker.state).unwrap();
+        saved["requests"][old.0.to_string()]["trusted_start_bound"] = json!(true);
+        worker.save(serde_json::from_value(saved).unwrap()).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, io::now_ms())
+            .unwrap();
+        let member = queue(&mut worker, room, agent, "unconfirmed steering");
+        worker.state.begin_steering(member, old).unwrap();
+        worker
+            .state
+            .record_steering(
+                member,
+                crate::messaging::model::SubmissionOutcome::Uncertain {
+                    message: "receipt lost".into(),
+                },
+            )
+            .unwrap();
+        let pending = queue(&mut worker, room, agent, "pending message");
+        worker.state.mark_restored_turn(agent);
+        let now = io::now_ms();
+        if outcome == "answered" {
+            worker
+                .state
+                .answer_message(
+                    worker.state.request(old).unwrap().prompt.id,
+                    agent,
+                    "explicit answer".into(),
+                    now,
+                )
+                .unwrap();
+        } else if outcome == "spooled-final" {
+            assert_eq!(
+                worker.state.accept_callback(ProviderCallback {
+                    callback_id: "durable-stop".into(),
+                    sequence: 1,
+                    occurred_at_ms: now,
+                    agent_id: agent,
+                    launch_id: "launch".into(),
+                    provider_session_id: Some("session".into()),
+                    provider_turn_id: Some("old-turn".into()),
+                    provider_prompt_id: None,
+                    prompt_payload: None,
+                    kind: CallbackEventKind::Final {
+                        text: "saved final".into()
+                    },
+                }),
+                CallbackDisposition::AcceptedPendingSettlement
+            );
+        }
+        let payload = worker.state.render_request_payload(old).unwrap();
+        let recorded = match outcome {
+            "recorded-final" => Some(crate::messaging::model::RecordedTurnEnd::Final {
+                turn_id: "old-turn".into(),
+                text: "recorded answer".into(),
+                prompts: vec![payload],
+            }),
+            "retry" => Some(crate::messaging::model::RecordedTurnEnd::Error(
+                "Selected model is at capacity. (server_overloaded)".into(),
+            )),
+            _ => None,
+        };
+        worker.state.settle_restored_turn(agent, now, |_| recorded);
+        if outcome == "retry" {
+            assert!(worker.state.agent(agent).unwrap().provider_retry.is_some());
+            assert_eq!(
+                worker.state.agent(agent).unwrap().current_request,
+                Some(old)
+            );
+            assert!(!worker.state.request(old).unwrap().settled());
+        } else {
+            assert!(worker.state.agent(agent).unwrap().current_request.is_none());
+            let expected = match outcome {
+                "answered" => Some("explicit answer"),
+                "spooled-final" => Some("saved final"),
+                "recorded-final" => Some("recorded answer"),
+                _ => None,
+            };
+            assert_eq!(
+                worker
+                    .state
+                    .request(old)
+                    .unwrap()
+                    .reply()
+                    .map(|r| r.text.as_str()),
+                expected,
+                "{outcome}"
+            );
+            if outcome == "interrupted" {
+                assert_eq!(
+                    worker.state.request(old).unwrap().failure_reason.as_deref(),
+                    Some("interrupted")
+                );
+            }
+            assert!(worker.state.request(member).unwrap().settled(), "{outcome}");
+        }
+        assert_eq!(worker.state.queued_requests(agent), &[pending]);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn prepare_kimi_restart_home(dir: &std::path::Path) {
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    let spool = dir.join("callbacks/launch");
+    let home = spool.join("kimi-home");
+    let source = dir.join("synthetic-auth");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for folder in ["credentials", "oauth"] {
+        std::fs::create_dir_all(source.join(folder)).unwrap();
+        symlink(source.join(folder), home.join(folder)).unwrap();
+    }
+    let metadata = home.metadata().unwrap();
+    std::fs::write(
+        spool.join("kimi-home.json"),
+        serde_json::to_vec(&json!({
+            "path": home, "source": source, "device": metadata.dev(), "inode": metadata.ino(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let session = home.join("sessions/workspace/session");
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    std::fs::write(
+        home.join("session_index.jsonl"),
+        format!(
+            "{}\n",
+            json!({
+                "sessionId":"session", "workDir":dir, "sessionDir":session,
+            })
+        ),
+    )
+    .unwrap();
+    // A real interrupted process left an open prompt, with no end commit.
+    std::fs::write(session.join("agents/main/wire.jsonl"), "").unwrap();
+}
