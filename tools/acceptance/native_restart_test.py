@@ -4,6 +4,7 @@ Only the provider is a stand-in. Restore, PTYs, hooks, coordinator and CLI are r
 Run explicitly, or through the dev-tools integration target; never at import time.
 """
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,117 @@ if str(ROOT) not in sys.path:
 from tools.acceptance.harness_test import Bus  # noqa: E402
 
 
+@contextmanager
+def restart_directory(run_dir, retain_failure, *, reply=False):
+    """Only opt-in failures keep an exclusively claimed short restart root."""
+    def check_sockets(root):
+        cases = [root / "claude", root / "codex"] if reply else [root]
+        for case in cases:
+            for relative in ("herdr.sock", "herdr-client.sock"):
+                socket = case / "data/herdr-config/sessions/bus" / relative
+                if len(os.fsencode(socket)) > 96:
+                    raise ValueError(f"restart socket path exceeds 96 encoded bytes: {socket}")
+
+    if run_dir is None:
+        if retain_failure:
+            raise ValueError("--retain-failure requires --run-dir")
+        with tempfile.TemporaryDirectory(prefix="br-restart-" if reply else "bn-restart-",
+                                         dir="/private/tmp") as directory:
+            root = Path(directory)
+            check_sockets(root)
+            yield root
+        return
+    root = Path(run_dir).absolute()
+    check_sockets(root)
+    if not retain_failure:
+        yield root
+        return
+    if root.parent != Path("/private/tmp") or not root.name.startswith("bus-rf-"):
+        raise ValueError("retained restart root must be a new bus-rf-* child of /private/tmp")
+    root.mkdir(mode=0o700)  # Never adopt or delete an existing directory/symlink.
+    owned = root.stat()
+    try:
+        yield root
+    except BaseException:
+        print(f"RESTART_FAILURE_RETAINED {root}", file=sys.stderr, flush=True)
+        raise
+    else:
+        current = root.lstat()
+        if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino) or root.is_symlink():
+            raise RuntimeError("restart root identity changed; refusing cleanup")
+        shutil.rmtree(root)
+
+
+def capture_restart_failure(bus, root, evidence):
+    """Best-effort read-only witness, after failure and before process cleanup."""
+    began = time.monotonic()
+    capture = {"phase": "before_cleanup", "errors": {}}
+    evidence["failure_capture"] = capture
+
+    def attempt(name, read):
+        try:
+            capture[name] = read()
+            return capture[name]
+        except Exception as error:
+            capture["errors"][name] = str(error)
+            return None
+
+    state = attempt("state", lambda: bus.cli("state", timeout=3))
+    if not evidence.get("bootstrap"):
+        capture["bootstrap_error"] = evidence.get("error", "first message was not submitted")
+    for name in ("bootstrap", "send"):
+        sent = evidence.get(name)
+        if sent:
+            attempt(f"{name}_status", lambda sent=sent: bus.cli(
+                "message", "status", str(sent["message_id"]), timeout=3))
+    agents = state.get("agents", []) if isinstance(state, dict) else []
+    for agent in agents[:1]:  # Each restart fixture creates exactly one agent.
+        pane = agent.get("runtime_identity", {}).get("pane_id")
+        if pane:
+            attempt("native", lambda: bus.native_agent(pane))
+        attempt("observe", lambda: bus.cli("agent", "observe", str(agent["id"]), timeout=3))
+
+    # Do not follow fixture symlinks (provider stand-ins or any external path).
+    snapshot = root / "failure-before-cleanup"
+    paths = [root / "tui.log"]
+    for directory, dirs, files in os.walk(bus.data, followlinks=False):
+        dirs[:] = [name for name in dirs if not (Path(directory) / name).is_symlink()]
+        paths.extend(Path(directory) / name for name in files)
+    for source in paths:
+        if source.is_symlink() or not source.is_file():
+            continue
+        relative = source.relative_to(root)
+
+        def copy(source=source, relative=relative):
+            destination = snapshot / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            return str(relative)
+
+        attempt(f"file:{relative}", copy)
+    capture["capture_ms"] = round((time.monotonic() - began) * 1000)
+    print(f"RESTART_FAILURE_CAPTURE {capture['capture_ms']}ms (post-failure diagnostics)",
+          file=sys.stderr, flush=True)
+
+
+def complete_restart_fixture(bus, root, evidence, original_error):
+    """A diagnostic write must never skip cleanup or hide the scenario error."""
+    try:
+        try:
+            (root / "evidence.json").write_text(json.dumps(evidence, indent=2))
+        except Exception as error:
+            if original_error is None:
+                raise
+            print(f"restart evidence write failed: {error}", file=sys.stderr)
+    finally:
+        try:
+            bus.stop()
+        except Exception as error:
+            if original_error is None:
+                raise
+            print(f"restart cleanup failed: {error}", file=sys.stderr)
+
+
 def wait_initial_room(bus):
     """Control can answer before the TUI queues its first work room."""
     deadline = time.monotonic() + 30
@@ -31,7 +143,7 @@ def wait_initial_room(bus):
         time.sleep(0.05)
 
 
-def scenario(binary, root, whole_session=False, unhealthy=False):
+def scenario(binary, root, whole_session=False, unhealthy=False, retain_failure=False):
     root.mkdir(parents=True, exist_ok=True)
     work, home, fake_bin = (root / name for name in ("work", "home", "bin"))
     for path in (work, home, fake_bin):
@@ -45,6 +157,7 @@ def scenario(binary, root, whole_session=False, unhealthy=False):
            "BUS_TUI_EFFECTS": str(root / "effects.jsonl")}
     bus = Bus(binary, root, env, workspace=work)
     evidence = {}
+    original_error = None
     try:
         bus.start()
         wait_initial_room(bus)
@@ -58,6 +171,7 @@ def scenario(binary, root, whole_session=False, unhealthy=False):
         bus.cli("agent", "add", "--room", "bus", "--name", "restart-agent",
                 "--provider", "claude", "--pwd", str(work), "--consent-hooks")
         first = bus.cli("send", "--room", "bus", "--to", "restart-agent", "--text", "bootstrap")
+        evidence["bootstrap"] = first
         before = bus.cli("wait", "--message", str(first["message_id"]), "--timeout", "30")
         old = before["requests"][0]
         assert old["stage"] == "replied", before
@@ -115,20 +229,29 @@ def scenario(binary, root, whole_session=False, unhealthy=False):
         evidence["native_boots"] = boots
         assert len(boots) == 2 and boots[0]["pid"] != boots[1]["pid"], boots
         print(json.dumps({"result": "PASS", "before": old["reply"], "after": new["reply"]}), flush=True)
-    except Exception as error:
+    except BaseException as error:
+        original_error = error
         evidence["error"] = str(error)
-        if "send" in evidence:
-            evidence["last_status"] = bus.cli("message", "status", str(evidence["send"]["message_id"]))
+        if retain_failure:
+            try:
+                capture_restart_failure(bus, root, evidence)
+            except Exception as diagnostic:
+                evidence["capture_error"] = str(diagnostic)
+        elif "send" in evidence:
+            try:
+                evidence["last_status"] = bus.cli("message", "status", str(evidence["send"]["message_id"]))
+            except Exception as diagnostic:
+                evidence["capture_error"] = str(diagnostic)
         raise
     finally:
-        (root / "evidence.json").write_text(json.dumps(evidence, indent=2))
-        bus.stop()
+        complete_restart_fixture(bus, root, evidence, original_error)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--retain-failure", action="store_true")
     parser.add_argument("--whole-session", action="store_true")
     parser.add_argument("--unhealthy", action="store_true")
     args = parser.parse_args()
@@ -137,11 +260,8 @@ def main():
     entries = subprocess.check_output(["git", "-C", str(ROOT), "worktree", "list", "--porcelain", "-z"], env=env)
     live = Path(os.fsdecode(entries.split(b"\0", 1)[0].removeprefix(b"worktree "))) / "target/debug/bus"
     assert not (binary == live.resolve() or (live.exists() and binary.samefile(live))), "live binary forbidden"
-    if args.run_dir:
-        scenario(binary, args.run_dir.resolve(), args.whole_session, args.unhealthy)
-    else:
-        with tempfile.TemporaryDirectory(prefix="bn-restart-", dir="/private/tmp") as directory:
-            scenario(binary, Path(directory), args.whole_session, args.unhealthy)
+    with restart_directory(args.run_dir, args.retain_failure) as directory:
+        scenario(binary, directory, args.whole_session, args.unhealthy, args.retain_failure)
 
 
 if __name__ == "__main__":
