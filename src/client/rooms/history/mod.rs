@@ -1,7 +1,9 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 mod background;
 mod exchange;
+mod groups;
 mod markdown;
+mod window;
 mod wrapped_links;
 
 // Separate the costs of a rebuild so a slow operation identifies its phase.
@@ -235,6 +237,10 @@ pub(super) struct History {
     rendered: usize,
     rebuilt: usize,
     projected: usize,
+    window_room: Option<(RoomId, crate::messaging::model::RoomHistoryFilters)>,
+    record_limit: usize,
+    loaded_limit: usize,
+    has_older: bool,
 }
 
 impl History {

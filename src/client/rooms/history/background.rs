@@ -20,11 +20,18 @@ struct Key {
     width: u16,
     minute: u64,
     cell: Option<(u32, u32)>,
+    filters: crate::messaging::model::RoomHistoryFilters,
+    limit: usize,
+    submissions: u64,
 }
 
 impl Key {
     fn same_geometry(self, other: Self) -> bool {
-        self.room == other.room && self.width == other.width && self.cell == other.cell
+        self.room == other.room
+            && self.width == other.width
+            && self.cell == other.cell
+            && self.filters == other.filters
+            && self.submissions == other.submissions
     }
 }
 
@@ -41,6 +48,7 @@ struct Layout {
     lines: Arc<[Line]>,
     filters: crate::messaging::model::RoomHistoryFilters,
     age_valid: Range<u64>,
+    has_older: bool,
 }
 
 impl Layout {
@@ -49,6 +57,9 @@ impl Layout {
             && self.key.room == key.room
             && self.key.width == key.width
             && self.key.cell == key.cell
+            && self.key.filters == key.filters
+            && self.key.limit == key.limit
+            && self.key.submissions == key.submissions
             && (self.key.minute == key.minute || self.age_valid.contains(&now))
     }
 }
@@ -161,6 +172,13 @@ impl Background {
             width,
             minute: now / 60_000,
             cell,
+            filters: self
+                .requested
+                .map_or_else(Default::default, |key| key.filters),
+            limit: self
+                .requested
+                .map_or(super::window::PAGE_RECORDS, |key| key.limit),
+            submissions: self.requested.map_or(0, |key| key.submissions),
         };
         self.layouts
             .get(&room)
@@ -181,21 +199,6 @@ impl Background {
             layouts: BTreeMap::new(),
             _thread: thread,
         })
-    }
-
-    fn apply_completed(&mut self, key: Key) {
-        let completed = {
-            let mut mailbox = self
-                .shared
-                .mailbox
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            self.shared.ready.store(false, Ordering::Relaxed);
-            mailbox.result.take()
-        };
-        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
-            self.layouts.insert(layout.key.room, layout);
-        }
     }
 }
 
@@ -245,12 +248,30 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
     ) {
+        let filters = snapshot
+            .state
+            .room(room)
+            .map_or_else(Default::default, |room| room.history_filters);
+        self.request_lines_filtered(snapshot, room, width, now, thumbnails, filters);
+    }
+
+    #[cfg(test)]
+    pub(in crate::client::rooms) fn request_lines_filtered(
+        &mut self,
+        snapshot: Arc<BusSnapshot>,
+        room: RoomId,
+        width: u16,
+        now: u64,
+        thumbnails: &mut Thumbnails,
+        filters: crate::messaging::model::RoomHistoryFilters,
+    ) {
         self.request_lines_with_submissions(
             snapshot,
             room,
             width,
             now,
             thumbnails,
+            filters,
             Default::default(),
         );
     }
@@ -262,33 +283,38 @@ impl History {
         width: u16,
         now: u64,
         thumbnails: &mut Thumbnails,
+        filters: crate::messaging::model::RoomHistoryFilters,
         submissions: BTreeMap<PromptId, LocalSendStatus>,
     ) {
         static REQUEST: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.request");
         let _timer = REQUEST.start();
         self.reset_metrics();
+        self.select_window(room, filters);
         let Some(background) = self.background.as_mut() else {
             if let Some(room) = snapshot.state.room(room) {
-                self.lines_filtered(
+                self.lines_with_submissions(
                     &snapshot.state,
                     room,
                     width,
                     snapshot.revision,
                     now,
                     thumbnails,
-                    room.history_filters,
+                    filters,
                     &submissions,
                 );
             }
             return;
         };
-        let key = Key {
+        let mut key = Key {
             revision: snapshot.revision,
             room,
             width,
             minute: now / 60_000,
             cell: thumbnails.layout_key(),
+            filters,
+            limit: self.record_limit,
+            submissions: super::submission_signature(&submissions),
         };
         background
             .layouts
@@ -304,7 +330,30 @@ impl History {
                 .map_or_else(Default::default, |layout| layout.filters);
             background.displayed_room = Some(room);
         }
-        background.apply_completed(key);
+        let completed = {
+            let mut mailbox = background
+                .shared
+                .mailbox
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            background.shared.ready.store(false, Ordering::Relaxed);
+            mailbox.result.take()
+        };
+        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
+            self.lines = Arc::clone(&layout.lines);
+            self.displayed_filters = layout.filters;
+            self.loaded_limit = layout.key.limit;
+            self.has_older = layout.has_older;
+            background.layouts.insert(layout.key.room, layout);
+            // Empty/sparse recent batches must continue without a scroll: the
+            // newest matching record may be beyond a batch of peer traffic.
+            if self.has_older && self.loaded_limit == self.record_limit && self.lines.len() < 80 {
+                self.record_limit = self
+                    .record_limit
+                    .saturating_add(super::window::PAGE_RECORDS);
+                key.limit = self.record_limit;
+            }
+        }
         if let Some(layout) = background
             .layouts
             .get(&room)
@@ -312,6 +361,8 @@ impl History {
         {
             self.lines = Arc::clone(&layout.lines);
             self.displayed_filters = layout.filters;
+            self.loaded_limit = layout.key.limit;
+            self.has_older = layout.has_older;
             if background.requested != Some(key) {
                 background.shared.generation.fetch_add(1, Ordering::Relaxed);
                 let mut mailbox = background
@@ -325,7 +376,11 @@ impl History {
             return;
         }
         if let Some(layout) = background.layouts.get(&room) {
-            self.lines = Arc::clone(&layout.lines);
+            self.lines = if layout.filters == filters && layout.key.submissions == key.submissions {
+                Arc::clone(&layout.lines)
+            } else {
+                Arc::default()
+            };
             self.displayed_filters = layout.filters;
         }
         if background.requested == Some(key) {
@@ -387,14 +442,16 @@ fn run(shared: Arc<Shared>) {
             width_px,
             height_px,
         }));
-        history.lines_filtered(
+        history.select_window(room.id, job.key.filters);
+        history.record_limit = job.key.limit;
+        history.lines_with_submissions(
             &job.snapshot.state,
             room,
             job.key.width,
             job.key.revision,
             job.now,
             &mut thumbnails,
-            room.history_filters,
+            job.key.filters,
             &job.submissions,
         );
         #[cfg(test)]
@@ -402,8 +459,9 @@ fn run(shared: Arc<Shared>) {
         let layout = Layout {
             key: job.key,
             lines: Arc::clone(&history.lines),
-            filters: room.history_filters,
+            filters: job.key.filters,
             age_valid: history.age_valid.clone(),
+            has_older: history.has_older,
         };
         let mut mailbox = shared.mailbox.lock().unwrap_or_else(|e| e.into_inner());
         if !mailbox.stopped && shared.generation.load(Ordering::Relaxed) == job.generation {

@@ -902,3 +902,230 @@ fn deleting_a_visited_room_releases_its_cached_layout() {
         .iter()
         .any(|line| line.text.contains("visited room 1")));
 }
+
+#[test]
+fn filter_first_render_is_bounded_by_recent_records_in_a_50k_room() {
+    let mut state = BusState::default();
+    let room = state.create_room("50k").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    for index in 0..50_000 {
+        state
+            .post_to_developer(
+                room,
+                agent,
+                format!("recent-record-{index}"),
+                vec![],
+                1_800_000_000_000 + index,
+            )
+            .unwrap();
+    }
+    let mut history = History::default();
+    let started = Instant::now();
+    history.lines_filtered(
+        &state,
+        state.room(room).unwrap(),
+        80,
+        1,
+        1_800_000_100_000,
+        &mut Thumbnails::default(),
+        crate::messaging::model::RoomHistoryFilters {
+            to_you: true,
+            from_you: false,
+        },
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "recent-record-49999"));
+    assert!(
+        history.rebuilt <= 256,
+        "first filtered frame rebuilt {} exchanges before showing the newest match",
+        history.rebuilt
+    );
+    assert!(
+        history.rendered <= 256,
+        "first filtered frame parsed {} bodies",
+        history.rendered
+    );
+    eprintln!(
+        "50k first filtered frame: exchanges={} parsed={} elapsed_us={}",
+        history.rebuilt,
+        history.rendered,
+        started.elapsed().as_micros()
+    );
+    assert!(!history
+        .cached()
+        .iter()
+        .any(|line| line.text == "recent-record-0"));
+    state
+        .post_to_developer(
+            room,
+            agent,
+            "new direct arrival".into(),
+            vec![],
+            1_800_000_100_001,
+        )
+        .unwrap();
+    history.lines_filtered(
+        &state,
+        state.room(room).unwrap(),
+        80,
+        2,
+        1_800_000_100_002,
+        &mut Thumbnails::default(),
+        crate::messaging::model::RoomHistoryFilters {
+            to_you: true,
+            from_you: false,
+        },
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "new direct arrival"));
+    assert_eq!(
+        history.rendered, 1,
+        "an arrival must reuse the older matching Markdown bodies"
+    );
+}
+
+#[test]
+fn filtered_window_can_extend_after_returning_to_cached_room() {
+    let mut state = BusState::default();
+    let room = state.create_room("paged").unwrap();
+    let other = state.create_room("other").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    for index in 0..600 {
+        state
+            .post_to_developer(
+                room,
+                agent,
+                format!("page-record-{index}"),
+                vec![],
+                1000 + index,
+            )
+            .unwrap();
+    }
+    state
+        .set_room_history_filters(
+            room,
+            crate::messaging::model::RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "page-record-599"));
+    assert!(!history
+        .cached()
+        .iter()
+        .any(|line| line.text == "page-record-0"));
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        other,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    assert!(
+        history.load_older(),
+        "returning to a cached filtered room must retain its older-history cursor"
+    );
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "page-record-100"));
+    assert!(history.load_older());
+    await_layout(&mut history, snapshot, room, 80, 2000, &mut thumbnails);
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "page-record-0"));
+    assert!(
+        !history.load_older(),
+        "fully loaded history has no older page"
+    );
+}
+
+#[test]
+fn sparse_filtered_window_reaches_matches_behind_recent_peer_traffic() {
+    let mut state = BusState::default();
+    let room = state.create_room("sparse").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    state
+        .post_to_developer(room, agent, "older direct match".into(), vec![], 1000)
+        .unwrap();
+    for index in 0..600 {
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("hidden peer {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Agent(agent),
+                1001 + index,
+            )
+            .unwrap();
+    }
+    state
+        .set_room_history_filters(
+            room,
+            crate::messaging::model::RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    await_layout(&mut history, snapshot, room, 80, 2000, &mut thumbnails);
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "older direct match"));
+    assert!(!history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("hidden peer")));
+}
