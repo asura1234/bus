@@ -487,8 +487,6 @@ impl Worker {
                         command_id: id,
                         result,
                     });
-                    // The client settles a command only once a snapshot shows
-                    // it; do not make that wait for this loop's poll tick.
                     busy.stage("snapshot");
                     self.publish_snapshot(&snapshots);
                 }

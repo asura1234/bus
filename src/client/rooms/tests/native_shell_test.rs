@@ -678,7 +678,7 @@ fn ctrl_c_release_and_modified_copy_chords_do_not_quit_bus() {
 }
 
 #[test]
-fn ctrl_c_keeps_a_draft_that_is_already_being_sent_and_stays_open() {
+fn ctrl_c_clears_new_draft_without_cancelling_the_pending_send() {
     let (mut ui, room, agent) = fixture();
     let local = ui.locals.get_mut(&room).unwrap();
     local.recipients.insert(agent);
@@ -687,8 +687,9 @@ fn ctrl_c_keeps_a_draft_that_is_already_being_sent_and_stays_open() {
     ui.request_send(room);
     key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(ui.quitting.is_none());
-    assert_eq!(ui.locals[&room].text.text, "on its way");
-    assert!(!ui
+    assert!(ui.locals[&room].text.text.is_empty());
+    assert_eq!(ui.submissions.len(), 1);
+    assert!(ui
         .pending
         .iter()
         .any(|p| matches!(&p.command, BusCommand::SetDraftText(_, text) if text.is_empty())));

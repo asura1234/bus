@@ -70,15 +70,7 @@ impl BusUi {
         let visible_anchor = (!self.history_follow_tail)
             .then(|| self.history.anchor_at(self.main_scroll))
             .flatten();
-        let (history_snapshot, submissions) = self.history_projection();
-        self.history.request_lines_with_submissions(
-            history_snapshot,
-            room.id,
-            width,
-            now,
-            &mut self.thumbnails,
-            submissions,
-        );
+        self.request_room_history(room, width, now);
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
                 self.main_scroll = index;
@@ -133,12 +125,23 @@ impl BusUi {
         let files = self.draft_files(room);
         self.file_scroll = self.file_scroll.min(files.len().saturating_sub(1));
         file_rows(view, &files, self.file_scroll, layout);
-        // Pointers report only moves: drop a path whose chip left a still pointer.
         if view.file_path_at(self.detail_at.0, self.detail_at.1) != self.detail_path {
             self.detail_path = None;
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+    }
+
+    fn request_room_history(&mut self, room: &Room, width: u16, now: u64) {
+        let (snapshot, submissions) = self.history_projection();
+        self.history.request_lines_with_submissions(
+            snapshot,
+            room.id,
+            width,
+            now,
+            &mut self.thumbnails,
+            submissions,
+        );
     }
 
     /// The Ctrl+R recall search, which has no panel of its own.

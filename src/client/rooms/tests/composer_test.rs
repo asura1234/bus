@@ -324,6 +324,12 @@ fn consecutive_sends_keep_checked_recipients_and_queue_the_successor() {
     let mut state = ui.snapshot.state.clone();
     let file = std::path::PathBuf::from("/project/context.md");
     state.attach_file(room, file.clone()).unwrap();
+    ui.receive_snapshot(Arc::new(BusSnapshot {
+        state: state.clone(),
+        revision: 1,
+        last_command_id: 0,
+        error: None,
+    }));
     state
         .set_agent_runtime_identity(
             agent,

@@ -278,7 +278,6 @@ impl History {
         background
             .layouts
             .retain(|id, _| snapshot.state.room(*id).is_some());
-        // Never show another room's rows while this room's first layout loads.
         if background.displayed_room != Some(room) {
             self.lines = background
                 .layouts
