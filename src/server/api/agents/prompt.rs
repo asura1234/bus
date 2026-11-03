@@ -35,6 +35,15 @@ fn observes_composer(kind: crate::agents::AgentKind) -> bool {
     )
 }
 
+fn has_native_draft(runtime: &crate::terminal::TerminalRuntime) -> bool {
+    runtime
+        .active_input_snapshot()
+        .is_some_and(|(screen, cursor)| {
+            composer::observe_with_cursor(crate::agents::AgentKind::Codex, &screen, "", cursor)
+                == crate::terminal::runtime::InputObservation::Other
+        })
+}
+
 struct StyledChar {
     character: char,
     faint: bool,
@@ -451,7 +460,12 @@ impl App {
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        if terminal.state == crate::agents::AgentState::Blocked {
+        if terminal.state == crate::agents::AgentState::Blocked
+            && !(native_only
+                && self
+                    .lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
+                    .is_some_and(has_native_draft))
+        {
             return Err(encode_error(
                 id,
                 "agent_blocked",

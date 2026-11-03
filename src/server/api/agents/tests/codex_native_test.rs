@@ -427,3 +427,193 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
         "a native interrupt must not press Esc"
     );
 }
+
+mod draft_admission {
+    use super::*;
+
+    async fn project_draft(app: &mut App) {
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+        runtime.set_detection_context(
+            AgentKind::Codex,
+            true,
+            None,
+            crate::server::api::agents::prompt::detection_composer(AgentKind::Codex),
+        );
+        let (state, _) = runtime
+            .test_scan_detection_context(AgentKind::Codex, AgentState::Idle)
+            .await;
+        assert_eq!(
+            state,
+            AgentState::Blocked,
+            "a live obligation sees the draft"
+        );
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Codex), state);
+        let info = app.agent_info(0, pane).unwrap();
+        assert_eq!(
+            info.agent_status,
+            crate::protocol::api::schema::AgentStatus::Blocked
+        );
+        assert!(info.dialog_id.is_none());
+        assert!(info.interactive_ready);
+    }
+
+    #[tokio::test]
+    async fn codex_native_draft_projection_uses_native_turn_state_without_touching_the_draft() {
+        for (active, steer) in [(false, false), (true, true), (true, false)] {
+            let (mut app, mut method, mut writes) =
+                provider_fixture(AgentKind::Codex, true, "developer draft 保留");
+            project_draft(&mut app).await;
+            if let Method::AgentPromptIfIdle(params) = &mut method {
+                params.steer = steer;
+                params.expected_turn_id = steer.then(|| "busy-turn".into());
+            }
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+            let before = runtime.visible_text();
+            let (path, server) = test_support::server_for("session", active, false);
+            let native = crate::server::terminals::native_input::test_bind(runtime, path);
+            let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+            if !response.contains("agent_prompted") {
+                // Drain the server on RED as well as on authoritative busy refusal.
+                let _ = native.interrupt(
+                    "session",
+                    std::time::Instant::now() + Duration::from_secs(3),
+                );
+            }
+            let calls = server.join().unwrap();
+            assert!(
+                writes.try_recv().is_err(),
+                "native-only admission never types"
+            );
+            assert_eq!(
+                app.lookup_runtime_sender(0, pane).unwrap().visible_text(),
+                before
+            );
+            if !active || steer {
+                assert!(
+                    response.contains("agent_prompted"),
+                    "{active}/{steer}: {response}"
+                );
+                assert_eq!(
+                    calls.last().unwrap()["method"],
+                    if steer {
+                        "turn/steer"
+                    } else {
+                        "thread/queue/start"
+                    }
+                );
+            } else {
+                assert!(
+                    response.contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN),
+                    "{response}"
+                );
+                assert!(!calls.iter().any(|call| matches!(
+                    call["method"].as_str(),
+                    Some("thread/queue/add" | "thread/queue/start" | "turn/steer")
+                )));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_native_draft_projection_has_no_unavailable_channel_typed_fallback() {
+        let (mut app, method, mut writes) =
+            provider_fixture(AgentKind::Codex, true, "developer draft 保留");
+        project_draft(&mut app).await;
+        let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+        assert!(response.contains("agent_not_idle"), "{response}");
+        assert!(writes.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn codex_native_draft_projection_does_not_bypass_other_blockers() {
+        for screen in [
+            "Provider unavailable; sign in again",
+            "New version available\r\n❯ Install update now\r\n  Continue with current version\r\n↑/↓ to select, Enter to confirm",
+            "›\r\n GPT-6 · /repo\r\n ? for shortcuts",
+            "\x1b[?2026h› developer draft\r\n GPT-6 · /repo\r\n ? for shortcuts",
+        ] {
+            let (mut app, method, mut writes) =
+                provider_fixture(AgentKind::Codex, true, "developer draft 保留");
+            project_draft(&mut app).await;
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+            runtime.test_process_pty_bytes(format!("\x1b[2J\x1b[H{screen}").as_bytes());
+            let (path, server) = test_support::server_for("session", false, false);
+            let native = crate::server::terminals::native_input::test_bind(runtime, path);
+            let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+            let _ = native.interrupt(
+                "session",
+                std::time::Instant::now() + Duration::from_secs(3),
+            );
+            let calls = server.join().unwrap();
+            assert!(!response.contains("agent_prompted"), "{screen}: {response}");
+            assert!(writes.try_recv().is_err());
+            assert!(!calls.iter().any(|call| matches!(
+                call["method"].as_str(),
+                Some("thread/queue/add" | "thread/queue/start" | "turn/steer")
+            )));
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_native_draft_projection_reads_the_active_screen_when_scrolled() {
+        for draft in [true, false] {
+            let (mut app, method, _) =
+                provider_fixture(AgentKind::Codex, true, "developer draft 保留");
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            let (runtime, mut writes) =
+                crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                    100, 24, 100_000, b"", 16,
+                );
+            runtime.test_process_pty_bytes(
+                screen(AgentKind::Codex, "developer draft 保留").as_bytes(),
+            );
+            app.state.insert_test_runtime(pane, runtime);
+            project_draft(&mut app).await;
+            let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+            let live = if draft {
+                "› current draft 保留\n GPT-6 · /repo\n ? for shortcuts"
+            } else {
+                "Provider unavailable; sign in again"
+            };
+            let text = format!(
+                "\x1b[2J\x1b[H› historical draft\n GPT-6 · /repo\n ? for shortcuts\n{}{live}",
+                "captured transcript\n".repeat(60)
+            );
+            runtime.test_process_pty_bytes(text.replace('\n', "\r\n").as_bytes());
+            runtime.set_scroll_offset_from_bottom(60);
+            let before = runtime.visible_text();
+            assert!(before.contains("historical draft"), "{before}");
+            assert!(!before.contains("current draft"));
+            let (path, server) = test_support::server_for("session", false, false);
+            let native = crate::server::terminals::native_input::test_bind(runtime, path);
+            let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+            if !response.contains("agent_prompted") {
+                let _ = native.interrupt(
+                    "session",
+                    std::time::Instant::now() + Duration::from_secs(3),
+                );
+            }
+            let calls = server.join().unwrap();
+            assert_eq!(response.contains("agent_prompted"), draft, "{response}");
+            assert_eq!(
+                calls
+                    .iter()
+                    .any(|call| call["method"] == "thread/queue/add"),
+                draft
+            );
+            assert!(writes.try_recv().is_err());
+            assert_eq!(
+                app.lookup_runtime_sender(0, pane).unwrap().visible_text(),
+                before
+            );
+        }
+    }
+}
