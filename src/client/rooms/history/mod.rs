@@ -28,6 +28,7 @@ pub(super) use exchange::{reply, visible_request};
 use markdown::MarkdownBlock;
 use ratatui::style::Style;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
