@@ -32,18 +32,24 @@ def wait_for(predicate, detail, seconds=60):
 
 
 def signal_client_group(client, sig):
-    # poll() reaps an exited leader before its PID can become a stale group ID.
-    if client.poll() is not None:
+    # Keep the leader unreaped until signalling: it pins the owned group ID,
+    # and live members may remain after the leader exits. Never reuse a reaped PID.
+    if client.returncode is not None:
         return
     try:
         os.killpg(client.pid, sig)
     except ProcessLookupError:
         pass
     except PermissionError:
-        # macOS may report EPERM if the leader exits between poll and killpg.
-        # A permission failure for a still-running child remains a real error.
+        # macOS may report EPERM for a zombie-only group. Reap the leader and
+        # ignore it only if the group disappeared; live-group errors still fail.
         if client.poll() is None:
             raise
+        try:
+            os.killpg(client.pid, 0)
+        except ProcessLookupError:
+            return
+        raise
 
 
 def alternate_build(source, target, different_version=False):
