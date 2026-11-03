@@ -633,6 +633,7 @@ fn native_response_timestamps(
     match response {
         Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
         Err(error) => error.timestamps,
+        _ => Default::default(),
     }
 }
 

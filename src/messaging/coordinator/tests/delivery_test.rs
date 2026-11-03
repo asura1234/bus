@@ -2314,6 +2314,7 @@ fn delivery_latency_excludes_idle_dialog_wait() {
     );
 }
 
+#[test]
 fn grok_resume_of_superseded_session_is_not_silently_retired() {
     // Grok 1.0.70 `/resume <id>` reloads a session in place and reports
     // session_start source=load. After a Bus clear (session -> fresh), resuming
