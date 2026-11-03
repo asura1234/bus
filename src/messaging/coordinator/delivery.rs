@@ -450,8 +450,7 @@ impl Worker {
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
-        self.trace_provider_retry(agent, request);
-        self.note_native_requested(request, io::now_ms())?;
+        self.trace_native_request(agent, request)?;
         let started = std::time::Instant::now();
         let _span = tracing::info_span!(
             "bus.delivery",
@@ -615,6 +614,15 @@ impl Worker {
         self.save(state)?;
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
+    }
+
+    fn trace_native_request(
+        &mut self,
+        agent: &RoomAgent,
+        request: RequestId,
+    ) -> Result<(), String> {
+        self.trace_provider_retry(agent, request);
+        self.note_native_requested(request, io::now_ms())
     }
 }
 
