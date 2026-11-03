@@ -61,7 +61,9 @@ impl BusUi {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
         let visible_anchor = self.visible_history_anchor();
-        if self.chat_search.is_some() || !self.history_follow_tail && self.main_scroll < 80 {
+        // A page can be both at the top and following the tail.
+        // Loading older records remains possible when it fits the viewport.
+        if self.chat_search.is_some() || self.main_scroll < 80 {
             self.history.load_older();
         }
         let (snapshot, submissions) = self.history_projection();
