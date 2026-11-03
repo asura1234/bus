@@ -1,5 +1,6 @@
 use super::*;
 use crate::messaging::control::{Request as ControlRequest, Response as ControlResponse};
+use crate::messaging::model::RoomHistoryFilters;
 use crate::messaging::native::TransportError;
 use serde_json::{json, Value};
 
@@ -362,5 +363,84 @@ fn feishu_notifications_cannot_be_disabled_or_change_sound() {
         assert!(saved.feishu_notifications);
         assert!(saved.master_sound.enabled);
     }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn room_history_filters_survive_reload_and_disappear_with_the_room() {
+    let root = root("room-history-filters");
+    let mut worker = session(&root, "filters");
+    let first = create_room(&mut worker, "first");
+    let second = create_room(&mut worker, "second");
+    let master = master(&worker);
+    let (events, _) = mpsc::channel();
+    for (room, filters) in [
+        (
+            first,
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        ),
+        (
+            second,
+            RoomHistoryFilters {
+                to_you: false,
+                from_you: true,
+            },
+        ),
+        (
+            master,
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: true,
+            },
+        ),
+    ] {
+        worker
+            .command(BusCommand::SetRoomHistoryFilters(room, filters), &events)
+            .unwrap();
+    }
+    drop(worker);
+
+    let mut reopened = session(&root, "filters");
+    assert_eq!(
+        reopened.state.room(first).unwrap().history_filters,
+        RoomHistoryFilters {
+            to_you: true,
+            from_you: false,
+        }
+    );
+    assert_eq!(
+        reopened.state.room(second).unwrap().history_filters,
+        RoomHistoryFilters {
+            to_you: false,
+            from_you: true,
+        }
+    );
+    assert_eq!(
+        reopened.state.room(master).unwrap().history_filters,
+        RoomHistoryFilters {
+            to_you: true,
+            from_you: true,
+        }
+    );
+    reopened
+        .command(BusCommand::DeleteRoom(first), &events)
+        .unwrap();
+    assert!(reopened.state.room(first).is_none());
+    drop(reopened);
+
+    let reloaded = session(&root, "filters");
+    assert!(reloaded.state.room(first).is_none());
+    assert!(
+        reloaded
+            .state
+            .room(second)
+            .unwrap()
+            .history_filters
+            .from_you
+    );
+    drop(reloaded);
     std::fs::remove_dir_all(root).unwrap();
 }

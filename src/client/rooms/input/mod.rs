@@ -565,7 +565,9 @@ impl BusUi {
             Action::Composer => {
                 self.recipient_menu = false;
             }
-            Action::Search(focus) => self.activate_chat_search(focus),
+            Action::Search => {}
+            Action::ToggleToYou => self.toggle_history_filter(true),
+            Action::ToggleFromYou => self.toggle_history_filter(false),
             Action::Recipients => {
                 self.recipient_menu = !self.recipient_menu;
             }

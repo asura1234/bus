@@ -85,6 +85,19 @@ impl BusUi {
     }
 
     pub(super) fn key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        if self.form.is_none() && self.rename.is_none() && !self.recipient_menu {
+            match (code, modifiers) {
+                (KeyCode::Char('i' | 'I'), KeyModifiers::ALT) => {
+                    self.toggle_history_filter(true);
+                    return;
+                }
+                (KeyCode::Char('o' | 'O'), KeyModifiers::ALT) => {
+                    self.toggle_history_filter(false);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.modal_key(code, modifiers) {
             return;
         }

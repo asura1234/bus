@@ -33,6 +33,7 @@ impl BusState {
                 kind: RoomKind::Work,
                 sound: None,
                 sound_name: None,
+                history_filters: Default::default(),
                 report_turns: BTreeMap::new(),
                 disk_alerts: Default::default(),
             },
@@ -83,6 +84,7 @@ impl BusState {
                         kind: RoomKind::Master,
                         sound: None,
                         sound_name: None,
+                        history_filters: Default::default(),
                         report_turns: BTreeMap::new(),
                         disk_alerts: Default::default(),
                     },
@@ -218,6 +220,18 @@ impl BusState {
             .get_mut(&id)
             .ok_or(ModelError::UnknownRoom(id))?
             .sound_name = name;
+        Ok(())
+    }
+
+    pub(crate) fn set_room_history_filters(
+        &mut self,
+        id: RoomId,
+        filters: super::RoomHistoryFilters,
+    ) -> Result<(), ModelError> {
+        self.rooms
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRoom(id))?
+            .history_filters = filters;
         Ok(())
     }
 

@@ -37,6 +37,17 @@ impl ReplyGroups {
             .flatten()
             .map(|source| format!("Answered with message {}", source.prompt.id.0))
     }
+
+    fn shared_to_developer(&self, state: &BusState, request: &Request, text: &str) -> bool {
+        if explicitly_to_you(text) {
+            return true;
+        }
+        let lead = request.reply_key();
+        std::iter::once(lead)
+            .chain(self.members.get(&lead).into_iter().flatten().copied())
+            .filter_map(|id| state.request(id))
+            .any(|member| member.prompt.author == Author::Developer)
+    }
 }
 
 #[cfg(test)]
@@ -48,6 +59,7 @@ mod group_tests;
 mod perf_tests;
 
 impl History {
+    #[cfg(test)]
     pub fn lines(
         &mut self,
         state: &BusState,
@@ -56,6 +68,27 @@ impl History {
         revision: u64,
         now: u64,
         thumbnails: &mut Thumbnails,
+    ) -> &[Line] {
+        self.lines_filtered(
+            state,
+            room,
+            width,
+            revision,
+            now,
+            thumbnails,
+            Default::default(),
+        )
+    }
+
+    pub fn lines_filtered(
+        &mut self,
+        state: &BusState,
+        room: &Room,
+        width: u16,
+        revision: u64,
+        now: u64,
+        thumbnails: &mut Thumbnails,
+        filters: crate::messaging::model::RoomHistoryFilters,
     ) -> &[Line] {
         static LINES: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.lines");
@@ -69,12 +102,14 @@ impl History {
             width,
             now / 60_000,
             thumbnails.layout_key(),
+            filters,
         );
         if self.key.is_some_and(|previous| {
             previous.0 == key.0
                 && previous.1 == key.1
                 && previous.2 == key.2
                 && previous.4 == key.4
+                && previous.5 == key.5
                 && (previous.3 == key.3 || self.age_valid.contains(&now))
         }) {
             self.key = Some(key);
@@ -141,7 +176,8 @@ impl History {
         let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
         self.markdown.retain(|source, _| shown.contains(source));
         self.key = Some(key);
-        self.lines = lines.into();
+        self.displayed_filters = filters;
+        self.lines = super::filter_lines(lines, filters).into();
         self.age_valid = age_valid;
         REBUILD.record_op(
             started.elapsed(),
@@ -356,8 +392,8 @@ impl History {
             } else {
                 push_body(lines, text, width, "    ", reply_anchor);
             }
-            let to_developer =
-                quote.is_some() && (prompt.author == Author::Developer || explicitly_to_you(text));
+            let to_developer = quote.is_some()
+                && request.is_some_and(|request| groups.shared_to_developer(state, request, text));
             for line in &mut lines[start..] {
                 line.to_developer = to_developer;
             }
@@ -521,7 +557,7 @@ fn blank_row(anchor: RowAnchor) -> Line {
 
 /// Which layout input changed, for the rebuild's slow-operation detail.
 fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str {
-    let Some((signature, room, width, minute, thumbnails)) = previous else {
+    let Some((signature, room, width, minute, thumbnails, filters)) = previous else {
         return "first";
     };
     if room != next.1 {
@@ -532,6 +568,8 @@ fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str 
         "content"
     } else if thumbnails != next.4 {
         "thumbnails"
+    } else if filters != next.5 {
+        "filters"
     } else if minute != next.3 {
         "minute"
     } else {

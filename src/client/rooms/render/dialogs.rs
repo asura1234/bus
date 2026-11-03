@@ -1,26 +1,19 @@
 //! Forms, the help screen and deletion confirmation.
-use super::super::{
-    chat_search::{ChatSearch, SearchFocus},
-    deletion::DeleteTarget,
-    forms::Form,
-    BusUi,
-};
+use super::super::{chat_search::ChatSearch, deletion::DeleteTarget, forms::Form, BusUi};
 use super::geometry::agent_form_gap;
 use super::text::{provider, wrap};
 use super::{Action, View};
 use ratatui::layout::Rect;
 
-/// Border, 3-row query field, two filter rows, key hint, border.
-pub(super) const SEARCH_BOX_HEIGHT: u16 = 8;
+/// Border, 3-row query field, key hint, border.
+pub(super) const SEARCH_BOX_HEIGHT: u16 = 6;
 /// The widest a centered dialog grows on a wide screen.
 const DIALOG_WIDTH: u16 = 66;
 const SEARCH_LABEL: &str = "Find: ";
-/// Up/Down navigate from every control; Enter navigates only in the query.
-const SEARCH_HINTS: [&str; 4] = [
-    "Tab/Shift+Tab focus · Enter/Space/click toggle · ↑ older · ↓ newer · Esc close",
-    "Tab focus · Enter/Space/click toggle · ↑ older · ↓ newer · Esc",
-    "Enter/Space/click toggle · ↑/↓",
-    "Enter/Space/click toggle",
+const SEARCH_HINTS: [&str; 3] = [
+    "Enter older · Shift+Enter newer · ↑/↓ · Esc close",
+    "Enter/↑ older · Shift+Enter/↓ newer · Esc",
+    "↑ older · ↓ newer · Esc",
 ];
 
 impl BusUi {
@@ -382,10 +375,7 @@ impl BusUi {
 pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: u16, count: usize) {
     let panel = view.search_box;
     if panel.height > 0 {
-        let counter = match (
-            search.query.is_empty() && !search.you_only && !search.from_you,
-            count,
-        ) {
+        let counter = match (search.query.is_empty(), count) {
             (true, _) => String::new(),
             (false, 0) => "no matches".to_owned(),
             (false, _) => format!("{}/{count}", search.current + 1),
@@ -407,13 +397,13 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
         // as the counter changes.
         let field_width = width.saturating_sub(label_width + "no matches".len() as u16 + 1);
         view.search_field = Rect::new(x + label_width, field_y, field_width, 3);
-        view.hit(view.search_field, Action::Search(SearchFocus::Query));
+        view.hit(view.search_field, Action::Search);
         let inner = field_width.saturating_sub(2);
         view.row(
             Rect::new(x + label_width + 1, field_y + 1, inner, 1),
             format!("{:<width$}", search.query, width = usize::from(inner)),
             None,
-            search.focus == SearchFocus::Query,
+            false,
             false,
         );
         view.row(
@@ -428,8 +418,8 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             false,
             true,
         );
-        search_footer(view, search, Rect::new(x, field_y + 3, width, 2));
-        if search.focus == SearchFocus::Query && inner > 0 {
+        search_footer(view, Rect::new(x, field_y + 3, width, 1));
+        if inner > 0 {
             let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
             view.cursor = Some(crate::protocol::wire::CursorState {
                 x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
@@ -443,31 +433,12 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
     }
 }
 
-fn search_footer(view: &mut View, search: &ChatSearch, row: Rect) {
-    for (offset, label, enabled, focus) in [
-        (0, "* → You", search.you_only, SearchFocus::ToYou),
-        (1, "You → *", search.from_you, SearchFocus::FromYou),
-    ] {
-        // Paint and hit-test the same rectangle, including box and label.
-        view.row(
-            Rect::new(row.x, row.y + offset, row.width.min(11), 1),
-            format!("[{}] {label}", if enabled { "x" } else { " " }),
-            Some(Action::Search(focus)),
-            search.focus == focus,
-            false,
-        );
-    }
+fn search_footer(view: &mut View, row: Rect) {
     let hint = SEARCH_HINTS
         .iter()
         .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(row.width));
     if let Some(hint) = hint {
-        view.row(
-            Rect::new(row.x, row.y + 2, row.width, 1),
-            *hint,
-            None,
-            false,
-            true,
-        );
+        view.row(row, *hint, None, false, true);
     }
 }
 

@@ -390,27 +390,47 @@ fn an_archived_group_still_shows_its_shared_reply_once() {
 
 #[test]
 fn a_rebuild_names_the_layout_input_that_changed() {
-    let key = (1, RoomId(1), 80, 10, None);
+    let key = (1, RoomId(1), 80, 10, None, Default::default());
     assert_eq!(rebuild_reason(None, key), "first");
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(2), 80, 10, None)), key),
+        rebuild_reason(Some((1, RoomId(2), 80, 10, None, Default::default())), key),
         "room"
     );
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(1), 100, 10, None)), key),
+        rebuild_reason(Some((1, RoomId(1), 100, 10, None, Default::default())), key),
         "width"
     );
     assert_eq!(
-        rebuild_reason(Some((2, RoomId(1), 80, 9, None)), key),
+        rebuild_reason(Some((2, RoomId(1), 80, 9, None, Default::default())), key),
         "content"
     );
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(1), 80, 10, Some((8, 16)))), key),
+        rebuild_reason(
+            Some((1, RoomId(1), 80, 10, Some((8, 16)), Default::default())),
+            key
+        ),
         "thumbnails"
     );
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(1), 80, 9, None)), key),
+        rebuild_reason(Some((1, RoomId(1), 80, 9, None, Default::default())), key),
         "minute"
+    );
+    assert_eq!(
+        rebuild_reason(
+            Some((
+                1,
+                RoomId(1),
+                80,
+                10,
+                None,
+                crate::messaging::model::RoomHistoryFilters {
+                    to_you: true,
+                    from_you: false,
+                },
+            )),
+            key
+        ),
+        "filters"
     );
 }
 

@@ -73,7 +73,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** pristine scratch data/settings; no pre-created workers.
 
 1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `# bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
-2. Inspect the work-room header → the conversation starts directly below the room name/divider, matching MASTER; no status editor is present.
+2. Inspect the work-room header → directly below the room name, right-aligned `[ ] * → You` and `[ ] You → *` checkboxes appear in that order, matching MASTER; the conversation starts below their divider and no status editor is present.
 3. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
 

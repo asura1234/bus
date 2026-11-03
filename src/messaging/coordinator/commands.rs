@@ -37,6 +37,7 @@ impl Worker {
                 self.record_master_sound(&state, id)?;
                 Ok(())
             }
+            C::SetRoomHistoryFilters(id, filters) => state.set_room_history_filters(id, filters),
             C::SetAllRoomsSound(on) => {
                 self.set_all_rooms_sound(Some(on), None, events)?;
                 return Ok(());

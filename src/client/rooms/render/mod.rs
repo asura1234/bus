@@ -7,7 +7,7 @@ mod history_links;
 mod hits;
 mod paint;
 mod recipient_menu;
-mod room;
+pub(super) mod room;
 mod settings;
 mod sidebar;
 mod text;
@@ -44,7 +44,9 @@ pub(super) enum Action {
     NewAgent,
     ScrollFiles(bool),
     Composer,
-    Search(super::chat_search::SearchFocus),
+    Search,
+    ToggleToYou,
+    ToggleFromYou,
     Recipients,
     Recipient(Option<crate::messaging::model::AgentId>),
     Files,

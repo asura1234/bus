@@ -535,6 +535,19 @@ impl BusUi {
                 .or_insert_with(|| LocalRoom::from(room));
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        let filters_changed = self.room.is_some_and(|room| {
+            previous.state.room(room).map(|room| room.history_filters)
+                != self
+                    .snapshot
+                    .state
+                    .room(room)
+                    .map(|room| room.history_filters)
+        });
+        if filters_changed {
+            if let Some(search) = &mut self.chat_search {
+                search.jump_to_newest = true;
+            }
+        }
         self.sync_snapshot_error();
         if let Some(config) = &self.sound_config {
             let alerts = crate::messaging::model::new_developer_notifications(
