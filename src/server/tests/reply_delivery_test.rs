@@ -1839,3 +1839,36 @@ async fn orchestrator_independent_policy_preserves_developer_and_worker_steering
         }
     }
 }
+
+#[tokio::test]
+async fn legacy_agent_request_does_not_enter_claude_autonomous_turn() {
+    let mut f = Delivery::new(&[Provider::ClaudeCode], true);
+    let orch = f.agents[0];
+    let sender = f.add_owned(f.master, Provider::Codex, "sender", false);
+    f.human_start(orch, "autonomous", "unrelated autonomous work");
+    let queued = f.send(
+        orch,
+        f.master,
+        "legacy independent request",
+        false,
+        Some(sender),
+    );
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    saved["state"]["requests"]
+        .as_object_mut()
+        .unwrap()
+        .get_mut(&queued.0.to_string())
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("queue_only");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    f.reopen();
+    assert!(
+        f.typed(orch).is_empty(),
+        "legacy independent request entered the autonomous turn: {:?}",
+        f.state().request(queued).unwrap()
+    );
+}
