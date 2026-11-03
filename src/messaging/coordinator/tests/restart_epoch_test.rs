@@ -687,3 +687,75 @@ fn restart_epoch_c50_reordered_receipt_cannot_capture_new_epoch_work() {
     f.worker.tick().unwrap();
     assert_eq!(f.request(queued).phase, RequestPhase::Active);
 }
+
+#[test]
+fn restart_published_sessionless_unknown_submit_settles_on_new_generation_even_without_rebind() {
+    struct LostAcknowledgment(Arc<Mutex<Vec<Method>>>);
+    impl Transport for LostAcknowledgment {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(
+                method,
+                Method::AgentPromptIfUnboundAtGeneration(_)
+            ));
+            self.0.lock().unwrap().push(method);
+            Err(TransportError {
+                code: None,
+                message: "connection lost after input".into(),
+                definitely_rejected: false,
+            })
+        }
+    }
+    for reopen in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        observe_epoch(&mut f, 1);
+        let mut state = f.worker.state.clone();
+        let mut identity = state.agent(f.agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(f.agent, identity).unwrap();
+        f.worker.save(state).unwrap();
+        f.worker.transport = Box::new(LostAcknowledgment(f.native.clone()));
+        let old = f.send(
+            "input before SessionStart and lost submit acknowledgment",
+            false,
+        );
+        f.deliver();
+        assert_eq!(f.request(old).phase, RequestPhase::Submitting);
+        assert!(f.request(old).provider_session_id.is_none());
+        let pending = f.send("retain until native startup succeeds", true);
+        let pending_before = f.request(pending).clone();
+        let inputs = f.typed_content().len();
+        if reopen {
+            reload(&mut f);
+        }
+        for generation in [1, 2] {
+            let info = serde_json::from_value(json!({
+                "generation": generation,
+                "terminal_id": "terminal", "pane_id": "failed-placeholder",
+                "agent": null, "agent_status": "unknown", "interactive_ready": false,
+                "workspace_id": "workspace", "tab_id": "tab", "focused": false,
+                "revision": 1
+            }))
+            .unwrap();
+            f.worker.transport = Box::new(RestartLifecycleNative {
+                methods: f.native.clone(),
+                info,
+            });
+            f.worker.tick().unwrap();
+            assert_eq!(f.request(pending), pending_before);
+            assert_eq!(
+                f.typed_content().len(),
+                inputs,
+                "uncertain input must never replay"
+            );
+            if generation == 1 {
+                assert_eq!(f.request(old).phase, RequestPhase::Submitting);
+            } else {
+                assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+                assert_eq!(
+                    f.request(old).failure_reason.as_deref(),
+                    Some("reply_not_captured")
+                );
+            }
+        }
+    }
+}

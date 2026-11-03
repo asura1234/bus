@@ -520,3 +520,46 @@ fn missing_launch_directory_preserves_busy_queue() {
         assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
     }
 }
+
+#[test]
+fn restart_stale_idle_owner_never_expires_new_messages_as_prior_request_active() {
+    for status in [
+        RuntimeStatus::Idle,
+        RuntimeStatus::Working,
+        RuntimeStatus::Blocked,
+        RuntimeStatus::Unavailable,
+    ] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 1_000)
+            .unwrap();
+        let old = submit_text(&mut state, room, agent, "old request");
+        state.begin_submission(old, "launch-codex", 0).unwrap();
+        state
+            .record_submission(
+                old,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("session".into()),
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        state.observe_status(agent, status, 1_001).unwrap();
+        let first = submit_text(&mut state, room, agent, "resume work");
+        let second = submit_text(&mut state, room, agent, "follow up");
+        let mut state: BusState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        assert!(
+            state
+                .expire_stalled_queued_requests(24 * 60 * 60 * 1_000)
+                .unwrap()
+                .is_empty(),
+            "{status:?}"
+        );
+        assert_eq!(state.queued_requests(agent), &[first, second]);
+        for id in [first, second] {
+            assert_eq!(state.request(id).unwrap().phase, RequestPhase::Queued);
+            assert!(state.request(id).unwrap().failure_reason.is_none());
+        }
+    }
+}
