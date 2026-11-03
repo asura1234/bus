@@ -9,6 +9,29 @@ use super::{
 pub(crate) const INTERRUPTED: &str = "interrupted";
 
 impl BusState {
+    /// A native result supersedes an older visual wait without asserting that
+    /// any turn, request or terminal has completed.
+    pub(crate) fn clear_native_interrupt_wait(&mut self, agent: AgentId) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .interrupt_pending = false;
+        Ok(())
+    }
+
+    /// Apply positive native completion without changing the terminal's
+    /// presentation status. The caller fences the observed turn and obligation.
+    pub(crate) fn complete_native_interrupt(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        self.close_interrupted(agent, now_ms)?;
+        self.complete_pending_final(agent, now_ms)?;
+        self.note_turn_end(agent, now_ms);
+        Ok(())
+    }
+
     /// Records that the stop key went to `agent`'s terminal. The turn closes
     /// when Bus next sees the agent idle, not before: the provider decides.
     pub(crate) fn begin_interrupt(&mut self, agent: AgentId) -> Result<(), ModelError> {

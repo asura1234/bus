@@ -600,3 +600,407 @@ fn room_interrupt_cancels_idle_and_unavailable_provider_holds() {
         );
     }
 }
+
+// Native completion is stronger than a key admission, and is bound to the
+// exact terminal/session and interrupted obligation rather than presentation Idle.
+struct InterruptReceipt(Result<ResponseResult, TransportError>);
+impl Transport for InterruptReceipt {
+    fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
+        std::mem::replace(&mut self.0, Ok(ResponseResult::Ok {}))
+    }
+}
+
+fn native_receipt(f: &mut Fixture, terminal: &str, session: &str) {
+    f.worker.transport = Box::new(InterruptReceipt(Ok(ResponseResult::AgentInterrupted {
+        terminal_id: terminal.into(),
+        session_id: session.into(),
+        turn_id: Some("turn-1".into()),
+    })));
+}
+
+#[test]
+fn native_interrupt_completion_closes_its_turn_and_queue_beside_a_blocked_draft() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    let queued = f.send("later", true);
+    f.status(RuntimeStatus::Blocked);
+    native_receipt(&mut f, "terminal", "session");
+    let response = interrupt(&mut f, json!({"agent":"builder"}));
+    assert_eq!(response.result["agents"][0]["outcome"], "stopped");
+    for id in [lead, queued] {
+        assert_eq!(f.request(id).failure_reason.as_deref(), Some("interrupted"));
+    }
+    let agent = f.worker.state.agent(f.agent).unwrap();
+    assert!(!agent.interrupt_pending);
+    assert_eq!(agent.current_request, None);
+    assert_eq!(agent.activity_status(), RuntimeStatus::Blocked);
+}
+
+#[test]
+fn native_interrupt_mismatched_identity_cannot_settle_or_poll_visual_idle() {
+    for (terminal, session) in [
+        ("other", "session"),
+        ("terminal", "other"),
+        ("", "session"),
+        ("terminal", ""),
+    ] {
+        let mut f = Fixture::new(Provider::Codex);
+        let lead = running(&mut f, "work", "turn-1");
+        native_receipt(&mut f, terminal, session);
+        let response = interrupt(&mut f, json!({"agent":"builder"}));
+        assert_eq!(response.result["agents"][0]["outcome"], "failed");
+        assert!(!f.worker.state.agent(f.agent).unwrap().interrupt_pending);
+        f.status(RuntimeStatus::Idle);
+        assert_eq!(f.request(lead).failure_reason, None);
+        assert!(!f.request(lead).settled());
+    }
+}
+
+#[test]
+fn native_interrupt_unconfirmed_cannot_become_stopped_from_visual_idle() {
+    for code in [Some("agent_interrupt_unconfirmed".into()), None] {
+        let mut f = Fixture::new(Provider::Codex);
+        let lead = running(&mut f, "work", "turn-1");
+        f.worker.transport = Box::new(InterruptReceipt(Err(TransportError {
+            code,
+            message: "Native interrupt is unconfirmed".into(),
+            definitely_rejected: false,
+        })));
+        let response = interrupt(&mut f, json!({"agent":"builder"}));
+        assert_eq!(response.result["agents"][0]["outcome"], "failed");
+        assert!(!f.worker.state.agent(f.agent).unwrap().interrupt_pending);
+        f.status(RuntimeStatus::Idle);
+        assert!(!f.request(lead).settled());
+        assert_eq!(f.request(lead).failure_reason, None);
+    }
+}
+
+#[test]
+fn native_interrupt_completion_preserves_a_captured_final() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    let unclaimed = f.send("steered input without a start hook", false);
+    f.deliver();
+    f.stopped("turn-1", "Work done.");
+    f.consume();
+    assert!(f.request(lead).pending_final.is_some());
+    f.status(RuntimeStatus::Blocked);
+    native_receipt(&mut f, "terminal", "session");
+    let response = interrupt(&mut f, json!({"agent":"builder"}));
+    assert_eq!(response.result["agents"][0]["outcome"], "stopped");
+    assert_eq!(f.reply(lead).as_deref(), Some("Work done."));
+    assert_eq!(f.request(lead).failure_reason, None);
+    assert_eq!(
+        f.request(unclaimed).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+}
+
+#[test]
+fn late_native_interrupt_completion_cannot_close_a_successor_in_the_same_session() {
+    let mut f = Fixture::new(Provider::Codex);
+    let old = running(&mut f, "old work", "turn-1");
+    assert_eq!(
+        interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    let fence = f
+        .worker
+        .native_interrupt_fence(&f.worker.state, f.agent)
+        .unwrap();
+    let mut state = f.worker.state.clone();
+    state.close_interrupted(f.agent, f.now).unwrap();
+    f.worker.save(state).unwrap();
+    f.status(RuntimeStatus::Idle);
+    let fresh = running(&mut f, "new work", "turn-2");
+    let queued = f.send("new queued work", true);
+    let mut state = f.worker.state.clone();
+    assert!(!f
+        .worker
+        .complete_native_interrupt(
+            &mut state,
+            f.agent,
+            &fence,
+            "terminal",
+            "session",
+            Some("turn-1"),
+            f.now
+        )
+        .unwrap());
+    f.worker.save(state).unwrap();
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert!(!f.request(fresh).settled());
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(fresh)
+    );
+}
+
+#[test]
+fn native_interrupt_fence_rejects_a_new_queue_or_same_request_new_submission() {
+    for changed_queue in [true, false] {
+        let mut f = Fixture::new(Provider::Codex);
+        let lead = running(&mut f, "work", "turn-1");
+        assert_eq!(
+            interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+            "interrupting"
+        );
+        let fence = f
+            .worker
+            .native_interrupt_fence(&f.worker.state, f.agent)
+            .unwrap();
+        if changed_queue {
+            f.send("fresh queue", true);
+        }
+        let mut state = f.worker.state.clone();
+        if !changed_queue {
+            // Deserialize a persisted state to model a late completion crossing
+            // a re-submission epoch without changing terminal/session/request ID.
+            let mut value = serde_json::to_value(&state).unwrap();
+            let request = value["requests"]
+                .as_object_mut()
+                .unwrap()
+                .get_mut(&lead.0.to_string())
+                .unwrap();
+            request["submission_status_revision"] =
+                json!(f.request(lead).submission_status_revision + 1);
+            state = serde_json::from_value(value).unwrap();
+        }
+        assert!(!f
+            .worker
+            .complete_native_interrupt(
+                &mut state,
+                f.agent,
+                &fence,
+                "terminal",
+                "session",
+                Some("turn-1"),
+                f.now
+            )
+            .unwrap());
+        assert!(!state.request(lead).unwrap().settled());
+    }
+}
+
+#[test]
+fn native_interrupt_receipt_for_a_replacement_turn_cannot_close_the_original_request() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    f.worker.transport = Box::new(InterruptReceipt(Ok(ResponseResult::AgentInterrupted {
+        terminal_id: "terminal".into(),
+        session_id: "session".into(),
+        turn_id: Some("replacement".into()),
+    })));
+    let response = interrupt(&mut f, json!({"agent":"builder"}));
+    assert_eq!(response.result["agents"][0]["outcome"], "failed");
+    assert!(!f.request(lead).settled());
+    assert!(!f.worker.state.agent(f.agent).unwrap().interrupt_pending);
+}
+
+#[test]
+fn native_unconfirmed_interrupt_disarms_an_older_visual_stop_wait() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    let mut state = f.worker.state.clone();
+    state.begin_interrupt(f.agent).unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.transport = Box::new(InterruptReceipt(Err(TransportError {
+        code: Some("agent_interrupt_unconfirmed".into()),
+        message: "unconfirmed".into(),
+        definitely_rejected: false,
+    })));
+    let response = interrupt(&mut f, json!({"agent":"builder"}));
+    assert_eq!(response.result["agents"][0]["outcome"], "failed");
+    assert!(
+        !f.worker.state.agent(f.agent).unwrap().interrupt_pending,
+        "a previous typed admission cannot promote newer native uncertainty through visual Idle"
+    );
+    f.status(RuntimeStatus::Idle);
+    assert!(!f.request(lead).settled());
+}
+
+#[test]
+fn late_unconfirmed_native_interrupt_preserves_a_newer_same_obligation_stop_wait() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    assert_eq!(
+        interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    let old = f
+        .worker
+        .native_interrupt_fence(&f.worker.state, f.agent)
+        .unwrap();
+    // A second, ordinary typed admission of the same obligation creates its
+    // own stop wait and durable interruption notice through the real control.
+    assert_eq!(
+        interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    let mut state = f.worker.state.clone();
+    assert!(!f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &old)
+        .unwrap());
+    assert!(state.agent(f.agent).unwrap().interrupt_pending);
+    assert!(!state.request(lead).unwrap().settled());
+    assert_eq!(state.agent(f.agent).unwrap().current_request, Some(lead));
+}
+
+#[test]
+fn late_unconfirmed_native_interrupt_preserves_a_successor_stop_wait() {
+    let mut f = Fixture::new(Provider::Codex);
+    running(&mut f, "old work", "turn-1");
+    assert_eq!(
+        interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    let old = f
+        .worker
+        .native_interrupt_fence(&f.worker.state, f.agent)
+        .unwrap();
+    let mut state = f.worker.state.clone();
+    state.close_interrupted(f.agent, f.now).unwrap();
+    f.worker.save(state).unwrap();
+    f.status(RuntimeStatus::Idle);
+    let fresh = running(&mut f, "fresh work", "turn-2");
+    assert_eq!(
+        interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    let mut state = f.worker.state.clone();
+    assert!(!f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &old)
+        .unwrap());
+    assert!(state.agent(f.agent).unwrap().interrupt_pending);
+    assert!(!state.request(fresh).unwrap().settled());
+    assert_eq!(state.agent(f.agent).unwrap().current_request, Some(fresh));
+}
+
+#[test]
+fn unconfirmed_native_interrupt_clears_only_the_matching_visual_wait() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    f.send("unclaimed steering", false);
+    f.deliver();
+    f.stopped("turn-1", "Captured final.");
+    f.consume();
+    let queued = f.send("queued work", true);
+    assert!(f.request(lead).pending_final.is_some());
+    let before = f.request(lead).clone();
+    let before_queued = f.request(queued).clone();
+    assert_eq!(
+        interrupt(&mut f, json!({"agent":"builder"})).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    let mut state = f.worker.state.clone();
+    let status = state.agent(f.agent).unwrap().activity_status();
+    let fence = f.worker.native_interrupt_fence(&state, f.agent).unwrap();
+    state
+        .post_bus_notice(f.room, None, "unrelated room traffic".into(), f.now)
+        .unwrap();
+    assert!(f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &fence)
+        .unwrap());
+    assert!(!state.agent(f.agent).unwrap().interrupt_pending);
+    assert_eq!(state.request(lead).unwrap(), &before);
+    assert_eq!(state.request(queued).unwrap(), &before_queued);
+    assert_eq!(state.agent(f.agent).unwrap().activity_status(), status);
+}
+
+#[test]
+fn late_native_completion_preserves_a_newer_same_obligation_interrupt() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    interrupt(&mut f, json!({"agent":"builder"}));
+    let old = f
+        .worker
+        .native_interrupt_fence(&f.worker.state, f.agent)
+        .unwrap();
+    interrupt(&mut f, json!({"agent":"builder"}));
+    let mut state = f.worker.state.clone();
+    assert!(!f
+        .worker
+        .complete_native_interrupt(
+            &mut state,
+            f.agent,
+            &old,
+            "terminal",
+            "session",
+            Some("turn-1"),
+            f.now
+        )
+        .unwrap());
+    assert!(state.agent(f.agent).unwrap().interrupt_pending);
+    assert!(!state.request(lead).unwrap().settled());
+}
+
+#[test]
+fn native_interrupt_attempt_is_not_reused_after_pruning_or_coordinator_reopen() {
+    let mut f = Fixture::new(Provider::Codex);
+    running(&mut f, "work", "turn-1");
+    interrupt(&mut f, json!({"agent":"builder"}));
+    let old = f
+        .worker
+        .native_interrupt_fence(&f.worker.state, f.agent)
+        .unwrap();
+    let saved = f.worker.state.clone();
+    f.worker.interrupt_attempts.latest.clear();
+    let mut state = saved.clone();
+    assert!(!f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &old)
+        .unwrap());
+    interrupt(&mut f, json!({"agent":"builder"}));
+    assert!(!f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &old)
+        .unwrap());
+    // Drop the original lease while retaining the old fence and its epoch.
+    let dummy = Worker::open(f.dir.join("dummy"), Box::new(Native(f.native.clone()))).unwrap();
+    drop(std::mem::replace(&mut f.worker, dummy));
+    f.worker = Worker::open(f.dir.clone(), Box::new(Native(f.native.clone()))).unwrap();
+    f.worker.save(saved.clone()).unwrap();
+    assert!(f.worker.native_interrupt_fence(&saved, f.agent).is_none());
+    interrupt(&mut f, json!({"agent":"builder"}));
+    assert_eq!(
+        f.worker.interrupt_attempts.serial, 1,
+        "force the same serial in a new epoch"
+    );
+    let mut state = f.worker.state.clone();
+    assert!(!f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &old)
+        .unwrap());
+    assert!(state.agent(f.agent).unwrap().interrupt_pending);
+}
+
+#[cfg(unix)]
+#[test]
+fn native_interrupt_attempt_does_not_roll_back_when_model_save_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    interrupt(&mut f, json!({"agent":"builder"}));
+    let old = f
+        .worker
+        .native_interrupt_fence(&f.worker.state, f.agent)
+        .unwrap();
+    std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = f.worker.control_interrupt(&json!({"agent":"builder"}));
+    std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(failed.is_err(), "the admission's model save must fail");
+    let mut state = f.worker.state.clone();
+    assert!(!f
+        .worker
+        .clear_unconfirmed_native_interrupt(&mut state, f.agent, &old)
+        .unwrap());
+    assert!(state.agent(f.agent).unwrap().interrupt_pending);
+    assert!(!state.request(lead).unwrap().settled());
+}
