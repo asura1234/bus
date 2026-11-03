@@ -611,7 +611,7 @@ async fn launch_prompt_precmd_assignment_launches_on_the_zle_mark() {
     wait_for_text(&runtime, "READY>").await;
     wait_for_prompt(&runtime).await;
     assert!(
-        runtime.launch_returned_to_prompt(),
+        runtime.test_prompt_observed(),
         "precmd reset must still emit a real mark"
     );
     let (mut app, target) = app_with_prompt_runtime(runtime);
@@ -659,7 +659,7 @@ async fn launch_prompt_noisy_rc_waits_for_the_actual_prompt() {
     assert!(started.elapsed() >= Duration::from_secs(10));
     wait_for_prompt(prompt_runtime(&app)).await;
     assert!(
-        prompt_runtime(&app).launch_returned_to_prompt(),
+        prompt_runtime(&app).test_prompt_observed(),
         "only real prompt evidence permits launch"
     );
     try_prompt_launch(&mut app, &target).expect("the completed noisy rc reaches its real prompt");
@@ -687,10 +687,7 @@ async fn launch_prompt_real_mark_launches_without_an_elapsed_gate() {
         let runtime = fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
         wait_for_text(&runtime, "READY>").await;
         wait_for_prompt(&runtime).await;
-        assert!(
-            runtime.launch_returned_to_prompt(),
-            "fixture must emit the mark"
-        );
+        assert!(runtime.test_prompt_observed(), "fixture must emit the mark");
         let (mut app, target) = app_with_prompt_runtime(runtime);
         let launch_started = std::time::Instant::now();
         try_prompt_launch(&mut app, &target)
@@ -787,7 +784,7 @@ async fn launch_prompt_zle_survives_precmd_reset_without_an_elapsed_fallback() {
         "the primary ZLE prompt must emit real readiness"
     );
     assert!(
-        runtime.launch_returned_to_prompt(),
+        runtime.test_prompt_observed(),
         "this must be actual prompt evidence"
     );
     drop(runtime);
@@ -949,7 +946,7 @@ async fn launch_prompt_automatic_image_handoff_rejects_the_old_prompt_without_in
     assert_eq!(runtime.child_pid(), Some(pid));
     assert_ne!(crate::platform::process_image(pid), Some(old_image));
     assert!(
-        runtime.launch_returned_to_prompt(),
+        runtime.test_prompt_observed(),
         "old mark is retained until the identity check"
     );
     let (mut app, target) = app_with_prompt_runtime(runtime);
@@ -981,7 +978,7 @@ async fn launch_prompt_relative_shell_uses_the_panes_cwd_for_image_proof() {
             &dir,
         );
         wait_for_prompt(&runtime).await;
-        assert!(runtime.launch_returned_to_prompt());
+        assert!(runtime.test_prompt_observed());
         assert!(available_shell_name(&runtime).is_some());
         drop(runtime);
         std::fs::remove_dir_all(dir).unwrap();

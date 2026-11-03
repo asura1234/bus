@@ -20,6 +20,18 @@ pane failures end unsettled waits with `agent_unavailable` and a `delivery_error
 while retaining the request for recovery. Temporary readiness waits and an
 unavailable native poll do not prove terminal failure.
 
+Launch ownership stays pending while the shell input transaction waits for a
+prompt, verifies the exact command, or submits Enter. A shell return requires a
+later primary prompt reporting the submitted attempt ID and no live provider.
+Bash allocates a prompt cycle once in its prompt hook and renders that cycle
+in PS1 after user expansions; redisplaying the same prompt cannot end a launch.
+This applies to fresh, resume and restart launches without changing deadlines.
+
+Native logs record `bus.agent.launch_phase` with the attempt ID, writer phase
+and prompt cycle. `bus.agent.identity_cleared` names the return, process exit,
+provider replacement or disappearance that retired ownership. An input failure
+before Enter remains distinct from an uncertain Enter write.
+
 ## Run-scoped permission bypass
 
 `bus --yolo` and `./run dev --yolo` add a permission-bypass flag to every
