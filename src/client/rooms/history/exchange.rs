@@ -107,15 +107,7 @@ impl History {
             filters,
             submission_signature(submissions),
         );
-        if self.key.is_some_and(|previous| {
-            previous.0 == key.0
-                && previous.1 == key.1
-                && previous.2 == key.2
-                && previous.4 == key.4
-                && previous.5 == key.5
-                && previous.6 == key.6
-                && (previous.3 == key.3 || self.age_valid.contains(&now))
-        }) {
+        if self.reusable_layout(key, now) {
             self.key = Some(key);
             return &self.lines;
         }
@@ -196,6 +188,18 @@ impl History {
             ),
         );
         &self.lines
+    }
+
+    fn reusable_layout(&self, key: LayoutKey, now: u64) -> bool {
+        self.key.is_some_and(|previous| {
+            previous.0 == key.0
+                && previous.1 == key.1
+                && previous.2 == key.2
+                && previous.4 == key.4
+                && previous.5 == key.5
+                && previous.6 == key.6
+                && (previous.3 == key.3 || self.age_valid.contains(&now))
+        })
     }
 
     fn prepare_source(

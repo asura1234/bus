@@ -390,29 +390,41 @@ fn an_archived_group_still_shows_its_shared_reply_once() {
 
 #[test]
 fn a_rebuild_names_the_layout_input_that_changed() {
-    let key = (1, RoomId(1), 80, 10, None, Default::default());
+    let key = (1, RoomId(1), 80, 10, None, Default::default(), 0);
     assert_eq!(rebuild_reason(None, key), "first");
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(2), 80, 10, None, Default::default())), key),
+        rebuild_reason(
+            Some((1, RoomId(2), 80, 10, None, Default::default(), 0)),
+            key
+        ),
         "room"
     );
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(1), 100, 10, None, Default::default())), key),
+        rebuild_reason(
+            Some((1, RoomId(1), 100, 10, None, Default::default(), 0)),
+            key
+        ),
         "width"
     );
     assert_eq!(
-        rebuild_reason(Some((2, RoomId(1), 80, 9, None, Default::default())), key),
+        rebuild_reason(
+            Some((2, RoomId(1), 80, 9, None, Default::default(), 0)),
+            key
+        ),
         "content"
     );
     assert_eq!(
         rebuild_reason(
-            Some((1, RoomId(1), 80, 10, Some((8, 16)), Default::default())),
+            Some((1, RoomId(1), 80, 10, Some((8, 16)), Default::default(), 0)),
             key
         ),
         "thumbnails"
     );
     assert_eq!(
-        rebuild_reason(Some((1, RoomId(1), 80, 9, None, Default::default())), key),
+        rebuild_reason(
+            Some((1, RoomId(1), 80, 9, None, Default::default(), 0)),
+            key
+        ),
         "minute"
     );
     assert_eq!(
@@ -427,10 +439,18 @@ fn a_rebuild_names_the_layout_input_that_changed() {
                     to_you: true,
                     from_you: false,
                 },
+                0,
             )),
             key
         ),
         "filters"
+    );
+    assert_eq!(
+        rebuild_reason(
+            Some((1, RoomId(1), 80, 10, None, Default::default(), 1)),
+            key
+        ),
+        "submissions"
     );
 }
 

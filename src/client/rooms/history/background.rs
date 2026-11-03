@@ -275,8 +275,6 @@ impl History {
             minute: now / 60_000,
             cell: thumbnails.layout_key(),
         };
-        // A live visited room keeps its completed rows, even while its inputs
-        // change. Deletion releases both these rows and the worker's cache.
         background
             .layouts
             .retain(|id, _| snapshot.state.room(*id).is_some());

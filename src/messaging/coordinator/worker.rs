@@ -418,7 +418,6 @@ impl Worker {
         events: mpsc::Sender<BusEvent>,
         snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
-        // Agents' builds can saturate the machine; control replies must still run.
         crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
         self.compact_history();
         let mut next_poll = std::time::Instant::now();

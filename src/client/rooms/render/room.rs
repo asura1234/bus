@@ -50,8 +50,6 @@ impl BusUi {
             return;
         };
         let width = main.width.saturating_sub(4);
-        // Nothing is ever drawn below the composer. Only the Ctrl+R recall
-        // search titles the composer's top border.
         let title = self.composer_title(room.id);
         let recipients = super::super::recipients::layout(
             local.recipients.iter().filter_map(|id| {

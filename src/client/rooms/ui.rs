@@ -1,7 +1,6 @@
 pub(super) use super::drafts::{
     ComposerSize, LocalRoom, LocalSendStatus, LocalSubmission, Recalled,
 };
-use super::editor::Editor;
 use super::notices::{command_agent, command_room};
 use super::{
     forms::{Form, Rename, Suggestions},
