@@ -178,6 +178,43 @@ pub(super) fn filter_lines(
         })
 }
 
+fn submission_signature(submissions: &BTreeMap<PromptId, LocalSendStatus>) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (prompt, status) in submissions {
+        prompt.0.hash(&mut hash);
+        match status {
+            LocalSendStatus::Pending => 0_u8,
+            LocalSendStatus::Failed => 1_u8,
+        }
+        .hash(&mut hash);
+    }
+    hash.finish()
+}
+
+/// Which layout input changed, for the rebuild's slow-operation detail.
+fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str {
+    let Some((signature, room, width, minute, thumbnails, filters, submissions)) = previous else {
+        return "first";
+    };
+    if room != next.1 {
+        "room"
+    } else if width != next.2 {
+        "width"
+    } else if signature != next.0 {
+        "content"
+    } else if thumbnails != next.4 {
+        "thumbnails"
+    } else if filters != next.5 {
+        "filters"
+    } else if submissions != next.6 {
+        "submissions"
+    } else if minute != next.3 {
+        "minute"
+    } else {
+        "unchanged"
+    }
+}
+
 #[derive(Default)]
 pub(super) struct History {
     key: Option<LayoutKey>,
@@ -207,6 +244,18 @@ impl History {
 
     pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {
         self.displayed_filters
+    }
+
+    fn reusable_layout(&self, key: LayoutKey, now: u64) -> bool {
+        self.key.is_some_and(|previous| {
+            previous.0 == key.0
+                && previous.1 == key.1
+                && previous.2 == key.2
+                && previous.4 == key.4
+                && previous.5 == key.5
+                && previous.6 == key.6
+                && (previous.3 == key.3 || self.age_valid.contains(&now))
+        })
     }
 
     pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {

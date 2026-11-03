@@ -2,7 +2,8 @@
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
 use super::{
-    History, LayoutKey, Line, LinkScope, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone,
+    rebuild_reason, submission_signature, History, LayoutKey, Line, LinkScope, MarkdownSource,
+    RowAnchor, RowKind, ThumbnailRow, Tone,
 };
 use crate::messaging::model::{
     AgentId, Author, BusState, Prompt, Request, RequestId, Room, RoomId,
@@ -188,18 +189,6 @@ impl History {
             ),
         );
         &self.lines
-    }
-
-    fn reusable_layout(&self, key: LayoutKey, now: u64) -> bool {
-        self.key.is_some_and(|previous| {
-            previous.0 == key.0
-                && previous.1 == key.1
-                && previous.2 == key.2
-                && previous.4 == key.4
-                && previous.5 == key.5
-                && previous.6 == key.6
-                && (previous.3 == key.3 || self.age_valid.contains(&now))
-        })
     }
 
     fn prepare_source(
@@ -578,45 +567,6 @@ fn blank_row(anchor: RowAnchor) -> Line {
         rejoin_space: false,
         copy_from: 0,
         anchor,
-    }
-}
-
-/// Which layout input changed, for the rebuild's slow-operation detail.
-fn submission_signature(
-    submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
-) -> u64 {
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for (prompt, status) in submissions {
-        prompt.0.hash(&mut hash);
-        match status {
-            super::LocalSendStatus::Pending => 0_u8,
-            super::LocalSendStatus::Failed => 1_u8,
-        }
-        .hash(&mut hash);
-    }
-    hash.finish()
-}
-
-fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str {
-    let Some((signature, room, width, minute, thumbnails, filters, submissions)) = previous else {
-        return "first";
-    };
-    if room != next.1 {
-        "room"
-    } else if width != next.2 {
-        "width"
-    } else if signature != next.0 {
-        "content"
-    } else if thumbnails != next.4 {
-        "thumbnails"
-    } else if filters != next.5 {
-        "filters"
-    } else if submissions != next.6 {
-        "submissions"
-    } else if minute != next.3 {
-        "minute"
-    } else {
-        "unchanged"
     }
 }
 
