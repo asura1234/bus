@@ -455,3 +455,6 @@ fn a_started_request_is_never_released_by_the_agents_own_turns() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[path = "orchestrator_ordering_test.rs"]
+mod orchestrator_ordering_tests;

@@ -75,11 +75,16 @@ impl Worker {
         changed |= state
             .route_worker_replies(now_ms, &waited)
             .map_err(|e| e.to_string())?;
-        changed |= self.prepare_orchestrator_inboxes(&mut state, now_ms);
         if changed {
             self.save(state)?;
         }
         self.expire_queued_now()?;
+        // Expiry can defer refused reply wakes. Select inbox classes after
+        // that maintenance so diagnostics, steering and submission share a head.
+        let mut state = self.state.clone();
+        if self.prepare_orchestrator_inboxes(&mut state, now_ms) {
+            self.save(state)?;
+        }
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());
         self.withdrawn_at.retain(|id, at| {
