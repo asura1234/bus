@@ -182,6 +182,21 @@ impl Background {
             _thread: thread,
         })
     }
+
+    fn apply_completed(&mut self, key: Key) {
+        let completed = {
+            let mut mailbox = self
+                .shared
+                .mailbox
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            self.shared.ready.store(false, Ordering::Relaxed);
+            mailbox.result.take()
+        };
+        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
+            self.layouts.insert(layout.key.room, layout);
+        }
+    }
 }
 
 impl Drop for Background {
@@ -289,18 +304,7 @@ impl History {
                 .map_or_else(Default::default, |layout| layout.filters);
             background.displayed_room = Some(room);
         }
-        let completed = {
-            let mut mailbox = background
-                .shared
-                .mailbox
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            background.shared.ready.store(false, Ordering::Relaxed);
-            mailbox.result.take()
-        };
-        if let Some(layout) = completed.filter(|layout| layout.key.same_geometry(key)) {
-            background.layouts.insert(layout.key.room, layout);
-        }
+        background.apply_completed(key);
         if let Some(layout) = background
             .layouts
             .get(&room)

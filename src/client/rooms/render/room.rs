@@ -51,15 +51,7 @@ impl BusUi {
         };
         let width = main.width.saturating_sub(4);
         let title = self.composer_title(room.id);
-        let recipients = super::super::recipients::layout(
-            local.recipients.iter().filter_map(|id| {
-                self.snapshot
-                    .state
-                    .agent(*id)
-                    .map(|agent| (agent.id, agent.name.as_str()))
-            }),
-            width,
-        );
+        let recipients = self.recipient_layout(local, width);
         let chat_search = self.chat_search.clone();
         let layout = self.composer_layout(view, main, local, &recipients);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
@@ -137,6 +129,18 @@ impl BusUi {
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+    }
+
+    fn recipient_layout(&self, local: &LocalRoom, width: u16) -> RecipientLayout {
+        super::super::recipients::layout(
+            local.recipients.iter().filter_map(|id| {
+                self.snapshot
+                    .state
+                    .agent(*id)
+                    .map(|agent| (agent.id, agent.name.as_str()))
+            }),
+            width,
+        )
     }
 
     fn paint_history_rows(&self, view: &mut View, content: &[Line], links: &[Vec<Candidate>]) {
