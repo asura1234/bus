@@ -193,14 +193,8 @@ impl Worker {
         Err(message)
     }
 
-    pub(super) fn cleanup_failed_startups(
-        &mut self,
-        infos: &[schema::AgentInfo],
-        _events: &mpsc::Sender<BusEvent>,
-        now_ms: u64,
-    ) -> Result<(), String> {
-        let pending: Vec<_> = self
-            .state
+    fn watched_startups(&self) -> Vec<(super::RoomAgent, AgentStartup)> {
+        self.state
             .agents()
             .filter_map(|agent| {
                 agent
@@ -209,7 +203,16 @@ impl Worker {
                     .filter(|_| !agent.deletion_pending)
                     .map(|startup| (agent.clone(), startup))
             })
-            .collect();
+            .collect()
+    }
+
+    pub(super) fn cleanup_failed_startups(
+        &mut self,
+        infos: &[schema::AgentInfo],
+        _events: &mpsc::Sender<BusEvent>,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let pending = self.watched_startups();
         for (agent, mut startup) in pending {
             if agent.missing_binary.is_some() {
                 continue;
