@@ -109,7 +109,7 @@ pub(super) struct Group {
     pub(super) series: Series,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct SlowRequest {
     pub(super) request_id: u64,
     pub(super) message_id: u64,
@@ -130,6 +130,8 @@ pub(super) struct Dashboard {
     pub(super) providers: BTreeMap<String, Series>,
     pub(super) recipients: BTreeMap<String, Group>,
     pub(super) slowest: Vec<SlowRequest>,
+    pub(super) provider_slowest: BTreeMap<String, Vec<SlowRequest>>,
+    pub(super) recipient_slowest: BTreeMap<String, Vec<SlowRequest>>,
 }
 
 #[derive(Default)]
@@ -217,6 +219,8 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
         .collect();
     let mut recipients: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut slowest = Vec::new();
+    let mut provider_slowest: BTreeMap<String, Vec<SlowRequest>> = BTreeMap::new();
+    let mut recipient_slowest: BTreeMap<String, Vec<SlowRequest>> = BTreeMap::new();
     for request in state.requests() {
         let provider = state
             .agent(request.agent_id)
@@ -255,7 +259,7 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
                         phases.insert(name, value);
                     }
                 }
-                slowest.push(SlowRequest {
+                let slow = SlowRequest {
                     request_id: request.id.0,
                     message_id: request.prompt.id.0,
                     recipient_id: request.agent_id.0,
@@ -270,14 +274,26 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
                     hour_start_ms: hour.start_ms,
                     accepted_to_box_ms: Some(total),
                     phases,
-                });
+                };
+                provider_slowest
+                    .entry(provider.into())
+                    .or_default()
+                    .push(slow.clone());
+                recipient_slowest
+                    .entry(request.agent_id.0.to_string())
+                    .or_default()
+                    .push(slow.clone());
+                slowest.push(slow);
             }
         }
     }
-    slowest.sort_by_key(|request| {
-        std::cmp::Reverse((request.accepted_to_box_ms.unwrap_or(0), request.request_id))
-    });
-    slowest.truncate(50);
+    sort_slowest(&mut slowest);
+    for requests in provider_slowest
+        .values_mut()
+        .chain(recipient_slowest.values_mut())
+    {
+        sort_slowest(requests);
+    }
     Dashboard {
         all: all.finish(),
         providers: providers
@@ -289,7 +305,16 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
             .map(|(id, group)| (id, group.finish()))
             .collect(),
         slowest,
+        provider_slowest,
+        recipient_slowest,
     }
+}
+
+fn sort_slowest(requests: &mut Vec<SlowRequest>) {
+    requests.sort_by_key(|request| {
+        std::cmp::Reverse((request.accepted_to_box_ms.unwrap_or(0), request.request_id))
+    });
+    requests.truncate(50);
 }
 
 pub(super) fn hour_with_offset(ms: u64, offset_seconds: i32) -> Option<HourKey> {
