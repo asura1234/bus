@@ -13,6 +13,7 @@ use std::{
 pub(super) struct DraftInput {
     buffered: Option<Vec<u8>>,
     revision: u64,
+    invalidation_revision: u64,
     pending: Option<PendingPaste>,
     working_started: Option<Instant>,
     completed_turn: Option<(Instant, Instant)>,
@@ -26,6 +27,7 @@ impl Default for DraftInput {
         Self {
             buffered: None,
             revision: 0,
+            invalidation_revision: 0,
             pending: None,
             working_started: None,
             completed_turn: None,
@@ -50,6 +52,7 @@ pub(super) struct DraftInputLease {
     io: PaneRuntimeIo,
     replay_safe: std::cell::Cell<bool>,
     revision: u64,
+    invalidation_revision: u64,
 }
 
 impl DraftInput {
@@ -119,12 +122,14 @@ impl DraftInput {
             io: io.clone(),
             replay_safe: std::cell::Cell::new(false),
             revision: input.revision,
+            invalidation_revision: input.invalidation_revision,
         })
     }
 
     pub(super) fn invalidate(state: &SharedDraftInput) {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         state.revision = state.revision.wrapping_add(1);
+        state.invalidation_revision = state.invalidation_revision.wrapping_add(1);
         state.pending = None;
         state.working_started = None;
         state.completed_turn = None;
@@ -164,6 +169,22 @@ impl DraftInputLease {
         if state.revision == self.revision {
             state.pending = Some(pending);
         }
+    }
+
+    pub(super) fn with_uninvalidated<T>(
+        &self,
+        action: impl FnOnce() -> io::Result<T>,
+    ) -> io::Result<T> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("pane input lock poisoned"))?;
+        if state.invalidation_revision != self.invalidation_revision {
+            return Err(io::Error::other(
+                super::submission::PromptNotShown::ComposerBusy,
+            ));
+        }
+        action()
     }
 
     pub(super) fn edited(&self) -> bool {
