@@ -3,6 +3,8 @@ mod background;
 mod exchange;
 mod groups;
 mod markdown;
+mod search;
+mod source;
 mod window;
 mod wrapped_links;
 
@@ -24,11 +26,13 @@ mod phases {
 
 use super::{render::Action, LocalSendStatus};
 use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
+pub(super) use exchange::reply;
 #[cfg(test)]
 use exchange::timestamp;
-pub(super) use exchange::{reply, visible_request};
 use markdown::MarkdownBlock;
 use ratatui::style::Style;
+pub(super) use search::SearchAnchor;
+pub(super) use source::visible_request;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -149,36 +153,22 @@ type LayoutKey = (
     u64,
 );
 
-pub(super) fn filter_lines(
-    lines: Vec<Line>,
-    filters: crate::messaging::model::RoomHistoryFilters,
-) -> Vec<Line> {
-    if filters == Default::default() {
+/// Projection already accepted each message before Markdown. Keep only useful gaps.
+fn clean_gaps(lines: Vec<Line>, filtered: bool) -> Vec<Line> {
+    if !filtered {
         return lines;
     }
-    let accepts = |line: &Line| {
-        (filters.to_you && line.to_developer) || (filters.from_you && line.from_developer)
-    };
-    let accepted: Vec<bool> = lines.iter().map(accepts).collect();
-    lines
-        .iter()
-        .enumerate()
-        .filter(|(index, line)| {
-            accepted[*index]
-                || line.anchor.kind == RowKind::Gap
-                    && (*index > 0 && accepted[index - 1]
-                        || *index + 1 < accepted.len() && accepted[index + 1])
-        })
-        .fold(Vec::new(), |mut filtered, (_, line)| {
-            if line.anchor.kind != RowKind::Gap
-                || filtered
-                    .last()
-                    .is_some_and(|previous: &Line| previous.anchor.kind != RowKind::Gap)
-            {
-                filtered.push(line.clone());
-            }
-            filtered
-        })
+    let mut result: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.anchor.kind != RowKind::Gap
+            || result
+                .last()
+                .is_some_and(|last| last.anchor.kind != RowKind::Gap)
+        {
+            result.push(line);
+        }
+    }
+    result
 }
 
 fn submission_signature(submissions: &BTreeMap<PromptId, LocalSendStatus>) -> u64 {
@@ -247,6 +237,10 @@ impl History {
     /// Rows from the latest `lines` call, as currently displayed.
     pub fn cached(&self) -> &[Line] {
         &self.lines
+    }
+
+    pub fn has_older(&self) -> bool {
+        self.has_older
     }
 
     pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {

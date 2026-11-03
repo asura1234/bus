@@ -1,8 +1,8 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::groups::{Exchange, ReplyGroups};
-use super::window::prompt_to_you;
+use super::groups::ReplyGroups;
+use super::source::{visible_request, Direction, Exchange};
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
@@ -126,10 +126,8 @@ impl History {
             self.rebuilt += 1;
             let prompt = exchange.prompt;
             update_age_validity(&mut age_valid, prompt.submitted_at_ms, now);
-            let prompt_matches = !filtered
-                || filters.from_you && prompt.author == Author::Developer
-                || filters.to_you && prompt_to_you(prompt);
-            if prompt_matches {
+            let direction = Direction::prompt(prompt);
+            if direction.accepts(filters) {
                 self.push_prompt_lines(
                     &mut lines,
                     &mut active_markdown,
@@ -140,6 +138,7 @@ impl History {
                     now,
                     thumbnails,
                     submissions,
+                    direction,
                 );
             }
 
@@ -161,7 +160,7 @@ impl History {
         self.key = Some(key);
         self.displayed_filters = filters;
         self.loaded_limit = self.record_limit;
-        self.lines = super::filter_lines(lines, filters).into();
+        self.lines = super::clean_gaps(lines, filtered).into();
         self.age_valid = age_valid;
         REBUILD.record_op(
             started.elapsed(),
@@ -211,6 +210,7 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
         submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+        direction: Direction,
     ) {
         let start = lines.len();
         let header_timer = super::phases::HEADER.start();
@@ -279,10 +279,9 @@ impl History {
         self.rendered += usize::from(cold);
         self.projected += usize::from(projected);
         push_prompt_files(lines, prompt, width, thumbnails);
-        let to_developer = prompt_to_you(prompt);
         for line in &mut lines[start..] {
-            line.to_developer = to_developer;
-            line.from_developer = prompt.author == Author::Developer;
+            line.to_developer = direction.to_you;
+            line.from_developer = direction.from_you;
         }
     }
 
@@ -315,11 +314,13 @@ impl History {
             let (text, quote) = reference
                 .as_deref()
                 .map_or_else(|| exchange_reply(request), |text| (text, None));
-            if filters.to_you
-                && !(quote.is_some()
+            let direction = Direction {
+                to_you: quote.is_some()
                     && request
-                        .is_some_and(|request| groups.shared_to_developer(state, request, text)))
-            {
+                        .is_some_and(|request| groups.shared_to_developer(state, request, text)),
+                from_you: false,
+            };
+            if !direction.accepts(filters) {
                 continue;
             }
             // One blank row between replies, as at every other block
@@ -388,10 +389,8 @@ impl History {
             } else {
                 push_body(lines, text, width, "    ", reply_anchor);
             }
-            let to_developer = quote.is_some()
-                && request.is_some_and(|request| groups.shared_to_developer(state, request, text));
             for line in &mut lines[start..] {
-                line.to_developer = to_developer;
+                line.to_developer = direction.to_you;
             }
         }
     }
@@ -407,11 +406,6 @@ fn update_age_validity(valid: &mut std::ops::Range<u64>, submitted_at_ms: u64, n
             valid.end = valid.end.min(expires);
         }
     }
-}
-
-pub(super) fn explicitly_to_you(text: &str) -> bool {
-    crate::messaging::attention::has_you_mention(text)
-        || crate::messaging::attention::waiting_tag_action(text).is_some()
 }
 
 fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor: RowAnchor) {
@@ -489,50 +483,6 @@ fn wrap_header(
             }
         })
         .collect()
-}
-
-/// Routing and diagnostic envelopes have neither a chat body nor a shared-reply slot.
-pub(in crate::client::rooms) fn visible_request(request: &Request) -> bool {
-    !request.is_error_report()
-        && (!request.bus_generated || !matches!(request.prompt.author, Author::Agent(_)))
-}
-
-/// The room's history entries in display order: requests grouped by prompt,
-/// then authored notices.
-pub(super) fn exchanges<'a>(
-    state: &'a BusState,
-    room: &'a Room,
-) -> BTreeMap<(u64, u64), Exchange<'a>> {
-    let mut exchanges = BTreeMap::new();
-    // Worker notifications are provider-routing envelopes, not authored chat.
-    // Their actual replies already belong to the source requests (and autonomous
-    // finals have their own developer post). Never project diagnostic envelopes
-    // or a provider's answer to one into history, including archived requests.
-    for request in state.requests().filter(|r| r.room_id == room.id) {
-        let prompt = &request.prompt;
-        if !visible_request(request) {
-            continue;
-        }
-        exchanges
-            .entry((prompt.submitted_at_ms, prompt.id.0))
-            .or_insert_with(|| Exchange {
-                prompt,
-                requests: BTreeMap::new(),
-            })
-            .requests
-            .insert(request.agent_id, request);
-    }
-    // Bus notices for the developer read like messages addressed to nobody.
-    for prompt in state.notices(room.id) {
-        exchanges.insert(
-            (prompt.submitted_at_ms, prompt.id.0),
-            Exchange {
-                prompt,
-                requests: BTreeMap::new(),
-            },
-        );
-    }
-    exchanges
 }
 
 fn blank_row(anchor: RowAnchor) -> Line {

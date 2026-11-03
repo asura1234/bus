@@ -690,19 +690,6 @@ impl BusState {
             .collect()
     }
 
-    /// Every group's members by lead, oldest first: `group_members` for all
-    /// leads in one pass, for views that place every group at once.
-    pub(crate) fn groups(&self) -> std::collections::BTreeMap<RequestId, Vec<RequestId>> {
-        let mut groups = std::collections::BTreeMap::<RequestId, Vec<RequestId>>::new();
-        for request in self.requests() {
-            let lead = request.reply_key();
-            if lead != request.id {
-                groups.entry(lead).or_default().push(request.id);
-            }
-        }
-        groups
-    }
-
     /// Real blocked-worker notices take precedence in an orchestrator's inbox.
     /// Use the persisted dialog routing identity, never sender-authored text.
     /// Keep FIFO order within each class. Idle delivery gives each notice its
