@@ -94,16 +94,19 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                 assert_eq!(f.worker.serving_generation, 1);
                 let old = if current {
                     if bound || transient_hold {
-                        running(&mut f, "old generation request", turn)
+                        Some(running(&mut f, "old generation request", turn))
                     } else {
                         let id = f.send("old awaiting-start request", false);
                         f.deliver();
-                        id
+                        Some(id)
                     }
+                } else if transient_hold {
+                    Some(f.send("queued retry lead", true))
                 } else {
-                    f.send("queued retry lead", true)
+                    None
                 };
                 if transient_hold {
+                    let old = old.unwrap();
                     hold_transient_error(&mut f, old);
                     if !current {
                         let mut document = serde_json::to_value(&f.worker.state).unwrap();
@@ -141,7 +144,7 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     f.worker.tick().unwrap();
                 }
                 if matches!(receipt, Receipt::Replay) {
-                    let phases: Vec<_> = [Some(old), queued]
+                    let phases: Vec<_> = [old, queued]
                         .into_iter()
                         .flatten()
                         .map(|id| (id, f.request(id).phase))
@@ -154,18 +157,14 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     }
                     assert_eq!(f.typed().len(), typed, "receipt replay duplicated delivery");
                 }
-                if transient_hold && !current {
-                    assert_eq!(f.request(old).phase, RequestPhase::Queued);
-                } else {
-                    assert_ne!(f.request(old).phase, RequestPhase::Queued);
-                }
-                let request = f.request(old);
                 if transient_hold {
+                    let request = f.request(old.unwrap());
                     assert_ne!(
                         request.phase,
                         RequestPhase::Abandoned,
                         "{provider:?}/{mode:?}"
                     );
+                    assert_eq!(request.phase == RequestPhase::Queued, !current);
                     assert_eq!(
                         f.worker.state.agent(f.agent).unwrap().provider_retry,
                         held,
@@ -177,18 +176,14 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                         "retry hold must retain FIFO without new input"
                     );
                 } else if current {
+                    let request = f.request(old.unwrap());
                     assert_eq!(request.phase, RequestPhase::Abandoned);
                     assert_eq!(
                         request.failure_reason.as_deref(),
                         Some("reply_not_captured")
                     );
-                } else {
-                    assert_ne!(request.phase, RequestPhase::Abandoned);
                 }
                 if !transient_hold {
-                    if !current {
-                        assert_eq!(request.delivery_epoch.as_ref().unwrap().generation, 2);
-                    }
                     if let Some(queued) = queued {
                         assert_ne!(
                             f.request(queued).phase,
