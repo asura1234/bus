@@ -231,7 +231,7 @@ impl PtyIoActor {
             let write_tx = write_tx.clone();
             let accepting = Arc::clone(&accepting);
             std::thread::spawn(move || {
-                run_input_forwarder(&mut data_rx, write_tx, accepting);
+                run_input_forwarder(&mut data_rx, write_tx, accepting, pane_id);
                 debug!(pane_id, "windows pty input thread exiting");
             });
         }
@@ -339,6 +339,7 @@ fn run_input_forwarder(
     data_rx: &mut mpsc::Receiver<PtyIoDataCommand>,
     write_tx: std_mpsc::Sender<PtyIoWriteCommand>,
     accepting: Arc<Mutex<bool>>,
+    pane_id: u32,
 ) {
     while let Some(command) = data_rx.blocking_recv() {
         match command {
@@ -369,12 +370,14 @@ fn run_input_forwarder(
                                 .unwrap_or_else(|error| error.into_inner())
                                 .text_written_at_ms
                                 .get_or_insert(crate::utils::time::now_ms());
+                            tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.text_flushed", pane_id);
                         }
                         // A started text write is committed. Finish Enter even if the caller
                         // stops waiting so a timeout cannot leave a partial prompt.
                         std::thread::sleep(delay);
                         // Enqueue under the gate so shutdown stays ordered against Enter, but
                         // wait outside it: shutdown must not block behind a backpressured write.
+                        let record_enter_write = !enter.is_empty();
                         let completion = {
                             let accepting = accepting
                                 .lock()
@@ -385,11 +388,14 @@ fn run_input_forwarder(
                             send_submission_part(&write_tx, enter, None)?
                         };
                         wait_submission_part(completion).map(|()| {
-                            timestamps
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .enter_written_at_ms
-                                .get_or_insert(crate::utils::time::now_ms());
+                            if record_enter_write {
+                                timestamps
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .enter_written_at_ms
+                                    .get_or_insert(crate::utils::time::now_ms());
+                                tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter_flushed", pane_id);
+                            }
                         })
                     })
                 };

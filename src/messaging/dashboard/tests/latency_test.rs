@@ -144,3 +144,34 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
         "405 Method Not Allowed"
     );
 }
+
+#[test]
+fn provider_slowest_drilldown_retains_requests_outside_global_top_fifty() {
+    let mut state = BusState::new();
+    let room = state.create_room("latency").unwrap();
+    let claude = state
+        .create_agent(
+            room,
+            "claude",
+            Provider::ClaudeCode,
+            "/scratch".into(),
+            None,
+        )
+        .unwrap();
+    let codex = state
+        .create_agent(room, "codex", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    let base = 1_793_577_600_000;
+    for index in 0..50 {
+        add_request(&mut state, room, claude, base + index * 1_000, 100, true);
+    }
+    let codex_request = add_request(&mut state, room, codex, base + 50_000, 1, true);
+    let report = snapshot(&state, singapore_hour);
+    assert_eq!(report.providers["codex"].phases["accepted_to_box"].n, 1);
+    assert_eq!(report.slowest.len(), 50);
+    assert_eq!(report.provider_slowest["codex"].len(), 1);
+    assert_eq!(
+        report.provider_slowest["codex"][0].request_id,
+        codex_request.0
+    );
+}
