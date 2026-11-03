@@ -126,6 +126,11 @@ fn kimi_yolo_normalizes_resume_argv_and_replays_saved_options_normally() {
             vec!["-ymVALUE"],
         ),
         (
+            vec!["-ymcustom", "--yolo"],
+            vec!["--auto", "-mcustom"],
+            vec!["-ymcustom", "--yolo"],
+        ),
+        (
             vec!["-ym", "VALUE"],
             vec!["--auto", "-m", "VALUE"],
             vec!["-ym", "VALUE"],
@@ -214,4 +219,123 @@ fn launch_rejects_attached_session_and_prompt_short_options() {
             );
         }
     }
+}
+
+#[test]
+fn native_kimi_accepts_normalized_short_option_combinations() {
+    let Ok(binary) = std::env::var("BUS_KIMI_NATIVE_BINARY") else {
+        eprintln!("set BUS_KIMI_NATIVE_BINARY to run the native property probe");
+        return;
+    };
+    struct Restore(Option<std::ffi::OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("BUS_YOLO", value),
+                None => std::env::remove_var("BUS_YOLO"),
+            }
+        }
+    }
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _restore = Restore(std::env::var_os("BUS_YOLO"));
+    let root = crate::utils::test_temp::unique_temp_path("kimi-native-yolo-options");
+    let home = root.join("home");
+    let kimi_home = root.join("kimi-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&kimi_home).unwrap();
+    fn random(seed: &mut u64) -> usize {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (*seed >> 32) as usize
+    }
+    let mut seed = 0x4b494d495f594f4c4f;
+    for case in 0..48 {
+        let model = ["alpha", "custom", "beta", "gamma"][random(&mut seed) % 4];
+        let y = "y".repeat(1 + random(&mut seed) % 3);
+        let mut units = Vec::new();
+        if random(&mut seed) % 3 == 0 {
+            if random(&mut seed) % 2 == 0 {
+                units.push(vec![format!("-{y}m{model}")]);
+            } else {
+                units.push(vec![format!("-{y}m"), model.to_owned()]);
+            }
+        } else {
+            units.push(vec![if random(&mut seed) % 2 == 0 {
+                "--yolo".to_owned()
+            } else {
+                format!("-{y}")
+            }]);
+            units.push(match random(&mut seed) % 4 {
+                0 => vec!["--model".into(), model.into()],
+                1 => vec![format!("--model={model}")],
+                2 => vec!["-m".into(), model.into()],
+                _ => vec![format!("-m{model}")],
+            });
+        }
+        if random(&mut seed) % 2 == 0 {
+            units.push(vec![
+                "--output-format".into(),
+                if random(&mut seed) % 2 == 0 {
+                    "text"
+                } else {
+                    "stream-json"
+                }
+                .into(),
+            ]);
+        }
+        if random(&mut seed) % 2 == 0 {
+            units.push(vec!["--add-dir".into(), "/tmp".into()]);
+        }
+        if random(&mut seed) % 2 == 0 {
+            units.push(vec!["--skills-dir".into(), "/tmp".into()]);
+        }
+        if random(&mut seed) % 2 == 0 {
+            units.push(vec!["--auto".into()]);
+        }
+        for index in (1..units.len()).rev() {
+            units.swap(index, random(&mut seed) % (index + 1));
+        }
+        let saved: Vec<String> = units.into_iter().flatten().collect();
+        super::kimi::launch::validate_owned_launch(&saved).unwrap();
+        std::env::remove_var("BUS_YOLO");
+        let mut normal = saved.clone();
+        launch::apply_run_permissions(ProviderKind::Kimi, &mut normal);
+        assert_eq!(normal, saved, "normal replay changed case {case}");
+        assert_eq!(super::kimi::launch::resumable_options(&saved), saved);
+
+        std::env::set_var("BUS_YOLO", "1");
+        let mut fresh = saved.clone();
+        launch::apply_run_permissions(ProviderKind::Kimi, &mut fresh);
+        let mut resumed = super::kimi::launch::resumable_options(&saved);
+        launch::apply_run_permissions(ProviderKind::Kimi, &mut resumed);
+        assert_eq!(fresh, resumed, "fresh/resume mismatch in case {case}");
+        assert_eq!(fresh.iter().filter(|arg| *arg == "--auto").count(), 1);
+        assert!(!fresh
+            .iter()
+            .any(|arg| super::kimi::launch::is_yolo_option(arg)));
+        super::kimi::launch::validate_run_permissions(&fresh).unwrap();
+        super::kimi::launch::validate_run_permissions(&resumed).unwrap();
+        let output = std::process::Command::new(&binary)
+            .args(&fresh)
+            .arg("--help")
+            .env_clear()
+            .envs([
+                ("HOME", home.as_os_str()),
+                ("KIMI_CODE_HOME", kimi_home.as_os_str()),
+                ("PATH", std::ffi::OsStr::new("/usr/bin:/bin")),
+                ("KIMI_CODE_NO_AUTO_UPDATE", std::ffi::OsStr::new("1")),
+                ("KIMI_DISABLE_OAUTH_LOCK", std::ffi::OsStr::new("0")),
+                ("TERM", std::ffi::OsStr::new("dumb")),
+                ("NO_COLOR", std::ffi::OsStr::new("1")),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "native Kimi rejected case {case}: saved={saved:?}, effective={fresh:?}, stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

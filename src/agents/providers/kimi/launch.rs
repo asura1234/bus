@@ -365,20 +365,57 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
     Ok(changed)
 }
 
+const SHORT_OPTIONS: &[(char, bool)] = &[
+    ('V', false),
+    ('S', true),
+    ('c', false),
+    ('y', false),
+    ('m', true),
+    ('p', true),
+    ('h', false),
+];
+
+struct ParsedShortOption {
+    yolo: bool,
+    normalized: Option<String>,
+    takes_next_value: bool,
+}
+
+fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
+    if name.len() < 2 || !name.starts_with('-') || name.starts_with("--") {
+        return None;
+    }
+    let mut yolo = false;
+    let mut normalized = "-".to_owned();
+    let mut takes_next_value = false;
+    for (index, flag) in name.char_indices().skip(1) {
+        let takes_value = SHORT_OPTIONS
+            .iter()
+            .find_map(|(candidate, takes_value)| (*candidate == flag).then_some(*takes_value))?;
+        if flag == 'y' {
+            yolo = true;
+        } else {
+            normalized.push(flag);
+        }
+        if takes_value {
+            let value_start = index + flag.len_utf8();
+            normalized.push_str(&name[value_start..]);
+            takes_next_value = value_start == name.len();
+            break;
+        }
+    }
+    Some(ParsedShortOption {
+        yolo,
+        normalized: (normalized.len() > 1).then_some(normalized),
+        takes_next_value,
+    })
+}
+
 pub(crate) fn normalize_yolo_option(name: &str) -> Option<Option<String>> {
     if name == "--yolo" {
         return Some(None);
     }
-    let flags = name.strip_prefix('-')?;
-    let short = flags.strip_prefix("y")?;
-    let trailing = short.trim_start_matches('y');
-    if trailing.is_empty() {
-        return Some(None);
-    }
-    trailing
-        .strip_prefix('m')
-        .filter(|_| !flags.starts_with('-'))
-        .map(|_| Some(format!("-{trailing}")))
+    parse_short_option(name).and_then(|option| option.yolo.then_some(option.normalized))
 }
 
 pub(crate) fn is_yolo_option(name: &str) -> bool {
@@ -386,13 +423,16 @@ pub(crate) fn is_yolo_option(name: &str) -> bool {
 }
 
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
-    if is_yolo_option(name) {
-        return Some(usize::from(name.ends_with('m')));
+    if name == "--yolo" {
+        return Some(0);
+    }
+    if let Some(option) = parse_short_option(name) {
+        return Some(usize::from(option.takes_next_value));
     }
     match name {
-        "-S" | "--session" | "--agent-file" | "--agent" | "-m" | "--model" | "--output-format"
-        | "-p" | "--prompt" | "--skills-dir" | "--add-dir" => Some(1),
-        "--auto" | "--continue" | "-c" | "--plan" | "--help" | "-h" | "--version" | "-V" => Some(0),
+        "--session" | "--agent-file" | "--agent" | "--model" | "--output-format" | "--prompt"
+        | "--skills-dir" | "--add-dir" => Some(1),
+        "--auto" | "--continue" | "--plan" | "--help" | "--version" => Some(0),
         _ => None,
     }
 }
