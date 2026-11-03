@@ -162,26 +162,59 @@ fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_rele
 }
 
 #[test]
-fn delete_unknown_launch_identity_fails_closed_without_transport() {
-    let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![]);
-    worker
-        .state
-        .set_agent_runtime_identity(
-            agent,
-            AgentRuntimeIdentity {
-                launch_id: Some("uncertain-launch".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let (events, _) = mpsc::channel();
-    assert!(worker
-        .command(BusCommand::DeleteAgent(agent), &events)
-        .is_err());
-    assert!(worker.state.agent(agent).unwrap().deletion_pending);
-    assert!(calls.lock().unwrap().is_empty());
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
+fn delete_unknown_launch_identity_fails_closed_after_native_ownership_lookup() {
+    for lookup in [
+        native_agents(Some("bus-r1-a2".into())),
+        Err(TransportError {
+            message: "ownership lookup failed".into(),
+            code: None,
+            definitely_rejected: false,
+        }),
+        Ok(ResponseResult::Ok {}),
+    ] {
+        let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![lookup]);
+        assert_eq!((room.0, agent.0), (1, 2), "native_agents names this agent");
+        let identity = AgentRuntimeIdentity {
+            launch_id: Some("uncertain-launch".into()),
+            ..Default::default()
+        };
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity.clone())
+            .unwrap();
+        let request = queue(&mut worker, room, agent, "keep while ownership is unproven");
+        let before = serde_json::to_value(worker.state.request(request).unwrap()).unwrap();
+        let (events, _) = mpsc::channel();
+        assert!(worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .is_err());
+        assert!(worker.state.agent(agent).unwrap().deletion_pending);
+        assert_eq!(
+            worker.state.agent(agent).unwrap().runtime_identity,
+            identity
+        );
+        assert!(worker.state.room(room).is_some());
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            serde_json::to_value(worker.state.request(request).unwrap()).unwrap(),
+            before
+        );
+        // Lookup is required; no close or provider input is authorized by
+        // owned, failed, or unexpected native ownership evidence.
+        assert_eq!(*calls.lock().unwrap(), vec!["agent.list"]);
+        drop(worker);
+        let recovered = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(recovered.agent(agent).unwrap().deletion_pending);
+        assert_eq!(recovered.agent(agent).unwrap().runtime_identity, identity);
+        assert_eq!(
+            serde_json::to_value(recovered.request(request).unwrap()).unwrap(),
+            before
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
