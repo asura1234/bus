@@ -75,14 +75,24 @@ impl Worker {
         changed |= state
             .route_worker_replies(now_ms, &waited)
             .map_err(|e| e.to_string())?;
+        changed |= self.prepare_orchestrator_inboxes(&mut state, now_ms);
         if changed {
             self.save(state)?;
         }
         self.expire_queued_now()?;
-        // Expiry can defer refused reply wakes. Select inbox classes after
-        // that maintenance so diagnostics, steering and submission share a head.
+        // Expiry can defer refused reply wakes. Restore only inbox ordering;
+        // keep the existing background-owner release at its earlier boundary.
         let mut state = self.state.clone();
-        if self.prepare_orchestrator_inboxes(&mut state, now_ms) {
+        let inboxes: Vec<_> = state
+            .agents()
+            .filter(|agent| agent.orchestrates.is_some())
+            .map(|agent| agent.id)
+            .collect();
+        let mut changed = false;
+        for agent in inboxes {
+            changed |= state.prioritize_orchestrator_dialogs(agent);
+        }
+        if changed {
             self.save(state)?;
         }
         self.delivery_waits
