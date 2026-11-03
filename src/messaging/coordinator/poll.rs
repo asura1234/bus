@@ -41,10 +41,9 @@ impl Worker {
             );
             self.poll_failures = 0;
         }
-        if let Some(generation) = infos.iter().map(|info| info.generation).max() {
-            self.serving_generation = generation;
-        }
         let mut state = self.state.clone();
+        // Retain the previous observation as legacy evidence until this poll's
+        // migrated state is durable; a failed save must not erase that boundary.
         migrate_legacy_requests(&mut state, &infos, self.serving_generation)?;
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
@@ -105,6 +104,9 @@ impl Worker {
         }
         self.directory_checks.poll(&mut state)?;
         self.apply_poll(state)?;
+        if let Some(generation) = infos.iter().map(|info| info.generation).max() {
+            self.serving_generation = generation;
+        }
         self.close_exited_terminals()?;
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
@@ -187,7 +189,11 @@ fn migrate_legacy_requests(
         };
         let epoch = DeliveryEpoch {
             generation: if terminal == &info.terminal_id && pane == &info.pane_id {
-                generation
+                if generation == 0 {
+                    info.generation
+                } else {
+                    generation
+                }
             } else {
                 0
             },

@@ -2103,3 +2103,7 @@ fn restart_generation_serving_change_without_rebind_or_receipt_releases_all_prov
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[cfg(unix)]
+#[path = "restart_hypotheses_test.rs"]
+mod restart_hypotheses_tests;

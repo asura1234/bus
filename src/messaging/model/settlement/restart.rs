@@ -50,6 +50,13 @@ impl BusState {
             self.requests.get_mut(&id)?.group = None;
         }
         self.agents.get_mut(&agent)?.current_request = Some(id);
+        // An answered lead's recorded turn can still claim unresolved steering.
+        if let Some(RecordedTurnEnd::Final {
+            turn_id, prompts, ..
+        }) = recorded_end(&request)
+        {
+            self.bind_recorded_turn_inputs(agent, &turn_id, &prompts);
+        }
         self.complete_pending_final(agent, now_ms).ok()?;
         let members = self.group_members(id);
         for member in &members {
