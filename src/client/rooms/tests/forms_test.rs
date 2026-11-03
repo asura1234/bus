@@ -35,6 +35,171 @@ fn creation_events_survive_snapshots_from_before_the_created_target() {
     assert_eq!(ui.terminal, Some(agent));
 }
 
+fn submit_room_form(ui: &mut BusUi, name: &str) {
+    ui.action(render::Action::NewRoom);
+    for c in name.chars() {
+        key(ui, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+    key(ui, KeyCode::Enter, KeyModifiers::NONE);
+}
+
+fn submit_agent_form(ui: &mut BusUi) {
+    ui.action(render::Action::NewAgent);
+    let Some(forms::Form::Agent {
+        name,
+        provider,
+        cwd,
+        ..
+    }) = &mut ui.form
+    else {
+        panic!("agent form was not opened");
+    };
+    name.text = "first-agent".into();
+    *provider = Some(Provider::ClaudeCode);
+    cwd.text = "/projects/first".into();
+    key(ui, KeyCode::Enter, KeyModifiers::NONE);
+}
+
+fn open_edited_file_form(ui: &mut BusUi) {
+    ui.action(render::Action::Files);
+    let Some(forms::Form::Files(editor)) = &mut ui.form else {
+        panic!("file form was not opened");
+    };
+    editor.text = "newer-input.txt".into();
+}
+
+fn assert_edited_file_form_survives(ui: &BusUi, room: RoomId) {
+    assert_eq!(ui.room, Some(room));
+    assert!(ui.terminal.is_none());
+    let Some(forms::Form::Files(editor)) = &ui.form else {
+        panic!("newer file form was discarded");
+    };
+    assert_eq!(editor.text, "newer-input.txt");
+}
+
+#[test]
+fn room_created_ack_preserves_a_newer_non_dev_form_and_its_room_context() {
+    let (mut ui, room, _) = fixture();
+    submit_room_form(&mut ui, "created-room");
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::CreateRoom(_))));
+    ui.action(render::Action::Cancel);
+    open_edited_file_form(&mut ui);
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+    ui.receive_event(BusEvent::RoomCreated(created));
+
+    assert_edited_file_form_survives(&ui, room);
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        pending.command,
+        BusCommand::SelectRoom(id) if id == created
+    )));
+}
+
+#[test]
+fn room_created_ack_completes_its_still_current_form() {
+    let (mut ui, _, _) = fixture();
+    submit_room_form(&mut ui, "created-room");
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+
+    ui.receive_event(BusEvent::RoomCreated(created));
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(created));
+}
+
+#[test]
+fn agent_added_ack_preserves_a_newer_non_dev_form_and_its_room_context() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::AddAgent(_))));
+    ui.action(render::Action::Cancel);
+    open_edited_file_form(&mut ui);
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+    ui.receive_event(BusEvent::AgentAdded(added));
+
+    assert_edited_file_form_survives(&ui, room);
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        pending.command,
+        BusCommand::FocusTerminal(id) if id == added
+    )));
+}
+
+#[test]
+fn agent_added_ack_completes_its_still_current_form() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+
+    ui.receive_event(BusEvent::AgentAdded(added));
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.terminal, Some(added));
+}
+
+#[test]
+fn external_creation_ack_preserves_a_newer_form_and_rename() {
+    let (mut ui, room, _) = fixture();
+    open_edited_file_form(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("external-room").unwrap();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "external-agent",
+            Provider::ClaudeCode,
+            "/projects/external".into(),
+            None,
+        )
+        .unwrap();
+
+    ui.receive_event(BusEvent::RoomCreated(created));
+    ui.receive_event(BusEvent::AgentAdded(added));
+
+    assert_edited_file_form_survives(&ui, room);
+
+    let (mut ui, room, _) = fixture();
+    ui.rename = Some(forms::Rename {
+        target: forms::RenameTarget::Room(room),
+        editor: editor::Editor::new("newer-room-name".into()),
+    });
+    ui.receive_event(BusEvent::RoomCreated(created));
+    assert_eq!(ui.room, Some(room));
+    assert_eq!(
+        ui.rename.as_ref().map(|rename| rename.editor.text.as_str()),
+        Some("newer-room-name")
+    );
+}
+
 #[test]
 fn ctrl_chords_open_the_agent_and_file_pickers() {
     let (mut ui, room, _) = fixture();

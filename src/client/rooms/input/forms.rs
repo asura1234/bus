@@ -76,9 +76,21 @@ impl BusUi {
         }
     }
 
+    pub(in crate::client::rooms) fn set_form(&mut self, form: Form) {
+        self.form_generation = self.form_generation.wrapping_add(1);
+        self.form = Some(form);
+    }
+
+    pub(in crate::client::rooms) fn clear_form(&mut self) {
+        if self.form.is_some() {
+            self.form_generation = self.form_generation.wrapping_add(1);
+        }
+        self.form = None;
+    }
+
     pub(super) fn open_form(&mut self, form: Form) {
         self.clear_selection();
-        self.form = Some(form);
+        self.set_form(form);
         self.terminal = None;
         self.recipient_menu = false;
         self.queue(BusCommand::LeaveRoom, Effect::None);
@@ -497,7 +509,7 @@ impl BusUi {
                     BusCommand::SetFeishuRecipient(editor.text.trim().to_owned())
                 };
                 self.queue(command, Effect::None);
-                self.form = Some(Form::Settings);
+                self.set_form(Form::Settings);
             }
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);

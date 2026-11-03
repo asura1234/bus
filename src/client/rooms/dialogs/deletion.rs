@@ -165,17 +165,20 @@ impl BusUi {
             .retain(|submission| !room_removed(submission.room));
         let missing_room = self.room.is_some_and(room_removed);
         let missing_terminal = self.terminal.is_some_and(agent_removed);
+        let next_room = missing_room
+            .then(|| state.rooms().next().map(|room| room.id))
+            .flatten();
         if missing_room || missing_terminal {
             self.terminal = None;
             self.target_pane = None;
-            self.form = None;
+            self.clear_form();
             self.rename = None;
             self.recipient_menu = false;
             self.main_scroll = 0;
             self.history_follow_tail = true;
             self.recipient_scroll = 0;
             if missing_room {
-                self.room = state.rooms().next().map(|room| room.id);
+                self.room = next_room;
             }
             if let Some(room) = self.room {
                 self.queue(BusCommand::SelectRoom(room), Effect::None);

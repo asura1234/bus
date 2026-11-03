@@ -257,6 +257,10 @@ impl Worker {
             }
             #[cfg(feature = "dev-tools")]
             "ui.hits" => ui_hits::hits_json(),
+            #[cfg(feature = "dev-tools")]
+            "ui.hold-acks" => ui_hits::set_ack_hold(true),
+            #[cfg(feature = "dev-tools")]
+            "ui.release-acks" => ui_hits::set_ack_hold(false),
             _ => Err("Unknown method".into()),
         }
     }
@@ -554,9 +558,13 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec("sounds", "sounds", &[], false, Tier::Dev),
     spec("bus.quit", "quit", &[], true, Tier::Dev),
     spec("diagnostics", "diagnostics", &[], false, Tier::Dev),
-    // The TUI driver's named click targets; only the dev variant has them.
+    // The TUI driver's named click targets and deterministic acknowledgement race.
     #[cfg(feature = "dev-tools")]
     spec("ui.hits", "ui hits", &[], false, Tier::Dev),
+    #[cfg(feature = "dev-tools")]
+    spec("ui.hold-acks", "ui hold-acks", &[], true, Tier::Dev),
+    #[cfg(feature = "dev-tools")]
+    spec("ui.release-acks", "ui release-acks", &[], true, Tier::Dev),
 ];
 
 /// Every place `text` names a dev-tier command the way docs and help do

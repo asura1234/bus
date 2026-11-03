@@ -49,13 +49,15 @@ pub(super) fn cli() -> Command {
         )
         .subcommand(subcommand("diagnostics"))
         .subcommand(subcommand("sounds"));
-    // `ui hits` exists only in the dev variant, with the TUI driver it serves.
+    // The dev variant exposes the UI inspection and deterministic race controls.
     #[cfg(feature = "dev-tools")]
     let command = command.subcommand(
         subcommand("ui")
             .subcommand_required(true)
             .arg_required_else_help(true)
-            .subcommand(subcommand("hits")),
+            .subcommand(subcommand("hits"))
+            .subcommand(subcommand("hold-acks"))
+            .subcommand(subcommand("release-acks")),
     );
     let command = command
         .subcommand(room_cli())
@@ -204,6 +206,8 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         #[cfg(feature = "dev-tools")]
         "ui" => match args.subcommand() {
             Some(("hits", _)) => ("ui.hits", json!({})),
+            Some(("hold-acks", _)) => ("ui.hold-acks", json!({})),
+            Some(("release-acks", _)) => ("ui.release-acks", json!({})),
             _ => return Err("unknown ui command".into()),
         },
         "room" => parse_room(args)?,
