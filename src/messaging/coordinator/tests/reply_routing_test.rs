@@ -1670,6 +1670,7 @@ fn reply_routing_keeps_worker_reply_through_orchestrator_startup_failure() {
                 command: "claude".into(),
                 started_at_ms: 0,
                 reported: true,
+                process_observed: false,
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(crate::messaging::model::StartupFailure {

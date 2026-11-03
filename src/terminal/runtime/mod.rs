@@ -262,6 +262,7 @@ impl TerminalRuntime {
             .store(self.shell_prompt_generation(), Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) fn launch_returned_to_prompt(&self) -> bool {
         self.shell_prompt_generation() > self.launch_prompt_generation.load(Ordering::Acquire)
     }

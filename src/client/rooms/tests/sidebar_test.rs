@@ -22,6 +22,7 @@ fn unavailable_worker_shows_only_its_status_while_the_error_is_logged() {
                 command: "claude --resume missing".into(),
                 started_at_ms: 1,
                 reported: true,
+                process_observed: false,
                 native_terminal_id: Some("failed-terminal".into()),
                 recovery: None,
                 failure: None,
