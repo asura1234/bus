@@ -228,6 +228,16 @@ impl TerminalRuntime {
         let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
         let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
+        {
+            let shared = scope.timestamps();
+            let mut timestamps = shared.lock().unwrap_or_else(|error| error.into_inner());
+            timestamps
+                .server_accepted_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+            timestamps
+                .writer_queued_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+        }
         let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
@@ -243,7 +253,7 @@ impl TerminalRuntime {
             hard_deadline,
             withdraw_grace,
             clock,
-            diagnostics: diagnostics::Diagnostics::default(),
+            diagnostics: diagnostics::Diagnostics::with_timestamps(scope.timestamps()),
             startup_suggestion_open: self.startup_suggestion_open.clone(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -388,7 +398,7 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown::NotSubmitted))?;
         self.diagnostics
             .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
-        let completion = self.io.queue_input_write_scoped(
+        let completion = self.io.queue_payload_input_write_scoped(
             bytes,
             Bytes::new(),
             delay,

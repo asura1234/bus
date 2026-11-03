@@ -126,6 +126,7 @@ fn automatic_press(
     screen.driver_presses.push(params);
     if screen.press_uncertain {
         return Err(TransportError {
+                timestamps: Default::default(),
             code: None,
             message: "input acknowledgement lost".into(),
             definitely_rejected: false,

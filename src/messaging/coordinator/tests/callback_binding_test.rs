@@ -521,6 +521,7 @@ fn orchestrated_worker() -> (Worker, AgentId, AgentId, RoomId, PathBuf) {
             ) {
                 return Ok(ResponseResult::AgentPrompted {
                     agent: native_info("pane", "claude", "session"),
+                    timestamps: Default::default(),
                 });
             }
             self.0.request(method)

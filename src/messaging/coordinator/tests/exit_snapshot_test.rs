@@ -41,6 +41,7 @@ fn scrollback() -> String {
 
 fn refused(code: &str) -> Result<ResponseResult, TransportError> {
     Err(TransportError {
+        timestamps: Default::default(),
         code: Some(code.into()),
         message: code.into(),
         definitely_rejected: true,

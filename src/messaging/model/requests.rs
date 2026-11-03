@@ -6,6 +6,7 @@ use super::{
     DELIVERED_STALL_MS, QUEUED_STALL_MS,
 };
 
+mod latency;
 mod rejection;
 mod submit;
 

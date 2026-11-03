@@ -13,6 +13,7 @@ pub(crate) struct TransportError {
     pub(crate) code: Option<String>,
     pub(crate) message: String,
     pub(crate) definitely_rejected: bool,
+    pub(crate) timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
 }
 
 pub(crate) trait Transport: Send {
@@ -159,6 +160,12 @@ fn classify_error(error: ApiClientError) -> TransportError {
         || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
         || response.error.code == crate::protocol::api::AGENT_COMPOSER_BUSY);
     TransportError {
+        timestamps: match &error {
+            ApiClientError::ErrorResponse(response) => {
+                response.error.timestamps.unwrap_or_default()
+            }
+            _ => Default::default(),
+        },
         code: match &error {
             ApiClientError::ErrorResponse(response) => Some(response.error.code.clone()),
             ApiClientError::EmptyResponse => Some(NATIVE_SERVER_UNAVAILABLE.into()),
@@ -239,6 +246,7 @@ mod tests {
                     crate::protocol::api::schema::ErrorResponse {
                         id: "r".into(),
                         error: crate::protocol::api::schema::ErrorBody {
+                            timestamps: None,
                             code: code.into(),
                             message: code.into(),
                         },
@@ -411,6 +419,7 @@ mod tests {
             let error = crate::protocol::api::schema::ErrorResponse {
                 id: "r".into(),
                 error: crate::protocol::api::schema::ErrorBody {
+                    timestamps: None,
                     code: code.into(),
                     message: code.into(),
                 },

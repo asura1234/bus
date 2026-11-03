@@ -412,6 +412,7 @@ impl Worker {
         )) {
             Ok(ResponseResult::Ok {}) => Ok(()),
             Ok(other) => Err(crate::messaging::native::TransportError {
+                timestamps: Default::default(),
                 code: None,
                 message: format!("Unexpected close response: {other:?}"),
                 definitely_rejected: false,

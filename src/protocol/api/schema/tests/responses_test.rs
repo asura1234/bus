@@ -274,6 +274,7 @@ fn error_response_round_trips() {
     let response = ErrorResponse {
         id: "req_1".into(),
         error: ErrorBody {
+            timestamps: None,
             code: "pane_not_found".into(),
             message: "pane p_1 not found".into(),
         },
@@ -282,4 +283,56 @@ fn error_response_round_trips() {
     let json = serde_json::to_string(&response).unwrap();
     let restored: ErrorResponse = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
+}
+
+#[test]
+fn legacy_agent_prompted_response_defaults_to_empty_timestamps() {
+    let response: SuccessResponse = serde_json::from_value(serde_json::json!({
+        "id": "legacy-prompt",
+        "result": {
+            "type": "agent_prompted",
+            "agent": {
+                "terminal_id": "terminal",
+                "pane_id": "pane",
+                "name": "worker",
+                "agent": "claude",
+                "agent_status": "idle",
+                "agent_session": {
+                    "source": "herdr:claude",
+                    "agent": "claude",
+                    "kind": "id",
+                    "value": "session"
+                },
+                "workspace_id": "workspace",
+                "tab_id": "tab",
+                "focused": false,
+                "revision": 1
+            }
+        }
+    }))
+    .unwrap();
+    let ResponseResult::AgentPrompted { timestamps, .. } = response.result else {
+        panic!("expected agent_prompted")
+    };
+    assert!(timestamps.is_empty());
+}
+
+#[test]
+fn native_error_response_preserves_observed_timestamps() {
+    let response = crate::server::api::errors::encode_error_body(
+        "slow-failure".into(),
+        crate::protocol::api::schema::ErrorBody {
+            code: "timeout".into(),
+            message: "confirmation timed out".into(),
+            timestamps: Some(crate::protocol::api::schema::NativeSubmissionTimestamps {
+                text_written_at_ms: Some(42),
+                ..Default::default()
+            }),
+        },
+    );
+    let restored: ErrorResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        restored.error.timestamps.unwrap().text_written_at_ms,
+        Some(42)
+    );
 }

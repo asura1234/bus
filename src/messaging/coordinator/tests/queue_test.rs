@@ -14,6 +14,7 @@ fn grok_login_keeps_work_queued_until_authenticated_idle() {
             Provider::Grok,
             vec![Ok(ResponseResult::AgentPrompted {
                 agent: native_info("pane", "grok", "session"),
+                timestamps: Default::default(),
             })],
         );
         let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
@@ -252,6 +253,7 @@ fn busy_rejection_restores_exact_fifo_and_blocked_does_not_submit() {
     let (mut worker, agent, room, dir, calls) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "busy".into(),
             code: Some("agent_not_idle".into()),
             definitely_rejected: true,
@@ -277,6 +279,7 @@ fn late_old_identical_codex_final_cannot_bind_and_matched_provider_error_release
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "unknown".into(),
             code: None,
             definitely_rejected: false,

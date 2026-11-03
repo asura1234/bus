@@ -2,6 +2,7 @@ use super::*;
 
 fn timeout() -> Result<ResponseResult, TransportError> {
     Err(TransportError {
+        timestamps: Default::default(),
         code: None,
         message: std::io::Error::from(std::io::ErrorKind::WouldBlock).to_string(),
         definitely_rejected: false,
@@ -304,6 +305,7 @@ fn long_stall_recovery_delivers_queued_work_once() {
         recovered(),
         Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "claude", "session"),
+            timestamps: Default::default(),
         }),
     ]);
     let (mut worker, agent, room, dir, calls) = fixture(Provider::ClaudeCode, replies);
@@ -446,6 +448,7 @@ fn server_unavailable_poll_response_marks_agent_unavailable() {
             native_error(ApiClientError::ErrorResponse(ErrorResponse {
                 id: "r".into(),
                 error: ErrorBody {
+                    timestamps: None,
                     code: "server_unavailable".into(),
                     message: "server is shutting down".into(),
                 },

@@ -197,6 +197,7 @@ fn decode_initial_request(line: &str, stream: &mut LocalStream) -> io::Result<Op
                 &ErrorResponse {
                     id: String::new(),
                     error: ErrorBody {
+                        timestamps: None,
                         code: "invalid_request".into(),
                         message: format!("invalid request: {request_error}"),
                     },
@@ -577,6 +578,7 @@ pub(super) fn error_response_json(id: String, code: &str, message: String) -> St
     serde_json::to_string(&ErrorResponse {
         id,
         error: ErrorBody {
+            timestamps: None,
             code: code.into(),
             message,
         },

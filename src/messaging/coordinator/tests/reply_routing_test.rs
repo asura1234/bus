@@ -38,6 +38,7 @@ impl Transport for Accepting {
                 "workspace_id":"workspace", "tab_id":"tab", "focused":false, "revision":1
             }))
             .unwrap(),
+            timestamps: Default::default(),
         })
     }
 }
@@ -905,6 +906,7 @@ impl Transport for NeverShown {
             other => panic!("unexpected native call: {other:?}"),
         }
         Err(TransportError {
+            timestamps: Default::default(),
             code: Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN.into()),
             message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
             definitely_rejected: true,

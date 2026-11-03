@@ -596,3 +596,66 @@ fn every_provider_empty_final_is_durable_and_has_no_room_publication() {
         }
     }
 }
+
+#[test]
+fn delivery_timestamps_round_trip_and_legacy_requests_default_to_empty() {
+    let (mut state, _, request) = idle_with_queued(1_000, "timed");
+    let accepted = state.request(request).unwrap().prompt.submitted_at_ms;
+    assert_eq!(
+        state.request(request).unwrap().latency.accepted_at_ms,
+        Some(accepted)
+    );
+    state.record_queued(request, 1_005).unwrap();
+    state.record_queued(request, 900).unwrap();
+    assert_eq!(
+        state.request(request).unwrap().latency.queued_at_ms,
+        Some(1_005),
+        "a retry or backward wall clock cannot replace the first timestamp"
+    );
+    let expected = state.request(request).unwrap().latency.clone();
+    let populated: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    assert_eq!(populated.request(request).unwrap().latency, expected);
+
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][request.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("latency");
+    let restored: BusState = serde_json::from_value(document).unwrap();
+    assert!(restored.request(request).unwrap().latency.is_empty());
+    let round_trip: BusState =
+        serde_json::from_value(serde_json::to_value(&restored).unwrap()).unwrap();
+    assert_eq!(round_trip, restored);
+}
+
+#[test]
+fn coalesced_recipients_share_native_and_provider_delivery_timestamps() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state
+        .coalesce_queue(first)
+        .expect("coalesce queued messages");
+    state.record_picked(first, 20, false).unwrap();
+    state.record_native_requested(first, 30).unwrap();
+    state
+        .record_native_timestamps(
+            first,
+            crate::messaging::model::NativeSubmissionTimestamps {
+                text_written_at_ms: Some(40),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.record_provider_started(first, 50);
+    state.record_reply_captured(first, 60);
+    for id in [first, second] {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.latency.picked_at_ms, Some(20));
+        assert_eq!(request.latency.native_requested_at_ms, Some(30));
+        assert_eq!(request.latency.native.text_written_at_ms, Some(40));
+        assert_eq!(request.latency.provider_started_at_ms, Some(50));
+        assert_eq!(request.latency.reply_captured_at_ms, Some(60));
+    }
+}

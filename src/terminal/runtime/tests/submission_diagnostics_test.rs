@@ -97,6 +97,21 @@ async fn submission_diagnostics_record_attempts_without_prompt_or_screen_content
         .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
         .unwrap()
         .unwrap();
+    let timestamps = completion.submission_timestamps();
+    let ordered = [
+        timestamps.paste_started_at_ms,
+        timestamps.text_written_at_ms,
+        timestamps.paste_completed_at_ms,
+        timestamps.composer_owned_at_ms,
+        timestamps.enter_sent_at_ms,
+        timestamps.enter_written_at_ms,
+        timestamps.native_confirmed_at_ms,
+    ]
+    .map(Option::unwrap);
+    assert!(
+        ordered.windows(2).all(|pair| pair[0] <= pair[1]),
+        "native phase timestamps are not ordered: {ordered:?}"
+    );
     let log = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
     for fact in [
         "bus.terminal.submission.summary",

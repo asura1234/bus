@@ -242,6 +242,7 @@ impl App {
         respond_to: std::sync::mpsc::Sender<String>,
         started: std::time::Instant,
     ) -> bool {
+        let accepted_at_ms = crate::utils::time::now_ms();
         let Some(budget) = crate::protocol::api::submission::method_budget(&request.method) else {
             return false;
         };
@@ -276,6 +277,14 @@ impl App {
         };
         match queued {
             Ok((id, agent, completion)) => {
+                completion.update_timestamps(|timestamps| {
+                    timestamps
+                        .server_accepted_at_ms
+                        .get_or_insert(accepted_at_ms);
+                    timestamps
+                        .writer_queued_at_ms
+                        .get_or_insert(crate::utils::time::now_ms());
+                });
                 tracing::debug!(target: "bus::server::api::agents", event = "bus.terminal.queued", api_request_id = %id,
                     pane_id = %agent.pane_id, terminal_id = %agent.terminal_id,
                     "Prompt submission queued in native terminal writer");
@@ -575,12 +584,19 @@ pub(super) fn complete_agent_prompt_submission(
     map_timeout: impl FnOnce(Duration) -> Duration,
 ) -> String {
     let completion_deadline = hard_deadline + completion.enter_delay_allowance();
-    complete_agent_prompt(id, agent, completion_deadline, started, now, |timeout| {
-        Ok(completion.wait_for_api(map_timeout(timeout)))
-    })
+    complete_agent_prompt_with_timestamps(
+        id,
+        agent,
+        completion_deadline,
+        started,
+        now,
+        |timeout| Ok(completion.wait_for_api(map_timeout(timeout))),
+        || completion.submission_timestamps(),
+    )
 }
 
 // The waiter is injectable so boundary races use a virtual response timeline.
+#[cfg(test)]
 pub(super) fn complete_agent_prompt(
     id: String,
     agent: crate::protocol::api::schema::AgentInfo,
@@ -589,8 +605,29 @@ pub(super) fn complete_agent_prompt(
     now: std::time::Instant,
     receive: impl FnOnce(Duration) -> Result<std::io::Result<()>, std::sync::mpsc::RecvTimeoutError>,
 ) -> String {
+    complete_agent_prompt_with_timestamps(
+        id,
+        agent,
+        hard_deadline,
+        started,
+        now,
+        receive,
+        Default::default,
+    )
+}
+
+fn complete_agent_prompt_with_timestamps(
+    id: String,
+    agent: crate::protocol::api::schema::AgentInfo,
+    hard_deadline: std::time::Instant,
+    started: std::time::Instant,
+    now: std::time::Instant,
+    receive: impl FnOnce(Duration) -> Result<std::io::Result<()>, std::sync::mpsc::RecvTimeoutError>,
+    timestamps: impl FnOnce() -> crate::protocol::api::schema::NativeSubmissionTimestamps,
+) -> String {
     let response_deadline = hard_deadline + crate::protocol::api::submission::RESPONSE_GRACE;
     let completed = receive(response_deadline.saturating_duration_since(now));
+    let timestamps = timestamps();
     let not_shown = |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
     let outcome = match &completed {
         Ok(Ok(())) => "written",
@@ -604,31 +641,35 @@ pub(super) fn complete_agent_prompt(
         pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Native prompt submission completed; this is not model acceptance");
+    let fail = |code: &str, message: String| {
+        encode_error_body(
+            id.clone(),
+            crate::protocol::api::schema::ErrorBody {
+                code: code.into(),
+                message,
+                timestamps: Some(timestamps),
+            },
+        )
+    };
     match completed {
-        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent, timestamps }),
         Ok(Err(err)) if crate::terminal::runtime::PromptNotShown::composer_busy(&err) => {
-            encode_error(
-                id,
-                crate::protocol::api::AGENT_COMPOSER_BUSY,
-                err.to_string(),
-            )
+            fail(crate::protocol::api::AGENT_COMPOSER_BUSY, err.to_string())
         }
-        Ok(Err(err)) if not_shown(&err) => encode_error(
-            id,
+        Ok(Err(err)) if not_shown(&err) => fail(
             crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
             err.to_string(),
         ),
         Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
-            encode_error(id, "timeout", err.to_string())
+            fail("timeout", err.to_string())
         }
-        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => encode_error(
-            id,
+        Ok(Err(err)) => fail("agent_prompt_failed", err.to_string()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => fail(
             "timeout",
-            "Native prompt submission exceeded its hard deadline",
+            "Native prompt submission exceeded its hard deadline".into(),
         ),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            encode_error(id, "agent_prompt_failed", "pty actor closed")
+            fail("agent_prompt_failed", "pty actor closed".into())
         }
     }
 }

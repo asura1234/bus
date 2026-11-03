@@ -470,11 +470,13 @@ impl ObservedSubmission {
             } else {
                 first
             };
+            self.diagnostics.editor_installed(editor.text.len());
             self.reset_confirmation(delay);
             self.check_deadline()?;
             self.guarded_editor_key(self.enter.clone(), lease, true, |screen| {
                 self.inspect.editor_frame_unchanged(&verified, screen)
             })?;
+            self.diagnostics.ownership_verified();
             self.wait_transfer(|| {
                 if let Some(screen) = self.terminal.active_ansi_if_complete() {
                     if screen != verified

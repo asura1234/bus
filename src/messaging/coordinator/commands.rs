@@ -152,6 +152,7 @@ impl Worker {
                 now_ms: now,
             },
         )?;
+        self.note_requests_queued(&requests);
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");
         }

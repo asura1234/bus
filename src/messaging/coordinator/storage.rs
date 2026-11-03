@@ -1,6 +1,6 @@
 //! Durable storage pause and recovery for the single coordinator.
-use super::{diagnostics, mpsc, BusEvent, BusState, Duration, Worker};
-use crate::messaging::storage::state_store::StoreError;
+use super::{diagnostics, io, mpsc, BusEvent, BusState, Duration, RequestId, Worker};
+use crate::messaging::storage::state_store::{JournalOp, StoreError};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -37,6 +37,203 @@ impl Worker {
         if state != self.state {
             self.save(state)?;
         }
+        Ok(())
+    }
+
+    pub(super) fn note_requests_queued(&mut self, ids: &[RequestId]) {
+        let at_ms = io::now_ms();
+        for id in ids {
+            let mut state = self.state.clone();
+            let Some(room) = state.request(*id).map(|request| request.room_id) else {
+                continue;
+            };
+            if state.record_queued(*id, at_ms).is_err() {
+                continue;
+            }
+            if self
+                .journal(
+                    state.clone(),
+                    JournalOp::DeliveryTimestamps {
+                        room,
+                        request_id: *id,
+                        queued_at_ms: Some(at_ms),
+                        native_requested_at_ms: None,
+                        reply_delivered_at_ms: None,
+                    },
+                )
+                .is_err()
+            {
+                continue;
+            }
+            let completed_at_ms = io::now_ms();
+            let mut completed = state.clone();
+            if completed.finish_queued(*id, at_ms, completed_at_ms).is_ok() {
+                let _ = self.journal(
+                    completed,
+                    JournalOp::complete_queued(room, *id, at_ms, completed_at_ms),
+                );
+            }
+        }
+    }
+
+    pub(super) fn note_native_requested(&mut self, id: RequestId, at_ms: u64) {
+        let mut state = self.state.clone();
+        let Some(room) = state.request(id).map(|request| request.room_id) else {
+            return;
+        };
+        if state.record_native_requested(id, at_ms).is_err() {
+            return;
+        }
+        if self
+            .journal(
+                state.clone(),
+                JournalOp::DeliveryTimestamps {
+                    room,
+                    request_id: id,
+                    queued_at_ms: None,
+                    native_requested_at_ms: Some(at_ms),
+                    reply_delivered_at_ms: None,
+                },
+            )
+            .is_err()
+        {
+            return;
+        }
+        let completed_at_ms = io::now_ms();
+        let mut completed = state.clone();
+        if completed
+            .finish_native_requested(id, at_ms, completed_at_ms)
+            .is_ok()
+        {
+            let _ = self.journal(
+                completed,
+                JournalOp::complete_native(room, id, at_ms, completed_at_ms),
+            );
+        }
+    }
+
+    /// Commits `state` and makes it durable. A state that differs from the
+    /// last write only in status-only observations writes nothing: those are
+    /// never persisted on their own (see `apply_poll`), so rewriting the same
+    /// durable content is pure cost. Inside a batch the write waits for
+    /// [`Self::finish_batch`].
+    pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
+        self.save_with_reply_timestamps(state, true)
+    }
+
+    pub(super) fn save_without_reply_timestamps(&mut self, state: BusState) -> Result<(), String> {
+        self.save_with_reply_timestamps(state, false)
+    }
+
+    fn save_with_reply_timestamps(
+        &mut self,
+        state: BusState,
+        stamp_new_replies: bool,
+    ) -> Result<(), String> {
+        if !self.store.has_unfolded_journal()
+            && !state.durable_poll_change_from(&self.durable_state)
+        {
+            if state != self.state {
+                self.state = state;
+                self.revision += 1;
+            }
+            return Ok(());
+        }
+        if let Some(batch) = self.batch.as_mut() {
+            if batch.before.is_none() {
+                batch.before = Some((self.state.clone(), self.revision));
+            }
+            self.state = state;
+            self.revision += 1;
+            return Ok(());
+        }
+        self.write_with_reply_timestamps(state, stamp_new_replies)?;
+        self.revision += 1;
+        Ok(())
+    }
+
+    pub(super) fn write(&mut self, state: BusState) -> Result<(), String> {
+        self.write_with_reply_timestamps(state, true)
+    }
+
+    fn write_with_reply_timestamps(
+        &mut self,
+        mut state: BusState,
+        stamp_new_replies: bool,
+    ) -> Result<(), String> {
+        if let Err(error) = self.store.save(&state) {
+            if crate::utils::error_pipe::is_suppressed() {
+                tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
+                return Err(error.to_string());
+            }
+            self.pause_storage(&error);
+            return Err(self.storage_notice().into());
+        }
+        if stamp_new_replies {
+            let at_ms = io::now_ms();
+            let new_replies: Vec<RequestId> = state
+                .requests()
+                .filter(|request| {
+                    request.completed_reply.is_some()
+                        && self
+                            .durable_state
+                            .request(request.id)
+                            .and_then(|old| old.completed_reply.as_ref())
+                            .is_none()
+                })
+                .map(|request| request.id)
+                .collect();
+            for id in new_replies {
+                let mut delivered = state.clone();
+                delivered.record_reply_delivered(id, at_ms);
+                let Some(room) = delivered.request(id).map(|request| request.room_id) else {
+                    continue;
+                };
+                if self
+                    .journal(
+                        delivered.clone(),
+                        JournalOp::DeliveryTimestamps {
+                            room,
+                            request_id: id,
+                            queued_at_ms: None,
+                            native_requested_at_ms: None,
+                            reply_delivered_at_ms: Some(at_ms),
+                        },
+                    )
+                    .is_ok()
+                {
+                    state = delivered;
+                }
+            }
+        }
+        diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
+        diagnostics::recoveries(&self.durable_state, &state);
+        diagnostics::provider_resets(&self.durable_state, &state);
+        for agent in state.agents() {
+            if self
+                .durable_state
+                .agent(agent.id)
+                .is_some_and(|old| old.status != agent.status)
+            {
+                tracing::debug!(event = "bus.agent.status", agent_id = agent.id.0,
+                    room_id = agent.room_id.0, request_id = ?agent.current_request.map(|id| id.0),
+                    status = ?agent.status, "Bus status changed");
+            }
+        }
+        self.durable_state = state.clone();
+        self.state = state;
+        Ok(())
+    }
+
+    /// Commits a composer draft edit or send through the store's journal:
+    /// durable before it is acknowledged, without a full `state.json` save.
+    pub(super) fn journal(&mut self, state: BusState, op: JournalOp) -> Result<(), String> {
+        if let Err(error) = self.store.journal(op) {
+            self.pause_storage(&error);
+            return Err(self.storage_notice().into());
+        }
+        self.state = state;
+        self.revision += 1;
         Ok(())
     }
 
