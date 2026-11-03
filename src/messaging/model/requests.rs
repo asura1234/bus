@@ -24,38 +24,11 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn abandon_generation_member(
-        &mut self,
-        id: RequestId,
-        now_ms: u64,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownRequest(id))?;
-        request.group = None;
-        request.phase = RequestPhase::Abandoned;
-        request.completed_at_ms = Some(now_ms);
-        request.failure_reason = Some("reply_not_captured".into());
-        Ok(())
-    }
-
-    #[cfg(test)]
     pub(crate) fn begin_submission(
         &mut self,
         request: RequestId,
         launch_id: &str,
         callback_boundary: u64,
-    ) -> Result<(), ModelError> {
-        self.begin_submission_with_epoch(request, launch_id, callback_boundary, None)
-    }
-
-    pub(crate) fn begin_submission_with_epoch(
-        &mut self,
-        request: RequestId,
-        launch_id: &str,
-        callback_boundary: u64,
-        epoch: Option<super::DeliveryEpoch>,
     ) -> Result<(), ModelError> {
         let request_state = self
             .requests
@@ -116,9 +89,6 @@ impl BusState {
         request_state.foreign_turn_settled_at_ms = None;
         // Starts the idle recovery clock at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
-        if let Some(epoch) = epoch {
-            self.stamp_delivery_epoch(request, epoch)?;
-        }
         Ok(())
     }
 
@@ -549,20 +519,10 @@ impl BusState {
     /// Moves `request` from the queue into `lead`'s group before Bus types it
     /// into the running turn. A captured answer settles the members that its
     /// hook or transcript claims; an unclaimed input retains its uncertainty.
-    #[cfg(test)]
     pub(crate) fn begin_steering(
         &mut self,
         request: RequestId,
         lead: RequestId,
-    ) -> Result<(), ModelError> {
-        self.begin_steering_with_epoch(request, lead, None)
-    }
-
-    pub(crate) fn begin_steering_with_epoch(
-        &mut self,
-        request: RequestId,
-        lead: RequestId,
-        epoch: Option<super::DeliveryEpoch>,
     ) -> Result<(), ModelError> {
         let agent_id = self
             .requests
@@ -601,9 +561,6 @@ impl BusState {
             if let Some(member) = self.requests.get_mut(&request) {
                 member.submission_status_revision = previous;
             }
-        }
-        if let Some(epoch) = epoch {
-            self.stamp_delivery_epoch(request, epoch)?;
         }
         Ok(())
     }

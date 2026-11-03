@@ -164,7 +164,7 @@ fn migrate_legacy_requests(
     generation: u64,
 ) -> Result<(), String> {
     let legacy: Vec<_> = state
-        .requests()
+        .unsettled_requests()
         .filter(|request| {
             request.delivery_epoch.is_none()
                 && matches!(
@@ -172,37 +172,30 @@ fn migrate_legacy_requests(
                     super::RequestPhase::Submitting | super::RequestPhase::Active
                 )
         })
-        .map(|request| request.id)
+        .map(|request| (request.id, request.agent_id))
         .collect();
-    for id in legacy {
-        let request = state.request(id).cloned().ok_or("Unknown legacy request")?;
-        let agent = state
-            .agent(request.agent_id)
-            .cloned()
-            .ok_or("Unknown agent")?;
-        let info = polled_agent(state, &agent, infos);
-        let same_identity = info.is_some_and(|info| {
-            agent.runtime_identity.terminal_id.as_deref() == Some(info.terminal_id.as_str())
-                && agent.runtime_identity.pane_id.as_deref() == Some(info.pane_id.as_str())
-        });
-        let (terminal_id, pane_id) = if same_identity {
-            let info = info.unwrap();
-            (info.terminal_id.clone(), info.pane_id.clone())
-        } else {
-            (
-                agent.runtime_identity.terminal_id.unwrap_or_default(),
-                agent.runtime_identity.pane_id.unwrap_or_default(),
-            )
+    for (id, agent) in legacy {
+        let owner = state.agent(agent).ok_or("Unknown legacy agent")?;
+        let Some(info) = polled_agent(state, owner, infos) else {
+            continue;
+        };
+        let (Some(terminal), Some(pane)) = (
+            &owner.runtime_identity.terminal_id,
+            &owner.runtime_identity.pane_id,
+        ) else {
+            continue;
+        };
+        let epoch = DeliveryEpoch {
+            generation: if terminal == &info.terminal_id && pane == &info.pane_id {
+                generation
+            } else {
+                0
+            },
+            terminal_id: terminal.clone(),
+            pane_id: pane.clone(),
         };
         state
-            .stamp_delivery_epoch(
-                id,
-                DeliveryEpoch {
-                    generation: if same_identity { generation } else { 0 },
-                    terminal_id,
-                    pane_id,
-                },
-            )
+            .stamp_delivery_epoch(id, epoch)
             .map_err(|error| error.to_string())?;
     }
     Ok(())

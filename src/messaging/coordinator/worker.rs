@@ -6,7 +6,6 @@ use super::{
     RequestId, RuntimeStatus, StoragePause, Transport,
 };
 use crate::agents::providers::spool;
-use crate::messaging::model::RequestPhase;
 use crate::messaging::perf;
 use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
@@ -624,6 +623,7 @@ impl Worker {
         let mut changed = false;
         for (agent, observed_at_ms) in agents {
             changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
+            let current = state.agent(agent).and_then(|owner| owner.current_request);
             let rollout = self.codex_rollouts.get(&agent);
             let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
                 .unwrap_or_else(|error| {
@@ -635,54 +635,36 @@ impl Worker {
             let kimi_recorded = &kimi_recorded;
             let recorded_end = |request: &crate::messaging::model::Request| {
                 if state_provider_is_kimi(&self.state, request.agent_id) {
-                    (*kimi_recorded).clone()
+                    (Some(request.id) == current)
+                        .then(|| (*kimi_recorded).clone())
+                        .flatten()
                 } else {
                     recorded_codex_end(rollout?, request)
                 }
             };
-            changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
-            let current = state.agent(agent).and_then(|owner| owner.current_request);
-            let stale_members: Vec<_> = state
-                .requests()
-                .filter(|request| {
-                    Some(request.id) != current
-                        && matches!(
-                            request.phase,
-                            RequestPhase::Submitting | RequestPhase::Active
-                        )
-                        && request
-                            .delivery_epoch
-                            .as_ref()
-                            .is_some_and(|epoch| epoch.generation < self.serving_generation)
-                })
+            let mut interrupted: Vec<_> = state
+                .unsettled_requests()
+                .filter(|request| request.agent_id == agent)
                 .map(|request| request.id)
+                .chain(current)
                 .collect();
-            for id in stale_members {
-                state
-                    .abandon_generation_member(id, observed_at_ms)
-                    .map_err(|error| error.to_string())?;
-                changed = true;
-            }
-            let settled = state
-                .agent(agent)
-                .and_then(|owner| owner.current_request)
-                .filter(|request| {
-                    state
-                        .request(*request)
-                        .and_then(|request| request.delivery_epoch.as_ref())
-                        .is_some_and(|epoch| epoch.generation < self.serving_generation)
-                })
-                .and_then(|request| {
-                    state.settle_generation_request(
+            interrupted.sort_by_key(|request| (Some(*request) != current, *request));
+            interrupted.dedup();
+            for request in interrupted {
+                changed |= state
+                    .settle_generation_request(
                         agent,
                         request,
                         self.serving_generation,
                         observed_at_ms,
                         recorded_end,
                     )
-                })
-                .or_else(|| state.settle_ended_request(agent, observed_at_ms, recorded_end));
-            changed |= settled.is_some();
+                    .is_some();
+            }
+            changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
+            changed |= state
+                .settle_ended_request(agent, observed_at_ms, recorded_end)
+                .is_some();
         }
         if changed {
             self.save(state)?;

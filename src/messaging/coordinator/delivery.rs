@@ -446,15 +446,16 @@ impl Worker {
         let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
             .map_err(|e| e.to_string())?;
         state
-            .begin_submission_with_epoch(
+            .begin_submission(request, launch, boundary)
+            .map_err(|e| e.to_string())?;
+        state
+            .stamp_delivery_epoch(
                 request,
-                launch,
-                boundary,
-                Some(crate::messaging::model::DeliveryEpoch {
+                crate::messaging::model::DeliveryEpoch {
                     generation: self.serving_generation,
                     terminal_id: terminal.clone(),
                     pane_id: pane.clone(),
-                }),
+                },
             )
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
@@ -568,31 +569,29 @@ impl Worker {
             .render_request_payload(request)
             .ok_or("Missing queued request")?;
         state
-            .begin_steering_with_epoch(
+            .begin_steering(request, lead)
+            .map_err(|e| e.to_string())?;
+        state
+            .stamp_delivery_epoch(
                 request,
-                lead,
-                Some(crate::messaging::model::DeliveryEpoch {
+                crate::messaging::model::DeliveryEpoch {
                     generation: self.serving_generation,
                     terminal_id: terminal.clone(),
                     pane_id: pane.clone(),
-                }),
+                },
             )
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
         let started = std::time::Instant::now();
-        let outcome = match self.transport.request(Method::AgentPromptIfIdle(
-            schema::AgentPromptIfIdleParams {
-                target: pane.clone(),
-                text,
-                expected_terminal_id: terminal.clone(),
-                expected_pane_id: pane.clone(),
-                expected_agent: launch::provider_kind(agent.provider).into(),
-                expected_session_id: session.clone(),
-                steer: true,
-                expected_generation: None,
-            },
+        let outcome = match self.transport.request(submission_method(
+            agent,
+            text,
+            terminal,
+            pane,
+            true,
+            self.serving_generation,
         )) {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: Some(session.clone()),

@@ -62,6 +62,7 @@ impl Transport for RestartLifecycleNative {
 fn restart_lifecycle_transport(fixture: &Fixture, rebind: bool) -> Box<dyn Transport> {
     let kind = crate::messaging::identity::provider_kind(fixture.provider).label();
     let info = serde_json::from_value(json!({
+        "generation": if rebind { 2 } else { fixture.worker.serving_generation },
         "terminal_id": if rebind { "restored-terminal" } else { "terminal" },
         "pane_id": if rebind { "restored-pane" } else { "pane" },
         "name": crate::messaging::identity::managed_name(fixture.room, fixture.agent),
@@ -1781,5 +1782,6 @@ fn provider_flake_reset_diagnostics_follow_successful_persistence_once() {
     }
 }
 
+#[cfg(unix)]
 #[path = "restart_epoch_test.rs"]
 mod restart_epoch_tests;

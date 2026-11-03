@@ -125,6 +125,20 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     restart_lifecycle_receipt(&f, "restarted");
                     f.worker.tick().unwrap();
                 }
+                if matches!(receipt, Receipt::Replay) {
+                    let phases: Vec<_> = [Some(old), queued]
+                        .into_iter()
+                        .flatten()
+                        .map(|id| (id, f.request(id).phase))
+                        .collect();
+                    let typed = f.typed().len();
+                    restart_lifecycle_receipt(&f, "restarted");
+                    f.worker.tick().unwrap();
+                    for (id, phase) in phases {
+                        assert_eq!(f.request(id).phase, phase, "receipt replay changed {id:?}");
+                    }
+                    assert_eq!(f.typed().len(), typed, "receipt replay duplicated delivery");
+                }
                 assert_ne!(f.request(old).phase, RequestPhase::Queued);
                 let request = f.request(old);
                 if transient_hold {
@@ -312,6 +326,154 @@ fn restart_epoch_c40_mixed_group_filters_each_delivery_generation() {
         "{:?}",
         f.request(newer)
     );
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(newer),
+        "a current-generation delivery must retain an execution owner"
+    );
+    f.started("turn-2", "current-generation member");
+    f.consume();
+    f.stopped("turn-2", "new-generation answer");
+    f.consume();
+    assert_eq!(f.reply(newer).as_deref(), Some("new-generation answer"));
+}
+
+#[test]
+fn restart_epoch_c47_steering_uses_the_generation_fenced_method() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    running(&mut f, "old lead", "turn-1");
+    let member = f.send("generation-fenced followup", false);
+    f.deliver();
+    assert_eq!(
+        f.request(member)
+            .delivery_epoch
+            .as_ref()
+            .unwrap()
+            .generation,
+        1
+    );
+    assert!(
+        f.native.lock().unwrap().iter().any(|method| matches!(
+            method,
+            Method::AgentPromptIfIdleAtGeneration(params)
+                if params.steer && params.expected_generation == Some(1)
+        )),
+        "steering must not bypass the serving-generation fence"
+    );
+}
+
+#[test]
+fn restart_epoch_c45_retry_hold_keeps_all_submitted_group_members() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let lead = running(&mut f, "held lead", "turn-1");
+    let member = f.send("held followup", false);
+    f.deliver();
+    assert_eq!(f.request(member).group, Some(lead));
+    hold_transient_error(&mut f, lead);
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_ne!(f.request(lead).phase, RequestPhase::Abandoned);
+    assert_ne!(f.request(member).phase, RequestPhase::Abandoned);
+    assert_eq!(f.request(member).group, Some(lead));
+}
+
+#[test]
+fn restart_epoch_c40_distinct_member_final_recovers_without_any_stop_hook() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let rollout = f.dir.join("rollout-distinct-members.jsonl");
+    let lead = f.send("first committed task", false);
+    f.deliver();
+    let lead_payload = f.typed().last().unwrap().0.clone();
+    f.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"first committed task","transcript_path":rollout}),
+    );
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    let member = f.send("second independently committed task", false);
+    f.deliver();
+    let member_payload = f.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&f, 1),
+            "turn-1",
+            &lead_payload,
+            Some("first final"),
+        ),
+    );
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&f, 2),
+            "turn-2",
+            &member_payload,
+            Some("second final"),
+        ),
+    );
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(lead).as_deref(), Some("first final"));
+    assert_eq!(f.reply(member).as_deref(), Some("second final"));
+    assert_eq!(f.request(member).phase, RequestPhase::Completed);
+}
+
+#[test]
+fn restart_epoch_c38_other_agents_final_is_read_before_interruption_fallback() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let first = running(&mut f, "first interrupted agent", "turn-1");
+    let mut state = f.worker.state.clone();
+    let other = state
+        .create_agent(f.room, "other", Provider::Codex, f.dir.clone(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            other,
+            AgentRuntimeIdentity {
+                launch_id: Some("other-launch".into()),
+                terminal_id: Some("other-terminal".into()),
+                pane_id: Some("other-pane".into()),
+                session_id: Some("other-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(other).unwrap();
+    state.observe_status(other, RuntimeStatus::Idle, 1).unwrap();
+    f.worker.save(state).unwrap();
+    callbacks::initialize(
+        &f.dir.join("callbacks/other-launch"),
+        &callbacks::Manifest {
+            routing_key: callbacks::RoutingKey(other.0),
+            provider: Provider::Codex,
+            launch_id: "other-launch".into(),
+        },
+    )
+    .unwrap();
+    f.agent = other;
+    let completed = f.send("other agent completed before restart", false);
+    f.deliver();
+    let payload = f.typed().last().unwrap().0.clone();
+    let rollout = f.dir.join("rollout-other-agent.jsonl");
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&f, 1),
+            "other-turn",
+            &payload,
+            Some("other final"),
+        ),
+    );
+    f.worker.codex_rollouts.insert(other, rollout);
+    f.agent = f.request(first).agent_id;
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(first).phase, RequestPhase::Abandoned);
+    assert_eq!(f.reply(completed).as_deref(), Some("other final"));
+    assert_eq!(f.request(completed).phase, RequestPhase::Completed);
 }
 
 #[test]
@@ -418,20 +580,41 @@ fn restart_epoch_c46_explicit_final_is_not_replayed_by_receipts() {
 
 #[test]
 fn restart_epoch_c47_save_failure_blocks_new_input_until_reconciled() {
-    let mut f = Fixture::new(Provider::Codex);
-    let old = f.send("request before durable restart", false);
-    f.deliver();
-    let queued = f.send("queued behind durable restart", true);
-    let before = f.typed().len();
-    f.worker.transport = epoch_transport(&f, false, 2);
-    f.worker
-        .store
-        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
-    assert!(f.worker.tick().is_err());
-    assert_eq!(f.typed().len(), before);
-    f.worker.tick().unwrap();
-    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
-    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+    use crate::messaging::storage::state_store::SaveStage;
+    for stage in [
+        SaveStage::TempCreate,
+        SaveStage::TempWrite,
+        SaveStage::TempSync,
+        SaveStage::Replace,
+        SaveStage::ParentSync,
+    ] {
+        for reopen in [false, true] {
+            let mut f = Fixture::new(Provider::Codex);
+            observe_epoch(&mut f, 1);
+            let old = f.send("request before durable restart", false);
+            f.deliver();
+            let queued = f.send("queued behind durable restart", true);
+            let before = f.typed().len();
+            f.worker.transport = epoch_transport(&f, false, 2);
+            f.worker.store.fail_once_at(stage);
+            assert!(f.worker.tick().is_err(), "{stage:?}");
+            assert_eq!(f.typed().len(), before, "{stage:?}");
+            if reopen {
+                epoch_reopen(&mut f, false, 2);
+            }
+            f.worker.tick().unwrap();
+            assert_eq!(f.request(old).phase, RequestPhase::Abandoned, "{stage:?}");
+            assert_eq!(f.typed().len(), before + 1, "{stage:?}/reopen={reopen}");
+            assert_eq!(
+                f.request(queued)
+                    .delivery_epoch
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                2
+            );
+        }
+    }
 }
 
 #[test]
