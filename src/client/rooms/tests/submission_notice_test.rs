@@ -324,6 +324,7 @@ fn tui_error_text_startup_failure_and_its_routed_notice_are_log_only() {
                 command: "codex".into(),
                 started_at_ms: 1000,
                 reported: true,
+                process_observed: false,
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(StartupFailure {

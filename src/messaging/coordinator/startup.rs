@@ -63,6 +63,7 @@ pub(super) fn watch_native_resume(
                 command: attempt.command.clone(),
                 started_at_ms: io::now_ms(),
                 reported: false,
+                process_observed: false,
                 native_terminal_id: Some(info.terminal_id.clone()),
                 recovery: None,
                 failure: None,
@@ -90,6 +91,7 @@ impl Worker {
                         .ok_or("Cannot describe the provider launch command")?,
                     started_at_ms,
                     reported: false,
+                    process_observed: false,
                     native_terminal_id: None,
                     recovery: None,
                     failure: None,
@@ -129,6 +131,7 @@ impl Worker {
                         .ok_or("Invalid launch command")?,
                     started_at_ms: io::now_ms(),
                     reported: true,
+                    process_observed: false,
                     native_terminal_id: None,
                     recovery: None,
                     failure: Some(failure),
@@ -212,11 +215,13 @@ impl Worker {
                 continue;
             }
             let name = identity::managed_name(agent.room_id, agent.id);
-            let info = infos.iter().find(|info| {
+            let terminal_info = infos.iter().find(|info| {
                 Some(info.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
                     && Some(info.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
-                    && (info.name.as_deref() == Some(&name)
-                        || super::resume::native_attempt(&agent, info).is_some())
+            });
+            let info = terminal_info.filter(|info| {
+                info.name.as_deref() == Some(&name)
+                    || super::resume::native_attempt(&agent, info).is_some()
             });
             let input_error = info.and_then(|info| info.launch_input_error.as_deref());
             let native_error = info
@@ -248,10 +253,22 @@ impl Worker {
                 continue;
             }
             let expired = now_ms.saturating_sub(startup.started_at_ms) >= STARTUP_TIMEOUT_MS;
+            let process_present = terminal_info.is_some_and(|info| {
+                info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+            });
+            let process_exited = startup.process_observed && !process_present;
             // Startup confirmation is bounded independently of native ownership;
             // only exit/replacement releases it. A failed list request never
             // reaches here, so silence is not failure.
-            if !startup.reported && !expired && info.is_some() && native_error.is_none() {
+            if !startup.reported && !expired && !process_exited && native_error.is_none() {
+                if !startup.process_observed && process_present && info.is_some() {
+                    startup.process_observed = true;
+                    let mut state = self.state.clone();
+                    state
+                        .set_agent_startup(agent.id, Some(startup))
+                        .map_err(|e| e.to_string())?;
+                    self.save(state)?;
+                }
                 continue;
             }
             if !startup.reported {

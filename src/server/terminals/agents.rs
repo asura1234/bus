@@ -112,25 +112,15 @@ impl App {
         else {
             return;
         };
-        let returned_to_prompt = self
-            .terminal_runtimes
-            .get(&terminal_id)
-            .is_some_and(|runtime| {
-                runtime.launch_returned_to_prompt()
-                    && available_shell_name(runtime).is_some()
-                    && live_runtime_agent(runtime).is_none()
-            });
         let changed = self
             .state
             .terminals
             .get_mut(&terminal_id)
             .is_some_and(|terminal| {
-                if terminal.managed_agent_awaiting_startup() && returned_to_prompt {
-                    terminal.clear_agent_name();
-                    true
-                } else {
-                    terminal.reconcile_managed_agent_at(Instant::now(), false)
-                }
+                // Editor redraws also emit prompt marks before the provider is
+                // acquired. Only an observed provider's exit or the deadline
+                // can end pending startup; a shell prompt alone cannot.
+                terminal.reconcile_managed_agent_at(Instant::now(), false)
             });
         if changed {
             self.state.mark_session_dirty();
