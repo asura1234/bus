@@ -45,14 +45,20 @@ impl EditorProbe {
         }
     }
 
-    fn attempt_command(&self, id: u64, command: &str) -> String {
+    fn attempt_command(&self, id: u64, command: &str) -> io::Result<String> {
         if super::spawn::is_powershell_shell(&self.shell) {
-            format!("$global:__bus_launch_attempt={id}; {command}")
-        } else {
-            // Bash's capture macro completes the first command on the line.
-            // Keep a single simple command so completion still calls our probe.
-            format!("__bus_launch {id} {command}")
+            return Ok(format!("$global:__bus_launch_attempt={id}; {command}"));
         }
+        if self.shell == "fish" {
+            return Ok(format!("__bus_launch {id} {command}"));
+        }
+        // Keep one outer command for Bash's capture macro. The helper parses
+        // the already-quoted original line so provider aliases still expand.
+        crate::platform::interactive_shell_command(
+            &["__bus_launch".into(), id.to_string(), command.into()],
+            &self.shell,
+        )
+        .ok_or_else(|| io::Error::other("Invalid wrapped shell launch command"))
     }
 
     fn capture(&self, writer: &ShellWriter) -> io::Result<Vec<u8>> {
@@ -277,7 +283,7 @@ impl TerminalRuntime {
         let id = self
             .launch_transaction
             .begin(self.pane_id.raw(), self.shell_prompt_generation());
-        let command = probe.attempt_command(id, &command);
+        let command = probe.attempt_command(id, &command)?;
         self.invalidate_shell_prompt();
         let writer = ShellWriter {
             io: self.io.clone(),

@@ -339,8 +339,8 @@ if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then source "${ZDOTDIR-$HOME}/.zshenv"; fi
 typeset -g __bus_prompt_cycle=0 __bus_launch_attempt=0
 function __bus_launch() {
     __bus_launch_attempt=$1
-    shift
-    "$@"
+    # The argument is the verified, shell-quoted command, including aliases.
+    builtin eval -- "$2"
 }
 function __bus_capture_editor() {
     [[ $CONTEXT == start ]] || return
@@ -442,8 +442,8 @@ __bus_prompt_mark=''
 export -n __bus_prompt_cycle __bus_launch_attempt __bus_prompt_mark
 __bus_launch() {
     __bus_launch_attempt=$1
-    shift
-    "$@"
+    # The argument is the verified, shell-quoted command, including aliases.
+    builtin eval -- "$2"
 }
 __bus_capture_editor() {
     COMPREPLY=()
