@@ -368,8 +368,9 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 self.assertFalse(os.access(Path(directory) / "lark-cli", os.X_OK))
 
             version = run(["--version"])
-            # Current --version is a release version, not compiled-SHA evidence.
-            # Both private run_start identities below must attest this exact head.
+            # --version carries the full compiled SHA; both private run_start
+            # identities below independently attest this exact head.
+            self.assertIn(sha, version)
             paths = save("paths", control("--paths"))
             self.assertEqual(Path(paths["data"]), root / "data")
             logs = Path(paths["logs"]).resolve()

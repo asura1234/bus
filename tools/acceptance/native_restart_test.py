@@ -145,7 +145,16 @@ def wait_initial_room(bus):
         time.sleep(0.05)
 
 
-def scenario(binary, root, whole_session=False, unhealthy=False, retain_failure=False):
+def build_identity(binary):
+    output = subprocess.check_output([str(binary), "--identity"], text=True)
+    return json.loads(output)["sha"]
+
+
+def scenario(binary, root, whole_session=False, unhealthy=False, replacement_binary=None,
+             retain_failure=False):
+    replacement_binary = replacement_binary or binary
+    initial_sha = build_identity(binary)
+    replacement_sha = build_identity(replacement_binary)
     root.mkdir(parents=True, exist_ok=True)
     work, home, fake_bin = (root / name for name in ("work", "home", "bin"))
     for path in (work, home, fake_bin):
@@ -184,10 +193,17 @@ def scenario(binary, root, whole_session=False, unhealthy=False, retain_failure=
         original_native = bus.native_agent(native_target)
         assert original_native is not None, agent
         evidence["original_native"] = original_native
+        initial_state = bus.cli("state")
+        initial_build = initial_state["build"]
+        assert initial_build["client"]["binary"] == str(binary), initial_build
+        assert initial_build["server"]["binary"] == str(binary), initial_build
+        assert initial_build["client"]["sha"] == initial_sha, initial_build
+        assert initial_build["server"]["sha"] == initial_sha, initial_build
+        evidence["initial_build"] = initial_build
         old_pid = bus.child.pid
+        replacement = root / "bus-replacement"
+        shutil.copy2(replacement_binary, replacement)
         if whole_session:
-            replacement = root / "bus-replacement"
-            shutil.copy2(binary, replacement)
             if unhealthy:
                 replacement.write_text("#!/bin/sh\nif [ \"$1\" = --identity ]; then\n"
                     f"echo '{{\"sha\":\"{'b' * 40}\",\"providers\":[\"claude\"]}}'\nelse exit 42; fi\n")
@@ -208,9 +224,23 @@ def scenario(binary, root, whole_session=False, unhealthy=False, retain_failure=
             evidence.update(outcome=outcome, replacement_tui=tui)
         else:
             bus.stop()
-            # start() means control readiness only. No idle/provider wait is allowed
-            # before this send: it must queue safely while native restore is pending.
+            native_log = open(root / "native-replacement.log", "wb")
+            native_process = subprocess.Popen([str(replacement), "server"], cwd=work,
+                                              env=dict(env, HERDR_SESSION="bus", BUS_DEV="1"),
+                                              stdout=native_log, stderr=subprocess.STDOUT,
+                                              start_new_session=True)
+            socket = bus.data / "herdr-config/sessions/bus/herdr.sock"
+            stamp = bus.data / "restarts/build.json"
+            deadline = time.monotonic() + 30
+            while True:
+                assert native_process.poll() is None, (root / "native-replacement.log").read_text()
+                if socket.exists() and stamp.exists() and json.loads(stamp.read_text())["sha"] == replacement_sha:
+                    break
+                assert time.monotonic() < deadline, (root / "native-replacement.log").read_text()
+                time.sleep(0.05)
             bus.start()
+            assert native_process.poll() is None, (root / "native-replacement.log").read_text()
+            native_log.close()
             assert bus.child.pid != old_pid
         sent = bus.cli("send", "--room", "bus", "--to", "restart-agent", "--text", "immediate-after-restart")
         evidence["send"] = sent
@@ -230,6 +260,16 @@ def scenario(binary, root, whole_session=False, unhealthy=False, retain_failure=
                  if (record := json.loads(line)).get("kind") == "run_start"]
         evidence["native_boots"] = boots
         assert len(boots) == 2 and boots[0]["pid"] != boots[1]["pid"], boots
+        final_state = bus.cli("state")
+        final_build = final_state["build"]
+        expected_final_sha = initial_sha if unhealthy else replacement_sha
+        assert final_build["client"]["sha"] == (expected_final_sha if whole_session else initial_sha), final_build
+        assert final_build["server"]["sha"] == expected_final_sha, final_build
+        assert final_build["server"]["pid"] != initial_build["server"]["pid"], final_build
+        if not whole_session:
+            assert final_build["client"]["binary"] == str(binary), final_build
+            assert final_build["server"]["binary"] == str(replacement), final_build
+        evidence["final_build"] = final_build
         print(json.dumps({"result": "PASS", "before": old["reply"], "after": new["reply"]}), flush=True)
     except BaseException as error:
         original_error = error
@@ -252,18 +292,22 @@ def scenario(binary, root, whole_session=False, unhealthy=False, retain_failure=
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
+    parser.add_argument("--replacement-binary", type=Path)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--retain-failure", action="store_true")
     parser.add_argument("--whole-session", action="store_true")
     parser.add_argument("--unhealthy", action="store_true")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
+    replacement_binary = (args.replacement_binary or binary).resolve(strict=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     entries = subprocess.check_output(["git", "-C", str(ROOT), "worktree", "list", "--porcelain", "-z"], env=env)
     live = Path(os.fsdecode(entries.split(b"\0", 1)[0].removeprefix(b"worktree "))) / "target/debug/bus"
-    assert not (binary == live.resolve() or (live.exists() and binary.samefile(live))), "live binary forbidden"
+    for candidate in (binary, replacement_binary):
+        assert not (candidate == live.resolve() or (live.exists() and candidate.samefile(live))), "live binary forbidden"
     with restart_directory(args.run_dir, args.retain_failure) as directory:
-        scenario(binary, directory, args.whole_session, args.unhealthy, args.retain_failure)
+        scenario(binary, directory, args.whole_session, args.unhealthy, replacement_binary,
+                 args.retain_failure)
 
 
 if __name__ == "__main__":

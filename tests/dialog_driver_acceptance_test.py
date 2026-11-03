@@ -208,7 +208,10 @@ class AcceptanceEvidenceTests(unittest.TestCase):
                         perf = private / "data/perf"; perf.mkdir(exist_ok=True)
                         for name in ["client", "server"]:
                             (perf / (name + ".jsonl")).write_text(json.dumps({"kind": "run_start", "build_sha": head, "dev_tools": True}) + "\n")
-                        result = {"build": {"binary": str(private / "bin/bus")}}
+                        result = {"build": {
+                            "client": {"binary": str(private / "bin/bus"), "sha": head},
+                            "server": {"binary": str(private / "bin/bus"), "sha": head},
+                        }}
                     elif args[:2] == ["room", "create"]:
                         result = {"room_id": 1}
                     elif args[:2] == ["agent", "add"]:
