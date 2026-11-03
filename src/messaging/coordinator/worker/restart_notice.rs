@@ -16,7 +16,15 @@ impl Worker {
             self.restart_requests = self
                 .state
                 .agents()
-                .filter_map(|agent| agent.current_request.map(|request| (agent.id, request)))
+                .filter_map(|agent| {
+                    let current = agent.current_request?;
+                    (self.restart_outcome_at.is_some()
+                        || self
+                            .resume_requests
+                            .get(&agent.id)
+                            .is_none_or(|original| *original == current))
+                    .then_some((agent.id, current))
+                })
                 .collect();
             self.restart_outcome_at = Some(record.at_ms);
         }

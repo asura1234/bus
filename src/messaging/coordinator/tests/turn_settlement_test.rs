@@ -42,6 +42,114 @@ fn server_restart(fixture: &mut Fixture) {
     fixture.worker.announce_recorded_restart().unwrap();
 }
 
+struct RestartLifecycleNative {
+    methods: Arc<Mutex<Vec<Method>>>,
+    info: schema::AgentInfo,
+}
+
+impl Transport for RestartLifecycleNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(&method, Method::AgentListWithDetectionContext(_)) {
+            self.methods.lock().unwrap().push(method);
+            return Ok(ResponseResult::AgentList {
+                agents: vec![self.info.clone()],
+            });
+        }
+        Native(self.methods.clone()).request(method)
+    }
+}
+
+fn restart_lifecycle_transport(fixture: &Fixture, rebind: bool) -> Box<dyn Transport> {
+    let kind = crate::messaging::identity::provider_kind(fixture.provider).label();
+    let info = serde_json::from_value(json!({
+        "terminal_id": if rebind { "restored-terminal" } else { "terminal" },
+        "pane_id": if rebind { "restored-pane" } else { "pane" },
+        "name": crate::messaging::identity::managed_name(fixture.room, fixture.agent),
+        "agent": kind, "agent_status": "idle", "interactive_ready": true,
+        "workspace_id": "workspace", "tab_id": "tab", "focused": false, "revision": 1,
+        "agent_session": {"source": crate::messaging::identity::managed_source(fixture.provider),
+            "agent": kind, "kind": "id", "value": "session"}
+    }))
+    .unwrap();
+    Box::new(RestartLifecycleNative {
+        methods: fixture.native.clone(),
+        info,
+    })
+}
+
+fn restart_lifecycle_reopen(fixture: &mut Fixture, rebind: bool) {
+    let placeholder = Worker::open(
+        fixture.dir.join("lifecycle-placeholder"),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        restart_lifecycle_transport(fixture, rebind),
+    )
+    .unwrap();
+}
+
+fn restart_lifecycle_receipt(fixture: &Fixture, outcome: &str) {
+    let record = crate::utils::restart_record::RestartLog {
+        at_ms: fixture.now,
+        who: "user:lifecycle".into(),
+        old_sha: "old".into(),
+        new_sha: "new".into(),
+        old_binary: "/old".into(),
+        new_binary: "/new".into(),
+        outcome: outcome.into(),
+        reason: String::new(),
+    };
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::outcome_path(&fixture.dir),
+        &record,
+    )
+    .unwrap();
+}
+
+#[test]
+fn restart_lifecycle_late_outcome_keeps_the_request_delivered_after_native_rebind() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let interrupted = fixture.send("in flight before whole-session restart", false);
+    fixture.deliver();
+    let queued = fixture.send(
+        "queued before restart, delivered by the resumed coordinator",
+        true,
+    );
+    restart_lifecycle_reopen(&mut fixture, true);
+    fixture.worker.tick().unwrap();
+    assert_eq!(fixture.request(interrupted).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Active);
+    restart_lifecycle_receipt(&fixture, "restarted");
+    fixture.worker.tick().unwrap();
+    assert_eq!(
+        fixture.request(queued).phase,
+        RequestPhase::Active,
+        "the health receipt describes the already-reconciled interruption, not work delivered by the replacement coordinator; reason={:?}",
+        fixture.request(queued).failure_reason
+    );
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_every_provider_queue()
