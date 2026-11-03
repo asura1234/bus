@@ -72,13 +72,17 @@ impl BusUi {
             DeleteTarget::Room(id) => Some(id),
             DeleteTarget::Agent(id) => self.snapshot.state.agent(id).map(|agent| agent.room_id),
         };
-        if self.send_intent == room {
-            self.send_intent = None;
-        }
         // Once confirmed, a not-yet-dispatched room prompt must not outrun deletion.
         self.pending.retain(|pending| {
             pending.enqueued
-                || !matches!(pending.command, BusCommand::Submit(id) | BusCommand::SubmitQueued(id) if Some(id) == room)
+                || !matches!(pending.command, BusCommand::Submit(id, _) | BusCommand::SubmitQueued(id, _) if Some(id) == room)
+        });
+        self.submissions.retain(|submission| {
+            Some(submission.room) != room
+                || self
+                    .pending
+                    .iter()
+                    .any(|pending| pending.id == submission.command_id)
         });
         let command = match target {
             DeleteTarget::Room(id) => BusCommand::DeleteRoom(id),
@@ -157,9 +161,8 @@ impl BusUi {
             .retain(|pending| pending.enqueued || !target_removed(&pending.command));
         self.failed
             .retain(|pending| !target_removed(&pending.command));
-        if self.send_intent.is_some_and(room_removed) {
-            self.send_intent = None;
-        }
+        self.submissions
+            .retain(|submission| !room_removed(submission.room));
         let missing_room = self.room.is_some_and(room_removed);
         let missing_terminal = self.terminal.is_some_and(agent_removed);
         if missing_room || missing_terminal {
@@ -191,8 +194,8 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
         | BusCommand::SetRecipients(id, _)
         | BusCommand::AttachFile(id, _)
         | BusCommand::RemoveFile(id, _)
-        | BusCommand::Submit(id)
-        | BusCommand::SubmitQueued(id) => state.room(*id).is_some(),
+        | BusCommand::Submit(id, _)
+        | BusCommand::SubmitQueued(id, _) => state.room(*id).is_some(),
         BusCommand::RenameAgent(id, _)
         | BusCommand::SetDetails(id, _)
         | BusCommand::FocusTerminal(id)
@@ -228,8 +231,11 @@ mod tests {
         ui.confirm_delete();
         let command = ui.deletion.as_ref().unwrap().command_id.unwrap();
         ui.settle_deletion(command);
-        ui.send_intent = Some(room);
-        ui.queue(BusCommand::Submit(room), Effect::None);
+        ui.locals.get_mut(&room).unwrap().text.insert("new input");
+        ui.queue(
+            BusCommand::Submit(room, crate::messaging::model::Draft::default()),
+            Effect::None,
+        );
         let pending = ui.pending.len();
 
         ui.confirm_delete();
@@ -244,8 +250,7 @@ mod tests {
             "must not enqueue another deletion"
         );
         assert_eq!(
-            ui.send_intent,
-            Some(room),
+            ui.locals[&room].text.text, "new input",
             "dismissal must preserve new input"
         );
     }

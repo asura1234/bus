@@ -116,9 +116,9 @@ pub(crate) enum BusCommand {
     SetRecipients(RoomId, AgentRecipients),
     AttachFile(RoomId, String),
     RemoveFile(RoomId, PathBuf),
-    Submit(RoomId),
+    Submit(RoomId, crate::messaging::model::Draft),
     /// Like `Submit`, but each message waits for its agent's own turn.
-    SubmitQueued(RoomId),
+    SubmitQueued(RoomId, crate::messaging::model::Draft),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),
     /// Adds a MASTER agent, launched with its orchestrator system prompt.

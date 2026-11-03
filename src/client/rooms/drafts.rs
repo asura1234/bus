@@ -2,8 +2,43 @@
 use super::{editor::Editor, forms::Form, BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentRecipients, Room, RoomId},
+    model::{AgentRecipients, Draft, Room, RoomId},
 };
+
+pub(super) fn attachment_path(input: &str) -> std::path::PathBuf {
+    let home = std::env::home_dir();
+    if let Some(home) = &home {
+        if let Ok(path) = crate::messaging::attachments::validate_attachment(input, home) {
+            return path;
+        }
+    }
+    if input == "~" {
+        return home.unwrap_or_else(|| std::path::PathBuf::from(input));
+    }
+    if let Some(remainder) = input.strip_prefix("~/") {
+        if let Some(home) = home {
+            return home.join(remainder);
+        }
+    }
+    std::path::PathBuf::from(input)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LocalSendStatus {
+    Pending,
+    Failed,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LocalSubmission {
+    pub command_id: u64,
+    pub room: RoomId,
+    pub draft: Draft,
+    pub queued: bool,
+    pub requested_at: std::time::Instant,
+    pub submitted_at_ms: u64,
+    pub status: LocalSendStatus,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ComposerSize {
@@ -83,22 +118,20 @@ impl BusUi {
 
     /// Sends like Enter, but the message waits for each agent's own turn.
     pub fn request_queued_send(&mut self, room: RoomId) {
-        self.request_send(room);
-        self.send_queued = self.send_intent == Some(room);
+        self.request_send_with(room, true);
     }
 
     pub fn request_send(&mut self, room: RoomId) {
+        self.request_send_with(room, false);
+    }
+
+    fn request_send_with(&mut self, room: RoomId, queued: bool) {
         if let Some(local) = self
             .locals
             .get_mut(&room)
             .filter(|local| local.text.text.trim() == "/help")
         {
             local.text = Editor::default();
-            // A queued intent reads the latest saved draft. Consume this local
-            // command before settling it; it must never become that payload.
-            if self.send_intent == Some(room) {
-                self.send_intent = None;
-            }
             self.text_changed(room);
             self.form = Some(Form::Help { scroll: 0 });
             self.recipient_menu = false;
@@ -134,14 +167,6 @@ impl BusUi {
             );
             return;
         }
-        if self.send_intent.is_some()
-            || self
-                .pending
-                .iter()
-                .any(|p| matches!(p.effect, Effect::Submit(..)))
-        {
-            return;
-        }
         let failed = std::mem::take(&mut self.failed);
         if let Some(local) = self.locals.get(&room) {
             tracing::debug!(event = "bus.message.requested", room_id = room.0,
@@ -159,6 +184,14 @@ impl BusUi {
             }
         }
         self.error = None;
+        self.submissions.retain(|submission| {
+            submission.room != room || submission.status != LocalSendStatus::Failed
+        });
+        let Some(draft) = self.draft_for_send(room) else {
+            return;
+        };
+        let requested_at = std::time::Instant::now();
+        let submitted_at_ms = crate::utils::time::now_ms();
         if let Some(local) = self.locals.get_mut(&room) {
             let text = local.text.text.clone();
             if !text.is_empty() && local.recall.last().map(|r| &r.text) != Some(&text) {
@@ -166,30 +199,162 @@ impl BusUi {
             }
             local.history_index = None;
             local.live_draft = None;
+            local.text = Editor::default();
+            local.text_generation += 1;
+            local.composer_size = ComposerSize::Auto;
+            local.composer_scroll = None;
         }
-        self.send_intent = Some(room);
-        self.send_requested_at = Some(std::time::Instant::now());
-        // Each send picks its own delivery; a cancelled Option+Enter must not
-        // turn a later plain Enter into a queued send.
-        self.send_queued = false;
+        let command = if queued {
+            BusCommand::SubmitQueued(room, draft.clone())
+        } else {
+            BusCommand::Submit(room, draft.clone())
+        };
+        let command_id = self.queue(command, Effect::Submit);
+        self.submissions.push(LocalSubmission {
+            command_id,
+            room,
+            draft,
+            queued,
+            requested_at,
+            submitted_at_ms,
+            status: LocalSendStatus::Pending,
+        });
         self.history_follow_tail = true;
+    }
+
+    fn draft_for_send(&self, room: RoomId) -> Option<Draft> {
+        let local = self.locals.get(&room)?;
+        Some(Draft {
+            text: local.text.text.clone(),
+            files: self.current_draft_files(room),
+            recipient_ids: local.recipients.clone(),
+        })
+    }
+
+    pub(super) fn current_draft_files(&self, room: RoomId) -> Vec<std::path::PathBuf> {
+        let sending = self
+            .submissions
+            .iter()
+            .filter(|submission| {
+                submission.room == room && submission.status == LocalSendStatus::Pending
+            })
+            .flat_map(|submission| submission.draft.files.iter())
+            .collect::<std::collections::BTreeSet<_>>();
+        let consumed = |id: u64, path: &std::path::Path| {
+            self.submissions.iter().any(|submission| {
+                submission.room == room
+                    && submission.status == LocalSendStatus::Pending
+                    && submission.command_id > id
+                    && submission.draft.files.iter().any(|sent| sent == path)
+            })
+        };
+        let mut files: Vec<std::path::PathBuf> = self
+            .snapshot
+            .state
+            .room(room)
+            .map(|room| {
+                room.draft
+                    .files
+                    .iter()
+                    .filter(|path| !sending.contains(path))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        for pending in &self.pending {
+            match &pending.command {
+                BusCommand::AttachFile(id, raw) if *id == room => {
+                    let path = attachment_path(raw);
+                    if !consumed(pending.id, &path) && !files.contains(&path) {
+                        files.push(path);
+                    }
+                }
+                BusCommand::RemoveFile(id, raw) if *id == room => {
+                    let path = attachment_path(&raw.display().to_string());
+                    files.retain(|file| file != &path);
+                }
+                _ => {}
+            }
+        }
+        for pending in &self.failed {
+            if let BusCommand::AttachFile(id, raw) = &pending.command {
+                if *id == room {
+                    let path = attachment_path(raw);
+                    if !consumed(pending.id, &path) && !files.contains(&path) {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        files
     }
 
     /// The local text, or a file the coordinator holds or is still attaching.
     fn draft_has_content(&self, room: RoomId) -> bool {
-        self.locals
-            .get(&room)
-            .is_some_and(|local| !local.text.text.is_empty())
-            || self
-                .snapshot
-                .state
-                .room(room)
-                .is_some_and(|room| !room.draft.files.is_empty())
-            || self
-                .pending
-                .iter()
-                .chain(&self.failed)
-                .any(|p| matches!(&p.command, BusCommand::AttachFile(id, _) if *id == room))
+        self.draft_for_send(room)
+            .is_some_and(|draft| !draft.text.is_empty() || !draft.files.is_empty())
+    }
+
+    pub(super) fn restore_failed_submission(&mut self, command_id: u64) {
+        let Some(submission) = self
+            .submissions
+            .iter_mut()
+            .find(|submission| submission.command_id == command_id)
+        else {
+            return;
+        };
+        submission.status = LocalSendStatus::Failed;
+        let room = submission.room;
+        let sent = submission.draft.text.clone();
+        if let Some(local) = self.locals.get_mut(&room) {
+            let text = if sent.is_empty() {
+                local.text.text.clone()
+            } else if local.text.text.is_empty() {
+                sent
+            } else {
+                format!("{sent}\n{}", local.text.text)
+            };
+            local.text = Editor::new(text);
+            local.composer_scroll = None;
+        }
+        self.text_changed(room);
+    }
+
+    pub(super) fn history_projection(
+        &self,
+    ) -> (
+        std::sync::Arc<crate::messaging::coordinator::BusSnapshot>,
+        std::collections::BTreeMap<crate::messaging::model::PromptId, LocalSendStatus>,
+    ) {
+        let mut statuses = std::collections::BTreeMap::new();
+        if self.submissions.is_empty() {
+            return (std::sync::Arc::clone(&self.snapshot), statuses);
+        }
+        let mut projected = (*self.snapshot).clone();
+        let mut local_revision = 1_u64 << 63;
+        for submission in &self.submissions {
+            local_revision = local_revision
+                .wrapping_mul(31)
+                .wrapping_add(submission.command_id)
+                .wrapping_add(u64::from(submission.status == LocalSendStatus::Failed) << 32);
+            let Ok(requests) = projected.state.submit_draft_exact(
+                submission.room,
+                submission.draft.clone(),
+                submission.submitted_at_ms,
+                submission.queued,
+            ) else {
+                continue;
+            };
+            if let Some(prompt) = requests
+                .first()
+                .and_then(|id| projected.state.request(*id))
+                .map(|request| request.prompt.id)
+            {
+                statuses.insert(prompt, submission.status);
+            }
+        }
+        projected.revision ^= local_revision;
+        (std::sync::Arc::new(projected), statuses)
     }
 
     pub(super) fn apply_external_edit(&mut self, room: RoomId, text: String) {
@@ -243,8 +408,7 @@ impl BusUi {
         }
     }
 
-    /// Ctrl+C clears a visible room draft; it never quits Bus. A draft that is
-    /// already being sent stays intact.
+    /// Ctrl+C clears a visible room draft; it never quits Bus or cancels sends.
     pub(super) fn clear_composer(&mut self) -> bool {
         if self.quitting.is_some()
             || self.force_exit_until.is_some()
@@ -265,18 +429,11 @@ impl BusUi {
         {
             return false;
         }
-        let sending = self.send_intent == Some(room)
-            || self
-                .pending
-                .iter()
-                .any(|p| matches!(p.effect, Effect::Submit(id, _) if id == room));
-        if !sending {
-            if let Some(local) = self.locals.get_mut(&room) {
-                local.text = Editor::default();
-            }
-            self.drag = None;
-            self.text_changed(room);
+        if let Some(local) = self.locals.get_mut(&room) {
+            local.text = Editor::default();
         }
+        self.drag = None;
+        self.text_changed(room);
         true
     }
 }

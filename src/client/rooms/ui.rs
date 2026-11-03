@@ -1,4 +1,7 @@
-pub(super) use super::drafts::{ComposerSize, LocalRoom, Recalled};
+pub(super) use super::drafts::{
+    ComposerSize, LocalRoom, LocalSendStatus, LocalSubmission, Recalled,
+};
+#[cfg(test)]
 use super::editor::Editor;
 use super::notices::{command_agent, command_room};
 use super::{
@@ -38,7 +41,7 @@ pub(super) enum Effect {
     Text(RoomId, u64),
     Recipients(RoomId, u64),
     Files(RoomId),
-    Submit(RoomId, u64),
+    Submit,
     Shutdown,
 }
 
@@ -61,17 +64,13 @@ pub(in crate::client) struct BusUi {
     pub(super) locals: BTreeMap<RoomId, LocalRoom>,
     pub(super) pending: VecDeque<Pending>,
     pub next_id: u64,
-    pub send_intent: Option<RoomId>,
-    /// When the pending send was requested, for its acknowledgement log.
-    pub(super) send_requested_at: Option<std::time::Instant>,
-    /// The pending send waits for each agent's own turn instead of steering.
-    pub(super) send_queued: bool,
     pub error: Option<String>,
     /// Agent errors last written to the client log, so each is logged once.
     pub(super) observed_agent_notices: BTreeMap<AgentId, super::notices::AgentNotices>,
     pub(super) observed_snapshot_error: Option<String>,
     pub(super) observed_request_notices: BTreeMap<RequestId, super::notices::RequestNotices>,
     pub(super) failed: Vec<Pending>,
+    pub(super) submissions: Vec<LocalSubmission>,
     // Storage recovered after these commands were rejected but before they
     // settled; settling retries them instead of keeping them failed.
     recovered_storage_failures: BTreeSet<u64>,
@@ -187,15 +186,13 @@ impl BusUi {
             locals,
             pending: VecDeque::new(),
             next_id: 1,
-            send_intent: None,
-            send_requested_at: None,
-            send_queued: false,
             recovered_storage_failures: BTreeSet::new(),
             error: None,
             observed_agent_notices: BTreeMap::new(),
             observed_snapshot_error: None,
             observed_request_notices,
             failed: Vec::new(),
+            submissions: Vec::new(),
             terminal: None,
             target_pane: None,
             native_focus_pending: false,
@@ -347,7 +344,7 @@ impl BusUi {
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
-        if let BusCommand::Submit(room) | BusCommand::SubmitQueued(room) = &command {
+        if let BusCommand::Submit(room, _) | BusCommand::SubmitQueued(room, _) = &command {
             tracing::info!(
                 event = "bus.message.submit",
                 room_id = room.0,
@@ -408,13 +405,13 @@ impl BusUi {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
                     if matches!(
                         pending.command,
-                        BusCommand::Submit(_) | BusCommand::SubmitQueued(_)
+                        BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
                     ) {
-                        // From the Enter that asked for this send to its answer.
                         let enter_to_ack_ms = self
-                            .send_requested_at
-                            .take()
-                            .map(|at| at.elapsed().as_millis() as u64);
+                            .submissions
+                            .iter()
+                            .find(|submission| submission.command_id == command_id)
+                            .map(|submission| submission.requested_at.elapsed().as_millis() as u64);
                         tracing::info!(
                             event = "bus.message.ack",
                             command_id,
@@ -595,7 +592,7 @@ impl BusUi {
                             Effect::Text(..) | Effect::Recipients(..) | Effect::Files(..)
                         ) && super::deletion::target_exists(&pending.command, &self.snapshot.state);
                     self.record_command_failure(&pending, error, recovered, keep);
-                    self.send_intent = None;
+                    self.restore_failed_submission(pending.id);
                     if keep {
                         if recovered {
                             self.retry_storage_failure(pending);
@@ -629,15 +626,8 @@ impl BusUi {
                         }
                         _ => {}
                     }
-                    if let Effect::Submit(room, generation) = pending.effect {
-                        if let Some(local) = self.locals.get_mut(&room) {
-                            if local.text_generation == generation {
-                                local.text = Editor::default();
-                                local.composer_size = ComposerSize::Auto;
-                                local.composer_scroll = None;
-                            }
-                        }
-                    }
+                    self.submissions
+                        .retain(|submission| submission.command_id != pending.id);
                     // Local editors remain authoritative; an old successful save never replaces
                     // a later generation. Only their exact command is retired here.
                 }
@@ -649,21 +639,12 @@ impl BusUi {
             self.recovered_storage_failures
                 .retain(|id| pending.iter().any(|pending| pending.id == *id));
         }
-        if self.pending.is_empty() {
-            if let Some(room) = self.send_intent.take() {
-                let generation = self
-                    .locals
-                    .get(&room)
-                    .map_or(0, |local| local.text_generation);
-                let command = if std::mem::take(&mut self.send_queued) {
-                    BusCommand::SubmitQueued(room)
-                } else {
-                    BusCommand::Submit(room)
-                };
-                self.queue(command, Effect::Submit(room, generation));
-            } else if self.quitting.is_some() && self.failed.is_empty() && !self.exit_ready {
-                self.queue(BusCommand::Shutdown, Effect::Shutdown);
-            }
+        if self.pending.is_empty()
+            && self.quitting.is_some()
+            && self.failed.is_empty()
+            && !self.exit_ready
+        {
+            self.queue(BusCommand::Shutdown, Effect::Shutdown);
         }
     }
 
@@ -671,7 +652,7 @@ impl BusUi {
     /// coordinator (a draft save, a send) settles only on a tick, so a 100 ms
     /// cadence would add up to that much to every step of Enter's round trip.
     pub fn tick_interval(&self) -> std::time::Duration {
-        if self.pending.is_empty() && self.send_intent.is_none() {
+        if self.pending.is_empty() {
             std::time::Duration::from_millis(100)
         } else {
             std::time::Duration::from_millis(10)
@@ -965,27 +946,28 @@ mod tests {
         );
     }
     #[test]
-    fn immediate_enter_waits_for_own_success_and_snapshot_before_submit() {
+    fn immediate_enter_queues_exact_draft_before_autosave_ack() {
         let (mut ui, room) = ui();
         ui.locals.get_mut(&room).unwrap().text.insert("latest");
         ui.text_changed(room);
         ui.request_send(room);
+        assert!(ui.locals[&room].text.text.is_empty());
+        assert!(ui.pending.iter().any(|pending| matches!(
+            &pending.command,
+            BusCommand::Submit(id, draft) if *id == room && draft.text == "latest"
+        )));
         ui.receive_event(BusEvent::CommandFinished {
             command_id: 1,
             result: Ok(()),
         });
         ui.settle();
-        assert!(!ui
-            .pending
-            .iter()
-            .any(|p| matches!(p.command, BusCommand::Submit(_))));
         acknowledge(&mut ui, 1, true);
         assert!(
-            matches!(ui.pending.front().map(|p| &p.command), Some(BusCommand::Submit(r)) if *r == room)
+            matches!(ui.pending.front().map(|p| &p.command), Some(BusCommand::Submit(r, _)) if *r == room)
         );
     }
     #[test]
-    fn failed_save_cancels_send_and_later_success_never_acknowledges_it() {
+    fn failed_save_does_not_cancel_exact_send() {
         let (mut ui, room) = ui();
         ui.locals
             .get_mut(&room)
@@ -997,12 +979,11 @@ mod tests {
         ui.request_send(room);
         acknowledge(&mut ui, 1, false);
         acknowledge(&mut ui, 2, true);
-        assert!(ui.send_intent.is_none());
-        assert!(!ui
+        assert!(ui
             .pending
             .iter()
-            .any(|p| matches!(p.command, BusCommand::Submit(_))));
-        assert_eq!(ui.locals[&room].text.text, "newer than saved");
+            .any(|p| matches!(p.command, BusCommand::Submit(..))));
+        assert!(ui.locals[&room].text.text.is_empty());
         assert!(ui.error.is_none());
     }
     #[test]
@@ -1012,11 +993,16 @@ mod tests {
         ui.text_changed(room);
         let saved = ui.pending.front().expect("draft save").id;
         ui.request_send(room);
+        let id = ui
+            .pending
+            .iter()
+            .find(|pending| matches!(pending.command, BusCommand::Submit(..)))
+            .unwrap()
+            .id;
         acknowledge(&mut ui, saved, true);
-        let id = ui.pending.front().expect("submit").id;
         ui.locals.get_mut(&room).unwrap().text.insert("next prompt");
         ui.text_changed(room);
         acknowledge(&mut ui, id, true);
-        assert_eq!(ui.locals[&room].text.text, "sent promptnext prompt");
+        assert_eq!(ui.locals[&room].text.text, "next prompt");
     }
 }

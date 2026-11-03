@@ -98,7 +98,6 @@ fn quote_preserves_newer_local_text_recipients_and_escaped_multiline_content() {
         "new local\nauthor: \"a\n\\\"quoted\\\" \\\\ @author\"\n"
     );
     assert!(ui.locals[&room].recipients.contains(&agent));
-    assert!(ui.send_intent.is_none());
 }
 
 /// Typed text in every input sits on the box's own background: the grey

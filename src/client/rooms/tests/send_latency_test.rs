@@ -108,13 +108,12 @@ fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
     // Measure saves inside each serialized handler, separately from ticks.
     let enter = Instant::now();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    let had_intent = ui.send_intent.is_some() || !ui.pending.is_empty();
+    let had_send = !ui.pending.is_empty();
     let prompts_before = seed.requests().count();
 
     // No further input: the one Enter must deliver the complete text on its own.
     let sent = tick_until(&mut ui, WAIT, |ui| {
-        ui.send_intent.is_none()
-            && ui.pending.is_empty()
+        ui.pending.is_empty()
             && ui.locals[&master].text.text.is_empty()
             && ui.snapshot.state.requests().count() > prompts_before
     });
@@ -170,7 +169,7 @@ fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
     }
 
     assert!(navigation.is_some(), "navigation never settled");
-    assert!(had_intent, "Enter did not queue its send intent");
+    assert!(had_send, "Enter did not queue its send");
     sent.expect("Enter with no further input never sent the message");
     assert!(
         stopped,

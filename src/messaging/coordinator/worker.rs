@@ -214,6 +214,19 @@ impl Worker {
         }
     }
 
+    fn delay_dev_command(&self) {
+        if !self.dev_enabled {
+            return;
+        }
+        let delay = std::fs::read_to_string(self.data_dir.join("command-delay-ms"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
+    }
+
     /// Commits `state` and makes it durable. A state that differs from the
     /// last write only in status-only observations writes nothing: those are
     /// never persisted on their own (see `apply_poll`), so rewriting the same
@@ -408,13 +421,29 @@ impl Worker {
         let _ = call.reply.try_send(response);
     }
 
+    fn finish_shutdown(
+        &mut self,
+        id: u64,
+        events: &mpsc::Sender<BusEvent>,
+        snapshots: &Arc<Mutex<Arc<BusSnapshot>>>,
+    ) {
+        self.fold_journal();
+        self.last_command_id = id;
+        if let Ok(mut shared) = snapshots.lock() {
+            *shared = Arc::new(self.snapshot());
+        }
+        let _ = events.send(BusEvent::CommandFinished {
+            command_id: id,
+            result: Ok(()),
+        });
+    }
+
     pub(super) fn run(
         mut self,
         commands: mpsc::Receiver<(u64, BusCommand)>,
         events: mpsc::Sender<BusEvent>,
         snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
-        // Agents' builds can saturate the machine; control replies must still run.
         crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
         self.compact_history();
         let mut next_poll = std::time::Instant::now();
@@ -428,15 +457,7 @@ impl Worker {
             let busy = perf::COORDINATOR_LOOP.enter("command");
             match received {
                 Ok((id, BusCommand::Shutdown)) => {
-                    self.fold_journal();
-                    self.last_command_id = id;
-                    if let Ok(mut shared) = snapshots.lock() {
-                        *shared = Arc::new(self.snapshot());
-                    }
-                    let _ = events.send(BusEvent::CommandFinished {
-                        command_id: id,
-                        result: Ok(()),
-                    });
+                    self.finish_shutdown(id, &events, &snapshots);
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -450,8 +471,10 @@ impl Worker {
                     }
                 }
                 Ok((id, command)) => {
-                    let submitting =
-                        matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
+                    let submitting = matches!(
+                        command,
+                        BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
+                    );
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let name = perf::command_name(&command);
                     let started = std::time::Instant::now();
@@ -460,6 +483,7 @@ impl Worker {
                     let result = if self.storage_pause.is_some() {
                         Err(self.storage_notice().into())
                     } else {
+                        self.delay_dev_command();
                         self.command(command, &events)
                     };
                     perf::COMMAND.record_op(started.elapsed(), name);
@@ -481,8 +505,6 @@ impl Worker {
                         command_id: id,
                         result,
                     });
-                    // The client settles a command only once a snapshot shows
-                    // it; do not make that wait for this loop's poll tick.
                     busy.stage("snapshot");
                     self.publish_snapshot(&snapshots);
                 }
@@ -492,9 +514,6 @@ impl Worker {
             if let Err(error) = self.pump_feishu(&events, io::now_ms()) {
                 self.error = Some(error);
             }
-            // Apply already-confirmed user commands before delivering queued
-            // work. In particular, Submit followed by Delete must not send in
-            // the background between those two commands.
             let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
             if can_poll && std::time::Instant::now() >= next_poll {
                 if self.storage_pause.is_none() {

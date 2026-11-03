@@ -54,7 +54,7 @@ fn sent_texts(ui: &BusUi) -> Vec<String> {
 }
 
 fn settled(ui: &BusUi) -> bool {
-    ui.send_intent.is_none() && ui.pending.is_empty()
+    ui.pending.is_empty()
 }
 
 fn assert_no_empty_rejection(ui: &BusUi) {
