@@ -365,12 +365,21 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
     Ok(changed)
 }
 
+pub(crate) fn is_yolo_option(name: &str) -> bool {
+    name == "--yolo"
+        || name
+            .strip_prefix('-')
+            .is_some_and(|flags| !flags.is_empty() && flags.chars().all(|flag| flag == 'y'))
+}
+
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
+    if is_yolo_option(name) {
+        return Some(0);
+    }
     match name {
         "-S" | "--session" | "--agent-file" | "--agent" | "-m" | "--model" | "--output-format"
         | "-p" | "--prompt" | "--skills-dir" | "--add-dir" => Some(1),
-        "-y" | "--yolo" | "--auto" | "--continue" | "-c" | "--plan" | "--help" | "-h"
-        | "--version" | "-V" => Some(0),
+        "--auto" | "--continue" | "-c" | "--plan" | "--help" | "-h" | "--version" | "-V" => Some(0),
         _ => None,
     }
 }
@@ -573,9 +582,7 @@ fn environment_for(
 pub(crate) fn validate_run_permissions(args: &[String]) -> Result<(), String> {
     let positions = common::argument_positions(ProviderKind::Kimi, args);
     let has_auto = positions.iter().any(|&index| args[index] == "--auto");
-    let has_yolo = positions
-        .iter()
-        .any(|&index| matches!(args[index].as_str(), "--yolo" | "-y"));
+    let has_yolo = positions.iter().any(|&index| is_yolo_option(&args[index]));
     if has_auto && has_yolo {
         return Err("Kimi --auto and --yolo cannot be combined".into());
     }
