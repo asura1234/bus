@@ -183,7 +183,7 @@ fn a_new_decision_after_answering_a_master_worker_wake_is_published() {
 }
 
 #[test]
-fn worker_woken_decision_with_unclaimed_steering_is_published_after_turn_proof() {
+fn worker_woken_decision_with_unclaimed_notification_is_published_after_turn_proof() {
     let (mut state, room, worker, _) = state_with_room_and_agents();
     let master = state.ensure_master_room();
     let orch = state
@@ -226,17 +226,19 @@ fn worker_woken_decision_with_unclaimed_steering_is_published_after_turn_proof()
         .observe_status(orch, RuntimeStatus::Working, 12)
         .unwrap();
     let worker_request = state
-        .submit_message_from(
+        .submit_bus_message_with(
             room,
             Draft {
-                text: "worker steering".into(),
+                text: "worker reply notification".into(),
                 files: vec![],
                 recipient_ids: [orch].into(),
             },
             Author::Agent(worker),
             12,
+            false,
         )
         .unwrap()[0];
+    assert!(state.request(worker_request).unwrap().bus_generated);
     let worker_prompt = state.render_request_payload(worker_request).unwrap();
     state.begin_steering(worker_request, lead).unwrap();
     state
