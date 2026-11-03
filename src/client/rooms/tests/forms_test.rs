@@ -78,21 +78,26 @@ fn assert_edited_file_form_survives(ui: &BusUi, room: RoomId) {
 }
 
 fn settle_creation_command(ui: &mut BusUi) {
-    let id = ui
-        .pending
-        .iter()
-        .find(|pending| matches!(
-            pending.command,
-            BusCommand::CreateRoom(_) | BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
-        ))
-        .map(|pending| pending.id)
-        .expect("creation command is pending");
-    ui.receive_event(BusEvent::CommandFinished {
-        command_id: id,
-        result: Ok(()),
-    });
+    let ids: Vec<_> = ui.pending.iter().map(|pending| pending.id).collect();
+    assert!(ids.iter().any(|id| {
+        ui.pending.iter().any(|pending| {
+            pending.id == *id && matches!(
+                pending.command,
+                BusCommand::CreateRoom(_) | BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+            )
+        })
+    }));
+    for id in &ids {
+        if let Some(pending) = ui.pending.iter_mut().find(|pending| pending.id == *id) {
+            pending.enqueued = true;
+        }
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: *id,
+            result: Ok(()),
+        });
+    }
     let mut snapshot = (*ui.snapshot).clone();
-    snapshot.last_command_id = id;
+    snapshot.last_command_id = *ids.last().expect("commands are pending");
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
     ui.settle();

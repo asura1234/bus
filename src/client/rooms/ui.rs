@@ -391,10 +391,15 @@ impl BusUi {
         id
     }
     fn take_creation_origin(&mut self, kind: CreationKind) -> Option<Option<u64>> {
+        let id = self
+            .creation_origins
+            .iter()
+            .rposition(|origin| origin.kind == kind)
+            .map(|index| self.creation_origins[index].id)?;
         let index = self
             .creation_origins
             .iter()
-            .rposition(|origin| origin.kind == kind)?;
+            .position(|origin| origin.id == id)?;
         Some(self.creation_origins.remove(index)?.form_generation)
     }
     fn completion_owns_current_form(&mut self, kind: CreationKind) -> bool {
