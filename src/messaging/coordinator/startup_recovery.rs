@@ -19,8 +19,10 @@ impl Worker {
         else {
             return Err("Saved launch terminal identity is incomplete; no retry was sent".into());
         };
-        let (executable, grok_home, kimi_home) =
-            if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
+        let attempt =
+            self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?;
+        let prepared: Result<_, String> = (|| {
+            let binding = if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
                 let launch_id = agent
                     .runtime_identity
                     .launch_id
@@ -52,7 +54,10 @@ impl Worker {
             } else {
                 (None, None, None)
             };
-        self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?;
+            Ok(binding)
+        })();
+        let (executable, grok_home, kimi_home) =
+            self.track_launch_result(attempt, "resume_preparation_failed", prepared)?;
         let mut state = self.state.clone();
         let mut startup = state
             .agent(agent.id)

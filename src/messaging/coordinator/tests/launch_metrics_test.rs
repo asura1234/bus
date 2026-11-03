@@ -168,3 +168,44 @@ fn launch_metrics_saved_identity_and_idle_status_are_not_positive_process_eviden
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn launch_metrics_invalid_arguments_do_not_count_as_launch_attempts() {
+    let _providers = provider_binaries();
+    let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let before = ledger(&worker);
+    assert!(before.as_object().unwrap().is_empty());
+    let result = worker.add_agent(
+        AddAgent {
+            room,
+            name: "invalid-mode".into(),
+            provider: Provider::Codex,
+            cwd: dir.to_string_lossy().into(),
+            extra_args: "exec".into(),
+            consent_project_hooks: true,
+        },
+        None,
+        &mpsc::channel().0,
+    );
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    let after = serde_json::to_value(&saved).unwrap()["launch_attempts"].clone();
+    let native_calls = calls.lock().unwrap().clone();
+    let roster_count = saved.agents().count();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("launch argument exec disables")),
+        "the intended preflight rejection must be reached: {result:?}"
+    );
+    assert!(native_calls.is_empty(), "invalid mode reached native input");
+    assert_eq!(roster_count, 1, "invalid input created a roster entry");
+    assert_eq!(
+        after, before,
+        "known invalid arguments must not create failed launch attempts"
+    );
+}
