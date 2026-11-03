@@ -77,6 +77,68 @@ fn assert_edited_file_form_survives(ui: &BusUi, room: RoomId) {
     assert_eq!(editor.text, "newer-input.txt");
 }
 
+fn settle_creation_command(ui: &mut BusUi) {
+    let id = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(
+            pending.command,
+            BusCommand::CreateRoom(_) | BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+        ))
+        .map(|pending| pending.id)
+        .expect("creation command is pending");
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: id,
+        result: Ok(()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = id;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        pending.command,
+        BusCommand::CreateRoom(_) | BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+    )));
+}
+
+#[test]
+fn room_created_ack_after_settlement_completes_its_origin_form() {
+    let (mut ui, _, _) = fixture();
+    submit_room_form(&mut ui, "created-room");
+    settle_creation_command(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+
+    ui.receive_event(BusEvent::RoomCreated(created));
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(created));
+}
+
+#[test]
+fn agent_added_ack_after_settlement_completes_its_origin_form() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    settle_creation_command(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+
+    ui.receive_event(BusEvent::AgentAdded(added));
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.terminal, Some(added));
+}
+
 #[test]
 fn room_created_ack_preserves_a_newer_non_dev_form_and_its_room_context() {
     let (mut ui, room, _) = fixture();
