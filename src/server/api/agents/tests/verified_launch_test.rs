@@ -722,3 +722,95 @@ async fn verified_launch_late_old_prompt_after_enter_is_not_a_return() {
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn verified_launch_aliases_keep_literal_arguments_and_attempt_return() {
+    use std::os::unix::fs::PermissionsExt;
+    for shell in ["/bin/bash", "/bin/zsh"] {
+        for resume in [false, true] {
+            let dir = crate::utils::test_temp::unique_temp_path("launch-alias");
+            std::fs::create_dir_all(dir.join("bin")).unwrap();
+            let provider = dir.join("alias provider");
+            std::fs::write(&provider, "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$HOME/alias-argv\"\nprintf 'FIXTURE_ALIAS_RUNNING\\n'\nread -r unused\nexit 23\n").unwrap();
+            std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
+            // An alias is the sole provider route; the private PATH has no codex.
+            let (rc, prompt) = if shell.ends_with("bash") {
+                (".bashrc", "RC=$? READY> ")
+            } else {
+                (".zshrc", "RC=%? READY> ")
+            };
+            std::fs::write(dir.join(rc), format!("export PATH=\"$HOME/bin\"\nalias codex=\"'{}' --alias-argument\"\nPS1='{prompt}'\n", provider.display())).unwrap();
+            let runtime =
+                fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
+            wait_for_prompt(&runtime).await;
+            let (mut app, target) = app_with_prompt_runtime(runtime);
+            let mut args = if resume {
+                vec!["--resume".to_owned(), "saved-session".to_owned()]
+            } else {
+                vec![]
+            };
+            args.extend(
+                [
+                    "one two",
+                    "quote'and;$()",
+                    "中文",
+                    "",
+                    "$(touch injected)",
+                    ";touch injected",
+                ]
+                .map(str::to_owned),
+            );
+            app.start_agent(crate::protocol::api::schema::AgentStartParams {
+                name: "alias".into(),
+                kind: "codex".into(),
+                pane_id: target.clone(),
+                args: args.clone(),
+                timeout_ms: None,
+                executable: None,
+                grok_home: None,
+                kimi_home: None,
+            })
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{shell} resume={resume}: {:?}",
+                    app.agent_start_error_body(error)
+                )
+            });
+            wait_for_launch_input(prompt_runtime(&app)).await;
+            wait_for_text(prompt_runtime(&app), "FIXTURE_ALIAS_RUNNING").await;
+            let actual = std::fs::read_to_string(dir.join("alias-argv")).unwrap();
+            let mut expected = vec!["--alias-argument"];
+            expected.extend(args.iter().map(String::as_str));
+            let actual = actual.split_terminator('\0').collect::<Vec<_>>();
+            // Bus appends its provider flags after the caller's arguments.
+            // Preserve the complete explicit argument prefix, including alias args.
+            assert!(
+                actual.starts_with(&expected),
+                "{shell} resume={resume}: actual={actual:?}, expected prefix={expected:?}"
+            );
+            assert!(!dir.join("injected").exists());
+            assert!(!prompt_runtime(&app).launch_returned_to_prompt());
+            assert_eq!(
+                app.agent_info_for_target(&target).unwrap().name.as_deref(),
+                Some("alias")
+            );
+            prompt_runtime(&app)
+                .try_send_bytes(Bytes::from_static(b"\r"))
+                .unwrap();
+            wait_for_text(prompt_runtime(&app), "RC=23 READY>").await;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !prompt_runtime(&app).launch_returned_to_prompt() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{}",
+                    prompt_runtime(&app).shell_prompt_diagnostics()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            app.handle_agent_list("alias-exit".into());
+            assert!(app.agent_info_for_target(&target).is_err());
+            drop(app);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
