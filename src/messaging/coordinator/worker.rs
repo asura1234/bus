@@ -496,9 +496,6 @@ impl Worker {
             if let Err(error) = self.pump_feishu(&events, io::now_ms()) {
                 self.error = Some(error);
             }
-            // Apply already-confirmed user commands before delivering queued
-            // work. In particular, Submit followed by Delete must not send in
-            // the background between those two commands.
             let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
             if can_poll && std::time::Instant::now() >= next_poll {
                 if self.storage_pause.is_none() {

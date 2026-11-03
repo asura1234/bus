@@ -320,7 +320,6 @@ impl History {
             background.requested = Some(key);
             return;
         }
-        // Keep the same room's last complete layout during a resize or update.
         if let Some(layout) = background.layouts.get(&room) {
             self.lines = Arc::clone(&layout.lines);
             self.displayed_filters = layout.filters;

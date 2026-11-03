@@ -67,9 +67,7 @@ impl BusUi {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
-        let visible_anchor = (!self.history_follow_tail)
-            .then(|| self.history.anchor_at(self.main_scroll))
-            .flatten();
+        let visible_anchor = self.visible_history_anchor();
         let (snapshot, submissions) = self.history_projection();
         Self::request_room_history(
             &mut self.history,
@@ -139,6 +137,12 @@ impl BusUi {
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+    }
+
+    fn visible_history_anchor(&self) -> Option<super::super::history::RowAnchor> {
+        (!self.history_follow_tail)
+            .then(|| self.history.anchor_at(self.main_scroll))
+            .flatten()
     }
 
     fn request_room_history(
