@@ -3,7 +3,7 @@ use crate::{
     agents::providers::codex::native::Runtime,
     terminal::{
         runtime::{
-            native_input::{NativeInput, NativePrompt},
+            native_input::{NativeInput, NativeInterruptCompletion, NativePrompt},
             PaneLaunchEnv,
         },
         TerminalRuntime,
@@ -39,11 +39,16 @@ impl NativeInput for CodexInput {
             input.expected_turn,
         )
     }
-    fn interrupt(&self, thread: &str, deadline: Instant) -> Option<io::Result<()>> {
+    fn interrupt(
+        &self,
+        thread: &str,
+        deadline: Instant,
+    ) -> Option<io::Result<NativeInterruptCompletion>> {
         self.0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .interrupt(thread, deadline)
+            .map(|result| result.map(|turn_id| NativeInterruptCompletion { turn_id }))
     }
 }
 
