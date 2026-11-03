@@ -235,7 +235,6 @@ impl BusState {
         self.requests.get(&id).or_else(|| self.history.request(id))
     }
 
-    /// Live and archived requests, in id order.
     pub(crate) fn mark_new_replies_delivered(&mut self, previous: &Self, at_ms: u64) {
         for (id, request) in &mut self.requests {
             if request.completed_reply.is_some()
@@ -250,6 +249,7 @@ impl BusState {
         }
     }
 
+    /// Live and archived requests, in id order.
     pub(crate) fn requests(&self) -> impl Iterator<Item = &Request> {
         MergeById {
             live: self.requests.values().peekable(),
