@@ -13,7 +13,7 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"unread_count":r.unread_count,"unseen_to_developer":r.unseen_to_developer,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().map(|a| agent_json(&self.state, a)).collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json(),"launch":launch_json()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"unread_count":r.unread_count,"unseen_to_developer":r.unseen_to_developer,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().map(|a| agent_json(&self.state, a)).collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json(&self.data_dir),"launch":launch_json()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_pause.is_some(),"storage_repair_required":matches!(self.storage_pause.as_ref(),Some(super::super::StoragePause::NeedsRepair)),"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::messaging::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -270,13 +270,37 @@ fn agent_json(
     value
 }
 
-/// How the running Bus was built: `debug` for a development build (`./run dev`,
-/// `cargo build`), `release` for an optimized build, plus the binary's path.
-fn build_json() -> Value {
+/// The coordinator/UI and native server are different processes after a restart.
+fn build_json(root: &std::path::Path) -> Value {
     json!({
-        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-        "binary": std::env::current_exe().ok(),
+        "client": {
+            "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "binary": std::env::current_exe().ok(),
+            "sha": env!("BUS_BUILD_SHA"),
+        },
+        "server": server_build_json(root),
     })
+}
+
+fn server_build_json(root: &std::path::Path) -> Value {
+    let Some(stamp) = crate::utils::restart_record::read_build_stamp(
+        &crate::utils::restart_record::build_path(root),
+    ) else {
+        return Value::Null;
+    };
+    let Some(binary) = stamp.binary.filter(|binary| !binary.is_empty()) else {
+        return Value::Null;
+    };
+    let Some(pid) = stamp
+        .pid
+        .filter(|pid| crate::platform::process_instance(*pid).is_some())
+    else {
+        return Value::Null;
+    };
+    if !crate::utils::restart_record::valid_build_sha(&stamp.sha) {
+        return Value::Null;
+    }
+    json!({"binary": binary, "sha": stamp.sha, "pid": pid})
 }
 
 /// How this process was started. `bus state` reports the coordinator's flags;

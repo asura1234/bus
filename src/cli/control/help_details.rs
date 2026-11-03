@@ -174,7 +174,10 @@ Result: {revision,master_room,visible_room,rooms:[...],agents:[...],usage,settin
     observation after restart. Managed settings can override it; Cursor is unknown.
   exit_snapshot on agents: path,tail,at_ms,launch_id,terminal_id,error,terminal_closed
     (true closed, false left open, null not attempted). Read that file after exit.
-  build:{profile:debug|release,binary}; launch:{dev,yolo} is how this process was started.
+  build:{client:{profile:debug|release,binary,sha},server:{binary,sha,pid}|null}.
+    client is the coordinator/UI executable; server is the native server recorded for this
+    data directory. server is null when that record is missing, corrupt, or stale.
+  launch:{dev,yolo} is how the client/coordinator process was started.
   settings is the shared settings snapshot.
 Errors: common errors below; inspect actionable_error for queued/failed agents."#;
 
