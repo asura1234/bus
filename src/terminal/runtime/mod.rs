@@ -4,9 +4,12 @@ mod detection_process;
 mod detection_task;
 mod draft_input;
 mod io;
+mod launch_transaction;
 mod read;
 mod shell_integration;
 mod shell_launch;
+#[cfg(test)]
+pub(crate) use shell_launch::LaunchTestBarrier;
 mod shutdown;
 mod submission;
 mod submission_clock;
@@ -170,16 +173,15 @@ pub struct TerminalRuntime {
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
-    launch_prompt_generation: Arc<AtomicU64>,
+    launch_transaction: launch_transaction::LaunchTransaction,
     /// True until developer or API bytes are queued to this pane, or Bus
     /// successfully pastes a prompt, since the last agent launch. A
     /// preservation buffer that is never queued leaves it set. Dialog
     /// automation, mouse, and focus do not clear it. A rejected send leaves
     /// it set. Only then is Claude's `Try "..."` shape a placeholder.
     startup_suggestion_open: Arc<AtomicBool>,
-    launch_input_error: Arc<Mutex<Option<(String, bool)>>>,
     #[cfg(test)]
-    launch_input_submitted: Arc<AtomicBool>,
+    launch_test_barrier: Arc<Mutex<Option<(bool, Arc<shell_launch::LaunchTestBarrier>)>>>,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,
@@ -220,7 +222,7 @@ impl TerminalRuntime {
                 .as_ref()
                 .map(|done| done.load(std::sync::atomic::Ordering::Acquire)),
             self.shell_prompt_generation()
-        )
+        ) + &self.launch_diagnostics()
     }
 
     pub(crate) fn has_launch_shell_integration(&self) -> bool {
@@ -258,12 +260,46 @@ impl TerminalRuntime {
     pub(crate) fn mark_agent_launch(&self) {
         self.startup_suggestion_open.store(true, Ordering::Release);
         self.invalidate_submission_ownership();
-        self.launch_prompt_generation
-            .store(self.shell_prompt_generation(), Ordering::Release);
     }
 
+    fn launch_prompt_witness(&self) -> Option<(u64, u64)> {
+        if let Some(integration) = &self.shell_integration {
+            return self
+                .terminal
+                .launch_shell_prompt_witness(integration.token());
+        }
+        #[cfg(test)]
+        return self
+            .launch_transaction
+            .id()
+            .map(|id| (self.shell_prompt_generation(), id));
+        #[cfg(not(test))]
+        None
+    }
+
+    pub(crate) fn has_launch_return_witness(&self) -> bool {
+        self.launch_transaction
+            .has_return_witness(self.launch_prompt_witness())
+    }
+
+    pub(crate) fn reconcile_launch_attempt(&self, live_provider: bool) -> bool {
+        self.launch_transaction
+            .returned(self.launch_prompt_witness(), live_provider)
+    }
+
+    #[cfg(test)]
     pub(crate) fn launch_returned_to_prompt(&self) -> bool {
-        self.shell_prompt_generation() > self.launch_prompt_generation.load(Ordering::Acquire)
+        self.reconcile_launch_attempt(false)
+    }
+
+    pub(crate) fn launch_diagnostics(&self) -> String {
+        self.launch_transaction
+            .diagnostics(self.launch_prompt_witness())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_prompt_observed(&self) -> bool {
+        self.shell_prompt_generation() > 0
     }
 
     pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {
