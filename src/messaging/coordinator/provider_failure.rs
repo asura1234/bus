@@ -105,9 +105,9 @@ pub(super) fn mark_lost_sessionless_turn(
 ) {
     if agent.runtime_identity.session_id.is_some()
         || agent.runtime_identity.pane_id.is_none()
-        || !state
+        || state
             .agent(agent.id)
-            .is_some_and(|owner| owner.runtime_identity.pane_id.is_none())
+            .is_none_or(|owner| owner.runtime_identity.pane_id.is_some())
     {
         return;
     }
