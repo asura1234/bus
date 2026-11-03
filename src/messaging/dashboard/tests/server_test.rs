@@ -206,3 +206,93 @@ fn ordinary_browser_disconnects_and_header_timeouts_never_enter_warning_pipe() {
     });
     assert!(!capture.text().contains("WARN"), "{}", capture.text());
 }
+
+#[test]
+fn dashboard_health_names_the_build_that_embeds_the_page() {
+    let response = http_response(
+        Path::new("/nonexistent-dashboard-test"),
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n",
+        "127.0.0.1:1234",
+        "test-nonce",
+    );
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["token"], "test-nonce");
+    assert_eq!(body["build"], env!("BUS_BUILD_SHA"));
+}
+
+#[test]
+fn dashboard_nonblocking_accept_preserves_fragmented_headers() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut client = TcpStream::connect(address).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    client.write_all(b"GET /health HTTP/1.1\r\n").unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    dispatch_connection(
+        stream,
+        "/nonexistent-dashboard-test".into(),
+        address.to_string(),
+        "fragmented-nonce".into(),
+    );
+    let mut byte = [0u8];
+    let pending = client.peek(&mut byte);
+    assert!(
+        matches!(&pending, Err(error) if matches!(
+            error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        )),
+        "HTTP worker closed or responded before the complete headers arrived: {pending:?}"
+    );
+    client
+        .write_all(format!("Host: {address}\r\n\r\n").as_bytes())
+        .unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response:?}");
+    assert!(response.contains("fragmented-nonce"), "{response:?}");
+}
+
+#[test]
+fn dashboard_nonblocking_accept_survives_connection_errors() {
+    for error in [
+        io::Error::from(io::ErrorKind::ConnectionAborted),
+        io::Error::from(io::ErrorKind::ConnectionReset),
+        io::Error::from(io::ErrorKind::BrokenPipe),
+        io::Error::from_raw_os_error(libc::EMFILE),
+    ] {
+        let root = crate::utils::test_temp::unique_temp_path("dashboard-accept-errors");
+        let service::Started::Owned(server) = service::start(&root).unwrap() else {
+            panic!("test owns the dashboard listener")
+        };
+        server.listener.set_nonblocking(true).unwrap();
+        let authority = server.listener.local_addr().unwrap().to_string();
+        let endpoint = root.join("dashboard-runtime/endpoint.json");
+        let detail = error.to_string();
+        let mut failure = Some(error);
+        let mut calls = 0;
+        let result = serve_connections(&root, server, authority, |_| {
+            calls += 1;
+            if let Some(error) = failure.take() {
+                return Err(error);
+            }
+            // A subsequent iteration must still honor cooperative retirement.
+            let mut active: Value =
+                serde_json::from_slice(&std::fs::read(&endpoint).unwrap()).unwrap();
+            active["token"] = json!("retired-by-contract-test");
+            std::fs::write(&endpoint, serde_json::to_vec(&active).unwrap()).unwrap();
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        });
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            result.is_ok(),
+            "accept error stopped service: {detail}: {result:?}"
+        );
+        assert_eq!(calls, 2, "service did not resume accepting after {detail}");
+    }
+}

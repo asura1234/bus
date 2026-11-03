@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub(super) struct Endpoint {
     pub(super) url: String,
     pub(super) token: String,
+    pub(super) build: String,
 }
 impl Endpoint {
     fn address(&self) -> io::Result<SocketAddrV4> {
@@ -25,7 +26,7 @@ impl Endpoint {
             });
         address.ok_or_else(|| io::Error::other("Invalid dashboard loopback endpoint"))
     }
-    fn healthy(&self) -> io::Result<bool> {
+    fn healthy(&self, build: &str) -> io::Result<bool> {
         let address = self.address()?;
         let timeout = Duration::from_millis(250);
         let mut stream = TcpStream::connect_timeout(&address.into(), timeout)?;
@@ -42,13 +43,16 @@ impl Endpoint {
         };
         let body: serde_json::Value =
             serde_json::from_slice(&bytes[boundary + 4..]).map_err(io::Error::other)?;
-        Ok(bytes.starts_with(b"HTTP/1.1 200 ") && body["token"].as_str() == Some(&self.token))
+        Ok(bytes.starts_with(b"HTTP/1.1 200 ")
+            && body["token"].as_str() == Some(&self.token)
+            && self.build == build
+            && body["build"].as_str() == Some(build))
     }
 }
 pub(super) struct Server {
     pub(super) listener: TcpListener,
     pub(super) endpoint: Endpoint,
-    _lease: crate::platform::fs::FileLock,
+    lease: Option<crate::platform::fs::FileLock>,
 }
 pub(super) enum Started {
     Owned(Server),
@@ -56,15 +60,24 @@ pub(super) enum Started {
 }
 
 pub(super) fn start(root: &Path) -> io::Result<Started> {
+    start_for_build(root, env!("BUS_BUILD_SHA"))
+}
+
+fn start_for_build(root: &Path, build: &str) -> io::Result<Started> {
     let runtime = root.join("dashboard-runtime");
     bus_io::private_dir(&runtime)?;
-    let endpoint_path = runtime.join("endpoint.json");
-    match bus_io::lock(&runtime.join("server.lock")) {
+    let _publication = bus_io::append_lock(&runtime.join("publication.lock"))?;
+    let generation = runtime.join(build);
+    bus_io::private_dir(&generation)?;
+    let endpoint_path = generation.join("endpoint.json");
+    let active_path = runtime.join("endpoint.json");
+    match bus_io::lock(&generation.join("server.lock")) {
         Ok(lease) => {
             let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
             let address = listener.local_addr()?;
             let endpoint = Endpoint {
                 url: format!("http://{address}/"),
+                build: build.to_owned(),
                 token: format!(
                     "{}-{}-{}",
                     std::process::id(),
@@ -76,10 +89,14 @@ pub(super) fn start(root: &Path) -> io::Result<Started> {
                 &endpoint_path,
                 &serde_json::to_vec(&endpoint).map_err(io::Error::other)?,
             )?;
+            bus_io::atomic_write(
+                &active_path,
+                &serde_json::to_vec(&endpoint).map_err(io::Error::other)?,
+            )?;
             Ok(Started::Owned(Server {
                 listener,
                 endpoint,
-                _lease: lease,
+                lease: Some(lease),
             }))
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -92,8 +109,14 @@ pub(super) fn start(root: &Path) -> io::Result<Started> {
                             .map_err(|error| format!("JSON {}: {error}", endpoint_path.display()))
                     });
                 let problem = match discovered {
-                    Ok(endpoint) => match endpoint.healthy() {
-                        Ok(true) => return Ok(Started::Existing(endpoint)),
+                    Ok(endpoint) => match endpoint.healthy(build) {
+                        Ok(true) => {
+                            bus_io::atomic_write(
+                                &active_path,
+                                &serde_json::to_vec(&endpoint).map_err(io::Error::other)?,
+                            )?;
+                            return Ok(Started::Existing(endpoint));
+                        }
                         Ok(false) => format!(
                             "{}: endpoint identity did not match",
                             endpoint_path.display()
@@ -112,6 +135,28 @@ pub(super) fn start(root: &Path) -> io::Result<Started> {
             }
         }
         Err(error) => Err(error),
+    }
+}
+
+impl Server {
+    /// Publish/reopen and retirement use the same lock: a reopened service cannot
+    /// hand back a URL while its owner is concurrently deciding to retire.
+    pub(super) fn retire_if_replaced(&mut self, root: &Path) -> io::Result<bool> {
+        let runtime = root.join("dashboard-runtime");
+        let _publication = match bus_io::lock(&runtime.join("publication.lock")) {
+            Ok(lease) => lease,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let active: Endpoint =
+            serde_json::from_slice(&std::fs::read(runtime.join("endpoint.json"))?)
+                .map_err(io::Error::other)?;
+        active.address()?;
+        if active.token != self.endpoint.token {
+            self.lease.take();
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 
@@ -135,6 +180,7 @@ pub(crate) fn open_in_browser(root: &Path) -> io::Result<()> {
         let endpoint = Endpoint {
             url: url.trim().into(),
             token: String::new(),
+            build: env!("BUS_BUILD_SHA").into(),
         };
         endpoint.address()?;
         if let Some(mut browser) = crate::platform::open_url(&endpoint.url)? {

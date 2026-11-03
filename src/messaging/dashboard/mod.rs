@@ -28,18 +28,37 @@ fn serve(root: &Path) -> io::Result<()> {
     let authority = server.listener.local_addr()?.to_string();
     writeln!(io::stdout().lock(), "{}", server.endpoint.url)?;
     io::stdout().flush()?;
-    for connection in server.listener.incoming() {
-        match connection {
-            Ok(stream) => dispatch_connection(
+    server.listener.set_nonblocking(true)?;
+    serve_connections(root, server, authority, std::net::TcpListener::accept)
+}
+
+fn serve_connections(
+    root: &Path,
+    mut server: service::Server,
+    authority: String,
+    mut accept: impl FnMut(&std::net::TcpListener) -> io::Result<(TcpStream, std::net::SocketAddr)>,
+) -> io::Result<()> {
+    loop {
+        if server.retire_if_replaced(root)? {
+            return Ok(());
+        }
+        match accept(&server.listener) {
+            Ok((stream, _)) => dispatch_connection(
                 stream,
                 root.to_owned(),
                 authority.clone(),
                 server.endpoint.token.clone(),
             ),
-            Err(error) => log_http_error(&error),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                log_http_error(&error);
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     }
-    Ok(())
 }
 
 pub(crate) use service::open_in_browser;
@@ -172,7 +191,9 @@ fn http_response(root: &Path, headers: &[u8], authority: &str, token: &str) -> R
         return Response {
             status: "200 OK",
             content_type: "application/json",
-            body: serde_json::json!({"token":token}).to_string().into_bytes(),
+            body: serde_json::json!({"token":token,"build":env!("BUS_BUILD_SHA")})
+                .to_string()
+                .into_bytes(),
         };
     }
     response_for(root, request[0], request[1])
@@ -184,6 +205,7 @@ fn serve_connection(
     authority: &str,
     token: &str,
 ) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
     let headers = read_headers(stream)?;
     let response = http_response(root, &headers, authority, token);
     stream.set_write_timeout(Some(REQUEST_DEADLINE))?;
