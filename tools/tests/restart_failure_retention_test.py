@@ -2,8 +2,10 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
+import time
 import uuid
 
 import pytest
@@ -87,7 +89,7 @@ def test_failed_diagnostic_reads_and_writes_do_not_replace_original_error(tmp_pa
 
 
 def test_opt_in_retains_only_failure_and_cleans_success():
-    root = Path("/private/tmp") / f"bus-rf-{uuid.uuid4().hex[:16]}"
+    root = Path("/private/tmp") / f"brf-{uuid.uuid4().hex[:16]}"
     with restart.restart_directory(root, True) as run:
         assert run == root
         assert os.stat(run).st_mode & 0o777 == 0o700
@@ -135,18 +137,18 @@ def test_default_failure_still_removes_ordinary_temporary_directory():
 
 def test_encoded_socket_limit_and_owned_root_checks_precede_writes():
     # Character count fits; encoded native socket path exceeds 96 bytes.
-    long_root = Path("/private/tmp") / ("bus-rf-" + "中" * 20)
+    long_root = Path("/private/tmp") / ("brf-" + "中" * 20)
     with pytest.raises(ValueError, match="96"):
         with restart.restart_directory(long_root, True, reply=True):
             pytest.fail("must reject before creating or running anything")
     assert not long_root.exists()
     with tempfile.TemporaryDirectory(prefix="rf-unit-", dir="/private/tmp") as parent:
-        foreign = Path(parent) / "bus-rf-foreign"
+        foreign = Path(parent) / "brf-foreign"
         with pytest.raises(ValueError, match="/private/tmp"):
             with restart.restart_directory(foreign, True):
                 pytest.fail("must reject foreign root")
         assert not foreign.exists()
-    with tempfile.TemporaryDirectory(prefix="bus-rf-", dir="/private/tmp") as existing:
+    with tempfile.TemporaryDirectory(prefix="brf-", dir="/private/tmp") as existing:
         marker = Path(existing) / "keep"
         marker.write_text("owned by someone else")
         with pytest.raises(FileExistsError):
@@ -156,7 +158,7 @@ def test_encoded_socket_limit_and_owned_root_checks_precede_writes():
 
 
 def test_client_socket_suffix_is_checked_even_when_api_socket_fits():
-    root = Path("/private/tmp") / ("bus-rf-" + "a" * 25)
+    root = Path("/private/tmp") / ("brf-" + "a" * 25)
     case = root / "claude/data/herdr-config/sessions/bus"
     assert len(os.fsencode(case / "herdr.sock")) <= 96
     assert len(os.fsencode(case / "herdr-client.sock")) > 96
@@ -164,3 +166,17 @@ def test_client_socket_suffix_is_checked_even_when_api_socket_fits():
         with restart.restart_directory(root, True, reply=True):
             pytest.fail("the longer client socket must reject before claiming root")
     assert not root.exists()
+
+
+def test_actual_rust_wrapper_roots_pass_the_python_entry_boundary():
+    # Exercise the producer's literals, including the longest reply/client suffix.
+    source = (Path(__file__).resolve().parents[2] / "tests/tui/native_restart_test.rs").read_text()
+    template = re.search(r'"(/private/tmp/[^\"]+\{:x\}[^\"]+\{nonce:x\})"', source).group(1)
+    suffix = re.search(r'let socket = root\.join\("([^\"]+)"\)', source).group(1)
+    for pid in (0x1234, 0x12345, 0xFFFFFF):
+        for nonce in (time.time_ns(), 0xFFFFFFFFFFFFFFFF):
+            root = Path(template.format(pid, nonce=nonce))
+            assert len(os.fsencode(root / suffix)) <= 96
+            with restart.restart_directory(root, True, reply=True):
+                assert root.is_dir()
+            assert not root.exists()

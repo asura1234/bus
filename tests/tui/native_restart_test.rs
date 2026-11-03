@@ -16,7 +16,7 @@ pub(super) fn restart_command(script: &str) -> std::process::Command {
             .expect("restart fixture clock")
             .as_nanos();
         let root = std::path::PathBuf::from(format!(
-            "/private/tmp/bus-rf-{:x}-{nonce:x}",
+            "/private/tmp/brf-{:x}-{nonce:x}",
             std::process::id()
         ));
         let socket = root.join("claude/data/herdr-config/sessions/bus/herdr-client.sock");
