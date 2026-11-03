@@ -5,6 +5,8 @@ use super::{
 };
 use crate::messaging::{identity, model::StartupRecovery};
 
+type LaunchBinding = (Option<String>, Option<String>, Option<String>);
+
 impl Worker {
     pub(super) fn retry_unsubmitted_agent_start(
         &mut self,
@@ -21,41 +23,7 @@ impl Worker {
         };
         let attempt =
             self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?;
-        let prepared: Result<_, String> = (|| {
-            let binding = if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
-                let launch_id = agent
-                    .runtime_identity
-                    .launch_id
-                    .as_deref()
-                    .ok_or("Saved provider launch identity is missing; no retry was sent")?;
-                let hooks = crate::agents::providers::hook_json::HookContext {
-                    binary: std::env::current_exe().map_err(|e| e.to_string())?,
-                    spool: self.data_dir.join("callbacks").join(launch_id),
-                    launch_id: launch_id.into(),
-                };
-                let env = if agent.provider == Provider::Grok {
-                    crate::agents::providers::grok::launch::environment(&hooks)?
-                } else {
-                    crate::agents::providers::kimi::launch::environment(&hooks)?
-                };
-                let executable = crate::agents::providers::launch::selected_executable(
-                    identity::provider_kind(agent.provider),
-                    &env,
-                )?
-                .ok_or("Saved provider executable is missing; no retry was sent")?;
-                let grok_home = env.get("GROK_HOME").cloned();
-                let kimi_home = env.get("KIMI_CODE_HOME").cloned();
-                if agent.provider == Provider::Grok && grok_home.is_none()
-                    || agent.provider == Provider::Kimi && kimi_home.is_none()
-                {
-                    return Err("Saved provider home is missing; no retry was sent".into());
-                }
-                (Some(executable), grok_home, kimi_home)
-            } else {
-                (None, None, None)
-            };
-            Ok(binding)
-        })();
+        let prepared = self.prepare_unsubmitted_launch(agent);
         let (executable, grok_home, kimi_home) =
             self.track_launch_result(attempt, "resume_preparation_failed", prepared)?;
         let mut state = self.state.clone();
@@ -118,5 +86,39 @@ impl Worker {
             self.report_adopted_session(agent.id, agent.provider, pane.clone(), session)?;
         }
         Ok(())
+    }
+
+    fn prepare_unsubmitted_launch(&self, agent: &RoomAgent) -> Result<LaunchBinding, String> {
+        if !matches!(agent.provider, Provider::Grok | Provider::Kimi) {
+            return Ok((None, None, None));
+        }
+        let launch_id = agent
+            .runtime_identity
+            .launch_id
+            .as_deref()
+            .ok_or("Saved provider launch identity is missing; no retry was sent")?;
+        let hooks = crate::agents::providers::hook_json::HookContext {
+            binary: std::env::current_exe().map_err(|e| e.to_string())?,
+            spool: self.data_dir.join("callbacks").join(launch_id),
+            launch_id: launch_id.into(),
+        };
+        let env = if agent.provider == Provider::Grok {
+            crate::agents::providers::grok::launch::environment(&hooks)?
+        } else {
+            crate::agents::providers::kimi::launch::environment(&hooks)?
+        };
+        let executable = crate::agents::providers::launch::selected_executable(
+            identity::provider_kind(agent.provider),
+            &env,
+        )?
+        .ok_or("Saved provider executable is missing; no retry was sent")?;
+        let grok_home = env.get("GROK_HOME").cloned();
+        let kimi_home = env.get("KIMI_CODE_HOME").cloned();
+        if agent.provider == Provider::Grok && grok_home.is_none()
+            || agent.provider == Provider::Kimi && kimi_home.is_none()
+        {
+            return Err("Saved provider home is missing; no retry was sent".into());
+        }
+        Ok((Some(executable), grok_home, kimi_home))
     }
 }
