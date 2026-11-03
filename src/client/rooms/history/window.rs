@@ -1,10 +1,9 @@
 //! Newest-first filtered history windows. Older records are requested on scroll.
 use super::{
-    exchange::{explicitly_to_you, visible_request},
-    groups::{Exchange, Exchanges, Window},
+    source::{visible_request, Exchange, Exchanges, Window},
     History, LayoutKey, MarkdownSource,
 };
-use crate::messaging::model::{Author, BusState, Prompt, Room};
+use crate::messaging::model::{BusState, Room};
 use crate::messaging::model::{RoomHistoryFilters, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -96,7 +95,7 @@ pub(super) fn recent_exchanges<'a>(
     room: &'a Room,
     limit: usize,
 ) -> (Exchanges<'a>, bool) {
-    let mut requests = state.recent_requests(u64::MAX).peekable();
+    let mut requests = state.recent_room_requests(room.id, u64::MAX).peekable();
     let mut notices = state.notices(room.id).rev().peekable();
     let mut exchanges = BTreeMap::new();
     for _ in 0..limit {
@@ -139,10 +138,4 @@ pub(super) fn recent_exchanges<'a>(
         exchanges,
         requests.peek().is_some() || notices.peek().is_some(),
     )
-}
-
-pub(super) fn prompt_to_you(prompt: &Prompt) -> bool {
-    prompt.author != Author::Developer
-        && (prompt.recipient_ids.is_empty()
-            || matches!(prompt.author, Author::Agent(_)) && explicitly_to_you(&prompt.text))
 }

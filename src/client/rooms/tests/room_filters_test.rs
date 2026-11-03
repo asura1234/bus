@@ -568,6 +568,7 @@ fn stale_filter_frame_does_not_move_find_selection() {
         &mut scroll,
         &mut follow_tail,
         false,
+        false,
     );
     let state = search.as_ref().unwrap();
     assert_eq!(state.current, 5);
@@ -582,6 +583,7 @@ fn stale_filter_frame_does_not_move_find_selection() {
         &mut scroll,
         &mut follow_tail,
         true,
+        false,
     );
     assert_eq!(search.as_ref().unwrap().current, 1);
     assert!(!search.as_ref().unwrap().jump_to_newest);
@@ -821,4 +823,288 @@ fn filtered_page_that_fits_viewport_still_loads_older_on_scroll() {
     assert!(ui.history.cached().iter().any(|line| line.text == "older direct needed"),
         "scrolling back must reach older matches even when the current filtered page fits the viewport");
     assert_visible_directions(&ui, true, false);
+}
+
+fn filtered_pagination_find_fixture(all_matches: bool) -> (BusUi, RoomId) {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    for index in 0..800u64 {
+        let text = if all_matches || index == 0 {
+            format!("Ωtarget-{index}")
+        } else {
+            format!("recent record {index}")
+        };
+        snapshot
+            .state
+            .post_to_developer(room, agent, text, vec![], 1000 + index)
+            .unwrap();
+    }
+    snapshot
+        .state
+        .set_room_history_filters(
+            room,
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    room_screen(&mut ui, 100, 32);
+    (ui, room)
+}
+
+#[test]
+fn filtered_pagination_find_reveals_older_only_match() {
+    let (mut ui, _) = filtered_pagination_find_fixture(false);
+    assert!(!ui
+        .history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("Ωtarget")));
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('Ω'), KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 32);
+    assert!(
+        ui.view.search_matches.is_empty(),
+        "the first search page unexpectedly contains the old match"
+    );
+    for _ in 0..4 {
+        room_screen(&mut ui, 100, 32);
+    }
+    assert_eq!(
+        ui.view.search_matches.len(),
+        1,
+        "the old matching page never loaded"
+    );
+    let current = ui.chat_search.as_ref().unwrap().current;
+    let row = ui.view.search_matches[current].0;
+    assert!(
+        (ui.main_scroll..ui.main_scroll + usize::from(ui.view.history.height)).contains(&row),
+        "Find discovered its only match at row {row}, but viewport is {}..{} and jump={}",
+        ui.main_scroll,
+        ui.main_scroll + usize::from(ui.view.history.height),
+        ui.chat_search.as_ref().unwrap().jump_to_newest
+    );
+}
+
+#[test]
+fn filtered_pagination_find_keeps_the_selected_match() {
+    let (mut ui, _) = filtered_pagination_find_fixture(true);
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('Ω'), KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 32);
+    let current = ui.chat_search.as_ref().unwrap().current;
+    let selected_before = ui.history.cached()[ui.view.search_matches[current].0]
+        .text
+        .clone();
+    assert!(selected_before.contains("Ωtarget-799"));
+    room_screen(&mut ui, 100, 32);
+    let current = ui.chat_search.as_ref().unwrap().current;
+    let row = ui.view.search_matches[current].0;
+    let selected_after = &ui.history.cached()[row].text;
+    assert!(selected_after == &selected_before
+        && (ui.main_scroll..ui.main_scroll + usize::from(ui.view.history.height)).contains(&row),
+        "Find selection changed without input: before={selected_before:?}, after={selected_after:?}, row={row}, viewport={}..{}",
+        ui.main_scroll, ui.main_scroll + usize::from(ui.view.history.height));
+}
+
+#[test]
+fn filtered_pagination_shared_reply_keeps_developer_context() {
+    let (mut ui, room, receiver) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let peer = snapshot
+        .state
+        .create_agent(room, "peer", Provider::Codex, "/peer".into(), None)
+        .unwrap();
+    let mut submit = |author, text: &str, at| {
+        snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: text.into(),
+                    files: vec![],
+                    recipient_ids: [receiver].into(),
+                },
+                author,
+                at,
+            )
+            .unwrap()[0]
+    };
+    let lead = submit(Author::Agent(peer), "ordinary peer lead", 1000);
+    let developer = submit(Author::Developer, "developer follower", 1001);
+    for index in 0..300u64 {
+        snapshot
+            .state
+            .post_to_developer(
+                room,
+                receiver,
+                format!("direct filler {index}"),
+                vec![],
+                1002 + index,
+            )
+            .unwrap();
+    }
+    let latest = snapshot
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "latest peer follower".into(),
+                files: vec![],
+                recipient_ids: [receiver].into(),
+            },
+            Author::Agent(peer),
+            1400,
+        )
+        .unwrap()[0];
+    assert!(snapshot.state.coalesce_queue(lead).is_some());
+    assert_eq!(snapshot.state.request(developer).unwrap().group, Some(lead));
+    assert_eq!(snapshot.state.request(latest).unwrap().group, Some(lead));
+    for id in [lead, developer, latest] {
+        snapshot
+            .state
+            .finish_for_test(id, "WINDOW SHARED ANSWER FOR DEVELOPER", 1500);
+    }
+    snapshot
+        .state
+        .set_room_history_filters(
+            room,
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    room_screen(&mut ui, 100, 32);
+    let first_count = ui
+        .history
+        .cached()
+        .iter()
+        .filter(|line| line.text.contains("WINDOW SHARED ANSWER FOR DEVELOPER"))
+        .count();
+    assert!(ui.history.load_older());
+    room_screen(&mut ui, 100, 32);
+    let expanded_count = ui
+        .history
+        .cached()
+        .iter()
+        .filter(|line| line.text.contains("WINDOW SHARED ANSWER FOR DEVELOPER"))
+        .count();
+    assert_eq!(
+        expanded_count, 1,
+        "full group context must establish the existing incoming-answer contract"
+    );
+    assert_eq!(first_count, 1,
+        "the bounded window lost the shared answer because its Developer member was outside the page (expanded count={expanded_count})");
+}
+
+#[test]
+fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() {
+    let (mut ui, room, receiver) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    let mut submit = |author, text: &str| {
+        snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: text.into(),
+                    files: vec![],
+                    recipient_ids: [receiver].into(),
+                },
+                author,
+                1000,
+            )
+            .unwrap()[0]
+    };
+    let lead = submit(Author::Agent(receiver), "peer lead");
+    let developer = submit(Author::Developer, "developer follower");
+    for index in 0..800 {
+        snapshot
+            .state
+            .post_to_developer(
+                room,
+                receiver,
+                format!("filler {index}"),
+                vec![],
+                1001 + index,
+            )
+            .unwrap();
+    }
+    let latest = snapshot
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "latest peer follower".into(),
+                files: vec![],
+                recipient_ids: [receiver].into(),
+            },
+            Author::Agent(receiver),
+            2000,
+        )
+        .unwrap()[0];
+    snapshot.state.coalesce_queue(lead).unwrap();
+    for id in [lead, developer, latest] {
+        snapshot.state.finish_for_test(id, "Ωshared answer", 3000);
+    }
+    // Persisted cross-room groups already occur for orchestrator turns. Reload
+    // that durable shape so both live and archived indexes must retain context.
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    json["requests"][developer.0.to_string()]["room_id"] = other.0.into();
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot
+        .state
+        .set_room_history_filters(
+            room,
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    room_screen(&mut ui, 100, 32);
+    assert_eq!(
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| line.text.contains("Ωshared answer"))
+            .count(),
+        1
+    );
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('Ω'), KeyModifiers::NONE);
+    room_screen(&mut ui, 100, 32);
+    assert_eq!(ui.view.search_matches.len(), 1);
+    for _ in 0..4 {
+        room_screen(&mut ui, 100, 32);
+    }
+    let row = ui.view.search_matches[ui.chat_search.as_ref().unwrap().current].0;
+    assert!(ui.history.cached()[row].text.contains("Ωshared answer"));
+    assert!((ui.main_scroll..ui.main_scroll + usize::from(ui.view.history.height)).contains(&row));
+    let mut archived = (*ui.snapshot).clone();
+    archived.state.archive(1_000_000);
+    assert!(archived.state.history().len() >= 3);
+    archived.revision += 1;
+    ui.receive_snapshot(Arc::new(archived));
+    room_screen(&mut ui, 100, 32);
+    assert_eq!(
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| line.text.contains("Ωshared answer"))
+            .count(),
+        1
+    );
 }

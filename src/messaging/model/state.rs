@@ -19,7 +19,7 @@ pub(crate) struct BusState {
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) retired_agents: BTreeMap<AgentId, super::staffing::RetiredAgent>,
-    pub(super) requests: BTreeMap<RequestId, Request>,
+    pub(super) requests: super::request_map::RequestMap,
     /// Recovery floor for transient routing metadata; old audit records remain readable.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(super) routing_before_ms: u64,
@@ -171,7 +171,7 @@ impl BusState {
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),
             retired_agents: BTreeMap::new(),
-            requests: BTreeMap::new(),
+            requests: Default::default(),
             routing_before_ms: 0,
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),
@@ -244,25 +244,35 @@ impl BusState {
         }
     }
 
-    /// A bounded history reader can seek backwards without collecting or sorting
-    /// the permanent request archive. IDs are allocated in submission order.
-    pub(crate) fn recent_requests(&self, before: u64) -> impl Iterator<Item = &Request> {
+    /// Only this room spends a bounded view's page budget, including archived records.
+    pub(crate) fn recent_room_requests(
+        &self,
+        room: RoomId,
+        before: u64,
+    ) -> impl Iterator<Item = &Request> {
         MergeById {
             newest_first: true,
-            live: self
-                .requests
-                .range(..RequestId(before))
-                .rev()
-                .map(|(_, request)| request)
-                .peekable(),
-            archived: self
-                .history
-                .requests
-                .range(..RequestId(before))
-                .rev()
-                .map(|(_, request)| request.as_ref())
-                .peekable(),
+            live: self.requests.recent_room(room, before).peekable(),
+            archived: self.history.recent_room_requests(room, before).peekable(),
         }
+    }
+
+    pub(crate) fn history_group_has_developer(&self, key: RequestId) -> bool {
+        self.request(key)
+            .is_some_and(|request| request.prompt.author == super::Author::Developer)
+            || self.requests.history_index().has_developer(key)
+            || self.history.groups.has_developer(key)
+    }
+
+    pub(crate) fn history_latest_group_member(
+        &self,
+        room: RoomId,
+        key: RequestId,
+    ) -> Option<RequestId> {
+        self.requests
+            .history_index()
+            .latest_follower(room, key)
+            .max(self.history.groups.latest_follower(room, key))
     }
 
     /// Live obligations only; reconciliation and save diagnostics must not
