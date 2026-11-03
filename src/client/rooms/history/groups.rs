@@ -8,12 +8,58 @@ pub(super) struct Exchange<'a> {
     pub(super) requests: BTreeMap<AgentId, &'a Request>,
 }
 
+pub(super) type Exchanges<'a> = BTreeMap<(u64, u64), Exchange<'a>>;
+pub(super) type Window<'a> = Option<(Exchanges<'a>, bool)>;
+
 pub(super) struct ReplyGroups {
     pub(super) members: BTreeMap<RequestId, Vec<RequestId>>,
     shared_sources: BTreeMap<RequestId, RequestId>,
 }
 
 impl ReplyGroups {
+    pub(super) fn for_projection<'a>(
+        state: &'a BusState,
+        room: &'a crate::messaging::model::Room,
+        recent: Window<'a>,
+    ) -> (Self, Exchanges<'a>) {
+        let _timer = super::phases::GROUPING.start();
+        if let Some((exchanges, more)) = recent {
+            let groups = if more {
+                Self::for_window(state, &exchanges)
+            } else {
+                Self::for_room(state, room.id)
+            };
+            (groups, exchanges)
+        } else {
+            (
+                Self::for_room(state, room.id),
+                super::exchange::exchanges(state, room),
+            )
+        }
+    }
+
+    pub(super) fn waiting_elsewhere(
+        &self,
+        state: &BusState,
+        room: RoomId,
+        request: &Request,
+    ) -> bool {
+        if request.completed_reply.is_some() {
+            return false;
+        }
+        self.members
+            .get(&request.reply_key())
+            .into_iter()
+            .flatten()
+            .rev()
+            .find(|id| {
+                state
+                    .request(**id)
+                    .is_some_and(|member| member.room_id == room && visible_request(member))
+            })
+            .is_some_and(|last| *last != request.id)
+    }
+
     pub(super) fn for_room(state: &BusState, room: RoomId) -> Self {
         Self {
             members: state.groups(),

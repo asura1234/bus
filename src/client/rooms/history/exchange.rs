@@ -2,7 +2,7 @@
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
 use super::groups::{Exchange, ReplyGroups};
-use super::window::{prompt_to_you, recent_exchanges};
+use super::window::prompt_to_you;
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
@@ -83,20 +83,8 @@ impl History {
         static REBUILD: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
-        self.select_window(room.id, filters);
         let filtered = filters != Default::default();
-        let recent = filtered.then(|| recent_exchanges(state, room, self.record_limit));
-        if let Some((_, has_older)) = &recent {
-            self.rebuilt = 0;
-            self.rendered = 0;
-            self.projected = 0;
-            // A filtered revision examines only its bounded newest window.
-            self.signature = revision ^ (self.record_limit as u64).rotate_left(32);
-            self.has_older = *has_older;
-        } else {
-            self.prepare_source(state, room, revision, submissions);
-            self.has_older = false;
-        }
+        let recent = self.prepare_window_source(state, room, revision, filters, submissions);
         let key = (
             self.signature,
             room.id,
@@ -106,28 +94,13 @@ impl History {
             filters,
             submission_signature(submissions),
         );
-        if self.reusable_layout(key, now) {
+        if self.layout_reusable(key, now) {
             self.key = Some(key);
             return &self.lines;
         }
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
-        let (groups, exchanges) = {
-            let _timer = super::phases::GROUPING.start();
-            if let Some((exchanges, more)) = recent {
-                let groups = if more {
-                    ReplyGroups::for_window(state, &exchanges)
-                } else {
-                    ReplyGroups::for_room(state, room.id)
-                };
-                (groups, exchanges)
-            } else {
-                (
-                    ReplyGroups::for_room(state, room.id),
-                    exchanges(state, room),
-                )
-            }
-        };
+        let (groups, exchanges) = ReplyGroups::for_projection(state, room, recent);
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
         let mut age_valid = 0..u64::MAX;
@@ -184,19 +157,7 @@ impl History {
             }
             lines.push(blank_row(RowAnchor::new(prompt.id, None, RowKind::Gap)));
         }
-        if filtered {
-            // Keep older warm blocks for lazy scrollback. Pruning every old
-            // block on toggle would make the first page scale with all history.
-            self.room_markdown
-                .entry(room.id)
-                .or_default()
-                .extend(active_markdown);
-        } else {
-            self.room_markdown.insert(room.id, active_markdown);
-            self.room_markdown.retain(|id, _| state.room(*id).is_some());
-            let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
-            self.markdown.retain(|source, _| shown.contains(source));
-        }
+        self.retain_window_markdown(state, room.id, active_markdown, filtered);
         self.key = Some(key);
         self.displayed_filters = filters;
         self.loaded_limit = self.record_limit;
@@ -216,7 +177,7 @@ impl History {
         &self.lines
     }
 
-    fn prepare_source(
+    pub(super) fn prepare_source(
         &mut self,
         state: &BusState,
         room: &Room,
@@ -347,19 +308,8 @@ impl History {
             // Pending groups keep one waiting row under their newest visible
             // member. Completed groups show the body under the first visible
             // exchange and leave an answer reference under every other member.
-            if let Some(request) = request.filter(|request| request.completed_reply.is_none()) {
-                let members = groups
-                    .members
-                    .get(&request.reply_key())
-                    .map_or(&[][..], Vec::as_slice);
-                let newest = members.iter().rev().find(|id| {
-                    state
-                        .request(**id)
-                        .is_some_and(|member| member.room_id == room.id && visible_request(member))
-                });
-                if newest.is_some_and(|last| *last != request.id) {
-                    continue;
-                }
+            if request.is_some_and(|request| groups.waiting_elsewhere(state, room.id, request)) {
+                continue;
             }
             let reference = request.and_then(|request| groups.reference(state, request));
             let (text, quote) = reference
@@ -549,7 +499,10 @@ pub(in crate::client::rooms) fn visible_request(request: &Request) -> bool {
 
 /// The room's history entries in display order: requests grouped by prompt,
 /// then authored notices.
-fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
+pub(super) fn exchanges<'a>(
+    state: &'a BusState,
+    room: &'a Room,
+) -> BTreeMap<(u64, u64), Exchange<'a>> {
     let mut exchanges = BTreeMap::new();
     // Worker notifications are provider-routing envelopes, not authored chat.
     // Their actual replies already belong to the source requests (and autonomous
