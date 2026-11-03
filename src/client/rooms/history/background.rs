@@ -211,6 +211,12 @@ impl History {
             .is_some_and(|background| background.shared.ready.swap(false, Ordering::Relaxed))
     }
 
+    fn reset_metrics(&mut self) {
+        self.rebuilt = 0;
+        self.rendered = 0;
+        self.projected = 0;
+    }
+
     pub(in crate::client::rooms) fn request_lines(
         &mut self,
         snapshot: Arc<BusSnapshot>,
@@ -222,6 +228,7 @@ impl History {
         static REQUEST: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.request");
         let _timer = REQUEST.start();
+        self.reset_metrics();
         let Some(background) = self.background.as_mut() else {
             if let Some(room) = snapshot.state.room(room) {
                 self.lines_filtered(
@@ -236,9 +243,6 @@ impl History {
             }
             return;
         };
-        self.rebuilt = 0;
-        self.rendered = 0;
-        self.projected = 0;
         let key = Key {
             revision: snapshot.revision,
             room,
