@@ -368,7 +368,7 @@ See docs/developer-notifications.md for recipient and CLI configuration."#;
 
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
 Bus refuses new worker sends in MASTER (master_reserved); use your own room, or --reply-to for a MASTER request.
-Use --reply-to MESSAGE --as AGENT --text ANSWER to complete only your recipient
+Use --reply-to MESSAGE [--as AGENT] --text ANSWER to complete only your recipient
 request mid-turn. It infers room/sender; excludes room,to,queue,async,file.
 Run replies in the foreground; require ok:true and stage:"replied" before claiming
 delivery. If the reply fails, check the existing answer with bus message status
@@ -422,7 +422,7 @@ except captured orchestrator finals to workers and captured finals of Bus-genera
 reply wakes. Empty or whitespace-only finals are not forwarded; they settle as
 replied with their raw text preserved. A non-empty worker-woken orchestrator final
 is published in MASTER.
-An --as author async waiter renews a 3s lease deferring its reply wake
+An explicit or inferred agent author async waiter renews a 3s lease deferring its reply wake
 (and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
 suppress delivery.

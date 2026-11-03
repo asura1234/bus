@@ -45,8 +45,8 @@ Permanent retention cannot have a fixed total disk limit for an unlimited number
 of messages. The archive grows linearly with unique requests and notices, plus
 retry duplicates that startup compaction removes. Active message bodies retain a
 ten-minute settled window; routing data retains its recent/pending window. The
-canonical map retains one compact record per removed ID while stale-ID forwarding
-is supported. Message archival and pruning never prune that identity map.
+canonical map retains one compact record per removed ID for deletion labels and
+stale-selector diagnostics. Message archival and pruning never prune that identity map.
 Snapshots share the archive rather than cloning message bodies; the current
 implementation still indexes the full archive in memory. Startup, per-tick
 archive and delivery passes, and history rendering scan the merged archive, so
