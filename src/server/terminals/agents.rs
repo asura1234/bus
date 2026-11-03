@@ -477,9 +477,23 @@ impl App {
             .lookup_runtime_sender(ws_idx, pane_id)
             .and_then(|runtime| crate::terminal::driver::observe(runtime).ok());
         let screen_detection_skipped = observed.is_none();
-        let dialog = observed.and_then(|(grid, _)| {
+        let provider_quota = observed.as_ref().and_then(|(grid, _)| {
+            (pane.agent.as_deref() == Some("cursor")
+                && crate::agents::providers::cursor::usage::is_restored_monthly_usage_limit(
+                    &grid.text(),
+                ))
+            .then(|| {
+                (
+                    crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR,
+                    crate::agents::providers::cursor::usage::monthly_reset_at(
+                        crate::utils::time::now_ms(),
+                    ),
+                )
+            })
+        });
+        let dialog = observed.as_ref().and_then(|(grid, _)| {
             crate::terminal::driver::blocker(
-                &grid,
+                grid,
                 pane.agent_status == crate::protocol::api::schema::AgentStatus::Working,
             )
         });
@@ -510,6 +524,8 @@ impl App {
             screen_detection_skipped,
             dialog_id: dialog,
             update_error: None,
+            provider_error: provider_quota.map(|(error, _)| error.to_owned()),
+            provider_quota_reset_at: provider_quota.map(|(_, reset)| reset),
             state_labels: pane.state_labels,
             tokens: pane.tokens,
             agent_session: pane.agent_session,

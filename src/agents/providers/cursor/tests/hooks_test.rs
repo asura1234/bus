@@ -85,6 +85,25 @@ fn noise_cursor_empty_final_response_is_distinct_from_missing_text() {
 }
 
 #[test]
+fn cursor_monthly_usage_limit_stop_is_a_provider_quota_error() {
+    let mut failure = hook("stop");
+    failure["status"] = json!("error");
+    failure["error"] = json!(
+        "You've reached your monthly usage limit\nRequest higher limits to continue using Cursor"
+    );
+    failure["error_code"] = json!("upgrade");
+    assert_eq!(
+        parse(&failure).unwrap(),
+        Parsed::Failure {
+            session: "s".into(),
+            turn: "g".into(),
+            message: "Cursor turn error; inspect its terminal.".into(),
+            error: Some("You've reached your monthly usage limit. Request higher limits to continue using Cursor (rate_limit)".into()),
+        }
+    );
+}
+
+#[test]
 fn cursor_missing_generation_and_unsupported_events_preserve_field_order() {
     let mut missing = hook("stop");
     missing.as_object_mut().unwrap().remove("generation_id");

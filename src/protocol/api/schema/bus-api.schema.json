@@ -4468,6 +4468,22 @@
             "pane_id": {
               "type": "string"
             },
+            "provider_error": {
+              "description": "Provider's own bounded error text, when its current screen proves a turn failed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider_quota_reset_at": {
+              "description": "Reset boundary used to deduplicate provider quota alerts.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "revision": {
               "format": "uint64",
               "minimum": 0,

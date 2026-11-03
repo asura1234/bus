@@ -1,7 +1,36 @@
-//! Error-report failures retain evidence without replacing unrelated agent diagnostics.
+//! Provider and error-report failures retain evidence without replacing unrelated diagnostics.
 use super::{BusState, ModelError, Request, RequestId, SubmissionOutcome};
 
 impl BusState {
+    pub(crate) fn record_bound_provider_error(
+        &mut self,
+        agent: super::AgentId,
+        message: &str,
+        now_ms: u64,
+    ) -> Result<bool, ModelError> {
+        let Some(request) = self
+            .agents
+            .get(&agent)
+            .and_then(|agent| agent.current_request)
+            .filter(|request| {
+                self.request(*request)
+                    .is_some_and(|request| request.trusted_start_bound)
+            })
+        else {
+            return Ok(false);
+        };
+        let (reason, error) = super::settlement::provider_error_outcome(message);
+        let closed = self.close_turn_with_reason(request, now_ms, reason)?;
+        if closed {
+            if let Some(error) = self.request_failure_error(request, error) {
+                if let Some(agent) = self.agents.get_mut(&agent) {
+                    agent.actionable_error = Some(error);
+                }
+            }
+        }
+        Ok(closed)
+    }
+
     /// Keep report-origin failure evidence in logs without creating a later error projection.
     pub(super) fn request_failure_error(
         &self,

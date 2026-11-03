@@ -13,7 +13,7 @@ use crate::agents::providers::{
     usage::{Observation, UsageWindow, UsageWindows},
     ProviderKind,
 };
-use crate::messaging::model::{AgentId, Provider, RoomAgent};
+use crate::messaging::model::{AgentId, BusState, Provider, RequestId, RoomAgent};
 use crate::utils::time as bus_io;
 
 const STALE_AFTER_MS: u64 = 15 * 60 * 1000;
@@ -37,10 +37,30 @@ impl UsageSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CursorUsageSnapshot {
+    error: String,
+    resets_at: u64,
+    read_at_ms: u64,
+    observed_by_agent: AgentId,
+    request: Option<RequestId>,
+}
+
+impl CursorUsageSnapshot {
+    fn current(&self, now_ms: u64) -> bool {
+        self.read_at_ms > 0
+            && self.read_at_ms <= now_ms
+            && now_ms - self.read_at_ms < STALE_AFTER_MS
+            && self.resets_at > now_ms / 1000
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
+    cursor: Option<CursorUsageSnapshot>,
+    cursor_errors: BTreeMap<AgentId, CursorUsageSnapshot>,
     started_at_ms: u64,
     claude_reads: BTreeMap<AgentId, Instant>,
 }
@@ -50,6 +70,8 @@ impl Default for Usage {
         Self {
             codex: None,
             claude: None,
+            cursor: None,
+            cursor_errors: BTreeMap::new(),
             started_at_ms: bus_io::now_ms(),
             claude_reads: BTreeMap::new(),
         }
@@ -104,6 +126,13 @@ impl Usage {
                 ));
             }
         }
+        if let Some(snapshot) = &self.cursor {
+            result.push((
+                format!("quota:cursor:monthly:{}", snapshot.resets_at),
+                snapshot.observed_by_agent,
+                snapshot.current(now_ms).then_some(true),
+            ));
+        }
         result
     }
 
@@ -120,7 +149,7 @@ impl Usage {
                     "observed_by_agent": snapshot.observed_by_agent,
                 }),
             },
-            "cursor": unknown("Cursor has no local allowance source"),
+            "cursor": self.cursor_json(bus_io::now_ms()),
             "grok": unknown(crate::agents::providers::grok::usage::allowance_unavailable_reason()),
             "kimi": unknown("Kimi has no local allowance source"),
         })
@@ -141,6 +170,68 @@ impl Usage {
         }
         json!({"status":"observed", "five_hour":five_hour, "weekly":weekly,
             "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+    }
+
+    fn cursor_json(&self, now_ms: u64) -> Value {
+        let Some(snapshot) = &self.cursor else {
+            return unknown("No Cursor usage limit has been observed since Bus started");
+        };
+        if !snapshot.current(now_ms) {
+            return unknown("Cursor usage-limit observation is stale or expired");
+        }
+        json!({"status":"observed", "monthly":{"used_percent":100.0,"resets_at":snapshot.resets_at},
+            "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+    }
+
+    pub(crate) fn observe_cursor(
+        &mut self,
+        agent: AgentId,
+        error: Option<&str>,
+        resets_at: Option<u64>,
+        read_at_ms: u64,
+        request: Option<RequestId>,
+    ) {
+        if let (Some(error), Some(resets_at)) = (error, resets_at) {
+            let snapshot = CursorUsageSnapshot {
+                error: error.to_owned(),
+                resets_at,
+                read_at_ms,
+                observed_by_agent: agent,
+                request,
+            };
+            if request.is_some() {
+                self.cursor_errors.insert(agent, snapshot.clone());
+            }
+            self.cursor = Some(snapshot);
+        } else {
+            if self
+                .cursor
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.observed_by_agent == agent)
+            {
+                self.cursor = None;
+            }
+            self.cursor_errors.remove(&agent);
+        }
+    }
+
+    pub(crate) fn cursor_error_for_turn(
+        &self,
+        agent: AgentId,
+        state: &BusState,
+        session: &str,
+        turn: &str,
+    ) -> Option<String> {
+        let snapshot = self.cursor_errors.get(&agent)?;
+        let request_id = state.agent(agent)?.current_request?;
+        let request = state.request(request_id)?;
+        (snapshot.observed_by_agent == agent
+            && snapshot.request == Some(request_id)
+            && snapshot.current(bus_io::now_ms())
+            && request.trusted_start_bound
+            && request.provider_session_id.as_deref() == Some(session)
+            && request.provider_turn_id.as_deref() == Some(turn))
+        .then(|| snapshot.error.clone())
     }
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.

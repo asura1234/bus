@@ -58,6 +58,8 @@ impl Worker {
             }
             let current_agent = state.agent(agent.id).ok_or("Unknown polled agent")?.clone();
             let agent = &current_agent;
+            let observed_at_ms = self.now_ms();
+            self.observe_cursor_info(&mut state, agent, info, observed_at_ms)?;
             let status = polled_status(agent, info);
             let (missing, exit_evidence) =
                 self.observe_missing_binary(&mut state, agent, status, info)?;
@@ -72,7 +74,6 @@ impl Worker {
                 )?;
             }
             confirm_interactive_agent(&mut state, agent, info)?;
-            let observed_at_ms = self.now_ms();
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;
@@ -107,6 +108,32 @@ impl Worker {
         }
         self.notify_dialogs(waits)?;
         Ok(Some(infos))
+    }
+
+    fn observe_cursor_info(
+        &mut self,
+        state: &mut BusState,
+        agent: &RoomAgent,
+        info: Option<&schema::AgentInfo>,
+        observed_at_ms: u64,
+    ) -> Result<(), String> {
+        if agent.provider == super::Provider::Cursor {
+            if let Some(info) = info {
+                self.usage.observe_cursor(
+                    agent.id,
+                    info.provider_error.as_deref(),
+                    info.provider_quota_reset_at,
+                    observed_at_ms,
+                    agent.current_request,
+                );
+                if let Some(error) = info.provider_error.as_deref() {
+                    state
+                        .record_bound_provider_error(agent.id, error, observed_at_ms)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn poll_interval(&self) -> Duration {

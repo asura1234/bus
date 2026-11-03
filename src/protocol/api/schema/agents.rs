@@ -196,6 +196,12 @@ pub struct AgentInfo {
     /// then waits for a person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_error: Option<String>,
+    /// Provider's own bounded error text, when its current screen proves a turn failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_error: Option<String>,
+    /// Reset boundary used to deduplicate provider quota alerts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_quota_reset_at: Option<u64>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

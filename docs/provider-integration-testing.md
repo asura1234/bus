@@ -973,3 +973,14 @@ idle then deliver, and an approval card without `--yolo`.
   to the next message. A model merely preparing to run the command is not proof
   that foreground execution was interrupted. Archive logs without following
   credential or OAuth links in private provider homes.
+
+- **2026-11-02 — Cursor monthly usage limit:** Cursor can accept a prompt, end
+  its turn with `ResourceExhausted` / `error_code: upgrade`, show
+  `You've reached your monthly usage limit`, and restore the submitted paste as
+  a collapsed composer chip. Test the exact error and restored-chip screen, a
+  bound failed request, and a later message whose composer read returns
+  `agent_composer_busy`. The failed request must be `provider_error: …
+  (rate_limit)`, quota attention must page once per monthly reset, and the
+  restored draft must remain for a person; do not clear it or type the queued
+  message over it. Ordinary Cursor delivery and the other providers' quota
+  fixtures are required neighbours.
