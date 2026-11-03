@@ -170,9 +170,7 @@ impl Worker {
             }
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
-        if agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.terminal_closed == Some(true) && snapshot.terminal_id == *terminal
-        }) {
+        if deletion_identity::terminal_already_closed(agent, terminal) {
             // Bus already closed it after saving the exited provider's screen.
             return Ok(None);
         }
