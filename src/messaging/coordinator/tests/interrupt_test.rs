@@ -507,3 +507,74 @@ fn missing_launch_directory_preserves_room_interrupt() {
         );
     }
 }
+
+#[test]
+fn provider_flake_review_idle_presentation_cannot_skip_the_native_member_stop_key() {
+    for room in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut f, "original task", "turn-1");
+        let member = f.send("native queued input", false);
+        f.deliver();
+        assert!(!f.request(member).trusted_start_bound);
+        f.record(json!({"hook_event_name":"StopFailure","session_id":"session","prompt_id":"turn-1","error":"server_error","last_assistant_message":"API Error: 529 Overloaded."}));
+        f.consume();
+        f.started("native-2", "native queued input");
+        f.consume();
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(member)
+        );
+        f.status(RuntimeStatus::Idle);
+        let params = if room {
+            json!({"room":f.room.0.to_string()})
+        } else {
+            json!({"agent":"builder"})
+        };
+        let response = interrupt(&mut f, params);
+        assert!(response.ok, "{response:?}");
+        assert_eq!(keys(&f), [("pane".to_owned(), vec!["esc".to_owned()])]);
+        assert_eq!(response.result["agents"][0]["outcome"], "interrupting");
+        f.status(RuntimeStatus::Idle);
+        for id in [lead, member] {
+            assert_eq!(f.request(id).failure_reason.as_deref(), Some("interrupted"));
+        }
+    }
+}
+
+#[test]
+fn room_interrupt_cancels_idle_and_unavailable_provider_holds() {
+    for status in [RuntimeStatus::Idle, RuntimeStatus::Unavailable] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut f, "owned task", "turn-1");
+        f.record(json!({"hook_event_name":"StopFailure","session_id":"session","prompt_id":"turn-1",
+            "error":"server_error","last_assistant_message":"Model overloaded (server_overloaded)"}));
+        f.consume();
+        f.status(status);
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .is_some());
+        let room = f.room.0.to_string();
+        let response = interrupt(&mut f, json!({"room":room}));
+        assert!(response.ok, "{response:?}");
+        assert_eq!(
+            f.request(lead).failure_reason.as_deref(),
+            Some("interrupted"),
+            "room interrupt skipped {status:?}: {response:?}"
+        );
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .is_none());
+        assert!(
+            keys(&f).is_empty(),
+            "an inactive hold needs cancellation, not a stop key"
+        );
+    }
+}

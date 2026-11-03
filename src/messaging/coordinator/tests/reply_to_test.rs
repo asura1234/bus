@@ -537,7 +537,7 @@ fn reply_to_does_not_hide_a_turn_error_for_an_outstanding_group_member() {
         assert!(answer(&mut f, message, agent, "answered mid-turn").ok);
         f.record(
             json!({"hook_event_name":"StopFailure","session_id":"session",
-            "prompt_id":"infinite-turn","error":"server_error","error_details":"Connection lost"}),
+            "prompt_id":"infinite-turn","error":"authentication_error","error_details":"Authentication failed"}),
         );
         f.consume();
         assert_eq!(

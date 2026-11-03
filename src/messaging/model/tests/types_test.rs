@@ -769,3 +769,5 @@ fn multi_recipient_batched_headers_keep_each_messages_own_recipients() {
 
 #[path = "orchestrator_finals_test.rs"]
 mod orchestrator_finals;
+#[path = "provider_retry_test.rs"]
+mod provider_retry_tests;

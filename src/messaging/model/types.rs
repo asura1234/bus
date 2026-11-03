@@ -414,6 +414,9 @@ pub(crate) struct RoomAgent {
     /// Delivery/correlation owner. A completed lead can remain here briefly
     /// while unconfirmed steering is matched, without withholding its answer.
     pub(crate) current_request: Option<RequestId>,
+    /// Bus owns this failed native attempt until its guarded retry or cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_retry: Option<super::ProviderRetry>,
     #[serde(default)]
     pub(crate) hook_setup_confirmed: bool,
     #[serde(default)]
@@ -583,6 +586,8 @@ pub(crate) struct Request {
     pub(crate) manual_recovery: Option<super::ManualRecovery>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) queued_rejection: Option<QueuedRejection>,
+    #[serde(default)]
+    pub(crate) provider_retry_attempts: u32,
     pub(crate) expected_launch_id: Option<String>,
     pub(crate) submission_boundary: Option<u64>,
     pub(crate) submission_status_revision: u64,

@@ -34,6 +34,7 @@ impl BusState {
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.interrupt_pending = false;
+        let held = agent_state.provider_retry.take().map(|hold| hold.lead);
         let current = agent_state.current_request;
         let mut closed = Vec::new();
         let replied = current
@@ -57,6 +58,28 @@ impl BusState {
                 request.completed_at_ms = Some(now_ms);
                 request.failure_reason = Some(INTERRUPTED.into());
                 closed.push(member);
+            }
+        }
+        if let Some(held) = held.filter(|id| {
+            Some(*id) != current
+                && self
+                    .request(*id)
+                    .is_some_and(|r| r.phase != RequestPhase::Queued)
+        }) {
+            let outstanding = self.request(held).is_some_and(|r| !r.settled())
+                || self
+                    .group_members(held)
+                    .iter()
+                    .any(|id| self.request(*id).is_some_and(|r| !r.settled()));
+            if outstanding {
+                self.close_turn_with_reason(held, now_ms, INTERRUPTED.into())?;
+                if replied {
+                    self.agents
+                        .get_mut(&agent)
+                        .ok_or(ModelError::UnknownAgent(agent))?
+                        .current_request = current;
+                }
+                closed.push(held);
             }
         }
         for queued in self.queued_requests(agent).to_vec() {

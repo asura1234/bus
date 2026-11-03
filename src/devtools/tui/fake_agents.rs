@@ -145,6 +145,7 @@ struct FakeAgent {
     hooks: Value,
     session: String,
     turns: u64,
+    overload_once_seen: bool,
     /// Images attached so far; Claude numbers `[Image #N]` across a session.
     images: usize,
     /// Terminal input, read on its own thread so a live turn can take typing.
@@ -197,6 +198,7 @@ impl FakeAgent {
             hooks,
             session: pseudo_uuid(),
             turns: 0,
+            overload_once_seen: false,
             images: 0,
             input: None,
             pending: Vec::new(),
@@ -379,7 +381,13 @@ impl FakeAgent {
             self.stop_turn(prompt);
             return None;
         }
-        if let Some(payload) = api_error(&self.provider, prompt) {
+        let failure = if self.overload_once_seen && prompt.contains("fake:overload-once") {
+            None
+        } else {
+            api_error(&self.provider, prompt)
+        };
+        if let Some(payload) = failure {
+            self.overload_once_seen |= prompt.contains("fake:overload-once");
             let text = payload["last_assistant_message"]
                 .as_str()
                 .unwrap_or_default();

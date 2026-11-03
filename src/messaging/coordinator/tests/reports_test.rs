@@ -638,7 +638,7 @@ fn a_late_final_after_stop_failure_for_a_master_request_stays_in_master() {
     let spool = bus.dir.join("callbacks/orch");
     for value in [
         json!({"hook_event_name":"UserPromptSubmit","session_id":"session-orch","prompt_id":"asked","prompt":typed}),
-        json!({"hook_event_name":"StopFailure","session_id":"session-orch","prompt_id":"asked","error":"server_error","last_assistant_message":"API Error: 529 Overloaded."}),
+        json!({"hook_event_name":"StopFailure","session_id":"session-orch","prompt_id":"asked","error":"authentication_error","last_assistant_message":"API Error: 401 Authentication failed."}),
     ] {
         callbacks::append(&spool, "orch", Provider::ClaudeCode, value, &[], false).unwrap();
         bus.worker.consume_callbacks(orchestrator, &spool).unwrap();

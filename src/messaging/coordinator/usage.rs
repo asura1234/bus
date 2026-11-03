@@ -57,6 +57,26 @@ impl Default for Usage {
 }
 
 impl Usage {
+    /// Only the failing agent's fresh native allowance may defer its quota probe.
+    pub(crate) fn retry_reset(&self, agent: &RoomAgent, now_ms: u64) -> Option<u64> {
+        let snapshot = match agent.provider {
+            Provider::Codex => self.codex.as_ref(),
+            Provider::ClaudeCode => self.claude.as_ref(),
+            _ => None,
+        }?;
+        if snapshot.observed_by_agent != agent.id || !snapshot.fresh(now_ms) {
+            return None;
+        }
+        [&snapshot.windows.five_hour, &snapshot.windows.weekly]
+            .into_iter()
+            .flatten()
+            .filter(|window| {
+                window.used_percent >= 100.0 && snapshot.current_window(window, now_ms)
+            })
+            .filter_map(|window| window.resets_at?.checked_mul(1000))
+            .max()
+    }
+
     pub(crate) fn exhausted(&self, now_ms: u64) -> Vec<(String, AgentId, Option<bool>)> {
         let mut result = Vec::new();
         for (provider, snapshot) in [("codex", &self.codex), ("claude", &self.claude)] {

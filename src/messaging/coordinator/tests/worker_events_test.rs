@@ -799,7 +799,7 @@ fn provider_error_does_not_spend_the_later_real_final() {
         2,
         CallbackEventKind::Error {
             message: "Connection ended".into(),
-            provider_error: Some("connection_lost".into()),
+            provider_error: Some("invalid_model".into()),
         },
     );
     let mut state = f.worker.state.clone();
@@ -1617,7 +1617,7 @@ fn provider_error_posts_after_an_aged_idle_request() {
         4,
         CallbackEventKind::Error {
             message: "Connection ended".into(),
-            provider_error: Some("connection_lost".into()),
+            provider_error: Some("invalid_model".into()),
         },
     ));
     state.retain_worker_outcomes(at + 1_000);

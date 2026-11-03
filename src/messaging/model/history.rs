@@ -338,6 +338,8 @@ impl super::BusState {
                 .next()
                 .is_some_and(|launch| launches.contains(launch))
         };
+        let retried = self.retried_provider_turns.len();
+        self.retried_provider_turns.retain(live);
         let turns = self.consumed_provider_turns.len() + self.unrelated_provider_turns.len();
         let consumed: std::collections::BTreeSet<String> = self
             .consumed_provider_turns
@@ -351,7 +353,8 @@ impl super::BusState {
             .filter(|key| live(key))
             .cloned()
             .collect();
-        let changed = answers != self.spent_dialog_answers.len()
+        let changed = retried != self.retried_provider_turns.len()
+            || answers != self.spent_dialog_answers.len()
             || callbacks != self.consumed_callbacks.len()
             || turns != consumed.len() + unrelated.len();
         self.consumed_provider_turns = consumed;

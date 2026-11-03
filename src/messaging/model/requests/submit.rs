@@ -140,6 +140,7 @@ impl BusState {
                     failure_reason: None,
                     manual_recovery: None,
                     queued_rejection: None,
+                    provider_retry_attempts: 0,
                     expected_launch_id: None,
                     submission_boundary: None,
                     submission_status_revision: 0,

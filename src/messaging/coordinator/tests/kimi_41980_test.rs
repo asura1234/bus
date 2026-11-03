@@ -12,13 +12,37 @@ fn failure_wire(f: &mut Fixture, lead: RequestId, case: usize) -> String {
             rows.remove(2); // The owned prompt has not committed yet.
         }
         2 => rows[1]["turnId"] = 99.into(),
+        // Synthetic permanent failure: the durable recovery log still covers closure.
+        3 => rows[1]["error"] = json!({"name":"AuthenticationError", "message":"401 unauthorized"}),
         _ => {}
     }
     rows.into_iter().map(|row| format!("{row}\n")).collect()
 }
 
+fn assert_quota_hold(f: &Fixture, lead: RequestId) {
+    let request = f.request(lead);
+    assert_eq!(request.phase, RequestPhase::Active);
+    assert!(!request.settled());
+    assert!(request.failure_reason.is_none());
+    assert_eq!(request.provider_turn_id.as_deref(), Some("0"));
+    assert!(
+        request.turn_ended_at_ms.is_some(),
+        "native failure must end the turn"
+    );
+    let hold = f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .provider_retry
+        .as_ref()
+        .unwrap();
+    assert_eq!(hold.lead, lead);
+    assert!(hold.quota);
+}
+
 #[test]
-fn kimi_41980_committed_failure_revokes_working_and_blocked_turn() {
+fn kimi_41980_committed_failure_holds_delivery_despite_stale_status() {
     for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
         for restart in [false, true] {
             for stop in [false, true] {
@@ -35,28 +59,18 @@ fn kimi_41980_committed_failure_revokes_working_and_blocked_turn() {
                     f.record(json!({"hook_event_name":"Stop","session_id":"session"}));
                 }
                 f.consume();
-                assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
-                assert!(f
-                    .request(lead)
-                    .failure_reason
-                    .as_deref()
-                    .unwrap()
-                    .starts_with("provider_error: APIProviderQuotaExhaustedError: 429"));
-                assert!(f
-                    .worker
-                    .state
-                    .agent(f.agent)
-                    .unwrap()
-                    .current_request
-                    .is_none());
+                assert_quota_hold(&f, lead);
                 f.deliver();
                 assert_eq!(f.typed().len(), 1, "no write into a failed native turn");
                 assert_eq!(f.request(next).phase, RequestPhase::Queued);
                 assert_eq!(f.request(next).group, None);
                 f.status(RuntimeStatus::Idle);
                 f.deliver();
-                assert_eq!(f.typed().len(), 2);
-                assert!(!f.typed()[1].1, "the next message gets an independent turn");
+                assert_eq!(
+                    f.typed().len(),
+                    1,
+                    "Idle alone does not bypass the retry deadline"
+                );
             }
         }
     }
@@ -71,6 +85,13 @@ fn kimi_41980_incomplete_or_foreign_failure_keeps_the_owned_turn() {
         std::fs::write(&wire, failure_wire(&mut f, lead, case)).unwrap();
         f.consume();
         assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .is_none());
         assert_eq!(
             f.worker.state.agent(f.agent).unwrap().current_request,
             Some(lead)
@@ -155,23 +176,51 @@ fn kimi_41980_uncertain_steering_holds_followups_until_a_native_receipt() {
 }
 
 #[test]
-fn kimi_41980_uncertain_steering_ends_with_provider_failure_without_retry() {
-    let mut f = Fixture::new(Provider::Kimi);
-    let wire = super::kimi_steering_tests::home(&f);
-    let lead = running(&mut f, "original task", "0");
-    let member = uncertain_member(&mut f);
-    let waiting = f.send("next queued work", false);
-    std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
-    f.consume();
-    assert_eq!(f.request(member).phase, RequestPhase::Abandoned);
-    assert!(!f.request(member).trusted_start_bound);
-    assert!(f.reply(member).is_none());
-    assert_eq!(f.request(waiting).phase, RequestPhase::Queued);
-    f.status(RuntimeStatus::Idle);
-    f.worker.transport = Box::new(Native(f.native.clone()));
-    f.deliver();
-    assert_eq!(f.typed().len(), 3);
-    assert_eq!(f.typed_content()[2], ("next queued work".into(), false));
+fn kimi_41980_uncertain_steering_is_never_replayed_by_a_provider_retry() {
+    for restart in [false, true] {
+        let mut f = Fixture::new(Provider::Kimi);
+        let wire = super::kimi_steering_tests::home(&f);
+        let lead = running(&mut f, "original task", "0");
+        let member = uncertain_member(&mut f);
+        let waiting = f.send("next queued work", false);
+        std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+        f.consume();
+        assert_quota_hold(&f, lead);
+        if restart {
+            super::kimi_steering_tests::reopen(&mut f);
+        }
+        f.status(RuntimeStatus::Idle);
+        f.worker.transport = Box::new(Native(f.native.clone()));
+        f.now = f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .retry_at_ms
+            + crate::messaging::model::QUEUED_STALL_MS * 2;
+        f.expire_after_reconciliation(f.now);
+        f.deliver();
+        assert_eq!(f.request(member).phase, RequestPhase::Submitting);
+        assert!(!f.request(member).trusted_start_bound);
+        assert!(f.request(member).uncertain_outcome);
+        assert!(f.request(member).submission_error.is_some());
+        assert!(f.reply(member).is_none());
+        assert_eq!(f.request(waiting).phase, RequestPhase::Queued);
+        assert_eq!(
+            f.typed().len(),
+            2,
+            "a deadline never proves an unconfirmed input ran"
+        );
+        let status = f
+            .worker
+            .control_message(f.request(member).prompt.id)
+            .unwrap();
+        assert_eq!(status["requests"][0]["stage"], "submitting");
+        assert_eq!(status["complete"], false);
+    }
 }
 
 #[test]
@@ -215,6 +264,13 @@ fn kimi_41980_partial_busy_wire_is_not_a_committed_provider_failure() {
         f.status(status);
         f.consume();
         assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .is_none());
         assert_eq!(
             f.worker.state.agent(f.agent).unwrap().current_request,
             Some(lead)
@@ -235,24 +291,7 @@ fn kimi_committed_failure_settles_even_with_a_stale_dialog_observation() {
         state.observe_dialog(f.agent, stale_dialog, f.now).unwrap();
         f.worker.save(state).unwrap();
         f.consume();
-        assert_eq!(
-            f.request(lead).phase,
-            RequestPhase::Abandoned,
-            "owned failure must settle independently of the stale dialog flag={stale_dialog}"
-        );
-        assert!(f
-            .request(lead)
-            .failure_reason
-            .as_deref()
-            .unwrap()
-            .starts_with("provider_error: APIProviderQuotaExhaustedError: 429"));
-        assert!(f
-            .worker
-            .state
-            .agent(f.agent)
-            .unwrap()
-            .current_request
-            .is_none());
+        assert_quota_hold(&f, lead);
         assert_eq!(f.request(next).phase, RequestPhase::Queued);
         assert_eq!(f.typed().len(), 1);
     }
@@ -283,19 +322,7 @@ fn kimi_failed_lead_is_not_rebound_when_queued_input_starts_the_next_turn() {
                 super::kimi_steering_tests::reopen(&mut f);
             }
             f.consume();
-            assert_eq!(
-                f.request(lead).phase,
-                RequestPhase::Abandoned,
-                "failed turn rebound to {:?}; next={:?}; stop={stop}; restart={restart}",
-                f.request(lead).provider_turn_id,
-                f.request(next).phase,
-            );
-            assert!(f
-                .request(lead)
-                .failure_reason
-                .as_deref()
-                .unwrap()
-                .starts_with("provider_error: APIProviderQuotaExhaustedError: 429"));
+            assert_quota_hold(&f, lead);
             assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
             assert!(f.reply(lead).is_none());
             assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("1"));
@@ -319,6 +346,13 @@ fn kimi_dialog_without_an_owned_commit_retains_the_turn() {
         f.worker.save(state).unwrap();
         f.consume();
         assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert!(f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .is_none());
         assert_eq!(
             f.worker.state.agent(f.agent).unwrap().current_request,
             Some(lead)
@@ -342,18 +376,16 @@ fn kimi_failure_does_not_promote_a_member_from_a_foreign_started_callback() {
             "prompt": if foreign_session { incident["followup"].as_str().unwrap() } else { "foreign input" },
         }));
         f.consume();
-        assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+        assert_quota_hold(&f, lead);
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
-        assert_eq!(f.request(next).phase, RequestPhase::Abandoned);
+        assert_eq!(f.request(next).phase, RequestPhase::Submitting);
         assert!(!f.request(next).trusted_start_bound);
+        assert!(f.request(next).submission_error.is_some());
         assert!(f.reply(next).is_none());
-        assert!(f
-            .worker
-            .state
-            .agent(f.agent)
-            .unwrap()
-            .current_request
-            .is_none());
+        assert_ne!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(next)
+        );
         assert_eq!(f.typed().len(), 2);
     }
 }
@@ -367,7 +399,7 @@ fn kimi_followup_after_failed_lead_rejects_callbacks_before_submission() {
     std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
     f.started("1", incident()["followup"].as_str().unwrap());
     f.consume();
-    assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+    assert_quota_hold(&f, lead);
     assert_eq!(f.request(next).phase, RequestPhase::Active);
     let callback = ProviderCallback {
         callback_id: "stale-start".into(),
@@ -388,8 +420,9 @@ fn kimi_followup_after_failed_lead_rejects_callbacks_before_submission() {
 }
 
 #[test]
-fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
-    for restart in [false, true] {
+fn provider_flake_legacy_kimi_inputs_keep_their_turns_before_and_after_hold() {
+    // The old retry callback path must not strand a second native input on the held lead.
+    for (restart, settle_first) in [(false, true), (false, false), (true, true), (true, false)] {
         let mut f = Fixture::new(Provider::Kimi);
         let wire = super::kimi_steering_tests::home(&f);
         let lead = running(&mut f, "original task", "0");
@@ -410,12 +443,28 @@ fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
             .unwrap();
         let failed_wire = failure_wire(&mut f, lead, 0);
         std::fs::write(&wire, &failed_wire).unwrap();
+        if settle_first {
+            f.consume();
+        }
 
         f.started("1", "first independent followup");
         f.started("2", "second independent followup");
         f.consume();
 
-        assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+        assert_eq!(f.request(lead).phase, RequestPhase::Active);
+        assert_eq!(
+            f.worker
+                .state
+                .agent(f.agent)
+                .unwrap()
+                .provider_retry
+                .as_ref()
+                .unwrap()
+                .lead,
+            lead,
+        );
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
+        assert!(f.request(lead).turn_ended_at_ms.is_some());
         assert_eq!(
             [
                 (
@@ -436,6 +485,12 @@ fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
             f.worker.state.agent(f.agent).unwrap().current_request,
             Some(second)
         );
+        for id in [first, second] {
+            assert!(
+                f.request(id).submission_error.is_none(),
+                "a native Started receipt must clear the old submission failure"
+            );
+        }
         assert_eq!(f.typed().len(), 3, "neither legacy input was replayed");
         if restart {
             super::kimi_steering_tests::reopen(&mut f);
@@ -468,6 +523,23 @@ fn kimi_legacy_unconfirmed_members_keep_independent_started_turns() {
         );
         assert_eq!(f.request(first).provider_turn_id.as_deref(), Some("1"));
         assert_eq!(f.request(second).provider_turn_id.as_deref(), Some("2"));
+        f.status(RuntimeStatus::Idle);
+        let due = f
+            .worker
+            .state
+            .agent(f.agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .retry_at_ms;
+        assert!(f.worker.state.retry_provider_requests(due));
+        assert_eq!(f.worker.state.queued_requests(f.agent), &[lead]);
+        assert_eq!(f.reply(first).as_deref(), Some("first independent answer"));
+        assert_eq!(
+            f.reply(second).as_deref(),
+            Some("second independent answer")
+        );
         assert_eq!(
             f.typed().len(),
             3,
@@ -508,7 +580,7 @@ fn kimi_pre_started_error_logs_recovery_once_after_durable_save() {
             f.worker.transport = Box::new(PolledKimi(f.native.clone()));
             f.worker.tick().unwrap();
         }
-        std::fs::write(wire, failure_wire(&mut f, lead, 0)).unwrap();
+        std::fs::write(wire, failure_wire(&mut f, lead, 3)).unwrap();
         f.started("1", incident()["followup"].as_str().unwrap());
         let spool = f.dir.join("callbacks/launch");
         f.worker

@@ -13,6 +13,8 @@ mod idle_agents;
 mod interrupts;
 mod payload;
 mod provider_failure;
+mod provider_retry;
+use provider_retry::ProviderRetry;
 mod recovery;
 mod replies;
 mod reply_routing;

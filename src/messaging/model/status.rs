@@ -60,6 +60,8 @@ impl RoomAgent {
     pub(crate) fn shown_status(&self) -> RuntimeStatus {
         if self.working_directory_error.is_some() || self.missing_binary.is_some() {
             RuntimeStatus::Unavailable
+        } else if self.provider_retry.is_some() {
+            RuntimeStatus::Working
         } else {
             self.activity_status()
         }

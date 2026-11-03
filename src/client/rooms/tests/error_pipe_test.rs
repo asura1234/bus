@@ -45,6 +45,11 @@ fn error_pipe_option_is_absent_from_non_dev_settings() {
 
 #[test]
 fn error_report_provider_failure_does_not_reenter_the_capture_inbox() {
+    assert_error_report_failure_is_suppressed("API Error: 401 Authentication failed", false);
+    assert_error_report_failure_is_suppressed("API Error: Connection lost mid-response", true);
+}
+
+fn assert_error_report_failure_is_suppressed(error: &str, transient: bool) {
     use crate::messaging::model::{
         AgentRuntimeIdentity, CallbackDisposition, CallbackEventKind, ProviderCallback,
         SubmissionOutcome,
@@ -110,12 +115,20 @@ fn error_report_provider_failure_does_not_reenter_the_capture_inbox() {
             prompt_payload: None,
             kind: CallbackEventKind::Error {
                 message: "Provider failed".into(),
-                provider_error: Some("API Error: Connection lost mid-response".into()),
+                provider_error: Some(error.into()),
             },
             ..started
         }), CallbackDisposition::AcceptedError);
-        assert!(snapshot.state.request(report).unwrap().failure_reason
-            .as_deref().unwrap().starts_with("provider_error:"));
+        let request = snapshot.state.request(report).unwrap();
+        if transient {
+            assert!(!request.settled());
+            assert!(request.failure_reason.is_none());
+            let owner = snapshot.state.agent(lead).unwrap();
+            assert_eq!(owner.shown_status(), RuntimeStatus::Working);
+            assert!(owner.actionable_error.is_none());
+        } else {
+            assert!(request.failure_reason.as_deref().unwrap().starts_with("provider_error:"));
+        }
         snapshot.revision += 1;
         ui.receive_snapshot(Arc::new(snapshot));
     });

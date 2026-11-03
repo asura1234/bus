@@ -65,6 +65,7 @@ impl BusState {
                 working_directory_error: None,
                 missing_binary: None,
                 current_request: None,
+                provider_retry: None,
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,
                 deletion_pending: false,

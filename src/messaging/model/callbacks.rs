@@ -126,6 +126,15 @@ impl BusState {
             callback.provider_session_id.as_deref(),
             callback.provider_turn_id.as_deref(),
         );
+        if turn_key
+            .as_ref()
+            .is_some_and(|key| self.retried_provider_turns.contains(key))
+        {
+            return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
+        }
+        if let Some(disposition) = self.accept_retry_input(&callback) {
+            return disposition;
+        }
         if let Some(key) = turn_key
             .as_ref()
             .filter(|key| self.unrelated_provider_turns.contains(*key))
@@ -146,8 +155,10 @@ impl BusState {
                                 .as_deref()
                                 .is_some_and(|payload| request.matches_callback_payload(payload))
                     });
-            let bound = agent
-                .current_request
+            let bound = self
+                .agents
+                .get(&callback.agent_id)
+                .and_then(|a| a.current_request)
                 .and_then(|id| self.requests.get(&id))
                 .is_some_and(|request| bound_callback_turn(request, &callback));
             if !absorbed && !bound {
@@ -310,6 +321,7 @@ impl BusState {
                 request.trusted_start_bound = true;
                 request.phase = RequestPhase::Active;
                 request.uncertain_outcome = false;
+                request.submission_error = None;
                 request.pending_final = None;
                 request.turn_ended_at_ms = None;
                 request.awaiting_background = false;
@@ -377,64 +389,6 @@ impl BusState {
                 self.apply_error_callback(request_id, callback, turn_key)
             }
         }
-    }
-
-    fn apply_error_callback(
-        &mut self,
-        request_id: RequestId,
-        callback: ProviderCallback,
-        turn_key: Option<String>,
-    ) -> CallbackDisposition {
-        let CallbackEventKind::Error {
-            message,
-            provider_error,
-        } = callback.kind
-        else {
-            return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
-        };
-        let bound = self
-            .requests
-            .get(&request_id)
-            .is_some_and(|r| r.trusted_start_bound);
-        let message = match (bound, provider_error) {
-            // A provider that names its error (Claude's StopFailure) closes the
-            // turn with the same retryable reason settlement gives Codex's.
-            (true, Some(error)) => {
-                let (reason, message) = super::settlement::provider_error_outcome(&error);
-                let at_ms = callback.occurred_at_ms;
-                match self.close_turn_with_reason(request_id, at_ms, reason) {
-                    Ok(closed) => closed.then_some(message),
-                    Err(_) => {
-                        return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest)
-                    }
-                }
-            }
-            (true, None) => {
-                self.note_steered_provider_error(request_id, &message);
-                if self
-                    .abandon_current_request(request_id, callback.occurred_at_ms)
-                    .is_err()
-                {
-                    return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
-                }
-                Some(message)
-            }
-            // The request stays open, so the error must not say it closed.
-            (false, Some(error)) => Some(format!(
-                "Provider turn failed: {error}; inspect its terminal."
-            )),
-            (false, None) => Some(message),
-        };
-        if bound {
-            self.consumed_provider_turns.extend(turn_key);
-        }
-        let message = message.and_then(|message| self.request_failure_error(request_id, message));
-        if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
-            if let Some(message) = message {
-                agent.actionable_error = Some(message);
-            }
-        }
-        CallbackDisposition::AcceptedError
     }
 
     fn apply_callback_steering(
@@ -631,15 +585,32 @@ impl BusState {
         if let Some(key) = turn_key {
             self.consumed_provider_turns.insert(key);
         }
+        self.finish_completed_turn(agent_id, request_id, unresolved.is_empty())?;
+        Ok(unresolved.is_empty())
+    }
+
+    fn finish_completed_turn(
+        &mut self,
+        agent_id: AgentId,
+        request_id: RequestId,
+        complete: bool,
+    ) -> Result<(), ModelError> {
         let agent = self
             .agents
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
-        if unresolved.is_empty() {
+        if complete {
             agent.current_request = None;
+            if agent
+                .provider_retry
+                .as_ref()
+                .is_some_and(|h| h.lead == request_id)
+            {
+                agent.provider_retry = None;
+            }
         }
         agent.actionable_error = None;
-        Ok(unresolved.is_empty())
+        Ok(())
     }
 
     /// One shared turn can answer messages in a work room and MASTER. Publish

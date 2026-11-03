@@ -458,6 +458,7 @@ impl BusState {
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
+        agent.provider_retry = None;
         if !report {
             agent.actionable_error = None;
         }

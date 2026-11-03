@@ -52,6 +52,77 @@ fn failed(ui: &mut BusUi, request: RequestId) {
 }
 
 #[test]
+fn provider_flake_started_receipt_does_not_report_failed_submission_to_client() {
+    use crate::messaging::model::{CallbackDisposition, CallbackEventKind, ProviderCallback};
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let agent = snapshot
+        .state
+        .create_agent(room, "kimi", Provider::Kimi, "/repo".into(), None)
+        .unwrap();
+    snapshot
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    snapshot.state.confirm_hook_setup(agent).unwrap();
+    snapshot
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 1000)
+        .unwrap();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.set_draft_text(room, "native task").unwrap();
+    let request = snapshot.state.submit_draft(room, 1000).unwrap()[0];
+    snapshot
+        .state
+        .begin_submission(request, "launch", 10)
+        .unwrap();
+    snapshot
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: "UNCONFIRMED_BEFORE_RECEIPT".into(),
+            },
+        )
+        .unwrap();
+    let payload = snapshot.state.render_request_payload(request).unwrap();
+    assert_eq!(
+        snapshot.state.accept_callback(ProviderCallback {
+            callback_id: "started-receipt".into(),
+            sequence: 11,
+            occurred_at_ms: 1001,
+            agent_id: agent,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("1".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(payload),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    assert!(snapshot.state.request(request).unwrap().trusted_start_bound);
+    // A client may first observe the request only after its native receipt.
+    snapshot.state = serde_json::from_slice(&serde_json::to_vec(&snapshot.state).unwrap()).unwrap();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
+    assert!(
+        !capture.text().contains("bus.request.failed"),
+        "{}",
+        capture.text()
+    );
+}
+
+#[test]
 fn abandoned_submission_history_never_draws_recovery_after_later_agent_errors() {
     let (mut ui, room, agent, request) = submitting();
     let mut history = super::super::history::History::default();

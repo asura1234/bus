@@ -71,7 +71,8 @@ impl Worker {
         let waited = self.reply_waiters.keys().copied().collect();
         let mut state = self.state.clone();
         let now_ms = super::io::now_ms();
-        let mut changed = state
+        let mut changed = self.prepare_provider_retries(&mut state, now_ms);
+        changed |= state
             .route_worker_replies(now_ms, &waited)
             .map_err(|e| e.to_string())?;
         changed |= self.prepare_orchestrator_inboxes(&mut state, now_ms);
@@ -92,6 +93,11 @@ impl Worker {
                 break;
             }
             // Messages waited because the agent could not take them yet.
+            if agent.provider_retry.as_ref().is_some_and(|h| {
+                !h.queued || now_ms < h.retry_at_ms || agent.status != RuntimeStatus::Idle
+            }) {
+                continue;
+            }
             let waited = self.delivery_waits.contains_key(&agent.id);
             if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
                 if let Some(reason) = diagnostics::wait_reason(&agent) {
@@ -134,7 +140,8 @@ impl Worker {
             // Claude accepts follow-ups during a turn it started outside Bus,
             // including while the native idle status still lags its start hook.
             // The new request binds only when its own payload is reported.
-            let steer_unbound = agent.provider == Provider::ClaudeCode
+            let steer_unbound = agent.provider_retry.is_none()
+                && agent.provider == Provider::ClaudeCode
                 && agent.current_request.is_none()
                 && !agent.dialog
                 && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
@@ -166,6 +173,20 @@ impl Worker {
             self.deliver_queued_request(&agent, waited, steer_unbound)?;
         }
         Ok(())
+    }
+
+    fn prepare_provider_retries(&self, state: &mut super::BusState, now_ms: u64) -> bool {
+        let mut changed = false;
+        for agent in self
+            .state
+            .agents()
+            .filter(|a| a.provider_retry.as_ref().is_some_and(|h| h.quota))
+        {
+            if let Some(reset) = self.usage.retry_reset(agent, now_ms) {
+                changed |= state.defer_provider_retry(agent.id, reset);
+            }
+        }
+        changed | state.retry_provider_requests(now_ms)
     }
 
     fn deliver_queued_request(
@@ -369,6 +390,19 @@ impl Worker {
         self.save(state)
     }
 
+    fn trace_provider_retry(&self, agent: &RoomAgent, request: RequestId) {
+        if let Some(request) = self
+            .state
+            .request(request)
+            .filter(|r| r.provider_retry_attempts > 0)
+        {
+            tracing::info!(event = "bus.provider.retry", agent_id = agent.id.0, request_id = request.id.0,
+                prompt_id = request.prompt.id.0, room_id = request.room_id.0, provider = ?agent.provider,
+                attempt = request.provider_retry_attempts, session_id = ?agent.runtime_identity.session_id,
+                "Starting guarded provider retry");
+        }
+    }
+
     fn deliver_request(
         &mut self,
         agent: &RoomAgent,
@@ -412,6 +446,7 @@ impl Worker {
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
+        self.trace_provider_retry(agent, request);
         let started = std::time::Instant::now();
         let _span = tracing::info_span!(
             "bus.delivery",
