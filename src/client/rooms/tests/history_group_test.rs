@@ -615,8 +615,9 @@ fn audit_history_renders_deleted_sender_recipient_and_reply_by_name() {
     }
 }
 
-#[test]
-fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
+fn hidden_routing_envelope_fixture(
+    developer_question: bool,
+) -> (BusState, RoomId, RequestId, RequestId) {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let room = state.create_room("work").unwrap();
@@ -641,7 +642,11 @@ fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
                 files: vec![],
                 recipient_ids: [orch].into(),
             },
-            Author::Developer,
+            if developer_question {
+                Author::Developer
+            } else {
+                Author::Agent(worker)
+            },
             1_000,
         )
         .unwrap()[0];
@@ -658,32 +663,80 @@ fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
             false,
         )
         .unwrap()[0];
+    (state, room, lead, hidden)
+}
+
+fn hidden_routing_history(state: &BusState, room: RoomId) -> String {
+    History::default()
+        .lines(
+            state,
+            state.room(room).unwrap(),
+            100,
+            1,
+            3_000,
+            &mut Thumbnails::default(),
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
+    // Ordinary authored work can still share a reply with its routing envelope.
+    let (mut state, room, lead, hidden) = hidden_routing_envelope_fixture(false);
     assert!(state.coalesce_queue(lead).is_some());
+    assert_eq!(state.request(hidden).unwrap().group, Some(lead));
     for id in [lead, hidden] {
         state.finish_for_test(id, "SHARED_AUTHORED_ANSWER", 2_000);
     }
-    let render = |state: &BusState| {
-        History::default()
-            .lines(
-                state,
-                state.room(room).unwrap(),
-                100,
-                1,
-                3_000,
-                &mut Thumbnails::default(),
-            )
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let text = render(&state);
+    let text = hidden_routing_history(&state, room);
     assert!(text.contains("AUTHORED_QUESTION"), "{text}");
     assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
     assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
     assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
-    let text = render(&state);
+    let text = hidden_routing_history(&state, room);
     assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
+}
+
+#[test]
+fn developer_question_stays_visible_when_an_agent_routing_envelope_cannot_coalesce() {
+    let (mut state, room, lead, hidden) = hidden_routing_envelope_fixture(true);
+    assert_eq!(
+        state.request(lead).unwrap().prompt.author,
+        Author::Developer
+    );
+    assert!(matches!(
+        state.request(hidden).unwrap().prompt.author,
+        Author::Agent(_)
+    ));
+    assert!(state.coalesce_queue(lead).is_none());
+    assert_eq!(state.request(hidden).unwrap().group, None);
+    assert_eq!(
+        state.queued_requests(state.request(lead).unwrap().agent_id),
+        &[lead, hidden]
+    );
+    state.finish_for_test(lead, "VISIBLE_DEVELOPER_ANSWER", 2_000);
+    let text = hidden_routing_history(&state, room);
+    assert!(text.contains("AUTHORED_QUESTION"), "{text}");
+    assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
+    assert_eq!(
+        text.matches("VISIBLE_DEVELOPER_ANSWER").count(),
+        1,
+        "{text}"
+    );
+    assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+    let text = hidden_routing_history(&state, room);
+    assert_eq!(
+        text.matches("VISIBLE_DEVELOPER_ANSWER").count(),
+        1,
+        "{text}"
+    );
+    let hidden = state.request(hidden).unwrap();
+    assert_eq!(hidden.phase, crate::messaging::model::RequestPhase::Queued);
+    assert_eq!(hidden.group, None);
+    assert!(!hidden.trusted_start_bound && !hidden.uncertain_outcome);
 }
 
 fn batch_history_state(hidden_lead: bool) -> (BusState, RoomId, Vec<RequestId>) {
