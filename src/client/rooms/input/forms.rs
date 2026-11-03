@@ -78,12 +78,14 @@ impl BusUi {
 
     pub(in crate::client::rooms) fn set_form(&mut self, form: Form) {
         self.form_generation = self.form_generation.wrapping_add(1);
+        crate::messaging::coordinator::publish_form_generation(self.form_generation);
         self.form = Some(form);
     }
 
     pub(in crate::client::rooms) fn clear_form(&mut self) {
         if self.form.is_some() {
             self.form_generation = self.form_generation.wrapping_add(1);
+            crate::messaging::coordinator::publish_form_generation(self.form_generation);
         }
         self.form = None;
     }

@@ -37,8 +37,11 @@ impl BusUi {
         &mut self,
         room: RoomId,
         agent: Option<AgentId>,
+        form_generation: Option<u64>,
     ) {
-        if self.form.is_some() || self.rename.is_some() {
+        if (self.form.is_some() || self.rename.is_some())
+            && form_generation != Some(self.form_generation)
+        {
             return;
         }
         if let Some(agent) = agent {

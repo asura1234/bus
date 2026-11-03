@@ -47,6 +47,7 @@ fn request(id: &str, method: &str, params: Value) -> ControlRequest {
 #[test]
 fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     let (mut worker, room, agent, dir) = fixture();
+    crate::messaging::coordinator::publish_form_generation(u64::MAX);
     let (events, receiver) = mpsc::channel();
     let call = request(
         "agent-focus",
@@ -61,7 +62,7 @@ fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     );
     assert!(
         matches!(receiver.try_recv().unwrap(), BusEvent::DevFocusRequested {
-        room: selected, agent: Some(target)
+        room: selected, agent: Some(target), form_generation: Some(u64::MAX)
     } if selected == room && target == agent)
     );
     assert_eq!(
@@ -82,7 +83,7 @@ fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     assert_eq!(response.result, json!({"stage":"queued", "room_id":room}));
     assert!(
         matches!(receiver.try_recv().unwrap(), BusEvent::DevFocusRequested {
-        room: selected, agent: None
+        room: selected, agent: None, form_generation: Some(u64::MAX)
     } if selected == room)
     );
     drop(worker);

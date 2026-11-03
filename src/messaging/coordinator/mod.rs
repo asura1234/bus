@@ -16,6 +16,7 @@ mod first_message;
 #[path = "tests/operational_notice_retirement_test.rs"]
 mod operational_notice_retirement_tests;
 mod poll;
+mod presentation;
 mod provider_failure;
 mod recovery;
 #[cfg(test)]
@@ -141,6 +142,7 @@ pub(crate) enum BusEvent {
     DevFocusRequested {
         room: RoomId,
         agent: Option<AgentId>,
+        form_generation: Option<u64>,
     },
     /// Dev `quit`: run the UI's own save-and-quit, as Ctrl+Q does.
     DevQuitRequested,
@@ -394,4 +396,5 @@ pub(crate) use control_dispatch::method_spec;
 #[cfg(feature = "dev-tools")]
 pub(crate) use control_dispatch::ui_hits;
 pub(crate) use control_dispatch::{Tier, METHODS};
+pub(crate) use presentation::{current_form_generation, publish_form_generation};
 pub(crate) mod usage;

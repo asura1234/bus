@@ -45,6 +45,19 @@ pub(super) enum Effect {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CreationKind {
+    Room,
+    Agent,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CreationOrigin {
+    pub id: u64,
+    pub kind: CreationKind,
+    pub form_generation: Option<u64>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Pending {
     pub id: u64,
@@ -52,7 +65,6 @@ pub(super) struct Pending {
     pub effect: Effect,
     pub enqueued: bool,
     pub result: Option<Result<(), String>>,
-    pub form_generation: Option<u64>,
 }
 
 pub(in crate::client) struct BusUi {
@@ -64,6 +76,7 @@ pub(in crate::client) struct BusUi {
     pub(super) clipboard_image_reader: fn(usize) -> Option<crate::platform::ClipboardImage>,
     pub(super) locals: BTreeMap<RoomId, LocalRoom>,
     pub(super) pending: VecDeque<Pending>,
+    pub(super) creation_origins: VecDeque<CreationOrigin>,
     pub next_id: u64,
     pub error: Option<String>,
     /// Agent errors last written to the client log, so each is logged once.
@@ -187,6 +200,7 @@ impl BusUi {
             room,
             locals,
             pending: VecDeque::new(),
+            creation_origins: VecDeque::new(),
             next_id: 1,
             recovered_storage_failures: BTreeSet::new(),
             error: None,
@@ -355,37 +369,43 @@ impl BusUi {
                 "Room submit queued for coordinator"
             );
         }
-        let form_generation = (self.form.is_some()
-            && matches!(
-                command,
-                BusCommand::CreateRoom(_)
-                    | BusCommand::AddAgent(_)
-                    | BusCommand::AddOrchestrator(..)
-            ))
-        .then_some(self.form_generation);
+        let creation_kind = match &command {
+            BusCommand::CreateRoom(_) => Some(CreationKind::Room),
+            BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..) => Some(CreationKind::Agent),
+            _ => None,
+        };
+        if let Some(kind) = creation_kind {
+            self.creation_origins.push_back(CreationOrigin {
+                id,
+                kind,
+                form_generation: self.form.is_some().then_some(self.form_generation),
+            });
+        }
         self.pending.push_back(Pending {
             id,
             command,
             effect,
             enqueued: false,
             result: None,
-            form_generation,
         });
         id
     }
-    fn completion_owns_current_form(&self, command: fn(&BusCommand) -> bool) -> bool {
+    fn take_creation_origin(&mut self, kind: CreationKind) -> Option<Option<u64>> {
+        let index = self
+            .creation_origins
+            .iter()
+            .rposition(|origin| origin.kind == kind)?;
+        Some(self.creation_origins.remove(index)?.form_generation)
+    }
+    fn completion_owns_current_form(&mut self, kind: CreationKind) -> bool {
+        let form_generation = self.take_creation_origin(kind);
         if self.rename.is_some() {
             return false;
         }
         if self.form.is_none() {
             return true;
         }
-        self.pending
-            .iter()
-            .rev()
-            .find(|pending| command(&pending.command))
-            .and_then(|pending| pending.form_generation)
-            .is_some_and(|generation| self.form_generation == generation)
+        form_generation.is_some_and(|generation| generation == Some(self.form_generation))
     }
     pub fn receive_event(&mut self, event: BusEvent) {
         #[cfg(feature = "dev-tools")]
@@ -397,7 +417,11 @@ impl BusUi {
             BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
             BusEvent::FeishuStatusChanged(status) => self.feishu_status = status,
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
-            BusEvent::DevFocusRequested { room, agent } => self.receive_dev_focus(room, agent),
+            BusEvent::DevFocusRequested {
+                room,
+                agent,
+                form_generation,
+            } => self.receive_dev_focus(room, agent, form_generation),
             BusEvent::CommandFinished { command_id, result } => {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
                     if matches!(
@@ -421,19 +445,12 @@ impl BusUi {
                 }
             }
             BusEvent::RoomCreated(room) => {
-                if self.completion_owns_current_form(|command| {
-                    matches!(command, BusCommand::CreateRoom(_))
-                }) {
+                if self.completion_owns_current_form(CreationKind::Room) {
                     self.open_room(room);
                 }
             }
             BusEvent::AgentAdded(agent) => {
-                if self.completion_owns_current_form(|command| {
-                    matches!(
-                        command,
-                        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
-                    )
-                }) {
+                if self.completion_owns_current_form(CreationKind::Agent) {
                     self.open_terminal(agent);
                 }
             }
@@ -912,7 +929,6 @@ mod tests {
             effect: Effect::Text(room, 1),
             enqueued: true,
             result: Some(Err("Storage paused; retrying".into())),
-            form_generation: None,
         });
 
         ui.receive_event(BusEvent::StorageRecovered);
