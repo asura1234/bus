@@ -159,6 +159,16 @@ fn confirmed(args: &ArgMatches) -> Result<bool, String> {
     }
 }
 
+#[cfg(feature = "dev-tools")]
+fn parse_ui(args: &ArgMatches) -> Result<(&'static str, Value), String> {
+    match args.subcommand() {
+        Some(("hits", _)) => Ok(("ui.hits", json!({}))),
+        Some(("hold-acks", _)) => Ok(("ui.hold-acks", json!({}))),
+        Some(("release-acks", _)) => Ok(("ui.release-acks", json!({}))),
+        _ => Err("unknown ui command".into()),
+    }
+}
+
 pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
     let matches = cli()
         .try_get_matches_from(args)
@@ -204,12 +214,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         "diagnostics" => ("diagnostics", json!({})),
         "sounds" => ("sounds", json!({})),
         #[cfg(feature = "dev-tools")]
-        "ui" => match args.subcommand() {
-            Some(("hits", _)) => ("ui.hits", json!({})),
-            Some(("hold-acks", _)) => ("ui.hold-acks", json!({})),
-            Some(("release-acks", _)) => ("ui.release-acks", json!({})),
-            _ => return Err("unknown ui command".into()),
-        },
+        "ui" => parse_ui(args)?,
         "room" => parse_room(args)?,
         "agent" => parse_agent(args)?,
         "send" => {
