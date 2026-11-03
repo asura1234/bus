@@ -1,43 +1,7 @@
 //! Durable launch audit records, including attempts rejected before roster insertion.
-use super::{
-    AgentId, AgentRuntimeIdentity, BusState, ModelError, Provider, Request, RequestPhase, RoomId,
-};
+use super::{AgentId, AgentRuntimeIdentity, BusState, ModelError, Provider, RoomId};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-pub(crate) fn request_pre_start_failure(request: &Request) -> bool {
-    matches!(
-        request
-            .failure_reason
-            .as_deref()
-            .map(str::trim)
-            .filter(|reason| !reason.is_empty())
-            .unwrap_or("missing_reason"),
-        "submission_unconfirmed"
-            | "prompt_not_shown"
-            | "delivery_error"
-            | "prior_request_active"
-            | "not_submitted"
-            | "session_hook_missing"
-    )
-}
-
-pub(crate) fn request_start_bound(state: &BusState, request: &Request) -> bool {
-    request.trusted_start_bound
-        || (!request.uncertain_outcome
-            && (request.phase == RequestPhase::Active
-                || request.phase == RequestPhase::Abandoned && !request.steered)
-            && request
-                .group
-                .and_then(|id| state.request(id))
-                .is_some_and(|lead| {
-                    lead.agent_id == request.agent_id
-                        && !request_pre_start_failure(lead)
-                        && (lead.trusted_start_bound
-                            || lead.reply().is_some()
-                            || lead.phase == RequestPhase::Completed)
-                }))
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,7 +59,6 @@ impl BusState {
                 last.checked_add(1)
                     .expect("Launch audit ID space exhausted")
             });
-        self.launch_tracking_started_at_ms.get_or_insert(at_ms);
         Arc::make_mut(&mut self.launch_attempts).insert(
             id,
             LaunchAttempt {
@@ -232,7 +195,7 @@ impl BusState {
         };
         self.requests.values().any(|r| {
             r.agent_id == agent
-                && request_start_bound(self, r)
+                && super::request_start_bound(self, r)
                 && r.expected_launch_id.as_deref() == Some(launch)
                 && r.submission_status_revision >= floor
         })
@@ -269,10 +232,11 @@ impl BusState {
     }
     pub(crate) fn copy_launch_ledger_from(&mut self, state: &Self) {
         self.launch_attempts = Arc::clone(&state.launch_attempts);
-        self.launch_tracking_started_at_ms = state.launch_tracking_started_at_ms;
     }
     pub(crate) fn launch_tracking_started_at_ms(&self) -> Option<u64> {
-        self.launch_tracking_started_at_ms
+        self.launch_attempts
+            .first_key_value()
+            .map(|(_, attempt)| attempt.started_at_ms)
     }
 
     pub(crate) fn cancel_pending_launch(
