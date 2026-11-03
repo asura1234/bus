@@ -5,7 +5,7 @@ use crate::messaging::{
     model::{AgentRecipients, Draft, Room, RoomId},
 };
 
-fn attachment_path(input: &str) -> std::path::PathBuf {
+pub(super) fn attachment_path(input: &str) -> std::path::PathBuf {
     let home = std::env::home_dir();
     if let Some(home) = &home {
         if let Ok(path) = crate::messaging::attachments::validate_attachment(input, home) {
@@ -209,7 +209,7 @@ impl BusUi {
         } else {
             BusCommand::Submit(room, draft.clone())
         };
-        let command_id = self.queue(command, Effect::Submit(room, 0));
+        let command_id = self.queue(command, Effect::Submit);
         self.submissions.push(LocalSubmission {
             command_id,
             room,

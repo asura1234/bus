@@ -696,7 +696,7 @@ fn pending_send_leaves_the_status_line_under_the_composer_empty() {
     let idle = room_screen(&mut ui, 100, 30);
     ui.queue(
         BusCommand::Submit(room, Draft::default()),
-        Effect::Submit(room, 0),
+        Effect::Submit,
     );
     let pending = room_screen(&mut ui, 100, 30);
     // The send is logged; flashing a status row for it only moves the composer.

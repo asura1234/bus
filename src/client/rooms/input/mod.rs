@@ -521,7 +521,7 @@ impl BusUi {
     fn remove_room_file(&mut self, path: std::path::PathBuf) {
         if let Some(room) = self.room {
             let before = self.failed.len();
-            self.failed.retain(|p| !matches!(&p.command,BusCommand::AttachFile(id,input) if *id==room && std::path::Path::new(input)==path));
+            self.failed.retain(|p| !matches!(&p.command,BusCommand::AttachFile(id,input) if *id==room && super::drafts::attachment_path(input)==path));
             if before != self.failed.len() {
                 self.error = None;
                 return;

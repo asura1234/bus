@@ -40,7 +40,7 @@ pub(super) enum Effect {
     Text(RoomId, u64),
     Recipients(RoomId, u64),
     Files(RoomId),
-    Submit(RoomId, u64),
+    Submit,
     Shutdown,
 }
 

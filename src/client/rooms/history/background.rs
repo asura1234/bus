@@ -221,6 +221,7 @@ impl History {
         self.projected = 0;
     }
 
+    #[cfg(test)]
     pub(in crate::client::rooms) fn request_lines(
         &mut self,
         snapshot: Arc<BusSnapshot>,
