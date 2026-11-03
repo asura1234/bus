@@ -24,7 +24,7 @@ fn launch_ledger_roundtrip_preserves_pre_agent_attempts() {
     assert_eq!(saved["launch_attempts"]["4"]["cause"], "missing_executable");
     assert!(saved["launch_attempts"]["4"]["agent_id"].is_null());
     assert_eq!(
-        saved["launch_tracking_started_at_ms"],
+        saved["launch_attempts"]["1"]["started_at_ms"],
         fixture["tracking_started_at_ms"]
     );
 }
@@ -242,7 +242,7 @@ fn launch_ledger_legacy_state_has_no_invented_history() {
         .remove("launch_tracking_started_at_ms");
     let mut s: BusState = serde_json::from_value(doc).unwrap();
     assert_eq!(s.launch_attempts().count(), 0);
-    assert!(s.launch_tracking_started_at_ms.is_none());
+    assert!(s.launch_tracking_started_at_ms().is_none());
     s.begin_launch_attempt(
         "first tracked",
         Provider::ClaudeCode,
@@ -250,6 +250,6 @@ fn launch_ledger_legacy_state_has_no_invented_history() {
         LaunchKind::Create,
         900,
     );
-    assert_eq!(s.launch_tracking_started_at_ms, Some(900));
+    assert_eq!(s.launch_tracking_started_at_ms(), Some(900));
     assert!(!s.is_pristine());
 }
