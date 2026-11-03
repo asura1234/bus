@@ -5,11 +5,16 @@ use crate::{
 };
 use std::{io, sync::mpsc, time::Instant};
 
-/// Raw PTY activity can temporarily project Working after a native turn ended.
-/// Only native metadata may admit this case; typed fallback must stay strict.
+/// A ready frontend can project Working during repaint or Blocked for a draft.
+/// The caller must prove a live draft before bypassing its Blocked guard. Only
+/// native metadata may admit either case; typed fallback must stay strict.
 pub(super) fn can_check_idle(agent: &AgentInfo) -> bool {
     agent.agent.as_deref() == Some("codex")
-        && agent.agent_status == crate::protocol::api::schema::AgentStatus::Working
+        && matches!(
+            agent.agent_status,
+            crate::protocol::api::schema::AgentStatus::Working
+                | crate::protocol::api::schema::AgentStatus::Blocked
+        )
         && agent.dialog_id.is_none()
         && !agent.launch_pending
         && agent.interactive_ready
