@@ -176,7 +176,11 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
     let typed = fixture.typed()[1].0.clone();
-    assert_eq!(test_prompt_content(&typed), "a real dialog needs help");
+    // Cross-room delivery keeps the original worker's authenticated header.
+    assert_eq!(
+        test_prompt_content(&typed),
+        format!("builder (room {}):\na real dialog needs help", work.0)
+    );
     fixture.started("worker-turn", &typed);
     fixture.stopped("worker-turn", "dialog answered");
     fixture.consume();
