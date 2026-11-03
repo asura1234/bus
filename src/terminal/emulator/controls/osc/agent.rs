@@ -56,7 +56,7 @@ impl AgentOscStateTracker {
                         *shell_prompt_generation = shell_prompt_generation.saturating_add(1);
                         return;
                     }
-                    let Some((token, sequence)) = private_prompt(payload) else {
+                    let Some(PrivatePrompt { token, sequence }) = private_prompt(payload) else {
                         return;
                     };
                     let token = String::from_utf8_lossy(token).into_owned();
@@ -125,14 +125,22 @@ pub(super) fn sanitize_agent_osc_string(payload: &[u8], max_chars: usize) -> Str
 
 /// A versioned marker is rendered after user PS1 expansion, with a sequence
 /// allocated once by the primary-prompt hook. Readline redraws replay it.
-fn private_prompt(payload: &[u8]) -> Option<(&[u8], Option<(u64, u64)>)> {
+struct PrivatePrompt<'a> {
+    token: &'a [u8],
+    sequence: Option<(u64, u64)>,
+}
+
+fn private_prompt(payload: &[u8]) -> Option<PrivatePrompt<'_>> {
     let mut fields = payload.strip_prefix(b"A;bus=")?.split(|b| *b == b';');
     let token = fields.next()?;
     if token.is_empty() || token.len() > 64 || !token.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
     let Some(cycle) = fields.next() else {
-        return Some((token, None));
+        return Some(PrivatePrompt {
+            token,
+            sequence: None,
+        });
     };
     let number = |value: &[u8]| {
         (!value.is_empty() && value.iter().all(u8::is_ascii_digit))
@@ -141,5 +149,8 @@ fn private_prompt(payload: &[u8]) -> Option<(&[u8], Option<(u64, u64)>)> {
     };
     let cycle = number(cycle.strip_prefix(b"cycle=")?)?;
     let attempt = number(fields.next()?.strip_prefix(b"attempt=")?)?;
-    (cycle > 0 && fields.next().is_none()).then_some((token, Some((cycle, attempt))))
+    (cycle > 0 && fields.next().is_none()).then_some(PrivatePrompt {
+        token,
+        sequence: Some((cycle, attempt)),
+    })
 }
