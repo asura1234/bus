@@ -14,6 +14,22 @@ impl BusState {
         Ok(())
     }
 
+    pub(crate) fn finish_queued(
+        &mut self,
+        request: RequestId,
+        started_at_ms: u64,
+        completed_at_ms: u64,
+    ) -> Result<(), ModelError> {
+        let request = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        if request.latency.queued_at_ms == Some(started_at_ms) {
+            request.latency.queued_at_ms = Some(completed_at_ms);
+        }
+        Ok(())
+    }
+
     fn delivery_targets(&self, request: RequestId) -> Result<Vec<RequestId>, ModelError> {
         self.requests
             .get(&request)
@@ -51,7 +67,23 @@ impl BusState {
     ) -> Result<(), ModelError> {
         for id in self.delivery_targets(request)? {
             if let Some(request) = self.requests.get_mut(&id) {
-                request.latency.native_requested_at_ms.get_or_insert(at_ms);
+                request.latency.native_requested_at_ms = Some(at_ms);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish_native_requested(
+        &mut self,
+        request: RequestId,
+        started_at_ms: u64,
+        completed_at_ms: u64,
+    ) -> Result<(), ModelError> {
+        for id in self.delivery_targets(request)? {
+            if let Some(request) = self.requests.get_mut(&id) {
+                if request.latency.native_requested_at_ms == Some(started_at_ms) {
+                    request.latency.native_requested_at_ms = Some(completed_at_ms);
+                }
             }
         }
         Ok(())
@@ -60,7 +92,7 @@ impl BusState {
     pub(crate) fn record_native_timestamps(
         &mut self,
         request: RequestId,
-        timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
+        timestamps: crate::messaging::model::NativeSubmissionTimestamps,
     ) -> Result<(), ModelError> {
         for id in self.delivery_targets(request)? {
             if let Some(request) = self.requests.get_mut(&id) {
@@ -87,6 +119,12 @@ impl BusState {
                     request.latency.reply_captured_at_ms.get_or_insert(at_ms);
                 }
             }
+        }
+    }
+
+    pub(crate) fn record_reply_delivered(&mut self, request: RequestId, at_ms: u64) {
+        if let Some(request) = self.requests.get_mut(&request) {
+            request.latency.reply_delivered_at_ms.get_or_insert(at_ms);
         }
     }
 }

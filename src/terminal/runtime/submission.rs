@@ -228,6 +228,16 @@ impl TerminalRuntime {
         let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
         let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
+        {
+            let shared = scope.timestamps();
+            let mut timestamps = shared.lock().unwrap_or_else(|error| error.into_inner());
+            timestamps
+                .server_accepted_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+            timestamps
+                .writer_queued_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+        }
         let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),

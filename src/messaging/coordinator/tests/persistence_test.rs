@@ -54,6 +54,7 @@ fn delete_room_partial_close_preserves_retryable_state_and_other_rooms() {
         vec![
             Ok(ResponseResult::Ok {}),
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "stop failed".into(),
                 code: Some("terminal_stop_failed".into()),
                 definitely_rejected: false,
@@ -417,6 +418,7 @@ fn recovered_storage_does_not_resubmit_uncertain_delivery() {
     let (mut worker, agent, room, dir, calls) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "submit outcome unknown".into(),
             code: None,
             definitely_rejected: false,

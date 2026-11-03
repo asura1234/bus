@@ -843,6 +843,11 @@ fn delivery_timestamps_round_trip_and_legacy_requests_default_to_empty() {
         Some(1_005),
         "a retry or backward wall clock cannot replace the first timestamp"
     );
+    let expected = state.request(request).unwrap().latency.clone();
+    let populated: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    assert_eq!(populated.request(request).unwrap().latency, expected);
+
     let mut document = serde_json::to_value(&state).unwrap();
     document["requests"][request.0.to_string()]
         .as_object_mut()
@@ -868,7 +873,7 @@ fn coalesced_recipients_share_native_and_provider_delivery_timestamps() {
     state
         .record_native_timestamps(
             first,
-            crate::protocol::api::schema::NativeSubmissionTimestamps {
+            crate::messaging::model::NativeSubmissionTimestamps {
                 text_written_at_ms: Some(40),
                 ..Default::default()
             },

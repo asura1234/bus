@@ -53,7 +53,9 @@ pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::BusState;
 pub(crate) use {
     crate::messaging::model::{
-        latency::{DeliveryLatency, DialogNoticeDelivery, QueuedRejection},
+        latency::{
+            DeliveryLatency, DialogNoticeDelivery, NativeSubmissionTimestamps, QueuedRejection,
+        },
         types::RoomAgent,
     },
     types::{

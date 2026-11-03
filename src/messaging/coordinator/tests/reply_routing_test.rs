@@ -906,6 +906,7 @@ impl Transport for NeverShown {
             other => panic!("unexpected native call: {other:?}"),
         }
         Err(TransportError {
+            timestamps: Default::default(),
             code: Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN.into()),
             message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
             definitely_rejected: true,

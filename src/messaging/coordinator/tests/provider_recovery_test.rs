@@ -732,6 +732,7 @@ fn startup_launch_rejection_resume_tab_abandons_never_submitted_work() {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
                 Method::TabCreate(_) => Err(TransportError {
+                    timestamps: Default::default(),
                     code: Some("tab_create_failed".into()),
                     message: "login shell is not executable".into(),
                     definitely_rejected: true,
@@ -789,6 +790,7 @@ fn startup_launch_rejection_uncertain_resume_tab_retains_queued_work() {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
                 Method::TabCreate(_) => Err(TransportError {
+                    timestamps: Default::default(),
                     code: None,
                     message: "transport lost".into(),
                     definitely_rejected: false,

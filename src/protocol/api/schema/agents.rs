@@ -33,27 +33,6 @@ impl NativeSubmissionTimestamps {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
-
-    pub fn merge_from(&mut self, other: Self) {
-        for (current, new) in [
-            (&mut self.server_accepted_at_ms, other.server_accepted_at_ms),
-            (&mut self.writer_queued_at_ms, other.writer_queued_at_ms),
-            (&mut self.paste_started_at_ms, other.paste_started_at_ms),
-            (&mut self.text_written_at_ms, other.text_written_at_ms),
-            (&mut self.paste_completed_at_ms, other.paste_completed_at_ms),
-            (&mut self.composer_owned_at_ms, other.composer_owned_at_ms),
-            (&mut self.enter_sent_at_ms, other.enter_sent_at_ms),
-            (&mut self.enter_written_at_ms, other.enter_written_at_ms),
-            (
-                &mut self.native_confirmed_at_ms,
-                other.native_confirmed_at_ms,
-            ),
-        ] {
-            if current.is_none() {
-                *current = new;
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

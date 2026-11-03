@@ -162,6 +162,7 @@ fn room_orchestrator_core_worker_read_uses_native_public_pane_selector() {
             };
             assert_eq!(params.target, "w1:p2");
             Err(TransportError {
+                timestamps: Default::default(),
                 code: None,
                 message: "probe complete".into(),
                 definitely_rejected: true,

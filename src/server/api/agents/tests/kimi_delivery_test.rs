@@ -468,3 +468,48 @@ fn kimi_cancelled_exchange_retains_marker_proof_until_the_composer_is_empty() {
         "an interrupted readback must leave exact proof for the marker still in the composer"
     );
 }
+
+#[tokio::test]
+async fn delivery_latency_kimi_editor_records_payload_and_ownership_timestamps() {
+    let _scratch = Scratch::new();
+    let (mut app, method, mut writes, directory) = fixture(IDLE, false);
+    let response = start(&mut app, method);
+    let file = crate::utils::test_temp::unique_temp_path("kimi-editor-latency");
+    let body = "from bus";
+    let mut draft = String::new();
+    for round in 0..2 {
+        assert_eq!(
+            next_or_response(&mut writes, &response).await.as_ref(),
+            b"\x07"
+        );
+        std::fs::write(&file, &draft).unwrap();
+        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+        draft = std::fs::read_to_string(&file).unwrap();
+        let marker = draft.strip_prefix(body).unwrap().to_owned();
+        assert!(marker.starts_with("__BUS_DRAFT_END_"));
+        paint(&app, IDLE, &draft, round + 1);
+        assert_eq!(
+            next_or_response(&mut writes, &response).await.as_ref(),
+            vec![0x7f; marker.len()]
+        );
+        draft.truncate(body.len());
+        paint(&app, IDLE, &draft, round + 2);
+    }
+    assert_eq!(
+        next_or_response(&mut writes, &response).await.as_ref(),
+        b"\r"
+    );
+    paint(&app, IDLE, "", 5);
+    let result = response.recv_timeout(WAIT).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let no_duplicate_keys = writes.try_recv().is_err();
+    std::fs::remove_file(file).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+
+    assert!(result.contains("agent_prompted"), "{result}");
+    assert!(no_duplicate_keys);
+    let timestamps = &value["result"]["timestamps"];
+    assert!(timestamps["native_confirmed_at_ms"].is_u64(), "{result}");
+    assert!(timestamps["text_written_at_ms"].is_u64(), "{result}");
+    assert!(timestamps["composer_owned_at_ms"].is_u64(), "{result}");
+}

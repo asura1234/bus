@@ -40,6 +40,8 @@ pub(crate) enum JournalOp {
         queued_at_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_requested_at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_delivered_at_ms: Option<u64>,
     },
 }
 
@@ -78,6 +80,7 @@ impl JournalOp {
                 request_id,
                 queued_at_ms,
                 native_requested_at_ms,
+                reply_delivered_at_ms,
                 ..
             } => {
                 if let Some(at_ms) = queued_at_ms {
@@ -85,6 +88,9 @@ impl JournalOp {
                 }
                 if let Some(at_ms) = native_requested_at_ms {
                     state.record_native_requested(*request_id, *at_ms)?;
+                }
+                if let Some(at_ms) = reply_delivered_at_ms {
+                    state.record_reply_delivered(*request_id, *at_ms);
                 }
                 Ok(())
             }

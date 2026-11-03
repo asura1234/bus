@@ -6,6 +6,7 @@ fn identity_agent_commands_resolve_names_globally_in_every_conversation() {
     impl Transport for Refusing {
         fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "no terminal in test".into(),
                 code: None,
                 definitely_rejected: true,
