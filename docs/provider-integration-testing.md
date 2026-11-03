@@ -992,5 +992,8 @@ idle then deliver, and an approval card without `--yolo`.
   failure because of physical line order. Retain the prompt/session binding
   and native time bounds so the next turn cannot supply the old turn's agent
   error. Replay delayed and interleaved records, pending-record restart and
-  queued follow-ups; require provider-error closure and one FIFO delivery per
-  accepted follow-up. Preserve normal successful and in-order failed turns.
+  queued follow-ups. A recognized quota/transient failure must enter the same
+  delivery's retry hold (#300), survive restart without replay, and preserve
+  queued work beyond 120 seconds. After a successful retry, require one FIFO
+  delivery per follow-up. Permanent errors still close as provider_error;
+  preserve normal successful and in-order failed turns.
