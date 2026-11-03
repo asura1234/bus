@@ -412,6 +412,23 @@ impl Worker {
         let _ = call.reply.try_send(response);
     }
 
+    fn finish_shutdown(
+        &mut self,
+        id: u64,
+        events: &mpsc::Sender<BusEvent>,
+        snapshots: &Arc<Mutex<Arc<BusSnapshot>>>,
+    ) {
+        self.fold_journal();
+        self.last_command_id = id;
+        if let Ok(mut shared) = snapshots.lock() {
+            *shared = Arc::new(self.snapshot());
+        }
+        let _ = events.send(BusEvent::CommandFinished {
+            command_id: id,
+            result: Ok(()),
+        });
+    }
+
     pub(super) fn run(
         mut self,
         commands: mpsc::Receiver<(u64, BusCommand)>,
@@ -431,15 +448,7 @@ impl Worker {
             let busy = perf::COORDINATOR_LOOP.enter("command");
             match received {
                 Ok((id, BusCommand::Shutdown)) => {
-                    self.fold_journal();
-                    self.last_command_id = id;
-                    if let Ok(mut shared) = snapshots.lock() {
-                        *shared = Arc::new(self.snapshot());
-                    }
-                    let _ = events.send(BusEvent::CommandFinished {
-                        command_id: id,
-                        result: Ok(()),
-                    });
+                    self.finish_shutdown(id, &events, &snapshots);
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {

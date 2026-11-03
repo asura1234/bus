@@ -111,13 +111,7 @@ impl BusUi {
         } else {
             self.main_scroll.min(view.history_max_scroll)
         };
-        view.history_text = Rect::new(layout.x, history_y, width, view.history.height);
-        let visible = content
-            .iter()
-            .skip(self.main_scroll)
-            .take(usize::from(view.history.height));
-        let links = visible_links(&mut self.link_paths, visible);
-        self.history_rows(view, content, &links);
+        self.paint_history_rows(view, content, layout, history_y);
         if !title.is_empty() && view.composer_box.height > 0 {
             view.row(
                 Rect::new(layout.x, view.composer_box.y, width, 1),
@@ -137,6 +131,22 @@ impl BusUi {
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+    }
+
+    fn paint_history_rows(
+        &mut self,
+        view: &mut View,
+        content: &[Line],
+        layout: RoomLayout,
+        history_y: u16,
+    ) {
+        view.history_text = Rect::new(layout.x, history_y, layout.width, view.history.height);
+        let visible = content
+            .iter()
+            .skip(self.main_scroll)
+            .take(usize::from(view.history.height));
+        let links = visible_links(&mut self.link_paths, visible);
+        self.history_rows(view, content, &links);
     }
 
     fn visible_history_anchor(&self) -> Option<super::super::history::RowAnchor> {

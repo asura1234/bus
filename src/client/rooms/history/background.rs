@@ -327,8 +327,6 @@ impl History {
         if background.requested == Some(key) {
             return;
         }
-        // Poll/draft revisions must not starve a cold layout by cancelling it
-        // before it can finish. Only room/geometry changes cancel running work.
         let generation = if background
             .requested
             .is_some_and(|previous| previous.same_geometry(key))
