@@ -60,8 +60,17 @@ impl ObservedSubmission {
                     editor.directory.clone(),
                     self.clock.remaining(self.hard_deadline),
                 )
-                .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-                self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)?;
+                .map_err(|error| {
+                    tracing::warn!(event = "bus.draft.exchange_wait", directory = %editor.directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
+                    io::Error::other(PromptNotShown::ComposerBusy)
+                })?;
+                self.restore_editor_transfer(
+                    &exchange,
+                    &editor.key,
+                    &editor.backspace,
+                    true,
+                    lease,
+                )?;
                 lease.restored();
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
