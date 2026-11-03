@@ -59,7 +59,7 @@ fn hold_transient_error(fixture: &mut Fixture, request: RequestId) {
         "attempts": 1,
         "retry_at_ms": u64::MAX,
         "quota": false,
-        "queued": true,
+        "queued": false,
     });
     fixture
         .worker
@@ -104,10 +104,17 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     f.send("queued retry lead", true)
                 };
                 if transient_hold {
-                    if !current {
-                        f.deliver();
-                    }
                     hold_transient_error(&mut f, old);
+                    if !current {
+                        let mut document = serde_json::to_value(&f.worker.state).unwrap();
+                        document["agents"][f.agent.0.to_string()]["provider_retry"]["queued"] =
+                            json!(true);
+                        document["requests"][old.0.to_string()]["provider_retry_attempts"] =
+                            json!(1);
+                        f.worker
+                            .save(serde_json::from_value(document).unwrap())
+                            .unwrap();
+                    }
                 }
                 let queued = (!queue_after).then(|| f.send("queued before resume", true));
                 match mode {
@@ -120,6 +127,14 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                 let queued = queue_after
                     .then(|| f.send("queued after resume", true))
                     .or(queued);
+                let held = f
+                    .worker
+                    .state
+                    .agent(f.agent)
+                    .unwrap()
+                    .provider_retry
+                    .clone();
+                let held_queue = f.worker.state.queued_requests(f.agent).to_vec();
                 f.worker.tick().unwrap();
                 if matches!(receipt, Receipt::Late | Receipt::Replay) {
                     restart_lifecycle_receipt(&f, "restarted");
@@ -139,7 +154,11 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     }
                     assert_eq!(f.typed().len(), typed, "receipt replay duplicated delivery");
                 }
-                assert_ne!(f.request(old).phase, RequestPhase::Queued);
+                if transient_hold && !current {
+                    assert_eq!(f.request(old).phase, RequestPhase::Queued);
+                } else {
+                    assert_ne!(f.request(old).phase, RequestPhase::Queued);
+                }
                 let request = f.request(old);
                 if transient_hold {
                     assert_ne!(
@@ -148,14 +167,14 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                         "{provider:?}/{mode:?}"
                     );
                     assert_eq!(
-                        f.worker
-                            .state
-                            .agent(f.agent)
-                            .unwrap()
-                            .provider_retry
-                            .as_ref()
-                            .map(|hold| hold.lead),
-                        Some(old)
+                        f.worker.state.agent(f.agent).unwrap().provider_retry,
+                        held,
+                        "task, attempts and original deadline must survive"
+                    );
+                    assert_eq!(
+                        f.worker.state.queued_requests(f.agent),
+                        held_queue,
+                        "retry hold must retain FIFO without new input"
                     );
                 } else if current {
                     assert_eq!(request.phase, RequestPhase::Abandoned);
@@ -166,13 +185,37 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                 } else {
                     assert_ne!(request.phase, RequestPhase::Abandoned);
                 }
-                if current && !transient_hold {
+                if !transient_hold {
+                    if !current {
+                        assert_eq!(request.delivery_epoch.as_ref().unwrap().generation, 2);
+                    }
                     if let Some(queued) = queued {
                         assert_ne!(
                             f.request(queued).phase,
                             RequestPhase::Queued,
                             "{provider:?}/{mode:?}/bound={bound}/hold={transient_hold}: {:?}",
                             f.request(queued)
+                        );
+                        assert_eq!(
+                            f.request(queued)
+                                .delivery_epoch
+                                .as_ref()
+                                .unwrap()
+                                .generation,
+                            2
+                        );
+                        let text = if queue_after {
+                            "queued after resume"
+                        } else {
+                            "queued before resume"
+                        };
+                        assert_eq!(
+                            f.typed()
+                                .iter()
+                                .filter(|(payload, _)| payload.contains(text))
+                                .count(),
+                            1,
+                            "every queued successor must be delivered exactly once"
                         );
                     }
                 }
@@ -723,7 +766,20 @@ fn restart_published_sessionless_unknown_submit_settles_on_new_generation_even_w
         assert!(f.request(old).provider_session_id.is_none());
         let pending = f.send("retain until native startup succeeds", true);
         let pending_before = f.request(pending).clone();
-        let inputs = f.typed_content().len();
+        let inputs = f
+            .native
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| {
+                matches!(
+                    method,
+                    Method::AgentPromptIfUnboundAtGeneration(_)
+                        | Method::AgentPromptIfIdleAtGeneration(_)
+                )
+            })
+            .count();
+        assert_eq!(inputs, 1);
         if reopen {
             reload(&mut f);
         }
@@ -741,9 +797,18 @@ fn restart_published_sessionless_unknown_submit_settles_on_new_generation_even_w
                 info,
             });
             f.worker.tick().unwrap();
-            assert_eq!(f.request(pending), pending_before);
+            assert_eq!(f.request(pending), &pending_before);
             assert_eq!(
-                f.typed_content().len(),
+                f.native
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|method| matches!(
+                        method,
+                        Method::AgentPromptIfUnboundAtGeneration(_)
+                            | Method::AgentPromptIfIdleAtGeneration(_)
+                    ))
+                    .count(),
                 inputs,
                 "uncertain input must never replay"
             );
