@@ -59,7 +59,7 @@ pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
 
 mod agents;
 mod env;
-pub(in crate::server) mod errors;
+pub(crate) mod errors;
 pub(crate) mod events;
 pub(crate) mod input_encoding;
 mod layouts;
