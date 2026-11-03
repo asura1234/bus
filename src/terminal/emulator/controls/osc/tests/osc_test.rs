@@ -787,3 +787,46 @@ fn shell_prompt_launch_token_survives_chunks_and_ignores_unrelated_marks() {
         assert_eq!(tracker.launch_prompt_generation, Some(("abc123".into(), 1)));
     }
 }
+
+#[test]
+fn shell_prompt_cycles_ignore_redraws_delayed_cycles_and_malformed_witnesses() {
+    let mut tracker = AgentOscStateTracker::default();
+    let mark = b"\x1b]133;A;bus=abc123;cycle=8;attempt=41\x07";
+    // Exercise every chunk boundary as well as same-cycle duplicate renders.
+    for split in 0..mark.len() {
+        let mut chunked = AgentOscStateTracker::default();
+        chunked.observe(&mark[..split]);
+        chunked.observe(&mark[split..]);
+        assert_eq!(
+            chunked.launch_prompt_witness,
+            Some(("abc123".into(), 8, 41))
+        );
+    }
+    tracker.observe(mark);
+    tracker.observe(mark);
+    tracker.observe(b"\x1b]133;A;bus=abc123;cycle=7;attempt=40\x07");
+    tracker.observe(b"\x1b]133;A;bus=abc123;cycle=8;attempt=42\x07");
+    assert_eq!(tracker.shell_prompt_generation, 1);
+    assert_eq!(tracker.launch_prompt_generation, Some(("abc123".into(), 8)));
+    assert_eq!(
+        tracker.launch_prompt_witness,
+        Some(("abc123".into(), 8, 41))
+    );
+    for bad in [
+        "cycle=0;attempt=41",
+        "cycle=9",
+        "cycle=9;attempt=",
+        "cycle=9;attempt=+41",
+        "cycle=9;attempt=41;extra",
+        "cycle=18446744073709551616;attempt=41",
+    ] {
+        tracker.observe(format!("\x1b]133;A;bus=abc123;{bad}\x07").as_bytes());
+        assert_eq!(tracker.shell_prompt_generation, 1, "{bad}");
+    }
+    tracker.observe(b"\x1b]133;A;bus=abc123;cycle=9;attempt=42\x07");
+    assert_eq!(tracker.shell_prompt_generation, 2);
+    assert_eq!(
+        tracker.launch_prompt_witness,
+        Some(("abc123".into(), 9, 42))
+    );
+}

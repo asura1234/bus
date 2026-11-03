@@ -195,7 +195,7 @@ async fn verified_launch_never_enters_a_line_transformed_twice() {
     let dir = crate::utils::test_temp::unique_temp_path("unverified-launch");
     std::fs::create_dir_all(&dir).unwrap();
     install_fake_provider(&dir);
-    std::fs::write(dir.join(".zshrc"), "function drop_first() { zle .bracketed-paste; BUFFER=${BUFFER[2,-1]}; }\nzle -N bracketed-paste drop_first\nfunction self-insert() { zle .self-insert; BUFFER=${BUFFER#c}; }\nzle -N self-insert\nfunction record_enter() { print entered >> \"$HOME/enters\"; zle .accept-line; }\nzle -N accept-line record_enter\nPS1='READY> '\n").unwrap();
+    std::fs::write(dir.join(".zshrc"), "function drop_first() { zle .bracketed-paste; BUFFER=${BUFFER[2,-1]}; }\nzle -N bracketed-paste drop_first\nfunction self-insert() { zle .self-insert; BUFFER=${BUFFER#[_c]}; }\nzle -N self-insert\nfunction record_enter() { print entered >> \"$HOME/enters\"; zle .accept-line; }\nzle -N accept-line record_enter\nPS1='READY> '\n").unwrap();
     let runtime = fixture_shell(
         "/bin/zsh",
         crate::utils::config::ShellModeConfig::NonLogin,
@@ -369,4 +369,448 @@ async fn verified_launch_fish_preserves_prompt_function_arguments_and_shell() {
     assert!(crate::platform::process_instance(prompt_runtime(&app).child_pid().unwrap()).is_some());
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// Hold the actual writer at its transaction boundary, rather than hoping a
+// loaded machine schedules agent.list between command capture and Enter.
+#[tokio::test]
+async fn verified_launch_redraw_before_enter_retains_native_ownership() {
+    let dir = crate::utils::test_temp::unique_temp_path("launch-redraw");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fake_provider(&dir);
+    std::fs::write(dir.join(".bashrc"), "PS1='READY> '\n").unwrap();
+    std::fs::write(dir.join("bin/codex"), "#!/bin/sh\nprintf started > \"$HOME/started\"\nprintf 'FIXTURE_PROVIDER_RUNNING\\n'\nread -r unused\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/bash",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let marker = runtime.test_shell_prompt_marker();
+    let barrier = runtime.test_hold_launch_input(false);
+    struct Release(std::sync::Arc<crate::terminal::runtime::LaunchTestBarrier>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    let release = Release(barrier.clone());
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    app.start_agent(crate::protocol::api::schema::AgentStartParams {
+        name: "redraw".into(),
+        kind: "codex".into(),
+        pane_id: target.clone(),
+        args: vec!["x".repeat(600)],
+        timeout_ms: None,
+        executable: None,
+        grok_home: None,
+        kimi_home: None,
+    })
+    .unwrap_or_else(|error| panic!("{:?}", app.agent_start_error_body(error)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !barrier.reached() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "writer never reached barrier: {:?}",
+            prompt_runtime(&app).launch_input_error()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!dir.join("started").exists());
+    while crate::platform::available_pane_shell(prompt_runtime(&app).child_pid().unwrap()).is_none()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "shell was not foreground while writer held"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!prompt_runtime(&app).test_launch_input_submitted());
+    // Deliver the delayed rendering of the *same* primary prompt, exactly
+    // where the old writer has already armed its generation floor.
+    prompt_runtime(&app).test_process_pty_bytes(&marker);
+    app.handle_agent_list("racing-poll".into());
+    let info = app
+        .agent_info_for_target(&target)
+        .unwrap_or_else(|error| panic!("redraw erased launch identity: {error:?}"));
+    assert_eq!(
+        info.name.as_deref(),
+        Some("redraw"),
+        "redraw erased launch identity: {info:?}"
+    );
+    assert!(info.launch_pending);
+    drop(release);
+    wait_for_launch_input(prompt_runtime(&app)).await;
+    wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
+    assert_eq!(
+        app.agent_info_for_target(&target).unwrap().name.as_deref(),
+        Some("redraw")
+    );
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[tokio::test]
+async fn verified_launch_bash_slow_ps1_cannot_authorize_input() {
+    let dir = crate::utils::test_temp::unique_temp_path("launch-slow-ps1");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fake_provider(&dir);
+    std::fs::write(
+        dir.join(".bashrc"),
+        r#"slow_prompt() {
+    printf held > "$HOME/ps1-held"
+    while [[ ! -e $HOME/ps1-release ]]; do read -r -t 0.01 unused; done
+    printf READY
+}
+PS1='$(slow_prompt)> '
+"#,
+    )
+    .unwrap();
+    let runtime = fixture_shell(
+        "/bin/bash",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    runtime
+        .queue_shell_command(&["codex".into()], Duration::from_secs(5))
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !dir.join("ps1-held").exists() {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(runtime.waiting_for_shell_prompt());
+    assert!(!runtime.test_launch_input_submitted());
+    assert!(!runtime.launch_returned_to_prompt());
+    assert!(!runtime.visible_text().contains("codex"));
+    std::fs::write(dir.join("ps1-release"), "go").unwrap();
+    wait_for_launch_input(&runtime).await;
+    wait_for_text(&runtime, "FIXTURE_PROVIDER_RUNNING").await;
+    drop(runtime);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn verified_launch_all_providers_keep_arguments_and_bound_return_on_resume() {
+    use std::os::unix::fs::PermissionsExt;
+    for kind in ["claude", "codex", "kimi", "cursor", "grok"] {
+        for resume in [false, true] {
+            let dir = crate::utils::test_temp::unique_temp_path("launch-neighbours");
+            std::fs::create_dir_all(&dir).unwrap();
+            install_fake_provider(&dir);
+            let agent = crate::agents::parse_agent_label(kind).unwrap();
+            let executable = crate::agents::interactive_agent_executable(agent);
+            let path = dir.join("bin").join(executable);
+            std::fs::write(&path, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/arguments\"\nprintf 'FIXTURE_PROVIDER_RUNNING\\n'\nread -r unused\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::write(dir.join(".bashrc"), "PS1='READY> '\n").unwrap();
+            let runtime = fixture_shell(
+                "/bin/bash",
+                crate::utils::config::ShellModeConfig::NonLogin,
+                &dir,
+            );
+            wait_for_prompt(&runtime).await;
+            let (mut app, target) = app_with_prompt_runtime(runtime);
+            let args = if resume {
+                vec!["--resume".into(), "saved-session".into()]
+            } else {
+                vec![]
+            };
+            app.start_agent(crate::protocol::api::schema::AgentStartParams {
+                name: "neighbour".into(),
+                kind: kind.into(),
+                pane_id: target.clone(),
+                args: args.clone(),
+                timeout_ms: None,
+                executable: matches!(kind, "grok" | "kimi").then(|| path.display().to_string()),
+                grok_home: (kind == "grok").then(|| dir.display().to_string()),
+                kimi_home: (kind == "kimi").then(|| dir.display().to_string()),
+            })
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{kind} resume={resume}: {:?}",
+                    app.agent_start_error_body(error)
+                )
+            });
+            wait_for_launch_input(prompt_runtime(&app)).await;
+            wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
+            app.handle_agent_list("live-poll".into());
+            let info = app.agent_info_for_target(&target).unwrap();
+            assert_eq!(
+                info.name.as_deref(),
+                Some("neighbour"),
+                "{kind} resume={resume}"
+            );
+            assert!(!prompt_runtime(&app).launch_returned_to_prompt());
+            if resume {
+                assert!(std::fs::read_to_string(dir.join("arguments"))
+                    .unwrap()
+                    .starts_with("--resume\nsaved-session\n"));
+            }
+            // The provider really exits; a matching next primary prompt must
+            // release startup ownership even before the first process probe.
+            prompt_runtime(&app)
+                .try_send_bytes(Bytes::from_static(b"\r"))
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !prompt_runtime(&app).launch_returned_to_prompt() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{kind}: {}",
+                    prompt_runtime(&app).shell_prompt_diagnostics()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            app.handle_agent_list("exit-poll".into());
+            assert!(
+                app.agent_info_for_target(&target).is_err(),
+                "{kind} exit retained ownership"
+            );
+            drop(app);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn verified_launch_missing_command_is_a_real_return() {
+    let dir = crate::utils::test_temp::unique_temp_path("launch-missing-command");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/bash",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    try_prompt_launch(&mut app, &target).unwrap();
+    wait_for_launch_input(prompt_runtime(&app)).await;
+    wait_for_text(prompt_runtime(&app), "command not found").await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !prompt_runtime(&app).launch_returned_to_prompt() {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    app.handle_agent_list("missing-poll".into());
+    assert!(app.agent_info_for_target(&target).is_err());
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn verified_launch_prompt_cycles_preserve_user_ps1_appends() {
+    let dir = crate::utils::test_temp::unique_temp_path("launch-ps1-appends");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fake_provider(&dir);
+    std::fs::write(
+        dir.join(".bashrc"),
+        "PS1='READY> '; PROMPT_COMMAND=\"PS1+='tail>'\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("bin/codex"),
+        "#!/bin/sh\nprintf 'PROVIDER_EXIT\\n'\nexit 1\n",
+    )
+    .unwrap();
+    let runtime = fixture_shell(
+        "/bin/bash",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    runtime
+        .queue_shell_command(&["codex".into()], Duration::from_secs(5))
+        .unwrap();
+    wait_for_launch_input(&runtime).await;
+    wait_for_text(&runtime, "PROVIDER_EXIT").await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !runtime.launch_returned_to_prompt() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{}",
+            runtime.shell_prompt_diagnostics()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.visible_text().contains("READY> tail>tail>"),
+        "{}",
+        runtime.visible_text()
+    );
+    drop(runtime);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[tokio::test]
+async fn verified_launch_late_old_prompt_after_enter_is_not_a_return() {
+    let dir = crate::utils::test_temp::unique_temp_path("launch-late-redraw");
+    std::fs::create_dir_all(&dir).unwrap();
+    install_fake_provider(&dir);
+    std::fs::write(dir.join(".bashrc"), "PS1='READY> '\n").unwrap();
+    std::fs::write(dir.join("bin/codex"), "#!/bin/sh\nprintf started > \"$HOME/started\"\nprintf 'FIXTURE_PROVIDER_RUNNING\\n'\nread -r unused\n").unwrap();
+    let runtime = fixture_shell(
+        "/bin/bash",
+        crate::utils::config::ShellModeConfig::NonLogin,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let old_prompt = runtime.test_shell_prompt_marker();
+    let barrier = runtime.test_hold_launch_input(true);
+    let pid = runtime.child_pid().unwrap();
+    struct Release {
+        barrier: std::sync::Arc<crate::terminal::runtime::LaunchTestBarrier>,
+        pid: u32,
+        process: Option<crate::platform::ProcessInstance>,
+    }
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if self.process.is_some() && crate::platform::process_instance(self.pid) == self.process
+            {
+                unsafe {
+                    libc::kill(self.pid as libc::pid_t, libc::SIGCONT);
+                }
+            }
+            self.barrier.release();
+        }
+    }
+    let release = Release {
+        barrier: barrier.clone(),
+        pid,
+        process: crate::platform::process_instance(pid),
+    };
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    try_prompt_launch(&mut app, &target).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !barrier.verification_reached() {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
+    // Confirm the shell is stopped before allowing the writer to queue Enter.
+    loop {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-o", "state=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        if String::from_utf8_lossy(&output.stdout).contains('T') {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    barrier.release_verification();
+    while !barrier.reached() {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!dir.join("started").exists());
+    prompt_runtime(&app).test_process_pty_bytes(&old_prompt);
+    app.handle_agent_list("enter-in-flight".into());
+    assert_eq!(
+        app.agent_info_for_target(&target).unwrap().name.as_deref(),
+        Some("fallback")
+    );
+    // The transaction can finish while Enter is still unread by the stopped
+    // shell. Replaying the old prompt *then* must still not count as return.
+    barrier.release();
+    wait_for_launch_input(prompt_runtime(&app)).await;
+    prompt_runtime(&app).test_process_pty_bytes(&old_prompt);
+    app.handle_agent_list("submitted-old-prompt".into());
+    assert!(app.agent_info_for_target(&target).unwrap().launch_pending);
+    assert!(!dir.join("started").exists());
+    drop(release);
+    wait_for_text(prompt_runtime(&app), "FIXTURE_PROVIDER_RUNNING").await;
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn verified_launch_aliases_keep_literal_arguments_and_attempt_return() {
+    use std::os::unix::fs::PermissionsExt;
+    for shell in ["/bin/bash", "/bin/zsh"] {
+        for resume in [false, true] {
+            let dir = crate::utils::test_temp::unique_temp_path("launch-alias");
+            std::fs::create_dir_all(dir.join("bin")).unwrap();
+            let provider = dir.join("alias provider");
+            std::fs::write(&provider, "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$HOME/alias-argv\"\nprintf 'FIXTURE_ALIAS_RUNNING\\n'\nread -r unused\nexit 23\n").unwrap();
+            std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
+            // An alias is the sole provider route; the private PATH has no codex.
+            let (rc, prompt) = if shell.ends_with("bash") {
+                (".bashrc", "RC=$? READY> ")
+            } else {
+                (".zshrc", "RC=%? READY> ")
+            };
+            std::fs::write(dir.join(rc), format!("export PATH=\"$HOME/bin\"\nalias codex=\"'{}' --alias-argument\"\nPS1='{prompt}'\n", provider.display())).unwrap();
+            let runtime =
+                fixture_shell(shell, crate::utils::config::ShellModeConfig::NonLogin, &dir);
+            wait_for_prompt(&runtime).await;
+            let (mut app, target) = app_with_prompt_runtime(runtime);
+            let mut args = if resume {
+                vec!["--resume".to_owned(), "saved-session".to_owned()]
+            } else {
+                vec![]
+            };
+            args.extend(
+                [
+                    "one two",
+                    "quote'and;$()",
+                    "中文",
+                    "",
+                    "$(touch injected)",
+                    ";touch injected",
+                ]
+                .map(str::to_owned),
+            );
+            app.start_agent(crate::protocol::api::schema::AgentStartParams {
+                name: "alias".into(),
+                kind: "codex".into(),
+                pane_id: target.clone(),
+                args: args.clone(),
+                timeout_ms: None,
+                executable: None,
+                grok_home: None,
+                kimi_home: None,
+            })
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{shell} resume={resume}: {:?}",
+                    app.agent_start_error_body(error)
+                )
+            });
+            wait_for_launch_input(prompt_runtime(&app)).await;
+            wait_for_text(prompt_runtime(&app), "FIXTURE_ALIAS_RUNNING").await;
+            let actual = std::fs::read_to_string(dir.join("alias-argv")).unwrap();
+            let mut expected = vec!["--alias-argument"];
+            expected.extend(args.iter().map(String::as_str));
+            let actual = actual.split_terminator('\0').collect::<Vec<_>>();
+            // Bus appends its provider flags after the caller's arguments.
+            // Preserve the complete explicit argument prefix, including alias args.
+            assert!(
+                actual.starts_with(&expected),
+                "{shell} resume={resume}: actual={actual:?}, expected prefix={expected:?}"
+            );
+            assert!(!dir.join("injected").exists());
+            assert!(!prompt_runtime(&app).launch_returned_to_prompt());
+            assert_eq!(
+                app.agent_info_for_target(&target).unwrap().name.as_deref(),
+                Some("alias")
+            );
+            prompt_runtime(&app)
+                .try_send_bytes(Bytes::from_static(b"\r"))
+                .unwrap();
+            wait_for_text(prompt_runtime(&app), "RC=23 READY>").await;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !prompt_runtime(&app).launch_returned_to_prompt() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{}",
+                    prompt_runtime(&app).shell_prompt_diagnostics()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            app.handle_agent_list("alias-exit".into());
+            assert!(app.agent_info_for_target(&target).is_err());
+            drop(app);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
 }

@@ -116,9 +116,9 @@ impl App {
             .terminal_runtimes
             .get(&terminal_id)
             .is_some_and(|runtime| {
-                runtime.launch_returned_to_prompt()
+                runtime.has_launch_return_witness()
+                    && runtime.reconcile_launch_attempt(live_runtime_agent(runtime).is_some())
                     && available_shell_name(runtime).is_some()
-                    && live_runtime_agent(runtime).is_none()
             });
         let changed = self
             .state
@@ -126,6 +126,9 @@ impl App {
             .get_mut(&terminal_id)
             .is_some_and(|terminal| {
                 if terminal.managed_agent_awaiting_startup() && returned_to_prompt {
+                    tracing::info!(event = "bus.agent.identity_cleared", reason = "launch_returned",
+                        terminal_id = %terminal_id, launch = %self.terminal_runtimes.get(&terminal_id)
+                            .map(|runtime| runtime.launch_diagnostics()).unwrap_or_default());
                     terminal.clear_agent_name();
                     true
                 } else {
@@ -304,6 +307,8 @@ impl App {
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         runtime.mark_agent_launch();
         if let Err(err) = runtime.queue_shell_command(&argv, timeout) {
+            tracing::info!(event = "bus.agent.identity_cleared", reason = "launch_rejected",
+                terminal_id = %terminal_id, error = %err);
             terminal.clear_agent_name();
             return Err(if err.kind() == std::io::ErrorKind::Unsupported {
                 AgentStartError::NoShellEditor(err.to_string())
@@ -541,7 +546,13 @@ impl App {
                 && !terminal.managed_agent_launch_pending()
                 && terminal.effective_known_agent().is_some_and(|expected| {
                     self.lookup_runtime_sender(ws_idx, pane_id)
-                        .is_some_and(|runtime| runtime_hosts_agent(runtime, expected))
+                        .is_some_and(|runtime| {
+                            let hosts = runtime_hosts_agent(runtime, expected);
+                            if hosts {
+                                runtime.reconcile_launch_attempt(true);
+                            }
+                            hosts
+                        })
                 }),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
             cwd: pane.cwd,

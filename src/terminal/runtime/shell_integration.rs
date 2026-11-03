@@ -336,6 +336,12 @@ else
 fi
 unset __BUS_ZDOTDIR_SET __BUS_ZDOTDIR
 if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then source "${ZDOTDIR-$HOME}/.zshenv"; fi
+typeset -g __bus_prompt_cycle=0 __bus_launch_attempt=0
+function __bus_launch() {
+    __bus_launch_attempt=$1
+    # The argument is the verified, shell-quoted command, including aliases.
+    builtin eval -- "$2"
+}
 function __bus_capture_editor() {
     [[ $CONTEXT == start ]] || return
     local __bus_challenge
@@ -383,7 +389,8 @@ function __bus_line_init() {
     fi
     precmd_functions=(${precmd_functions:#__bus_arm} __bus_arm)
     __bus_bind_editor
-    builtin printf '\033]133;A;bus=__BUS_PROMPT_TOKEN__\007'
+    (( ++__bus_prompt_cycle ))
+    builtin printf '\033]133;A;bus=__BUS_PROMPT_TOKEN__;cycle=%s;attempt=%s\007' "$__bus_prompt_cycle" "${__bus_launch_attempt:-0}"
     unset __bus_had_line_init
     return $__bus_rc
 }
@@ -397,7 +404,8 @@ function __bus_active_editor() {
     # line-init again. Its editor is positively waiting for primary input.
     precmd_functions=(${precmd_functions:#__bus_arm} __bus_arm)
     __bus_bind_editor
-    builtin printf '\033]133;A;bus=__BUS_PROMPT_TOKEN__\007'
+    (( ++__bus_prompt_cycle ))
+    builtin printf '\033]133;A;bus=__BUS_PROMPT_TOKEN__;cycle=%s;attempt=%s\007' "$__bus_prompt_cycle" "${__bus_launch_attempt:-0}"
 }
 function __bus_install_line_init() {
     local __bus_install_rc=$?
@@ -428,7 +436,16 @@ for __bus_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile";
 done
 unset __bus_profile
 "#;
-const BASH_PROMPT: &str = r#"__bus_capture_editor() {
+const BASH_PROMPT: &str = r#"__bus_prompt_cycle=0
+__bus_launch_attempt=0
+__bus_prompt_mark=''
+export -n __bus_prompt_cycle __bus_launch_attempt __bus_prompt_mark
+__bus_launch() {
+    __bus_launch_attempt=$1
+    # The argument is the verified, shell-quoted command, including aliases.
+    builtin eval -- "$2"
+}
+__bus_capture_editor() {
     COMPREPLY=()
     local __bus_challenge __bus_prefix='__bus_probe '
     [[ $COMP_LINE == "$__bus_prefix"* ]] || return
@@ -465,11 +482,18 @@ __bus_bind_editor() {
 __bus_prompt_ready() {
     local __bus_status=$?
     __bus_bind_editor
-    local __bus_mark='\[\e]133;A;bus=__BUS_PROMPT_TOKEN__\a\]'
+    __bus_prompt_cycle=$((__bus_prompt_cycle + 1))
+    local __bus_prefix='\[\e]133;A;bus=__BUS_PROMPT_TOKEN__;'
+    # Remove exactly our previous literal marker, preserving user prompt text
+    # appended after it. The new cycle and attempt stay literal across redraws.
+    if [[ -n $__bus_prompt_mark ]]; then
+        PS1=${PS1//"$__bus_prompt_mark"/}
+    fi
+    __bus_prompt_mark="${__bus_prefix}cycle=${__bus_prompt_cycle};attempt=${__bus_launch_attempt}\a\]"
     # Readline renders this only after PS1's user expansions have completed.
     # Keep the private marker out of child shells, including exported user PS1.
     export -n PS1
-    [[ $PS1 == *"$__bus_mark" ]] || PS1+="$__bus_mark"
+    PS1+="$__bus_prompt_mark"
     return "$__bus_status"
 }
 # The private hook function is not exported; neither may its invocation be.

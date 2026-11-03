@@ -141,6 +141,8 @@ impl TerminalState {
             self.recent_agent_process_exit = None;
         }
         if agent_released {
+            tracing::info!(event = "bus.agent.identity_cleared", reason = "process_exited",
+                terminal_id = %self.id, ?agent, ?exited_process);
             self.clear_agent_name();
         }
         TerminalStateMutation {

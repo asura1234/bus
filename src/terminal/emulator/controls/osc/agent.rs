@@ -20,6 +20,7 @@ pub(in crate::terminal::emulator) struct AgentOscStateTracker {
     latest_progress: Option<String>,
     pub(in crate::terminal::emulator) shell_prompt_generation: u64,
     pub(in crate::terminal::emulator) launch_prompt_generation: Option<(String, u64)>,
+    pub(in crate::terminal::emulator) launch_prompt_witness: Option<(String, u64, u64)>,
 }
 
 impl AgentOscStateTracker {
@@ -33,6 +34,7 @@ impl AgentOscStateTracker {
         let mut terminal_title_changed = false;
         let shell_prompt_generation = &mut self.shell_prompt_generation;
         let launch_prompt_generation = &mut self.launch_prompt_generation;
+        let launch_prompt_witness = &mut self.launch_prompt_witness;
         collector.observe(bytes, |body| {
             let Some((command, payload)) = parse_agent_osc_body(body) else {
                 return;
@@ -50,21 +52,29 @@ impl AgentOscStateTracker {
                         Some(sanitize_agent_osc_string(payload, AGENT_OSC_MAX_CHARS));
                 }
                 b"133" => {
-                    let token = payload.strip_prefix(b"A;bus=").filter(|token| {
-                        !token.is_empty()
-                            && token.len() <= 64
-                            && token.iter().all(u8::is_ascii_hexdigit)
-                    });
-                    if payload != b"A" && token.is_none() {
+                    if payload == b"A" {
+                        *shell_prompt_generation = shell_prompt_generation.saturating_add(1);
                         return;
                     }
-                    *shell_prompt_generation = shell_prompt_generation.saturating_add(1);
-                    if let Some(token) = token {
-                        *launch_prompt_generation = Some((
-                            String::from_utf8_lossy(token).into_owned(),
-                            *shell_prompt_generation,
-                        ));
+                    let Some(PrivatePrompt { token, sequence }) = private_prompt(payload) else {
+                        return;
+                    };
+                    let token = String::from_utf8_lossy(token).into_owned();
+                    if let Some((cycle, _)) = sequence {
+                        if launch_prompt_witness
+                            .as_ref()
+                            .is_some_and(|(seen, previous, _)| seen == &token && cycle <= *previous)
+                        {
+                            return;
+                        }
                     }
+                    *shell_prompt_generation = shell_prompt_generation.saturating_add(1);
+                    *launch_prompt_generation = Some((
+                        token.clone(),
+                        sequence.map_or(*shell_prompt_generation, |(cycle, _)| cycle),
+                    ));
+                    *launch_prompt_witness =
+                        sequence.map(|(cycle, attempt)| (token, cycle, attempt));
                 }
                 _ => {}
             }
@@ -111,4 +121,36 @@ pub(super) fn sanitize_agent_osc_string(payload: &[u8], max_chars: usize) -> Str
         out.push(ch);
     }
     out
+}
+
+/// A versioned marker is rendered after user PS1 expansion, with a sequence
+/// allocated once by the primary-prompt hook. Readline redraws replay it.
+struct PrivatePrompt<'a> {
+    token: &'a [u8],
+    sequence: Option<(u64, u64)>,
+}
+
+fn private_prompt(payload: &[u8]) -> Option<PrivatePrompt<'_>> {
+    let mut fields = payload.strip_prefix(b"A;bus=")?.split(|b| *b == b';');
+    let token = fields.next()?;
+    if token.is_empty() || token.len() > 64 || !token.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    let Some(cycle) = fields.next() else {
+        return Some(PrivatePrompt {
+            token,
+            sequence: None,
+        });
+    };
+    let number = |value: &[u8]| {
+        (!value.is_empty() && value.iter().all(u8::is_ascii_digit))
+            .then(|| std::str::from_utf8(value).ok()?.parse::<u64>().ok())
+            .flatten()
+    };
+    let cycle = number(cycle.strip_prefix(b"cycle=")?)?;
+    let attempt = number(fields.next()?.strip_prefix(b"attempt=")?)?;
+    (cycle > 0 && fields.next().is_none()).then_some(PrivatePrompt {
+        token,
+        sequence: Some((cycle, attempt)),
+    })
 }
