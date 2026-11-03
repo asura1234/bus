@@ -11,6 +11,8 @@ Dev tools (answer only in a session started with `bus --dev`):
   quit
   diagnostics
   ui hits      (dev variant only)
+  ui hold-acks (dev variant only)
+  ui release-acks (dev variant only)
   restart --binary PATH --confirm
   dashboard
 
@@ -42,6 +44,9 @@ bus stop does, and exits; bus resume relaunches each agent into its saved conver
 ui hits lists the room UI's clickable regions as of its last frame, each with a stable
 name (room:NAME, agent:NAME, new-room, settings, color-blind, composer, files, ...) and its
 cells; the TUI driver clicks them by name. Only the dev variant (./run dev) has it.
+ui hold-acks and ui release-acks hold and release RoomCreated, AgentAdded and
+DevFocusRequested before UI dispatch for deterministic scratch ordering tests. ui hits reports
+holding_acknowledgements and held_acknowledgements so the test can confirm the hold without sleeps.
 restart (`bus --dev restart --binary PATH --confirm`) saves and quits the whole
 Bus, then relaunches PATH in the same terminal with the recorded flags and session.
 Both the server and TUI/coordinator must run PATH's build SHA before success is
