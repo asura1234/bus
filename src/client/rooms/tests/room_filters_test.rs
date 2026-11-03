@@ -760,3 +760,65 @@ fn background_refresh_never_presents_unfiltered_rows_under_a_checked_filter() {
         "old unfiltered background layout leaked under the checked filter: {screen}"
     );
 }
+
+#[test]
+fn filtered_page_that_fits_viewport_still_loads_older_on_scroll() {
+    use crossterm::event::MouseEventKind::ScrollUp;
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .post_to_developer(room, agent, "older direct needed".into(), vec![], 1000)
+        .unwrap();
+    for index in 0..260 {
+        snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("hidden peer {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Agent(agent),
+                1001 + index,
+            )
+            .unwrap();
+    }
+    for index in 0..40 {
+        snapshot
+            .state
+            .post_to_developer(
+                room,
+                agent,
+                format!("recent direct {index}"),
+                vec![],
+                2000 + index,
+            )
+            .unwrap();
+    }
+    snapshot
+        .state
+        .set_room_history_filters(
+            room,
+            RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(room);
+    let initial = room_screen(&mut ui, 100, 200);
+    assert!(!initial.contains("older direct needed"));
+    assert_eq!(ui.view.history_max_scroll, 0);
+    for _ in 0..3 {
+        let rect = ui.view.history_text;
+        mouse(&mut ui, ScrollUp, rect.x + 2, rect.y + 2);
+        room_screen(&mut ui, 100, 200);
+    }
+    assert!(ui.history.cached().iter().any(|line| line.text == "older direct needed"),
+        "scrolling back must reach older matches even when the current filtered page fits the viewport");
+    assert_visible_directions(&ui, true, false);
+}
