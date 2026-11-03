@@ -21,7 +21,7 @@ pub(crate) fn encode_error(id: String, code: &str, message: impl Into<String>) -
     )
 }
 
-pub(super) fn encode_error_body(id: String, error: ErrorBody) -> String {
+pub(crate) fn encode_error_body(id: String, error: ErrorBody) -> String {
     let timestamps = error.timestamps.map(|value| {
         format!(
             r#", "timestamps":{}"#,

@@ -12,12 +12,99 @@
             },
             "message": {
               "type": "string"
+            },
+            "timestamps": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/error_response/$defs/NativeSubmissionTimestamps"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
             "code",
             "message"
           ],
+          "type": "object"
+        },
+        "NativeSubmissionTimestamps": {
+          "properties": {
+            "composer_owned_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "enter_sent_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "enter_written_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "native_confirmed_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "paste_completed_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "paste_started_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "server_accepted_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "text_written_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "writer_queued_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
           "type": "object"
         }
       },

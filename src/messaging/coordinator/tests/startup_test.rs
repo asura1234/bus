@@ -68,7 +68,7 @@ impl Transport for FailedLaunchNative {
                     *args.lock().unwrap() = params.args.clone();
                 }
                 if let Some(code) = self.shell_wait_code {
-                    return Err(TransportError { code: Some(code.into()), message: SHELL_PROMPT_WAIT_ERROR.into(), definitely_rejected: true });
+                    return Err(TransportError { code: Some(code.into()), message: SHELL_PROMPT_WAIT_ERROR.into(), definitely_rejected: true, timestamps: Default::default() });
                 }
                 let mut info = native_info("pane", "codex", "unused");
                 info.name = Some(params.name);
@@ -92,7 +92,7 @@ impl Transport for FailedLaunchNative {
                 if self.screen_terminal.is_some() {
                     return Err(TransportError { code: Some("agent_identity_changed".into()),
                         message: "Launch terminal is no longer available at its recorded pane".into(),
-                        definitely_rejected: true });
+                        definitely_rejected: true, timestamps: Default::default() });
                 }
                 Ok(ResponseResult::AgentStartupSnapshot { snapshot: serde_json::from_value(json!({
                     "pane_id": params.pane_id, "terminal_id": params.expected_terminal_id,
