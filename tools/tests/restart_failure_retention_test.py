@@ -88,8 +88,11 @@ def test_failed_diagnostic_reads_and_writes_do_not_replace_original_error(tmp_pa
     assert evidence["failure_capture"]["errors"]["state"] == "control unavailable"
 
 
-def test_opt_in_retains_only_failure_and_cleans_success():
-    root = Path("/private/tmp") / f"brf-{uuid.uuid4().hex[:16]}"
+@pytest.mark.parametrize("sequenced", [False, True], ids=["legacy", "shared-sequence"])
+def test_opt_in_retains_only_failure_and_cleans_success(sequenced):
+    name = (f"rf{os.getpid():x}-{time.time_ns() // 1000:x}-1" if sequenced
+            else f"brf-{uuid.uuid4().hex[:16]}")
+    root = Path("/private/tmp") / name
     with restart.restart_directory(root, True) as run:
         assert run == root
         assert os.stat(run).st_mode & 0o777 == 0o700
@@ -155,6 +158,16 @@ def test_encoded_socket_limit_and_owned_root_checks_precede_writes():
             with restart.restart_directory(Path(existing), True):
                 pytest.fail("must not adopt an existing root")
         assert marker.read_text() == "owned by someone else"
+    with tempfile.TemporaryDirectory(prefix="rf-unit-", dir="/private/tmp") as parent:
+        existing = Path(parent).with_name(f"rf{os.getpid():x}-{time.time_ns() // 1000:x}-1")
+        existing.symlink_to(parent, target_is_directory=True)
+        try:
+            with pytest.raises(FileExistsError):
+                with restart.restart_directory(existing, True):
+                    pytest.fail("must not adopt an existing sequenced root or symlink")
+            assert existing.is_symlink()
+        finally:
+            existing.unlink()
 
 
 def test_client_socket_suffix_is_checked_even_when_api_socket_fits():
@@ -169,14 +182,25 @@ def test_client_socket_suffix_is_checked_even_when_api_socket_fits():
 
 
 def test_actual_rust_wrapper_roots_pass_the_python_entry_boundary():
-    # Exercise the producer's literals, including the longest reply/client suffix.
-    source = (Path(__file__).resolve().parents[2] / "tests/tui/native_restart_test.rs").read_text()
-    template = re.search(r'"(/private/tmp/[^\"]+\{:x\}[^\"]+\{nonce:x\})"', source).group(1)
+    # Exercise the shared producer's literals and full sequence at one clock tick.
+    repo = Path(__file__).resolve().parents[2]
+    source = (repo / "tests/tui/native_restart_test.rs").read_text()
+    factory = (repo / "src/utils/tests/temp_path_test.rs").read_text()
+    label = re.search(r'unique_temp_path\("([^\"]+)"\)', source).group(1)
+    template = re.search(r'"(b\{:x\}-\{:x\}-\{:x\}-\{label\})"', factory).group(1)
+    compact = re.search(r'with_file_name\(format!\("([^\"]+)"\)\)', source).group(1)
+    assert f'strip_suffix("-{label}")' in source and "strip_prefix('b')" in source
     suffix = re.search(r'let socket = root\.join\("([^\"]+)"\)', source).group(1)
     for pid in (0x1234, 0x12345, 0xFFFFFF):
-        for nonce in (time.time_ns(), 0xFFFFFFFFFFFFFFFF):
-            root = Path(template.format(pid, nonce=nonce))
-            assert len(os.fsencode(root / suffix)) <= 96
-            with restart.restart_directory(root, True, reply=True):
-                assert root.is_dir()
-            assert not root.exists()
+        for micros in (time.time_ns() // 1000, 4_102_444_800_000_000):
+            roots = []
+            for sequence in (1, 4096):
+                name = template.format(pid, micros, sequence, label=label)
+                identity = name.removeprefix("b").removesuffix(f"-{label}")
+                root = Path("/private/tmp") / compact.format(identity=identity)
+                roots.append(root)
+                assert len(os.fsencode(root / suffix)) <= 96
+                with restart.restart_directory(root, True, reply=True):
+                    assert root.is_dir()
+                assert not root.exists()
+            assert roots[0] != roots[1], "same-clock sequence identity must survive compaction"
