@@ -33,7 +33,7 @@ The startup flag can precede `resume` or follow its selector.
 | Claude Code | `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | Codex | `--yolo` | `--yolo`, `--dangerously-bypass-approvals-and-sandbox` |
 | Cursor | `--force` | `--force`, `--yolo`, `-f` |
-| Kimi | `--auto` | `--auto`; legacy `--yolo` and `-y` are replaced by `--auto` |
+| Kimi | `--auto` | `--auto`; legacy `--yolo`, `-y`, and clustered `-y` forms such as `-yy` are replaced by `--auto` |
 
 Evidence checked locally on 2026-11-02: Kimi 2.4.1 `--help` describes `--yolo`
 as Ask When Needed and `--auto` as Never Ask. Claude Code 2.1.301 `--help`
