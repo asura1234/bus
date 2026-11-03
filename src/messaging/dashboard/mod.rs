@@ -17,7 +17,7 @@ pub(crate) fn run(root: &Path) -> io::Result<()> {
 }
 
 fn serve(root: &Path) -> io::Result<()> {
-    let mut server = match service::start(root)? {
+    let server = match service::start(root)? {
         service::Started::Existing(endpoint) => {
             writeln!(io::stdout().lock(), "{}", endpoint.url)?;
             io::stdout().flush()?;
@@ -29,11 +29,20 @@ fn serve(root: &Path) -> io::Result<()> {
     writeln!(io::stdout().lock(), "{}", server.endpoint.url)?;
     io::stdout().flush()?;
     server.listener.set_nonblocking(true)?;
+    serve_connections(root, server, authority, std::net::TcpListener::accept)
+}
+
+fn serve_connections(
+    root: &Path,
+    mut server: service::Server,
+    authority: String,
+    mut accept: impl FnMut(&std::net::TcpListener) -> io::Result<(TcpStream, std::net::SocketAddr)>,
+) -> io::Result<()> {
     loop {
         if server.retire_if_replaced(root)? {
             return Ok(());
         }
-        match server.listener.accept() {
+        match accept(&server.listener) {
             Ok((stream, _)) => dispatch_connection(
                 stream,
                 root.to_owned(),
@@ -44,7 +53,10 @@ fn serve(root: &Path) -> io::Result<()> {
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
+            Err(error) => {
+                log_http_error(&error);
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     }
 }
