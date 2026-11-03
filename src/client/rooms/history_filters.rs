@@ -2,10 +2,10 @@ use super::{BusUi, Effect};
 use crate::messaging::coordinator::BusCommand;
 
 impl BusUi {
-    pub(super) fn toggle_history_filter(&mut self, to_you: bool) {
-        let Some(room) = self.room else {
-            return;
-        };
+    pub(super) fn effective_history_filters(
+        &self,
+        room: crate::messaging::model::RoomId,
+    ) -> Option<crate::messaging::model::RoomHistoryFilters> {
         let pending = self
             .pending
             .iter()
@@ -18,12 +18,17 @@ impl BusUi {
                 }
                 _ => None,
             });
-        let Some(mut filters) = pending.or_else(|| {
+        pending.or_else(|| {
             self.snapshot
                 .state
                 .room(room)
                 .map(|room| room.history_filters)
-        }) else {
+        })
+    }
+
+    pub(super) fn toggle_history_filter(&mut self, to_you: bool) {
+        let Some(room) = self.room else { return };
+        let Some(mut filters) = self.effective_history_filters(room) else {
             return;
         };
         if to_you {

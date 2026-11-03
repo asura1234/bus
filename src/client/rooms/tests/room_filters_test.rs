@@ -613,3 +613,150 @@ fn background_layout_carries_filters_and_releases_find_jump() {
         ui.view.search_matches.len() - 1
     );
 }
+
+#[test]
+fn incoming_message_during_filter_ack_keeps_checkbox_and_hides_peer_traffic() {
+    let (mut ui, room, agent) = fixture();
+    mixed_find_history(&mut ui, room, agent);
+    ui.open_room(room);
+    let unfiltered = room_screen(&mut ui, 100, 60);
+    assert!(unfiltered.contains("Needle ordinary peer traffic"));
+    key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
+    let id = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(pending.command, BusCommand::SetRoomHistoryFilters(..)))
+        .unwrap()
+        .id;
+    // A message snapshot can arrive before the filter command's save is acknowledged.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .post_to_developer(
+            room,
+            agent,
+            "new matching direct post".into(),
+            vec![],
+            200_000,
+        )
+        .unwrap();
+    snapshot
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "new nonmatching peer post".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(agent),
+            200_001,
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: id,
+        result: Ok(()),
+    });
+    let screen = room_screen(&mut ui, 100, 60);
+    assert!(
+        screen.contains("[x] * → You"),
+        "pending user choice cleared by incoming snapshot: {screen}"
+    );
+    assert!(screen.contains("new matching direct post"), "{screen}");
+    assert!(!screen.contains("Needle ordinary peer traffic"), "{screen}");
+    assert!(!screen.contains("new nonmatching peer post"), "{screen}");
+    apply_filter_commands(&mut ui);
+    let screen = room_screen(&mut ui, 100, 60);
+    assert!(screen.contains("[x] * → You"), "{screen}");
+    assert!(!screen.contains("Needle ordinary peer traffic"), "{screen}");
+}
+
+#[test]
+fn incoming_messages_and_rebuilds_keep_acknowledged_filters_enabled() {
+    for key_char in ['i', 'o'] {
+        let (mut ui, room, agent) = fixture();
+        mixed_find_history(&mut ui, room, agent);
+        ui.open_room(room);
+        key(&mut ui, KeyCode::Char(key_char), KeyModifiers::ALT);
+        apply_filter_commands(&mut ui);
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .post_to_developer(
+                room,
+                agent,
+                "new matching direct post".into(),
+                vec![],
+                200_000,
+            )
+            .unwrap();
+        snapshot
+            .state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "new nonmatching peer post".into(),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Agent(agent),
+                200_001,
+            )
+            .unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+        for width in [100, 80, 100] {
+            let screen = room_screen(&mut ui, width, 60);
+            assert!(
+                screen.contains(if key_char == 'i' {
+                    "[x] * → You"
+                } else {
+                    "[x] You → *"
+                }),
+                "{screen}"
+            );
+            assert!(!screen.contains("new nonmatching peer post"), "{screen}");
+            assert_visible_directions(&ui, key_char == 'i', key_char == 'o');
+        }
+    }
+}
+
+#[test]
+fn background_refresh_never_presents_unfiltered_rows_under_a_checked_filter() {
+    let (mut ui, room, agent) = fixture();
+    mixed_find_history(&mut ui, room, agent);
+    ui.open_room(room);
+    ui.history.enable_background().unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        let screen = room_screen(&mut ui, 100, 60);
+        if screen.contains("Needle ordinary peer traffic") {
+            break;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::yield_now();
+    }
+    key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
+    apply_filter_commands(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .post_to_developer(
+            room,
+            agent,
+            "new matching during refresh".into(),
+            vec![],
+            200_000,
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let screen = room_screen(&mut ui, 100, 60);
+    assert!(screen.contains("[x] * → You"), "{screen}");
+    assert!(
+        !screen.contains("Needle ordinary peer traffic"),
+        "old unfiltered background layout leaked under the checked filter: {screen}"
+    );
+}
