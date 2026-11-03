@@ -99,8 +99,10 @@ sbus --dev                      # UI terminal; leave it open
 ```
 
 In the other terminal, set `scratch` to the printed path and the same alias,
-then run `sbus --paths` and `sbus state`. `build.binary` must be
-`$scratch/bin/bus`. Run `sbus settings` there too. With no `settings.json`,
+then run `sbus --paths` and `sbus state`. `build.client.binary` and
+`build.server.binary` must both be `$scratch/bin/bus`, and both `sha` fields must
+equal the full `git rev-parse HEAD`. The client is the coordinator/UI process;
+the server is the native process. Run `sbus settings` there too. With no `settings.json`,
 expect `result.settings.feishu_waiting_notifications` true,
 `result.settings.feishu_recipient` `ou_ca1b530d792419a044e281f998ce68dc`,
 `result.settings.feishu_cli_path` null, and `result.settings.feishu.enabled`
@@ -115,9 +117,11 @@ adding agents: the block above starts `sbus --dev` only after `cmp`. Get `logs`
 from `sbus --paths`, and read `<logs>/perf/client.jsonl` and `server.jsonl` for
 this run's `run_start` records. Both `build_sha` values must equal the full
 `git rev-parse HEAD`; correlate the new records using their PID/time and
-`sbus state`'s `build.binary` path. Check `sbus agent add --help`'s
-`possible values` includes the new provider. `--version` and `state.build` do
-**not** expose the SHA on current builds. If a record is missing, `unknown`,
+`sbus state`'s `build.client.binary` and `build.server.binary` paths. Check
+`sbus agent add --help`'s `possible values` includes the new provider. The two
+`state.build` role records and `--version` also expose the SHA. During any restart
+or reattach, verify each role against its own process rather than assuming the
+client and server share an executable. If a record is missing, `unknown`,
 mismatched, or cannot be tied to this run, stop: obtain a verified unique-target
 build or wait for the provenance fix. Never accept a short SHA or a guessed
 binary. Keep the slot until the shared-target copy is made; compare its
