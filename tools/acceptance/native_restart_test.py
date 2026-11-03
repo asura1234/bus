@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -45,8 +46,9 @@ def restart_directory(run_dir, retain_failure, *, reply=False):
     if not retain_failure:
         yield root
         return
-    if root.parent != Path("/private/tmp") or not root.name.startswith("brf-"):
-        raise ValueError("retained restart root must be a new brf-* child of /private/tmp")
+    sequenced = re.fullmatch(r"rf[0-9a-f]+-[0-9a-f]+-[0-9a-f]+", root.name)
+    if root.parent != Path("/private/tmp") or not (root.name.startswith("brf-") or sequenced):
+        raise ValueError("retained restart root must be a new owned child of /private/tmp")
     root.mkdir(mode=0o700)  # Never adopt or delete an existing directory/symlink.
     owned = root.stat()
     try:
