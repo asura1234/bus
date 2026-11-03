@@ -14,6 +14,13 @@ use crate::messaging::model::{BusState, Draft, ModelError, RequestId, RoomId};
 
 const JOURNAL_VERSION: u64 = 1;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompletionPhase {
+    Queued,
+    NativeRequested,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum JournalOp {
@@ -43,15 +50,55 @@ pub(crate) enum JournalOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply_delivered_at_ms: Option<u64>,
     },
+    /// Equality is the completion guard, not attempt identity: 1005 -> 1005
+    /// remains eligible for another completion whose expected start is 1005.
+    DeliveryTimestampCompletion {
+        room: RoomId,
+        request_id: RequestId,
+        phase: CompletionPhase,
+        started_at_ms: u64,
+        completed_at_ms: u64,
+    },
 }
 
 impl JournalOp {
+    pub(crate) fn complete_queued(
+        room: RoomId,
+        request_id: RequestId,
+        started_at_ms: u64,
+        completed_at_ms: u64,
+    ) -> Self {
+        Self::DeliveryTimestampCompletion {
+            room,
+            request_id,
+            phase: CompletionPhase::Queued,
+            started_at_ms,
+            completed_at_ms,
+        }
+    }
+
+    pub(crate) fn complete_native(
+        room: RoomId,
+        request_id: RequestId,
+        started_at_ms: u64,
+        completed_at_ms: u64,
+    ) -> Self {
+        Self::DeliveryTimestampCompletion {
+            room,
+            request_id,
+            phase: CompletionPhase::NativeRequested,
+            started_at_ms,
+            completed_at_ms,
+        }
+    }
+
     fn room(&self) -> RoomId {
         match self {
             Self::DraftText { room, .. }
             | Self::Submit { room, .. }
             | Self::SubmitDraft { room, .. }
-            | Self::DeliveryTimestamps { room, .. } => *room,
+            | Self::DeliveryTimestamps { room, .. }
+            | Self::DeliveryTimestampCompletion { room, .. } => *room,
         }
     }
 
@@ -76,6 +123,20 @@ impl JournalOp {
             } => state
                 .submit_draft_exact(*room, draft.clone(), *now_ms, *queued)
                 .map(drop),
+            Self::DeliveryTimestampCompletion {
+                request_id,
+                phase,
+                started_at_ms,
+                completed_at_ms,
+                ..
+            } => match phase {
+                CompletionPhase::Queued => {
+                    state.finish_queued(*request_id, *started_at_ms, *completed_at_ms)
+                }
+                CompletionPhase::NativeRequested => {
+                    state.finish_native_requested(*request_id, *started_at_ms, *completed_at_ms)
+                }
+            },
             Self::DeliveryTimestamps {
                 request_id,
                 queued_at_ms,

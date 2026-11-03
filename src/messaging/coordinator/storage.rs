@@ -70,13 +70,7 @@ impl Worker {
             if completed.finish_queued(*id, at_ms, completed_at_ms).is_ok() {
                 let _ = self.journal(
                     completed,
-                    JournalOp::DeliveryTimestamps {
-                        room,
-                        request_id: *id,
-                        queued_at_ms: Some(completed_at_ms),
-                        native_requested_at_ms: None,
-                        reply_delivered_at_ms: None,
-                    },
+                    JournalOp::complete_queued(room, *id, at_ms, completed_at_ms),
                 );
             }
         }
@@ -113,13 +107,7 @@ impl Worker {
         {
             let _ = self.journal(
                 completed,
-                JournalOp::DeliveryTimestamps {
-                    room,
-                    request_id: id,
-                    queued_at_ms: None,
-                    native_requested_at_ms: Some(completed_at_ms),
-                    reply_delivered_at_ms: None,
-                },
+                JournalOp::complete_native(room, id, at_ms, completed_at_ms),
             );
         }
     }
