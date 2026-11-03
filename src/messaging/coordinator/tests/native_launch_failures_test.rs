@@ -1,5 +1,6 @@
 use super::launch_metrics_tests::{ledger, seed_launch};
 use super::*;
+use crate::messaging::storage::state_store::SaveStage;
 
 #[test]
 fn launch_metrics_definite_start_rejection_keeps_its_exact_cause() {
@@ -162,6 +163,48 @@ fn launch_metrics_failed_initial_save_prevents_preparation_and_native_input() {
     assert!(
         !dir.join(".codex").exists(),
         "preparation ran before the durable attempt save"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn launch_metrics_storage_recovery_logs_the_persisted_outcome() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, u64::MAX);
+    let mut state = worker.state.clone();
+    super::super::launch_metrics::settle_current(
+        &mut state,
+        agent,
+        crate::messaging::model::LaunchOutcome::Failed,
+        Some("command_failed"),
+        2,
+    );
+    worker.store.fail_once_at(SaveStage::TempSync);
+    assert!(worker.save(state.clone()).is_err());
+    worker.state = state;
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(
+        serde_json::to_value(&worker.durable_state).unwrap()["launch_attempts"]["1"]["outcome"],
+        "pending"
+    );
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (events, _) = mpsc::channel();
+        worker.retry_storage(
+            std::time::Instant::now() + std::time::Duration::from_secs(2),
+            &events,
+        );
+    });
+    assert!(
+        capture.text().contains("bus.agent.launch_outcome"),
+        "{}",
+        capture.text()
+    );
+    assert!(
+        capture.text().contains("attempt_id=1"),
+        "{}",
+        capture.text()
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

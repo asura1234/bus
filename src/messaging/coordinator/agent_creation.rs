@@ -465,6 +465,7 @@ impl Worker {
         {
             return Err(MASTER_AGENT_NEEDS_ROOM.into());
         }
+        launch::launch_args(identity::provider_kind(input.provider), &input.extra_args)?;
         Ok(cwd)
     }
 }
