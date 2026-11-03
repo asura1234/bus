@@ -249,7 +249,7 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
             .wrapping_add(1442695040888963407);
         (*seed >> 32) as usize
     }
-    let mut seed = 0x4b494d495f594f4c4f;
+    let mut seed = 0x4b494d495f594f4c;
     for case in 0..48 {
         let model = ["alpha", "custom", "beta", "gamma"][random(&mut seed) % 4];
         let y = "y".repeat(1 + random(&mut seed) % 3);
