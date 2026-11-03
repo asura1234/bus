@@ -611,11 +611,17 @@ impl BusState {
 
     /// Joins the queued messages that piled up while the agent could not take
     /// them into `lead`'s prompt: consecutive ones from the queue front, up to
-    /// the first sent with `--queue` or from another room. Returns the text to type, each part
+    /// the first sent with `--queue`, from another room, or in another
+    /// orchestrator priority class. Returns the text to type, each part
     /// marked with its sender and time, or `None` when `lead` goes alone.
     pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
         let request = self.requests.get(&lead)?;
         let (agent_id, room) = (request.agent_id, request.room_id);
+        let priority = self
+            .agents
+            .get(&agent_id)
+            .is_some_and(|agent| agent.orchestrates.is_some())
+            .then(|| self.orchestrator_queue_class(lead));
         let queue = self.queues.get(&agent_id)?;
         if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
             return None;
@@ -627,6 +633,7 @@ impl BusState {
                 self.requests
                     .get(id)
                     .is_some_and(|r| !r.queue_only && r.room_id == room)
+                    && priority.is_none_or(|class| self.orchestrator_queue_class(*id) == class)
             })
             .collect();
         if members.is_empty() {
@@ -703,8 +710,22 @@ impl BusState {
         groups
     }
 
-    /// Real blocked-worker notices take precedence in an orchestrator's inbox.
-    /// Use the persisted dialog routing identity, never sender-authored text.
+    fn orchestrator_queue_class(&self, id: RequestId) -> u8 {
+        if self.is_dialog_notice(id) {
+            0
+        } else if self
+            .request(id)
+            .is_some_and(|request| request.prompt.author == Author::Developer)
+        {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// Real blocked-worker notices precede Developer messages, then ordinary
+    /// work in an orchestrator's inbox. Use persisted routing and author identity,
+    /// never sender-authored text.
     /// Keep FIFO order within each class. Idle delivery gives each notice its
     /// own turn; `next_steering` allows it into an already-active turn.
     pub(crate) fn prioritize_orchestrator_dialogs(&mut self, agent: AgentId) -> bool {
@@ -715,19 +736,19 @@ impl BusState {
         {
             return false;
         }
-        let notices: std::collections::BTreeSet<_> = self
+        let classes: std::collections::BTreeMap<_, _> = self
             .queued_requests(agent)
             .iter()
             .copied()
-            .filter(|id| self.is_dialog_notice(*id))
+            .map(|id| (id, self.orchestrator_queue_class(id)))
             .collect();
         let Some(queue) = self.queues.get_mut(&agent) else {
             return false;
         };
         let before = queue.clone();
-        queue.sort_by_key(|id| !notices.contains(id));
+        queue.sort_by_key(|id| classes[id]);
         let mut changed = *queue != before;
-        for id in queue.iter().filter(|id| notices.contains(id)) {
+        for id in queue.iter().filter(|id| classes.get(*id) == Some(&0)) {
             if let Some(request) = self.requests.get_mut(id) {
                 changed |= !request.queue_only;
                 request.queue_only = true;
