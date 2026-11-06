@@ -523,6 +523,7 @@ fn cold_resume_after_startup_failure_accepts_explicitly_resent_work() {
                 command: "codex".into(),
                 started_at_ms: io::now_ms(),
                 reported: true,
+                process_observed: false,
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(crate::messaging::model::StartupFailure {
@@ -1044,7 +1045,7 @@ fn cold_resume_after_failed_startup_reopens_without_replaying_closed_work() {
         .watch_agent_startup(agent, vec!["codex".into()])
         .unwrap();
     worker
-        .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
+        .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
     let closed_before = worker.state.request(closed).unwrap().clone();
     assert_eq!(closed_before.phase, RequestPhase::Abandoned);

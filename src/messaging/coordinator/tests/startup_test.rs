@@ -156,6 +156,15 @@ fn failed_startup_reports_evidence_and_retains_identity() {
             &events,
         )
         .unwrap();
+    let broken = worker
+        .state
+        .agents()
+        .find(|agent| agent.name == "broken")
+        .unwrap()
+        .id;
+    worker
+        .cleanup_failed_startups(&[pending_info(&worker, broken)], &events, io::now_ms())
+        .unwrap();
     worker.tick().unwrap();
     assert!(
         worker.state.agents().next().is_some(),
@@ -203,6 +212,178 @@ fn pending_info(worker: &Worker, agent: AgentId) -> schema::AgentInfo {
     info.agent_session = None;
     info.launch_pending = true;
     info
+}
+
+#[test]
+fn startup_process_absence_before_first_observation_keeps_queued_work() {
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        let (mut worker, agent, room, dir) = pending(provider);
+        let request = queue(&mut worker, room, agent, "wait for the provider");
+        let start = worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .startup
+            .as_ref()
+            .unwrap()
+            .started_at_ms;
+        for elapsed in [60, 500, 29_999] {
+            worker
+                .cleanup_failed_startups(&[], &mpsc::channel().0, start + elapsed)
+                .unwrap();
+            assert!(
+                !worker
+                    .state
+                    .agent(agent)
+                    .unwrap()
+                    .startup
+                    .as_ref()
+                    .unwrap()
+                    .reported,
+                "{provider:?}: an unobserved process is not an exited process"
+            );
+            assert_eq!(
+                worker.state.request(request).unwrap().phase,
+                RequestPhase::Queued
+            );
+        }
+        let mut ready = pending_info(&worker, agent);
+        ready.launch_pending = false;
+        ready.interactive_ready = true;
+        worker
+            .cleanup_failed_startups(&[ready], &mpsc::channel().0, start + 29_999)
+            .unwrap();
+        assert!(worker.state.agent(agent).unwrap().startup.is_none());
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn startup_observed_process_exit_fails_before_deadline() {
+    let (mut worker, agent, room, dir) = pending(Provider::ClaudeCode);
+    let request = queue(&mut worker, room, agent, "queued work");
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(
+            &[pending_info(&worker, agent)],
+            &mpsc::channel().0,
+            start + 50,
+        )
+        .unwrap();
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 60)
+        .unwrap();
+    let failed = worker.state.agent(agent).unwrap();
+    assert!(failed.startup.as_ref().unwrap().reported);
+    assert!(failed
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("launch ended"));
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_startup_failed")
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_missing_unobserved_process_expires_at_the_deadline() {
+    let (mut worker, agent, room, dir) = pending(Provider::ClaudeCode);
+    let request = queue(&mut worker, room, agent, "queued work");
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("within 30 seconds"));
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_startup_failed")
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn startup_name_loss_with_a_present_provider_is_not_a_process_exit() {
+    let (mut worker, agent, room, dir) = pending(Provider::ClaudeCode);
+    let request = queue(&mut worker, room, agent, "queued work");
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    let mut info = pending_info(&worker, agent);
+    worker
+        .cleanup_failed_startups(&[info.clone()], &mpsc::channel().0, start + 50)
+        .unwrap();
+    info.name = None;
+    info.launch_pending = false;
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 60)
+        .unwrap();
+    assert!(
+        !worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .startup
+            .as_ref()
+            .unwrap()
+            .reported
+    );
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -667,6 +848,13 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
     let message = state.request(request).unwrap().prompt.id;
     worker.save(state).unwrap();
     worker
+        .cleanup_failed_startups(
+            &[pending_info(&worker, agent)],
+            &mpsc::channel().0,
+            io::now_ms(),
+        )
+        .unwrap();
+    worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
     assert_eq!(
@@ -742,6 +930,13 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
 #[test]
 fn startup_failure_abandons_new_sends_with_persistent_recovery_detail() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    worker
+        .cleanup_failed_startups(
+            &[pending_info(&worker, agent)],
+            &mpsc::channel().0,
+            io::now_ms(),
+        )
+        .unwrap();
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
@@ -844,6 +1039,13 @@ fn startup_failure_does_not_abandon_submitted_or_uncertain_work() {
             )
             .unwrap()[0];
         worker.save(state).unwrap();
+        worker
+            .cleanup_failed_startups(
+                &[pending_info(&worker, agent)],
+                &mpsc::channel().0,
+                io::now_ms(),
+            )
+            .unwrap();
         worker
             .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
             .unwrap();
@@ -1449,6 +1651,13 @@ fn startup_failure_notification_is_deduplicated_after_restart() {
         .unwrap()[0];
     worker.save(state).unwrap();
     worker
+        .cleanup_failed_startups(
+            &[pending_info(&worker, agent)],
+            &mpsc::channel().0,
+            io::now_ms(),
+        )
+        .unwrap();
+    worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
     let failed_at = worker
@@ -1558,6 +1767,13 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
             .join(orchestrator::PROMPT_FILE);
         let prompt_text = std::fs::read_to_string(&prompt_path).unwrap();
         let send = queue(&mut worker, room, agent, "sender-authored work");
+        worker
+            .cleanup_failed_startups(
+                &[pending_info(&worker, agent)],
+                &mpsc::channel().0,
+                io::now_ms(),
+            )
+            .unwrap();
         worker
             .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
             .unwrap();
