@@ -254,3 +254,27 @@ fn launch_metrics_legacy_reattach_does_not_invent_a_launch() {
     std::fs::remove_dir_all(dir).unwrap();
     assert!(saved.as_object().unwrap().is_empty());
 }
+
+#[test]
+fn launch_metrics_unsubmitted_recovery_preparation_failure_is_durable() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Kimi, vec![]);
+    prepare_resume(
+        &mut worker,
+        agent,
+        Some(StartupRecovery::Unsubmitted { args: vec![] }),
+    );
+    let agent = worker.state.agent(agent).unwrap().clone();
+    let result = worker.retry_unsubmitted_agent_start(&agent, vec![]);
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("Bus resume capture configuration is missing")),
+        "probe must reach saved executable preparation: {result:?}"
+    );
+    let saved = ledger(&worker);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(saved.as_object().unwrap().len(), 2, "{saved}");
+    assert_eq!(saved["2"]["kind"], "recovery");
+    assert_eq!(saved["2"]["outcome"], "failed");
+}

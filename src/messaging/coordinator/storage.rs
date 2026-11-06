@@ -125,6 +125,7 @@ impl Worker {
             return;
         }
         diagnostics::recoveries(&self.durable_state, &self.state);
+        super::launch_metrics::log_outcomes(&self.durable_state, &self.state);
         self.durable_state = self.state.clone();
         self.storage_pause = None;
         self.error = None;
