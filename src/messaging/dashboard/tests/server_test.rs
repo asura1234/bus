@@ -22,7 +22,7 @@ fn persisted_fixture(root: &Path) {
     .unwrap();
 }
 
-fn files(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+pub(super) fn files(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut out: Vec<_> = std::fs::read_dir(root)
         .unwrap()
         .map(|item| {

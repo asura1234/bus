@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::messaging::storage::state_store::JsonStore;
+mod launch_metrics;
 mod metrics;
 mod service;
 
@@ -90,13 +91,19 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
         },
         "/data" => {
             let now = crate::utils::time::now_ms();
-            let metrics = match JsonStore::new(root.join("state.json")).load() {
-                Ok(state) => state.map(|state| metrics::snapshot(&state, metrics::local_hour)),
+            let state = match JsonStore::new(root.join("state.json")).load() {
+                Ok(state) => state,
                 Err(error) => {
                     tracing::warn!(event = "bus.dashboard.read_failed", %error);
                     None
                 }
             };
+            let metrics = state
+                .as_ref()
+                .map(|state| metrics::snapshot(state, metrics::local_hour));
+            let launches = state
+                .as_ref()
+                .map(|state| launch_metrics::snapshot(state, metrics::local_hour));
             let hour = metrics::local_hour(now);
             let offset = hour
                 .label
@@ -116,8 +123,7 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
                 "Server local time: {} ({offset})",
                 zone.as_deref().unwrap_or("system timezone")
             );
-            let data =
-                serde_json::json!({"generated_at_ms":now,"timezone":timezone,"metrics":metrics});
+            let data = serde_json::json!({"generated_at_ms":now,"timezone":timezone,"metrics":metrics,"launches":launches});
             Response {
                 status: "200 OK",
                 content_type: "application/json; charset=utf-8",
@@ -272,3 +278,7 @@ fn log_http_error(error: &io::Error) {
 #[cfg(test)]
 #[path = "tests/fixtures_test.rs"]
 mod fixtures;
+
+#[cfg(test)]
+#[path = "tests/launch_metrics_test.rs"]
+mod launch_metrics_tests;
