@@ -228,6 +228,10 @@ const SAMPLES: &[&[&str]] = &[
     &["diagnostics"],
     #[cfg(feature = "dev-tools")]
     &["ui", "hits"],
+    #[cfg(feature = "dev-tools")]
+    &["ui", "hold-acks"],
+    #[cfg(feature = "dev-tools")]
+    &["ui", "release-acks"],
 ];
 
 #[test]

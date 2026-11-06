@@ -45,6 +45,19 @@ pub(super) enum Effect {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CreationKind {
+    Room,
+    Agent,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CreationOrigin {
+    pub id: u64,
+    pub kind: CreationKind,
+    pub form_generation: Option<u64>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Pending {
     pub id: u64,
@@ -63,6 +76,7 @@ pub(in crate::client) struct BusUi {
     pub(super) clipboard_image_reader: fn(usize) -> Option<crate::platform::ClipboardImage>,
     pub(super) locals: BTreeMap<RoomId, LocalRoom>,
     pub(super) pending: VecDeque<Pending>,
+    pub(super) creation_origins: VecDeque<CreationOrigin>,
     pub next_id: u64,
     pub error: Option<String>,
     /// Agent errors last written to the client log, so each is logged once.
@@ -79,6 +93,7 @@ pub(in crate::client) struct BusUi {
     pub(super) native_focus_pending: bool,
     pub(super) terminal_navigation: u64,
     pub(super) form: Option<Form>,
+    pub(super) form_generation: u64,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
     pub(super) recipient_menu: bool,
@@ -185,6 +200,7 @@ impl BusUi {
             room,
             locals,
             pending: VecDeque::new(),
+            creation_origins: VecDeque::new(),
             next_id: 1,
             recovered_storage_failures: BTreeSet::new(),
             error: None,
@@ -198,6 +214,7 @@ impl BusUi {
             native_focus_pending: false,
             terminal_navigation: 0,
             form: None,
+            form_generation: 0,
             deletion: None,
             rename: None,
             recipient_menu: false,
@@ -352,6 +369,18 @@ impl BusUi {
                 "Room submit queued for coordinator"
             );
         }
+        let creation_kind = match &command {
+            BusCommand::CreateRoom(_) => Some(CreationKind::Room),
+            BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..) => Some(CreationKind::Agent),
+            _ => None,
+        };
+        if let Some(kind) = creation_kind {
+            self.creation_origins.push_back(CreationOrigin {
+                id,
+                kind,
+                form_generation: self.form.is_some().then_some(self.form_generation),
+            });
+        }
         self.pending.push_back(Pending {
             id,
             command,
@@ -361,46 +390,43 @@ impl BusUi {
         });
         id
     }
-    /// The coordinator echoes the saved settings for every stepper press
-    /// before that press's command is finished, so a quick second press
-    /// would be undone by the first press's echo. A stepper value whose
-    /// command is still pending stays as shown; the final echo matches it.
-    fn receive_settings(&mut self, mut settings: crate::messaging::prefs::settings::BusSettings) {
-        let pending = |is: fn(&BusCommand) -> bool| {
-            self.pending
-                .iter()
-                .any(|p| p.result.is_none() && is(&p.command))
-        };
-        if pending(|command| matches!(command, BusCommand::SetSidebarWidth(_))) {
-            settings.sidebar_width = self.settings.sidebar_width;
+    fn take_creation_origin(&mut self, kind: CreationKind) -> Option<Option<u64>> {
+        let id = self
+            .creation_origins
+            .iter()
+            .rposition(|origin| origin.kind == kind)
+            .map(|index| self.creation_origins[index].id)?;
+        let index = self
+            .creation_origins
+            .iter()
+            .position(|origin| origin.id == id)?;
+        Some(self.creation_origins.remove(index)?.form_generation)
+    }
+    fn completion_owns_current_form(&mut self, kind: CreationKind) -> bool {
+        let form_generation = self.take_creation_origin(kind);
+        if self.rename.is_some() {
+            return false;
         }
-        if pending(|command| matches!(command, BusCommand::SetFeishuNotifications(_))) {
-            settings.feishu_notifications = self.settings.feishu_notifications;
+        if self.form.is_none() {
+            return true;
         }
-        if pending(|command| matches!(command, BusCommand::SetDeveloperSoundName(_))) {
-            settings.developer_sound = self.settings.developer_sound.clone();
-        }
-        if pending(|command| matches!(command, BusCommand::SetDeveloperSoundEnabled(_))) {
-            settings.developer_sound_enabled = self.settings.developer_sound_enabled;
-        }
-        self.settings = settings;
+        form_generation.is_some_and(|generation| generation == Some(self.form_generation))
     }
     pub fn receive_event(&mut self, event: BusEvent) {
+        #[cfg(feature = "dev-tools")]
+        let Some(event) = crate::messaging::coordinator::ui_hits::hold_ack(event) else {
+            return;
+        };
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
             BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
             BusEvent::FeishuStatusChanged(status) => self.feishu_status = status,
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
-            BusEvent::DevFocusRequested { room, agent } => {
-                if let Some(agent) = agent {
-                    // Show this agent's room in the sidebar without marking the
-                    // room history read merely because its terminal was opened.
-                    self.room = Some(room);
-                    self.open_terminal(agent);
-                } else {
-                    self.open_room(room);
-                }
-            }
+            BusEvent::DevFocusRequested {
+                room,
+                agent,
+                form_generation,
+            } => self.receive_dev_focus(room, agent, form_generation),
             BusEvent::CommandFinished { command_id, result } => {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
                     if matches!(
@@ -424,11 +450,14 @@ impl BusUi {
                 }
             }
             BusEvent::RoomCreated(room) => {
-                self.open_room(room);
+                if self.completion_owns_current_form(CreationKind::Room) {
+                    self.open_room(room);
+                }
             }
             BusEvent::AgentAdded(agent) => {
-                self.form = None;
-                self.open_terminal(agent);
+                if self.completion_owns_current_form(CreationKind::Agent) {
+                    self.open_terminal(agent);
+                }
             }
             BusEvent::TerminalFocused { agent, pane_id }
                 if self.terminal == Some(agent)
@@ -476,7 +505,7 @@ impl BusUi {
             } => {
                 self.suggestions.entries.clear();
                 self.suggestions.query_id += 1;
-                self.form = Some(Form::Consent {
+                self.set_form(Form::Consent {
                     input,
                     orchestrator,
                     notice,
@@ -662,6 +691,11 @@ impl BusUi {
     /// Called only from client update handling. IO lives in the coordinator worker.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        #[cfg(feature = "dev-tools")]
+        for event in crate::messaging::coordinator::ui_hits::released_acks() {
+            self.receive_event(event);
+            changed = true;
+        }
         for _ in 0..256 {
             let Some(event) = self.handle.as_ref().and_then(BusHandle::try_event) else {
                 break;

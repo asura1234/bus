@@ -49,13 +49,15 @@ pub(super) fn cli() -> Command {
         )
         .subcommand(subcommand("diagnostics"))
         .subcommand(subcommand("sounds"));
-    // `ui hits` exists only in the dev variant, with the TUI driver it serves.
+    // The dev variant exposes the UI inspection and deterministic race controls.
     #[cfg(feature = "dev-tools")]
     let command = command.subcommand(
         subcommand("ui")
             .subcommand_required(true)
             .arg_required_else_help(true)
-            .subcommand(subcommand("hits")),
+            .subcommand(subcommand("hits"))
+            .subcommand(subcommand("hold-acks"))
+            .subcommand(subcommand("release-acks")),
     );
     let command = command
         .subcommand(room_cli())
@@ -157,6 +159,16 @@ fn confirmed(args: &ArgMatches) -> Result<bool, String> {
     }
 }
 
+#[cfg(feature = "dev-tools")]
+fn parse_ui(args: &ArgMatches) -> Result<(&'static str, Value), String> {
+    match args.subcommand() {
+        Some(("hits", _)) => Ok(("ui.hits", json!({}))),
+        Some(("hold-acks", _)) => Ok(("ui.hold-acks", json!({}))),
+        Some(("release-acks", _)) => Ok(("ui.release-acks", json!({}))),
+        _ => Err("unknown ui command".into()),
+    }
+}
+
 pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
     let matches = cli()
         .try_get_matches_from(args)
@@ -202,10 +214,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         "diagnostics" => ("diagnostics", json!({})),
         "sounds" => ("sounds", json!({})),
         #[cfg(feature = "dev-tools")]
-        "ui" => match args.subcommand() {
-            Some(("hits", _)) => ("ui.hits", json!({})),
-            _ => return Err("unknown ui command".into()),
-        },
+        "ui" => parse_ui(args)?,
         "room" => parse_room(args)?,
         "agent" => parse_agent(args)?,
         "send" => {

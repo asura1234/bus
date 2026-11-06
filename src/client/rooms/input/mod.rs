@@ -434,7 +434,7 @@ impl BusUi {
         self.pending.retain(|pending| {
             pending.enqueued || !matches!(pending.command, BusCommand::FocusTerminal(_))
         });
-        self.form = None;
+        self.clear_form();
         self.rename = None;
         self.recipient_menu = false;
         self.queue(BusCommand::LeaveRoom, Effect::None);
@@ -467,7 +467,7 @@ impl BusUi {
         self.terminal = None;
         self.target_pane = None;
         self.native_focus_pending = false;
-        self.form = None;
+        self.clear_form();
         self.rename = None;
         self.recipient_menu = false;
         self.main_scroll = 0;
@@ -633,13 +633,13 @@ impl BusUi {
             Action::AdjustSidebarWidth(wider) => self.adjust_sidebar_width(wider),
             Action::Cancel => {
                 if matches!(self.form, Some(Form::ErrorOrchestrator { .. })) {
-                    self.form = Some(Form::Settings);
+                    self.set_form(Form::Settings);
                     return;
                 }
                 if let Some(room) = self.room {
                     self.open_room(room);
                 } else {
-                    self.form = None;
+                    self.clear_form();
                 }
             }
             Action::Add => self.add(),
