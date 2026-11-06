@@ -105,6 +105,13 @@ pub(crate) struct NativeTime {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "U01 stages data contracts before production consumers"
+    )
+)]
 pub(crate) struct FactEnvelope {
     pub(crate) endpoint: EndpointIdentity,
     pub(crate) source: SourceCursor,
@@ -118,6 +125,13 @@ pub(crate) struct FactEnvelope {
 /// last complete cursor/bytes; this enum neither advances nor acknowledges it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "U01 stages data contracts before production consumers"
+    )
+)]
 pub(crate) enum ReadProgress {
     Complete(SourceCursor),
     PendingTail {

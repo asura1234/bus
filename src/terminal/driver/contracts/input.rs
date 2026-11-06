@@ -28,6 +28,13 @@ pub(crate) struct OperationCapability {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "U01 stages data contracts before production consumers"
+    )
+)]
 pub(crate) struct Capabilities {
     pub(crate) native_lifecycle: Support,
     pub(crate) generic_lifecycle: Support,
@@ -46,6 +53,13 @@ pub(crate) enum Readiness {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "U01 stages data contracts before production consumers"
+    )
+)]
 pub(crate) struct InputAssessment {
     pub(crate) token: ObservationToken,
     pub(crate) readiness: Readiness,
@@ -55,6 +69,13 @@ pub(crate) struct InputAssessment {
 /// Scope is captured before a write. A later attempt must not inherit a stop
 /// or an acknowledgment merely because it occupies the same terminal.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "U01 stages data contracts before production consumers"
+    )
+)]
 pub(crate) struct OperationScope {
     pub(crate) id: String,
     pub(crate) kind: OperationKind,
@@ -74,6 +95,13 @@ pub(crate) enum WriteDisposition {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "U01 stages data contracts before production consumers"
+    )
+)]
 pub(crate) struct WriteReceipt {
     pub(crate) operation_id: String,
     pub(crate) disposition: WriteDisposition,

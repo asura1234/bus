@@ -2,13 +2,10 @@
 //!
 //! U01 defines the data and replay oracles before U02–U07 add consumers. No
 //! record here authorizes input, binds a request, settles work or schedules retry.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "U01 stages data contracts before production consumers"
-    )
-)]
+//!
+//! Root records expect `dead_code` until a production consumer names them.
+//! On rustc 1.96, that expectation walks field types and marks them live, so
+//! those referenced types cannot carry an expectation of their own.
 
 pub(crate) mod identity;
 pub(crate) mod input;
