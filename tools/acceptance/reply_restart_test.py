@@ -10,13 +10,15 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.acceptance.harness_test import Bus, CliError  # noqa: E402
+from tools.acceptance.native_restart_test import (  # noqa: E402
+    capture_restart_failure, complete_restart_fixture, restart_directory,
+)
 
 
 def until(predicate, timeout=40):
@@ -40,7 +42,7 @@ def stop_spooled(data):
     return False
 
 
-def scenario(binary, root, provider, master):
+def scenario(binary, root, provider, master, retain_failure=False):
     root.mkdir()
     work = root / "work"
     work.mkdir()
@@ -60,6 +62,8 @@ def scenario(binary, root, provider, master):
            "BUS_TUI_FAKE_SUBMIT_GATE": str(root)}
     bus = Bus(binary, root, env, workspace=work)
     began = time.monotonic()
+    evidence = {}
+    original_error = None
     try:
         bus.start()
         # Keep the default first work room as the observer across restart;
@@ -83,6 +87,7 @@ def scenario(binary, root, provider, master):
         before = {key: value["unread_count"] for key, value in durable()["rooms"].items()}
         sent = bus.cli("send", "--room", room, "--to", "restart-agent", "--text",
                        "fake:raw-reply restart-proof")
+        evidence["bootstrap"] = sent
         message = str(sent["message_id"])
         until(lambda: bus.cli("message", "status", message)["requests"][0]["start_bound"])
         until(held.exists)
@@ -135,16 +140,34 @@ def scenario(binary, root, provider, master):
         assert {key: value["unread_count"] for key, value in durable()["rooms"].items()} == expected
         print(json.dumps({"provider": provider, "room": room, "message": message,
                           "seconds": round(time.monotonic() - began, 3), "result": "PASS"}))
+    except BaseException as error:
+        original_error = error
+        if retain_failure:
+            evidence["error"] = str(error)
+            try:
+                capture_restart_failure(bus, root, evidence)
+            except Exception as diagnostic:
+                evidence["capture_error"] = str(diagnostic)
+        raise
     finally:
-        release.touch()
-        if bus.child is not None and bus.child.poll() is None:
-            os.kill(bus.child.pid, signal.SIGCONT)
-        bus.stop()
+        try:
+            release.touch()
+        finally:
+            try:
+                if bus.child is not None and bus.child.poll() is None:
+                    os.kill(bus.child.pid, signal.SIGCONT)
+            finally:
+                if retain_failure and original_error is not None:
+                    complete_restart_fixture(bus, root, evidence, original_error)
+                else:
+                    bus.stop()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
+    parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--retain-failure", action="store_true")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     # The first registered worktree is the main checkout. Linked worktrees
@@ -157,10 +180,11 @@ def main():
     live_binary = main_checkout / "target/debug/bus"
     assert not (binary == live_binary.resolve()
                 or (live_binary.exists() and binary.samefile(live_binary))), "live Bus binary is forbidden"
-    with tempfile.TemporaryDirectory(prefix="br-restart-", dir="/private/tmp") as directory:
-        root = Path(directory)
-        scenario(binary, root / "claude", "claude", True)
-        scenario(binary, root / "codex", "codex", False)
+    with restart_directory(args.run_dir, args.retain_failure, reply=True) as root:
+        # Default invocations keep their ordinary scenario/cleanup behavior.
+        extra = (True,) if args.retain_failure else ()
+        scenario(binary, root / "claude", "claude", True, *extra)
+        scenario(binary, root / "codex", "codex", False, *extra)
 
 
 if __name__ == "__main__":
