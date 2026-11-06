@@ -82,18 +82,33 @@ impl Worker {
                 return Ok(());
             }
         }
-        self.ensure_provider_binary(input.room, input.provider)?;
-        let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
-        self.prepare_agent_prompt(
+        let attempt = self.begin_tracked_launch(
+            &input.name,
+            input.provider,
+            input.room,
+            crate::messaging::model::LaunchKind::Create,
+        )?;
+        state.copy_launch_ledger_from(&self.state);
+        let checked = self.ensure_provider_binary(input.room, input.provider);
+        self.track_launch_result(attempt, "missing_executable", checked)?;
+        let prepared = self.prepare_provider_launch(&input, id);
+        let (mut prepared, hooks) =
+            self.track_launch_result(attempt, "preparation_failed", prepared)?;
+        let prompt = self.prepare_agent_prompt(
             &input,
             id,
             &mut state,
             orchestrator.as_ref(),
             &mut prepared,
             &hooks,
-        )?;
+        );
+        self.track_launch_result(attempt, "prompt_preparation_failed", prompt)?;
+        let binding = launch_binding(&mut state, id, &input, &prepared);
         let (selected_executable, grok_home, kimi_home) =
-            launch_binding(&mut state, id, &input, &prepared)?;
+            self.track_launch_result(attempt, "launch_binding_failed", binding)?;
+        state
+            .attach_launch_attempt(attempt, id)
+            .map_err(|e| e.to_string())?;
         let identity = self.persist_agent_launch(
             state,
             id,
@@ -110,7 +125,12 @@ impl Worker {
                 let argv = std::iter::once(launch::executable(input.provider).to_owned())
                     .chain(prepared.args.iter().cloned())
                     .collect();
-                return self.record_failed_launch_creation(id, argv, &error.message);
+                return self.record_failed_launch_creation(
+                    id,
+                    argv,
+                    &error.message,
+                    error.code.as_deref().unwrap_or("terminal_creation_failed"),
+                );
             }
             other => {
                 return self.agent_error(
@@ -130,6 +150,7 @@ impl Worker {
                 },
             )
             .map_err(|e| e.to_string())?;
+        super::launch_metrics::bind_current(&mut state, id);
         self.save(state)?;
         // This identity is durable before start. A missing response must not launch twice.
         let mut argv = vec![selected_executable
@@ -247,6 +268,7 @@ impl Worker {
         state
             .set_agent_runtime_identity(id, identity.clone())
             .map_err(|e| e.to_string())?;
+        super::launch_metrics::bind_current(&mut state, id);
         if matches!(provider, Provider::ClaudeCode | Provider::Kimi)
             || launch::provider_kind(provider) == "fake"
         {
