@@ -171,7 +171,9 @@ impl App {
             Method::AgentStartIfIdentity(params) => self.handle_agent_start_if_identity(id, params),
             Method::AgentPrompt(_)
             | Method::AgentPromptIfIdle(_)
-            | Method::AgentPromptIfUnbound(_) => errors::encode_error(
+            | Method::AgentPromptIfIdleAtGeneration(_)
+            | Method::AgentPromptIfUnbound(_)
+            | Method::AgentPromptIfUnboundAtGeneration(_) => errors::encode_error(
                 id,
                 "invalid_request",
                 "agent.prompt is handled asynchronously by the app runtime",

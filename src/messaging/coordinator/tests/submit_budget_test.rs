@@ -16,7 +16,10 @@ impl Transport for DelayedNativeReply {
         let calls = self.calls.clone();
         self.client
             .request_using(method, move |_, request, timeout| {
-                assert!(matches!(request.method, Method::AgentPromptIfIdle(_)));
+                assert!(matches!(
+                    request.method,
+                    Method::AgentPromptIfIdle(_) | Method::AgentPromptIfIdleAtGeneration(_)
+                ));
                 calls.lock().unwrap().push(timeout);
                 if delay >= timeout {
                     return Err(ApiClientError::Io(std::io::Error::new(

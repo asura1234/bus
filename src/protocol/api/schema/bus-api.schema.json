@@ -1122,6 +1122,14 @@
             "expected_agent": {
               "type": "string"
             },
+            "expected_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "expected_pane_id": {
               "type": "string"
             },
@@ -1155,6 +1163,14 @@
         "AgentPromptIfUnboundParams": {
           "description": "First interactive Codex turn: its SessionStart hook is deferred until input.\nThis separate method requires the exact managed launch, never an arbitrary pane.",
           "properties": {
+            "expected_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "expected_managed_name": {
               "type": "string"
             },
@@ -3711,7 +3727,39 @@
         {
           "properties": {
             "method": {
+              "const": "agent.prompt_if_idle_at_generation",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentPromptIfIdleParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.prompt_if_unbound",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentPromptIfUnboundParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.prompt_if_unbound_at_generation",
               "type": "string"
             },
             "params": {
@@ -4537,6 +4585,12 @@
                 "string",
                 "null"
               ]
+            },
+            "generation": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
             },
             "interactive_ready": {
               "type": "boolean"

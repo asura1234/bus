@@ -844,7 +844,7 @@ impl Transport for ResumeDeliveryTransport {
                     agents: vec![self.info.clone()],
                 })
             }
-            Method::AgentPromptIfIdle(params) => {
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
                 let saved = JsonStore::new(self.state_path.clone())
                     .load()
                     .unwrap()

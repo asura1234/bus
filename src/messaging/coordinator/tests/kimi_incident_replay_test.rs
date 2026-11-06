@@ -257,7 +257,10 @@ struct RecordedEditorUncertainty(Arc<Mutex<Vec<Method>>>, String);
 
 impl Transport for RecordedEditorUncertainty {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        let input = matches!(&method, Method::AgentPromptIfIdle(_));
+        let input = matches!(
+            &method,
+            Method::AgentPromptIfIdle(_) | Method::AgentPromptIfIdleAtGeneration(_)
+        );
         let response = Native(self.0.clone()).request(method)?;
         if input {
             Err(TransportError {

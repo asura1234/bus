@@ -133,6 +133,7 @@ impl Worker {
                 expected_agent: launch::provider_kind(agent.provider).into(),
                 expected_session_id: session.clone(),
                 steer: false,
+                expected_generation: None,
             }),
             // Codex starts its provider session with the first turn.
             None if agent.provider == Provider::Codex => {
@@ -142,6 +143,7 @@ impl Worker {
                     expected_terminal_id: terminal.clone(),
                     expected_pane_id: pane.clone(),
                     expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+                    expected_generation: None,
                 })
             }
             None => return Err("The agent has no provider session yet".into()),

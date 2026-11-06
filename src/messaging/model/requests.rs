@@ -13,6 +13,20 @@ mod rejection;
 mod submit;
 
 impl BusState {
+    pub(crate) fn stamp_delivery_epoch(
+        &mut self,
+        request: RequestId,
+        epoch: super::DeliveryEpoch,
+    ) -> Result<(), ModelError> {
+        for id in std::iter::once(request).chain(self.group_members(request)) {
+            self.requests
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?
+                .delivery_epoch = Some(epoch.clone());
+        }
+        Ok(())
+    }
+
     pub(crate) fn begin_submission(
         &mut self,
         request: RequestId,
