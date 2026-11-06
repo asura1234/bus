@@ -26,7 +26,7 @@ impl Fixture {
         std::fs::write(source.join("config.toml"), "").unwrap();
         std::fs::write(
             &executable,
-            "#!/bin/sh\ncase \"$1\" in\n--version) echo 2.4.0 ;;\n--help) echo '--session --agent-file --yolo' ;;\n*) exit 91 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n--version) echo 2.4.0 ;;\n--help) echo '--session --agent-file --yolo --auto' ;;\n*) exit 91 ;;\nesac\n",
         )
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -52,11 +52,15 @@ impl Fixture {
     }
 
     pub(crate) fn prepare(&self) -> PreparedLaunch {
+        self.prepare_args("--model synthetic --yolo")
+    }
+
+    fn prepare_args(&self, extra_args: &str) -> PreparedLaunch {
         prepare(
             &LaunchSpec {
                 provider: ProviderKind::Kimi,
                 cwd: self.root.to_string_lossy().into_owned(),
-                extra_args: "--model synthetic --yolo".into(),
+                extra_args: extra_args.into(),
                 consent_project_hooks: false,
                 hooks: self.hooks.clone(),
             },
@@ -152,4 +156,64 @@ fn kimi_update_switch_is_not_saved_as_a_user_launch_option() {
         common::saved_options(ProviderKind::Kimi, &fixture.hooks.spool).unwrap(),
         expected
     );
+}
+
+#[test]
+fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
+    for (input, yolo, normal) in [
+        ("", vec!["--auto"], vec![]),
+        ("--auto", vec!["--auto"], vec!["--auto"]),
+        ("--yolo", vec!["--auto"], vec!["--yolo"]),
+        ("-y", vec!["--auto"], vec!["-y"]),
+        ("-yy", vec!["--auto"], vec!["-yy"]),
+        ("-ymVALUE", vec!["--auto", "-mVALUE"], vec!["-ymVALUE"]),
+        (
+            "-ymcustom --yolo",
+            vec!["--auto", "-mcustom"],
+            vec!["-ymcustom", "--yolo"],
+        ),
+        (
+            "-ym VALUE",
+            vec!["--auto", "-m", "VALUE"],
+            vec!["-ym", "VALUE"],
+        ),
+        (
+            "--model synthetic --yolo --output-format text",
+            vec!["--auto", "--model", "synthetic", "--output-format", "text"],
+            vec!["--model", "synthetic", "--yolo", "--output-format", "text"],
+        ),
+        ("--auto --yolo", vec!["--auto"], vec!["--auto", "--yolo"]),
+    ] {
+        let original = common::parse_path_tokens(input).unwrap();
+        for (enabled, expected) in [(true, yolo), (false, normal)] {
+            let fixture = Fixture::new();
+            if enabled {
+                std::env::set_var("BUS_YOLO", "1");
+            }
+            let prepared = if enabled && input == "--auto --yolo" {
+                fixture.prepare_args(input)
+            } else if input == "--auto --yolo" {
+                assert!(prepare(
+                    &LaunchSpec {
+                        provider: ProviderKind::Kimi,
+                        cwd: fixture.root.to_string_lossy().into_owned(),
+                        extra_args: input.into(),
+                        consent_project_hooks: false,
+                        hooks: fixture.hooks.clone(),
+                    },
+                    |_| Ok(()),
+                )
+                .is_err());
+                continue;
+            } else {
+                fixture.prepare_args(input)
+            };
+            assert_eq!(prepared.args, expected, "input={input:?}, yolo={enabled}");
+            assert_eq!(
+                common::saved_options(ProviderKind::Kimi, &fixture.hooks.spool).unwrap(),
+                original,
+                "generated permissions replaced saved options"
+            );
+        }
+    }
 }

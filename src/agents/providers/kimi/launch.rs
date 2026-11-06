@@ -160,7 +160,7 @@ fn resolve_executable(source: &Path) -> Result<PathBuf, String> {
             .trim()
             .split('.')
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-        || !["--session", "--agent-file", "--yolo"]
+        || !["--session", "--agent-file", "--yolo", "--auto"]
             .iter()
             .all(|flag| String::from_utf8_lossy(&help.stdout).contains(flag))
     {
@@ -365,12 +365,74 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
     Ok(changed)
 }
 
+const SHORT_OPTIONS: &[(char, bool)] = &[
+    ('V', false),
+    ('S', true),
+    ('c', false),
+    ('y', false),
+    ('m', true),
+    ('p', true),
+    ('h', false),
+];
+
+struct ParsedShortOption {
+    yolo: bool,
+    normalized: Option<String>,
+    takes_next_value: bool,
+}
+
+fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
+    if name.len() < 2 || !name.starts_with('-') || name.starts_with("--") {
+        return None;
+    }
+    let mut yolo = false;
+    let mut normalized = "-".to_owned();
+    let mut takes_next_value = false;
+    for (index, flag) in name.char_indices().skip(1) {
+        let takes_value = SHORT_OPTIONS
+            .iter()
+            .find_map(|(candidate, takes_value)| (*candidate == flag).then_some(*takes_value))?;
+        if flag == 'y' {
+            yolo = true;
+        } else {
+            normalized.push(flag);
+        }
+        if takes_value {
+            let value_start = index + flag.len_utf8();
+            normalized.push_str(&name[value_start..]);
+            takes_next_value = value_start == name.len();
+            break;
+        }
+    }
+    Some(ParsedShortOption {
+        yolo,
+        normalized: (normalized.len() > 1).then_some(normalized),
+        takes_next_value,
+    })
+}
+
+pub(crate) fn normalize_yolo_option(name: &str) -> Option<Option<String>> {
+    if name == "--yolo" {
+        return Some(None);
+    }
+    parse_short_option(name).and_then(|option| option.yolo.then_some(option.normalized))
+}
+
+pub(crate) fn is_yolo_option(name: &str) -> bool {
+    normalize_yolo_option(name).is_some()
+}
+
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
+    if name == "--yolo" {
+        return Some(0);
+    }
+    if let Some(option) = parse_short_option(name) {
+        return Some(usize::from(option.takes_next_value));
+    }
     match name {
-        "-S" | "--session" | "--agent-file" | "--agent" | "-m" | "--model" | "--output-format"
-        | "-p" | "--prompt" | "--skills-dir" | "--add-dir" => Some(1),
-        "-y" | "--yolo" | "--auto" | "--continue" | "-c" | "--plan" | "--help" | "-h"
-        | "--version" | "-V" => Some(0),
+        "--session" | "--agent-file" | "--agent" | "--model" | "--output-format" | "--prompt"
+        | "--skills-dir" | "--add-dir" => Some(1),
+        "--auto" | "--continue" | "--plan" | "--help" | "--version" => Some(0),
         _ => None,
     }
 }
@@ -571,11 +633,10 @@ fn environment_for(
 }
 
 pub(crate) fn validate_run_permissions(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|arg| arg == "--auto")
-        && args
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
+    let positions = common::argument_positions(ProviderKind::Kimi, args);
+    let has_auto = positions.iter().any(|&index| args[index] == "--auto");
+    let has_yolo = positions.iter().any(|&index| is_yolo_option(&args[index]));
+    if has_auto && has_yolo {
         return Err("Kimi --auto and --yolo cannot be combined".into());
     }
     Ok(())
@@ -588,18 +649,9 @@ pub(crate) fn prepare(
     let cwd = common::canonical_directory(&spec.cwd)?;
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
     let adopted_session = validate_owned_launch(&options)?;
-    validate_run_permissions(&options)?;
-    if crate::utils::env::yolo_enabled() && options.iter().any(|arg| arg == "--auto") {
-        return Err("Bus --yolo conflicts with Kimi --auto; choose one permission mode".into());
-    }
     let saved_options = options.clone();
-    if crate::utils::env::yolo_enabled()
-        && !options
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
-        options.insert(0, "--yolo".into());
-    }
+    common::apply_run_permissions(ProviderKind::Kimi, &mut options);
+    validate_run_permissions(&options)?;
     let source = source_home()?;
     let executable = resolve_executable(&source)?;
     let home = private_home(&source, &spec.hooks)?;
