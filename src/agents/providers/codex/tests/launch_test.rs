@@ -123,3 +123,16 @@ fn draft_action_pins_override_user_remaps_on_new_and_resumed_launches() {
         }
     }
 }
+
+#[test]
+fn codex_native_launcher_is_pinned_instead_of_resolved_by_the_pane_shell() {
+    use crate::agents::providers::{launch as common, ProviderKind};
+    let env = std::collections::HashMap::from([(
+        "PATH".into(),
+        "/private/launch/bin:/usr/bin:/bin".into(),
+    )]);
+    assert_eq!(
+        common::selected_executable(ProviderKind::Codex, &env).unwrap(),
+        Some("/private/launch/bin/codex".into())
+    );
+}
