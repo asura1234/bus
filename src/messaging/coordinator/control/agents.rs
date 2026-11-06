@@ -7,7 +7,137 @@ use super::{
 use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 use serde_json::{json, Value};
 
+/// Fences completion to the obligation captured before issuing the interrupt.
+#[derive(PartialEq, Eq)]
+pub(in crate::messaging::coordinator) struct NativeInterruptFence {
+    attempt: InterruptAttempt,
+    identity: crate::messaging::model::AgentRuntimeIdentity,
+    current: Option<crate::messaging::model::RequestId>,
+    busy_revision: u64,
+    queued: Vec<crate::messaging::model::RequestId>,
+    members: Vec<crate::messaging::model::RequestId>,
+    submission: Option<InterruptSubmission>,
+}
+
+struct InterruptAttempt {
+    epoch: std::sync::Arc<()>,
+    serial: u64,
+}
+
+impl PartialEq for InterruptAttempt {
+    fn eq(&self, other: &Self) -> bool {
+        self.serial == other.serial && std::sync::Arc::ptr_eq(&self.epoch, &other.epoch)
+    }
+}
+impl Eq for InterruptAttempt {}
+
+#[derive(PartialEq, Eq)]
+struct InterruptSubmission {
+    revision: u64,
+    boundary: Option<u64>,
+    turn: Option<String>,
+    session: Option<String>,
+    launch: Option<String>,
+}
+
 impl Worker {
+    fn admit_interrupt_attempt(&mut self, id: AgentId) -> Result<(), String> {
+        let attempts = &mut self.interrupt_attempts;
+        attempts.serial = attempts
+            .serial
+            .checked_add(1)
+            .ok_or("Interrupt admission serial exhausted")?;
+        attempts
+            .latest
+            .retain(|id, _| self.state.agent(*id).is_some());
+        attempts.latest.insert(id, attempts.serial);
+        Ok(())
+    }
+
+    pub(in crate::messaging::coordinator) fn clear_unconfirmed_native_interrupt(
+        &self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+        fence: &NativeInterruptFence,
+    ) -> Result<bool, String> {
+        if self.native_interrupt_fence(state, id).as_ref() != Some(fence) {
+            return Ok(false);
+        }
+        state
+            .clear_native_interrupt_wait(id)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    pub(in crate::messaging::coordinator) fn native_interrupt_fence(
+        &self,
+        state: &crate::messaging::model::BusState,
+        id: AgentId,
+    ) -> Option<NativeInterruptFence> {
+        let agent = state
+            .agent(id)
+            .filter(|agent| agent.provider == Provider::Codex)?;
+        agent
+            .runtime_identity
+            .terminal_id
+            .as_deref()
+            .filter(|id| !id.is_empty())?;
+        agent
+            .runtime_identity
+            .session_id
+            .as_deref()
+            .filter(|id| !id.is_empty())?;
+        let request = agent.current_request.and_then(|id| state.request(id));
+        Some(NativeInterruptFence {
+            attempt: InterruptAttempt {
+                epoch: self.interrupt_attempts.epoch.clone(),
+                serial: *self.interrupt_attempts.latest.get(&id)?,
+            },
+            identity: agent.runtime_identity.clone(),
+            current: agent.current_request,
+            busy_revision: agent.busy_revision,
+            queued: state.queued_requests(id).to_vec(),
+            members: agent
+                .current_request
+                .map_or_else(Vec::new, |id| state.group_members(id)),
+            submission: request.map(|request| InterruptSubmission {
+                revision: request.submission_status_revision,
+                boundary: request.submission_boundary,
+                turn: request.provider_turn_id.clone(),
+                session: request.provider_session_id.clone(),
+                launch: request.expected_launch_id.clone(),
+            }),
+        })
+    }
+
+    pub(in crate::messaging::coordinator) fn complete_native_interrupt(
+        &self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+        fence: &NativeInterruptFence,
+        terminal: &str,
+        session: &str,
+        turn: Option<&str>,
+        now: u64,
+    ) -> Result<bool, String> {
+        if terminal.is_empty()
+            || session.is_empty()
+            || fence.identity.terminal_id.as_deref() != Some(terminal)
+            || fence.identity.session_id.as_deref() != Some(session)
+            || self.native_interrupt_fence(state, id).as_ref() != Some(fence)
+            || fence
+                .submission
+                .as_ref()
+                .is_some_and(|request| request.turn.as_deref() != turn)
+        {
+            return Ok(false);
+        }
+        state
+            .complete_native_interrupt(id, now)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
     pub(super) fn execute_agents(
         &mut self,
         method: &str,
@@ -345,51 +475,7 @@ impl Worker {
                 row["outcome"] = json!("already_idle");
             }
             RuntimeStatus::Idle | RuntimeStatus::Working | RuntimeStatus::Blocked => {
-                let key = interrupt_key(agent.provider);
-                let Some(pane) = agent.runtime_identity.pane_id.clone() else {
-                    row["outcome"] = json!("failed");
-                    row["reason"] = json!("The agent has no terminal yet");
-                    return Ok(row);
-                };
-                // One press only: a second Esc opens Claude's rewind or
-                // Codex's edit-previous-message, and a second Ctrl+C quits
-                // Cursor or escalates Grok's cancel toward quit.
-                let sent =
-                    self.transport
-                        .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
-                            target: pane,
-                            keys: vec![key.into()],
-                            native_interrupt: None,
-                        }));
-                match sent {
-                    Err(error) if error.definitely_rejected => {
-                        tracing::warn!(
-                            event = "bus.agent.interrupt",
-                            agent_id = id.0,
-                            key,
-                            error = %error.message,
-                            "Stop key refused"
-                        );
-                        row["outcome"] = json!("failed");
-                        row["reason"] = json!(error.message);
-                    }
-                    // An uncertain failure may have pressed the key; the
-                    // CLI's wait for idle decides.
-                    _ => {
-                        tracing::info!(
-                            event = "bus.agent.interrupt",
-                            agent_id = id.0,
-                            key,
-                            "Stop key pressed"
-                        );
-                        state.begin_interrupt(id).map_err(|e| e.to_string())?;
-                        state
-                            .post_interrupt_notice(room, interrupter.clone(), id, now)
-                            .map_err(|e| e.to_string())?;
-                        row["outcome"] = json!("interrupting");
-                        row["key"] = json!(key);
-                    }
-                }
+                return self.interrupt_running_agent(state, id, room, interrupter, now);
             }
             other => {
                 row["outcome"] = json!("failed");
@@ -398,6 +484,112 @@ impl Worker {
                     agent.name,
                     json!(other).as_str().unwrap_or("not running")
                 ));
+            }
+        }
+        Ok(row)
+    }
+
+    fn interrupt_running_agent(
+        &mut self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+        room: RoomId,
+        interrupter: &crate::messaging::model::Author,
+        now: u64,
+    ) -> Result<Value, String> {
+        let agent = state.agent(id).ok_or("Unknown agent")?;
+        let mut row = json!({"agent_id":id,"name":agent.name});
+        let key = interrupt_key(agent.provider);
+        let Some(pane) = agent.runtime_identity.pane_id.clone() else {
+            row["outcome"] = json!("failed");
+            row["reason"] = json!("The agent has no terminal yet");
+            return Ok(row);
+        };
+        self.admit_interrupt_attempt(id)?;
+        let fence = self.native_interrupt_fence(state, id);
+        // One press only: a second Esc opens Claude's rewind or
+        // Codex's edit-previous-message, and a second Ctrl+C quits
+        // Cursor or escalates Grok's cancel toward quit.
+        let sent = self
+            .transport
+            .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
+                target: pane,
+                keys: vec![key.into()],
+                native_interrupt: (agent.provider == Provider::Codex)
+                    .then(|| {
+                        Some(schema::NativeInterruptIdentity {
+                            expected_terminal_id: agent.runtime_identity.terminal_id.clone()?,
+                            expected_session_id: agent.runtime_identity.session_id.clone()?,
+                        })
+                    })
+                    .flatten(),
+            }));
+        match sent {
+            Ok(ResponseResult::AgentInterrupted {
+                terminal_id,
+                session_id,
+                turn_id,
+            }) => {
+                let completed = if let Some(fence) = fence {
+                    self.complete_native_interrupt(
+                        state,
+                        id,
+                        &fence,
+                        &terminal_id,
+                        &session_id,
+                        turn_id.as_deref(),
+                        now,
+                    )?
+                } else {
+                    false
+                };
+                if completed {
+                    state
+                        .post_interrupt_notice(room, interrupter.clone(), id, now)
+                        .map_err(|e| e.to_string())?;
+                    row["outcome"] = json!("stopped");
+                } else {
+                    row["outcome"] = json!("failed");
+                    row["reason"] = json!(
+                        "Native interrupt completion did not match the interrupted obligation"
+                    );
+                }
+            }
+            Err(error)
+                if error.definitely_rejected
+                    || fence.is_some()
+                    || error.code.as_deref() == Some("agent_interrupt_unconfirmed") =>
+            {
+                if error.code.as_deref() == Some("agent_interrupt_unconfirmed") {
+                    if let Some(fence) = fence.as_ref() {
+                        self.clear_unconfirmed_native_interrupt(state, id, fence)?;
+                    }
+                }
+                tracing::warn!(
+                    event = "bus.agent.interrupt",
+                    agent_id = id.0,
+                    key,
+                    error = %error.message,
+                    "Interrupt refused"
+                );
+                row["outcome"] = json!("failed");
+                row["reason"] = json!(error.message);
+            }
+            // An uncertain failure may have pressed the key; the
+            // CLI's wait for idle decides.
+            _ => {
+                tracing::info!(
+                    event = "bus.agent.interrupt",
+                    agent_id = id.0,
+                    key,
+                    "Interrupt admission completed"
+                );
+                state.begin_interrupt(id).map_err(|e| e.to_string())?;
+                state
+                    .post_interrupt_notice(room, interrupter.clone(), id, now)
+                    .map_err(|e| e.to_string())?;
+                row["outcome"] = json!("interrupting");
+                row["key"] = json!(key);
             }
         }
         Ok(row)

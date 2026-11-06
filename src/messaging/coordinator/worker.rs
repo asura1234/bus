@@ -22,7 +22,17 @@ use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 /// How often a tick moves settled history out of `state.json`.
 const ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 
+/// Private interrupt admissions; epoch ownership prevents reuse after reopening,
+/// and serials are never restored by failed model saves or receipt eviction.
+#[derive(Default)]
+pub(super) struct InterruptAttempts {
+    pub(super) epoch: Arc<()>,
+    pub(super) serial: u64,
+    pub(super) latest: BTreeMap<AgentId, u64>,
+}
+
 pub(super) struct Worker {
+    pub(super) interrupt_attempts: InterruptAttempts,
     pub(super) idle_alerted_rooms: BTreeSet<super::RoomId>, // In-memory idle episodes.
     pub(super) disk_space: super::disk_space::DiskSpace,
     pub(super) directory_checks: super::working_directory::DirectoryChecks,
@@ -141,6 +151,7 @@ impl Worker {
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
+            interrupt_attempts: InterruptAttempts::default(),
             idle_alerted_rooms: BTreeSet::new(),
             disk_space: super::disk_space::DiskSpace::default(),
             directory_checks: super::working_directory::DirectoryChecks::default(),

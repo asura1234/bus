@@ -569,7 +569,10 @@ impl Worker {
                 expected_agent: launch::provider_kind(agent.provider).into(),
                 expected_session_id: session.clone(),
                 steer: true,
-                expected_turn_id: None,
+                expected_turn_id: self
+                    .state
+                    .request(lead)
+                    .and_then(|request| request.provider_turn_id.clone()),
             },
         )) {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
@@ -593,7 +596,7 @@ impl Worker {
         };
         tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
             mode = "steer", outcome = ?outcome,
-            elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
+            elapsed_ms = started.elapsed().as_millis() as u64, "Steering admission completed");
         let mut state = self.state.clone();
         state
             .record_steering(request, outcome.clone())
