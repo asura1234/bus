@@ -241,6 +241,10 @@ impl HeadlessServer {
 
         let headless_size = app.state.headless_size;
         let server_config_diagnostic = config::config_diagnostic_summary(config_diagnostics);
+        let mut app = app;
+        app.state.generation =
+            crate::utils::restart_record::reserve_generation(&crate::utils::paths::data_dir())
+                .map_err(io::Error::other)?;
         Ok(Self {
             app,
             _api_tx: api_tx,

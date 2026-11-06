@@ -517,7 +517,10 @@ fn orchestrated_worker() -> (Worker, AgentId, AgentId, RoomId, PathBuf) {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             if matches!(
                 method,
-                Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_)
+                Method::AgentPromptIfIdle(_)
+                    | Method::AgentPromptIfIdleAtGeneration(_)
+                    | Method::AgentPromptIfUnbound(_)
+                    | Method::AgentPromptIfUnboundAtGeneration(_)
             ) {
                 return Ok(ResponseResult::AgentPrompted {
                     agent: native_info("pane", "claude", "session"),

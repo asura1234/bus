@@ -14,6 +14,8 @@ use crate::utils::theme::{Palette, ThemeRuntimeConfig};
 
 /// Testable without PTYs or a tokio runtime.
 pub struct AppState {
+    /// Monotonic native-server start used to fence delivery across restarts.
+    pub generation: u64,
     pub terminals:
         std::collections::HashMap<crate::utils::ids::TerminalId, crate::terminal::TerminalState>,
     pub(crate) pane_id_aliases: std::collections::HashMap<u32, PaneId>,

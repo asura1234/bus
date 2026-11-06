@@ -78,7 +78,10 @@ impl Transport for FakeTransport {
         }
         if matches!(
             method,
-            Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_)
+            Method::AgentPromptIfIdle(_)
+                | Method::AgentPromptIfIdleAtGeneration(_)
+                | Method::AgentPromptIfUnbound(_)
+                | Method::AgentPromptIfUnboundAtGeneration(_)
         ) {
             let state = JsonStore::new(self.state_path.clone())
                 .load()
