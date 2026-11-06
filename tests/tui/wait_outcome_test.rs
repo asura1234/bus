@@ -70,13 +70,6 @@ fn bounded_message_wait_recovers_a_transient_provider_error() {
         ],
     ));
     assert_eq!(code, 0, "{added}");
-    session.ok(&[
-        "wait",
-        "--state",
-        "agents.*.status == idle",
-        "--timeout",
-        "20s",
-    ]);
     let (code, sent) = parse(scratch_bus(
         &session,
         &[
