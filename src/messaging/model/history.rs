@@ -3,7 +3,7 @@
 //! sit behind one `Arc`, so cloning the state for a save or a UI snapshot copies
 //! only the live part.
 use super::{AgentId, Prompt, PromptId, Request, RequestId, RoomId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// A settled request or a notice older than this is archived.
@@ -14,6 +14,8 @@ pub(crate) const HISTORY_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct History {
     pub(super) requests: BTreeMap<RequestId, Arc<Request>>,
+    request_rooms: BTreeMap<RoomId, BTreeSet<RequestId>>,
+    pub(super) groups: super::history_index::HistoryIndex,
     /// Derived at insert/load; request bodies remain shared and history stays append-only.
     messages: BTreeMap<(PromptId, RequestId), Arc<Request>>,
     pub(super) rooms: BTreeMap<RoomId, String>,
@@ -116,7 +118,15 @@ impl History {
                 let request = Arc::new(*request);
                 if let Some(previous) = self.requests.insert(request.id, Arc::clone(&request)) {
                     self.messages.remove(&(previous.prompt.id, previous.id));
+                    if let Some(ids) = self.request_rooms.get_mut(&previous.room_id) {
+                        ids.remove(&previous.id);
+                    }
                 }
+                self.request_rooms
+                    .entry(request.room_id)
+                    .or_default()
+                    .insert(request.id);
+                self.groups.insert(&request);
                 self.messages
                     .insert((request.prompt.id, request.id), request);
             }
@@ -131,6 +141,18 @@ impl History {
 
     pub(super) fn request(&self, id: RequestId) -> Option<&Request> {
         self.requests.get(&id).map(Arc::as_ref)
+    }
+
+    pub(super) fn recent_room_requests(
+        &self,
+        room: RoomId,
+        before: u64,
+    ) -> impl Iterator<Item = &Request> {
+        self.request_rooms
+            .get(&room)
+            .into_iter()
+            .flat_map(move |ids| ids.range(..RequestId(before)).rev())
+            .filter_map(|id| self.request(*id))
     }
 
     pub(super) fn requests_for_message(&self, message: PromptId) -> impl Iterator<Item = &Request> {

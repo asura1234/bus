@@ -1,6 +1,8 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
+use super::groups::ReplyGroups;
+use super::source::{visible_request, Direction, Exchange};
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
@@ -11,45 +13,6 @@ use crate::messaging::model::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-
-struct Exchange<'a> {
-    prompt: &'a Prompt,
-    requests: BTreeMap<AgentId, &'a Request>,
-}
-
-struct ReplyGroups {
-    members: BTreeMap<RequestId, Vec<RequestId>>,
-    shared_sources: BTreeMap<RequestId, RequestId>,
-}
-
-impl ReplyGroups {
-    fn for_room(state: &BusState, room: RoomId) -> Self {
-        Self {
-            members: state.groups(),
-            shared_sources: state.shared_reply_sources(room, visible_request),
-        }
-    }
-
-    fn reference(&self, state: &BusState, request: &Request) -> Option<String> {
-        let group = request.completed_reply.as_ref()?.group?;
-        let source = *self.shared_sources.get(&group)?;
-        (source != request.id)
-            .then(|| state.request(source))
-            .flatten()
-            .map(|source| format!("Answered with message {}", source.prompt.id.0))
-    }
-
-    fn shared_to_developer(&self, state: &BusState, request: &Request, text: &str) -> bool {
-        if explicitly_to_you(text) {
-            return true;
-        }
-        let lead = request.reply_key();
-        std::iter::once(lead)
-            .chain(self.members.get(&lead).into_iter().flatten().copied())
-            .filter_map(|id| state.request(id))
-            .any(|member| member.prompt.author == Author::Developer)
-    }
-}
 
 #[cfg(test)]
 #[path = "../tests/history_group_test.rs"]
@@ -78,11 +41,33 @@ impl History {
             now,
             thumbnails,
             Default::default(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn lines_filtered(
+        &mut self,
+        state: &BusState,
+        room: &Room,
+        width: u16,
+        revision: u64,
+        now: u64,
+        thumbnails: &mut Thumbnails,
+        filters: crate::messaging::model::RoomHistoryFilters,
+    ) -> &[Line] {
+        self.lines_with_submissions(
+            state,
+            room,
+            width,
+            revision,
+            now,
+            thumbnails,
+            filters,
             &Default::default(),
         )
     }
 
-    pub fn lines_filtered(
+    pub fn lines_with_submissions(
         &mut self,
         state: &BusState,
         room: &Room,
@@ -98,7 +83,8 @@ impl History {
         static REBUILD: crate::utils::perf::Timer =
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
-        self.prepare_source(state, room, revision, submissions);
+        let filtered = filters != Default::default();
+        let recent = self.prepare_window_source(state, room, revision, filters, submissions);
         let key = (
             self.signature,
             room.id,
@@ -108,19 +94,13 @@ impl History {
             filters,
             submission_signature(submissions),
         );
-        if self.reusable_layout(key, now) {
+        if self.layout_reusable(key, now) {
             self.key = Some(key);
             return &self.lines;
         }
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
-        let (groups, exchanges) = {
-            let _timer = super::phases::GROUPING.start();
-            (
-                ReplyGroups::for_room(state, room.id),
-                exchanges(state, room),
-            )
-        };
+        let (groups, exchanges) = ReplyGroups::for_projection(state, room, recent);
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
         let mut age_valid = 0..u64::MAX;
@@ -146,36 +126,41 @@ impl History {
             self.rebuilt += 1;
             let prompt = exchange.prompt;
             update_age_validity(&mut age_valid, prompt.submitted_at_ms, now);
-            self.push_prompt_lines(
-                &mut lines,
-                &mut active_markdown,
-                state,
-                room.id,
-                prompt,
-                width,
-                now,
-                thumbnails,
-                submissions,
-            );
+            let direction = Direction::prompt(prompt);
+            if direction.accepts(filters) {
+                self.push_prompt_lines(
+                    &mut lines,
+                    &mut active_markdown,
+                    state,
+                    room.id,
+                    prompt,
+                    width,
+                    now,
+                    thumbnails,
+                    submissions,
+                    direction,
+                );
+            }
 
-            self.push_reply_lines(
-                &mut lines,
-                &mut active_markdown,
-                state,
-                room,
-                &exchange,
-                &groups,
-                width,
-            );
+            if !filtered || filters.to_you {
+                self.push_reply_lines(
+                    &mut lines,
+                    &mut active_markdown,
+                    state,
+                    room,
+                    &exchange,
+                    &groups,
+                    width,
+                    filters,
+                );
+            }
             lines.push(blank_row(RowAnchor::new(prompt.id, None, RowKind::Gap)));
         }
-        self.room_markdown.insert(room.id, active_markdown);
-        self.room_markdown.retain(|id, _| state.room(*id).is_some());
-        let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
-        self.markdown.retain(|source, _| shown.contains(source));
+        self.retain_window_markdown(state, room.id, active_markdown, filtered);
         self.key = Some(key);
         self.displayed_filters = filters;
-        self.lines = super::filter_lines(lines, filters).into();
+        self.loaded_limit = self.record_limit;
+        self.lines = super::clean_gaps(lines, filtered).into();
         self.age_valid = age_valid;
         REBUILD.record_op(
             started.elapsed(),
@@ -191,7 +176,7 @@ impl History {
         &self.lines
     }
 
-    fn prepare_source(
+    pub(super) fn prepare_source(
         &mut self,
         state: &BusState,
         room: &Room,
@@ -225,6 +210,7 @@ impl History {
         now: u64,
         thumbnails: &mut Thumbnails,
         submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
+        direction: Direction,
     ) {
         let start = lines.len();
         let header_timer = super::phases::HEADER.start();
@@ -293,12 +279,9 @@ impl History {
         self.rendered += usize::from(cold);
         self.projected += usize::from(projected);
         push_prompt_files(lines, prompt, width, thumbnails);
-        let to_developer = prompt.author != Author::Developer
-            && (prompt.recipient_ids.is_empty()
-                || matches!(prompt.author, Author::Agent(_)) && explicitly_to_you(&prompt.text));
         for line in &mut lines[start..] {
-            line.to_developer = to_developer;
-            line.from_developer = prompt.author == Author::Developer;
+            line.to_developer = direction.to_you;
+            line.from_developer = direction.from_you;
         }
     }
 
@@ -311,6 +294,7 @@ impl History {
         exchange: &Exchange<'_>,
         groups: &ReplyGroups,
         width: u16,
+        filters: crate::messaging::model::RoomHistoryFilters,
     ) {
         let prompt = exchange.prompt;
         let mut replied = false;
@@ -323,24 +307,22 @@ impl History {
             // Pending groups keep one waiting row under their newest visible
             // member. Completed groups show the body under the first visible
             // exchange and leave an answer reference under every other member.
-            if let Some(request) = request.filter(|request| request.completed_reply.is_none()) {
-                let members = groups
-                    .members
-                    .get(&request.reply_key())
-                    .map_or(&[][..], Vec::as_slice);
-                let newest = members.iter().rev().find(|id| {
-                    state
-                        .request(**id)
-                        .is_some_and(|member| member.room_id == room.id && visible_request(member))
-                });
-                if newest.is_some_and(|last| *last != request.id) {
-                    continue;
-                }
+            if request.is_some_and(|request| groups.waiting_elsewhere(state, room.id, request)) {
+                continue;
             }
             let reference = request.and_then(|request| groups.reference(state, request));
             let (text, quote) = reference
                 .as_deref()
                 .map_or_else(|| exchange_reply(request), |text| (text, None));
+            let direction = Direction {
+                to_you: quote.is_some()
+                    && request
+                        .is_some_and(|request| groups.shared_to_developer(state, request, text)),
+                from_you: false,
+            };
+            if !direction.accepts(filters) {
+                continue;
+            }
             // One blank row between replies, as at every other block
             // boundary; the exchange's own Gap row follows the last one.
             if replied {
@@ -407,10 +389,8 @@ impl History {
             } else {
                 push_body(lines, text, width, "    ", reply_anchor);
             }
-            let to_developer = quote.is_some()
-                && request.is_some_and(|request| groups.shared_to_developer(state, request, text));
             for line in &mut lines[start..] {
-                line.to_developer = to_developer;
+                line.to_developer = direction.to_you;
             }
         }
     }
@@ -426,11 +406,6 @@ fn update_age_validity(valid: &mut std::ops::Range<u64>, submitted_at_ms: u64, n
             valid.end = valid.end.min(expires);
         }
     }
-}
-
-fn explicitly_to_you(text: &str) -> bool {
-    crate::messaging::attention::has_you_mention(text)
-        || crate::messaging::attention::waiting_tag_action(text).is_some()
 }
 
 fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor: RowAnchor) {
@@ -508,47 +483,6 @@ fn wrap_header(
             }
         })
         .collect()
-}
-
-/// Routing and diagnostic envelopes have neither a chat body nor a shared-reply slot.
-pub(in crate::client::rooms) fn visible_request(request: &Request) -> bool {
-    !request.is_error_report()
-        && (!request.bus_generated || !matches!(request.prompt.author, Author::Agent(_)))
-}
-
-/// The room's history entries in display order: requests grouped by prompt,
-/// then authored notices.
-fn exchanges<'a>(state: &'a BusState, room: &'a Room) -> BTreeMap<(u64, u64), Exchange<'a>> {
-    let mut exchanges = BTreeMap::new();
-    // Worker notifications are provider-routing envelopes, not authored chat.
-    // Their actual replies already belong to the source requests (and autonomous
-    // finals have their own developer post). Never project diagnostic envelopes
-    // or a provider's answer to one into history, including archived requests.
-    for request in state.requests().filter(|r| r.room_id == room.id) {
-        let prompt = &request.prompt;
-        if !visible_request(request) {
-            continue;
-        }
-        exchanges
-            .entry((prompt.submitted_at_ms, prompt.id.0))
-            .or_insert_with(|| Exchange {
-                prompt,
-                requests: BTreeMap::new(),
-            })
-            .requests
-            .insert(request.agent_id, request);
-    }
-    // Bus notices for the developer read like messages addressed to nobody.
-    for prompt in state.notices(room.id) {
-        exchanges.insert(
-            (prompt.submitted_at_ms, prompt.id.0),
-            Exchange {
-                prompt,
-                requests: BTreeMap::new(),
-            },
-        );
-    }
-    exchanges
 }
 
 fn blank_row(anchor: RowAnchor) -> Line {

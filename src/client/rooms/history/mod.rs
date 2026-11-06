@@ -1,7 +1,11 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 mod background;
 mod exchange;
+mod groups;
 mod markdown;
+mod search;
+mod source;
+mod window;
 mod wrapped_links;
 
 // Separate the costs of a rebuild so a slow operation identifies its phase.
@@ -22,11 +26,13 @@ mod phases {
 
 use super::{render::Action, LocalSendStatus};
 use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
+pub(super) use exchange::reply;
 #[cfg(test)]
 use exchange::timestamp;
-pub(super) use exchange::{reply, visible_request};
 use markdown::MarkdownBlock;
 use ratatui::style::Style;
+pub(super) use search::SearchAnchor;
+pub(super) use source::visible_request;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -147,36 +153,22 @@ type LayoutKey = (
     u64,
 );
 
-pub(super) fn filter_lines(
-    lines: Vec<Line>,
-    filters: crate::messaging::model::RoomHistoryFilters,
-) -> Vec<Line> {
-    if filters == Default::default() {
+/// Projection already accepted each message before Markdown. Keep only useful gaps.
+fn clean_gaps(lines: Vec<Line>, filtered: bool) -> Vec<Line> {
+    if !filtered {
         return lines;
     }
-    let accepts = |line: &Line| {
-        (filters.to_you && line.to_developer) || (filters.from_you && line.from_developer)
-    };
-    let accepted: Vec<bool> = lines.iter().map(accepts).collect();
-    lines
-        .iter()
-        .enumerate()
-        .filter(|(index, line)| {
-            accepted[*index]
-                || line.anchor.kind == RowKind::Gap
-                    && (*index > 0 && accepted[index - 1]
-                        || *index + 1 < accepted.len() && accepted[index + 1])
-        })
-        .fold(Vec::new(), |mut filtered, (_, line)| {
-            if line.anchor.kind != RowKind::Gap
-                || filtered
-                    .last()
-                    .is_some_and(|previous: &Line| previous.anchor.kind != RowKind::Gap)
-            {
-                filtered.push(line.clone());
-            }
-            filtered
-        })
+    let mut result: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.anchor.kind != RowKind::Gap
+            || result
+                .last()
+                .is_some_and(|last| last.anchor.kind != RowKind::Gap)
+        {
+            result.push(line);
+        }
+    }
+    result
 }
 
 fn submission_signature(submissions: &BTreeMap<PromptId, LocalSendStatus>) -> u64 {
@@ -235,6 +227,10 @@ pub(super) struct History {
     rendered: usize,
     rebuilt: usize,
     projected: usize,
+    window_room: Option<(RoomId, crate::messaging::model::RoomHistoryFilters)>,
+    record_limit: usize,
+    loaded_limit: usize,
+    has_older: bool,
 }
 
 impl History {
@@ -243,20 +239,12 @@ impl History {
         &self.lines
     }
 
-    pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {
-        self.displayed_filters
+    pub fn has_older(&self) -> bool {
+        self.has_older
     }
 
-    fn reusable_layout(&self, key: LayoutKey, now: u64) -> bool {
-        self.key.is_some_and(|previous| {
-            previous.0 == key.0
-                && previous.1 == key.1
-                && previous.2 == key.2
-                && previous.4 == key.4
-                && previous.5 == key.5
-                && previous.6 == key.6
-                && (previous.3 == key.3 || self.age_valid.contains(&now))
-        })
+    pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {
+        self.displayed_filters
     }
 
     pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {

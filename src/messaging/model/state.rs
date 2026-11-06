@@ -19,7 +19,7 @@ pub(crate) struct BusState {
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) retired_agents: BTreeMap<AgentId, super::staffing::RetiredAgent>,
-    pub(super) requests: BTreeMap<RequestId, Request>,
+    pub(super) requests: super::request_map::RequestMap,
     /// Recovery floor for transient routing metadata; old audit records remain readable.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(super) routing_before_ms: u64,
@@ -171,7 +171,7 @@ impl BusState {
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),
             retired_agents: BTreeMap::new(),
-            requests: BTreeMap::new(),
+            requests: Default::default(),
             routing_before_ms: 0,
             queues: BTreeMap::new(),
             reply_routes: BTreeMap::new(),
@@ -238,9 +238,41 @@ impl BusState {
     /// Live and archived requests, in id order.
     pub(crate) fn requests(&self) -> impl Iterator<Item = &Request> {
         MergeById {
+            newest_first: false,
             live: self.requests.values().peekable(),
             archived: self.history.requests.values().map(Arc::as_ref).peekable(),
         }
+    }
+
+    /// Only this room spends a bounded view's page budget, including archived records.
+    pub(crate) fn recent_room_requests(
+        &self,
+        room: RoomId,
+        before: u64,
+    ) -> impl Iterator<Item = &Request> {
+        MergeById {
+            newest_first: true,
+            live: self.requests.recent_room(room, before).peekable(),
+            archived: self.history.recent_room_requests(room, before).peekable(),
+        }
+    }
+
+    pub(crate) fn history_group_has_developer(&self, key: RequestId) -> bool {
+        self.request(key)
+            .is_some_and(|request| request.prompt.author == super::Author::Developer)
+            || self.requests.history_index().has_developer(key)
+            || self.history.groups.has_developer(key)
+    }
+
+    pub(crate) fn history_latest_group_member(
+        &self,
+        room: RoomId,
+        key: RequestId,
+    ) -> Option<RequestId> {
+        self.requests
+            .history_index()
+            .latest_follower(room, key)
+            .max(self.history.groups.latest_follower(room, key))
     }
 
     /// Live obligations only; reconciliation and save diagnostics must not
@@ -252,10 +284,12 @@ impl BusState {
     /// A message's recipients in request order, without rescanning permanent history.
     pub(crate) fn requests_for_message(&self, message: PromptId) -> impl Iterator<Item = &Request> {
         MergeById {
+            newest_first: false,
             live: self
                 .requests
-                .values()
-                .filter(move |r| r.prompt.id == message)
+                .range(RequestId(message.0.saturating_add(1))..)
+                .map(|(_, request)| request)
+                .take_while(move |request| request.prompt.id == message)
                 .peekable(),
             archived: self.history.requests_for_message(message).peekable(),
         }
@@ -334,6 +368,7 @@ impl BusState {
 
 /// Two id-ordered request iterators merged into one id-ordered iterator.
 struct MergeById<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> {
+    newest_first: bool,
     live: std::iter::Peekable<L>,
     archived: std::iter::Peekable<A>,
 }
@@ -345,7 +380,9 @@ impl<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> Itera
 
     fn next(&mut self) -> Option<&'a Request> {
         match (self.live.peek(), self.archived.peek()) {
-            (Some(live), Some(archived)) if archived.id < live.id => self.archived.next(),
+            (Some(live), Some(archived)) if (archived.id < live.id) != self.newest_first => {
+                self.archived.next()
+            }
             (Some(_), _) => self.live.next(),
             (None, _) => self.archived.next(),
         }

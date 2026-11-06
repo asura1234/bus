@@ -1,7 +1,7 @@
 //! Room history, composer, search and recipient views.
 use super::super::{
     chat_search::{find_matches, ChatSearch},
-    history::{Line, Tone},
+    history::{History, Line, SearchAnchor, Tone},
     links::{visible_links, Candidate},
     recipients::Layout as RecipientLayout,
     thumbnails::Placement,
@@ -11,7 +11,7 @@ use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::message_name_color;
 use super::text::{display, wrap};
 use super::{Action, Hit, View, ACCENT, GREY};
-use crate::messaging::model::{Room, RoomId};
+use crate::messaging::model::{BusState, Room, RoomHistoryFilters, RoomId};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -52,14 +52,30 @@ impl BusUi {
         let width = main.width.saturating_sub(4);
         let title = self.composer_title(room.id);
         let recipients = self.recipient_layout(local, width);
-        let chat_search = self.chat_search.clone();
         let layout = self.composer_layout(view, main, local, &recipients);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
-        let history_y = self.room_header(view, main, room, layout);
+        let filters = self.effective_history_filters(room.id).unwrap_or_default();
+        let history_y = self.room_header(view, main, room, layout, filters);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
+        let search_anchor = SearchAnchor::capture(
+            &self.history,
+            &self.snapshot.state,
+            self.chat_search
+                .as_ref()
+                .filter(|search| !search.jump_to_newest)
+                .map(|search| search.current),
+            &self.view.search_matches,
+            usize::from(self.view.history.height),
+            self.main_scroll,
+        );
         let visible_anchor = self.visible_history_anchor();
+        // A page that fits the viewport can be at both the top and the tail.
+        // Loading older records must remain possible in that state.
+        if self.chat_search.is_some() || self.main_scroll < 80 {
+            self.history.load_older();
+        }
         let (snapshot, submissions) = self.history_projection();
         Self::request_room_history(
             &mut self.history,
@@ -68,6 +84,7 @@ impl BusUi {
             room.id,
             width,
             now,
+            filters,
             submissions,
         );
         if let Some(anchor) = visible_anchor {
@@ -82,27 +99,18 @@ impl BusUi {
             main.width,
             view.composer_box.y.saturating_sub(history_y),
         );
-        view.history_max_scroll = content
-            .len()
-            .saturating_sub(usize::from(view.history.height));
-        view.search_matches = chat_search
-            .as_ref()
-            .map(|search| find_matches(content, search))
-            .unwrap_or_default();
-        update_chat_search(
+        history_search_view(
+            &self.history,
+            &self.snapshot.state,
             &mut self.chat_search,
+            search_anchor,
             view,
             layout.x,
             width,
             &mut self.main_scroll,
             &mut self.history_follow_tail,
-            self.history.current_filters() == room.history_filters,
+            filters,
         );
-        self.main_scroll = if self.history_follow_tail {
-            view.history_max_scroll
-        } else {
-            self.main_scroll.min(view.history_max_scroll)
-        };
         view.history_text = Rect::new(layout.x, history_y, width, view.history.height);
         let visible = content
             .iter()
@@ -160,12 +168,21 @@ impl BusUi {
         room: RoomId,
         width: u16,
         now: u64,
+        filters: crate::messaging::model::RoomHistoryFilters,
         submissions: std::collections::BTreeMap<
             crate::messaging::model::PromptId,
             super::super::LocalSendStatus,
         >,
     ) {
-        history.request_lines_with_submissions(snapshot, room, width, now, thumbnails, submissions);
+        history.request_lines_with_submissions(
+            snapshot,
+            room,
+            width,
+            now,
+            thumbnails,
+            filters,
+            submissions,
+        );
     }
 
     /// The Ctrl+R recall search, which has no panel of its own.
@@ -235,7 +252,14 @@ impl BusUi {
         }
     }
 
-    fn room_header(&self, view: &mut View, main: Rect, room: &Room, layout: RoomLayout) -> u16 {
+    fn room_header(
+        &self,
+        view: &mut View,
+        main: Rect,
+        room: &Room,
+        layout: RoomLayout,
+        filters: crate::messaging::model::RoomHistoryFilters,
+    ) -> u16 {
         let RoomLayout {
             x,
             width,
@@ -254,18 +278,8 @@ impl BusUi {
         if composer_y > 3 {
             let filter_x = x + width.saturating_sub(24);
             for (offset, label, enabled, action) in [
-                (
-                    0,
-                    "* → You",
-                    room.history_filters.to_you,
-                    Action::ToggleToYou,
-                ),
-                (
-                    13,
-                    "You → *",
-                    room.history_filters.from_you,
-                    Action::ToggleFromYou,
-                ),
+                (0, "* → You", filters.to_you, Action::ToggleToYou),
+                (13, "You → *", filters.from_you, Action::ToggleFromYou),
             ] {
                 let rect = Rect::new(
                     filter_x + offset,
@@ -559,6 +573,56 @@ impl BusUi {
     }
 }
 
+fn history_search_view(
+    history: &History,
+    state: &BusState,
+    search: &mut Option<ChatSearch>,
+    anchor: Option<SearchAnchor>,
+    view: &mut View,
+    x: u16,
+    width: u16,
+    scroll: &mut usize,
+    follow_tail: &mut bool,
+    filters: RoomHistoryFilters,
+) {
+    view.history_max_scroll = history
+        .cached()
+        .len()
+        .saturating_sub(usize::from(view.history.height));
+    view.search_matches = search
+        .as_ref()
+        .map(|search| find_matches(history.cached(), search))
+        .unwrap_or_default();
+    if let Some(anchor) = anchor {
+        if let Some(index) = anchor.restore(
+            history,
+            state,
+            &view.search_matches,
+            usize::from(view.history.height),
+            scroll,
+        ) {
+            if let Some(search) = search.as_mut() {
+                search.current = index;
+            }
+        }
+    }
+    update_chat_search(
+        search,
+        view,
+        x,
+        width,
+        scroll,
+        follow_tail,
+        history.current_filters() == filters,
+        history.has_older(),
+    );
+    *scroll = if *follow_tail {
+        view.history_max_scroll
+    } else {
+        (*scroll).min(view.history_max_scroll)
+    };
+}
+
 pub(in crate::client::rooms) fn update_chat_search(
     chat_search: &mut Option<ChatSearch>,
     view: &mut View,
@@ -567,6 +631,7 @@ pub(in crate::client::rooms) fn update_chat_search(
     scroll: &mut usize,
     follow_tail: &mut bool,
     filters_current: bool,
+    has_older: bool,
 ) {
     if let Some(search) = chat_search.as_mut() {
         let count = view.search_matches.len();
@@ -574,7 +639,7 @@ pub(in crate::client::rooms) fn update_chat_search(
             search_panel(view, search, x, width, count);
             return;
         }
-        if search.jump_to_newest {
+        if search.jump_to_newest && (count > 0 || !has_older || search.query.is_empty()) {
             // A new query starts from the newest match, nearest the bottom.
             search.jump_to_newest = false;
             search.current = count.saturating_sub(1);
