@@ -60,8 +60,17 @@ impl ObservedSubmission {
                     editor.directory.clone(),
                     self.clock.remaining(self.hard_deadline),
                 )
-                .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-                self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)?;
+                .map_err(|error| {
+                    tracing::warn!(event = "bus.draft.exchange_wait", directory = %editor.directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
+                    io::Error::other(PromptNotShown::ComposerBusy)
+                })?;
+                self.restore_editor_transfer(
+                    &exchange,
+                    &editor.key,
+                    &editor.backspace,
+                    true,
+                    lease,
+                )?;
                 lease.restored();
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
@@ -198,7 +207,7 @@ impl ObservedSubmission {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        if let Err(error) = self.swap_key(key.clone(), false) {
+        if let Err(error) = self.swap_key(lease, key.clone(), false) {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
@@ -263,12 +272,22 @@ impl ObservedSubmission {
         result
     }
 
-    fn editor_handoff(&self, exchange: &Exchange, key: &Bytes) -> io::Result<()> {
-        self.swap_key(key.clone(), false)?;
+    fn editor_handoff(
+        &self,
+        exchange: &Exchange,
+        key: &Bytes,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
+        self.swap_key(lease, key.clone(), false)?;
         self.wait_transfer(|| exchange.acknowledged())
     }
 
-    fn swap_key(&self, key: Bytes, submit: bool) -> io::Result<()> {
+    fn swap_key(
+        &self,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        key: Bytes,
+        submit: bool,
+    ) -> io::Result<()> {
         let deadline = if submit {
             self.deadline.get()
         } else {
@@ -278,37 +297,39 @@ impl ObservedSubmission {
             .content_lock
             .lock()
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        let screen = self
-            .terminal
-            .active_ansi_if_complete()
-            .filter(|screen| self.inspect.submission_available(screen))
-            .ok_or_else(|| io::Error::other("Native input is blocked"))?;
-        if self.clock.now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Draft transfer expired",
-            ));
-        }
-        let key = if submit {
-            self.inspect.editor_submit_key(&screen, &key)
-        } else {
-            key
-        };
-        if submit {
-            self.diagnostics.enter(&key, self.clock.now());
-        }
-        let (text, enter) = if submit {
-            (Bytes::new(), key)
-        } else {
-            (key, Bytes::new())
-        };
-        let completion = self.io.queue_input_write_scoped(
-            text,
-            enter,
-            Duration::ZERO,
-            Some(deadline),
-            &self.scope,
-        )?;
+        let completion = lease.with_uninvalidated(|| {
+            let screen = self
+                .terminal
+                .active_ansi_if_complete()
+                .filter(|screen| self.inspect.submission_available(screen))
+                .ok_or_else(|| io::Error::other("Native input is blocked"))?;
+            if self.clock.now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Draft transfer expired",
+                ));
+            }
+            let key = if submit {
+                self.inspect.editor_submit_key(&screen, &key)
+            } else {
+                key
+            };
+            if submit {
+                self.diagnostics.enter(&key, self.clock.now());
+            }
+            let (text, enter) = if submit {
+                (Bytes::new(), key)
+            } else {
+                (key, Bytes::new())
+            };
+            self.io.queue_input_write_scoped(
+                text,
+                enter,
+                Duration::ZERO,
+                Some(deadline),
+                &self.scope,
+            )
+        })?;
         drop(guard);
         let result = completion
             .recv_timeout(self.clock.remaining(deadline))
@@ -321,7 +342,12 @@ impl ObservedSubmission {
         }
     }
 
-    fn remove_marker(&self, exchange: &Exchange, backspace: &Bytes) -> io::Result<()> {
+    fn remove_marker(
+        &self,
+        exchange: &Exchange,
+        backspace: &Bytes,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
         self.wait_transfer(|| {
             Ok(self
                 .inspect
@@ -331,7 +357,7 @@ impl ObservedSubmission {
         for _ in exchange.marker().bytes() {
             keys.extend_from_slice(backspace);
         }
-        self.swap_key(Bytes::from(keys), false)?;
+        self.swap_key(lease, Bytes::from(keys), false)?;
         self.wait_transfer(|| {
             let screen = self.terminal.active_ansi();
             Ok(self.inspect.submission_available(&screen)
@@ -346,8 +372,9 @@ impl ObservedSubmission {
         exchange: &Exchange,
         key: &Bytes,
         backspace: &Bytes,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
-        self.restore_editor_transfer(exchange, key, backspace, false)
+        self.restore_editor_transfer(exchange, key, backspace, false, lease)
     }
 
     fn restore_editor_transfer(
@@ -356,6 +383,7 @@ impl ObservedSubmission {
         key: &Bytes,
         backspace: &Bytes,
         requested: bool,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
         // A failed Bus withdrawal can leave an owned or edited prompt behind.
         // Retain the recovery file instead of replacing or merging that input.
@@ -367,13 +395,13 @@ impl ObservedSubmission {
         if !requested {
             exchange.request_restore()?;
         }
-        self.editor_handoff(exchange, key)?;
-        self.remove_marker(exchange, backspace)?;
+        self.editor_handoff(exchange, key, lease)?;
+        self.remove_marker(exchange, backspace, lease)?;
         // A native editor round-trip is the authoritative exact read, including
         // offscreen text, tabs and trailing whitespace that a screen cannot show.
         exchange.request_verify()?;
-        self.editor_handoff(exchange, key)?;
-        self.remove_marker(exchange, backspace)?;
+        self.editor_handoff(exchange, key, lease)?;
+        self.remove_marker(exchange, backspace, lease)?;
         exchange.remove_recovery()
     }
 
@@ -400,8 +428,8 @@ impl ObservedSubmission {
             .request_swap(&editor.text)
             .inspect_err(|_| lease.restored())?;
         let captured = self
-            .editor_handoff(&exchange, &key)
-            .and_then(|()| self.remove_marker(&exchange, &backspace));
+            .editor_handoff(&exchange, &key, lease)
+            .and_then(|()| self.remove_marker(&exchange, &backspace, lease));
         if let Err(error) = captured {
             if !Exchange::has_preserved_draft(exchange.path()) {
                 lease.restored();
@@ -417,14 +445,16 @@ impl ObservedSubmission {
             bytes = editor.text.len(), "Bus input installed through native editor");
         self.reset_confirmation(delay);
         let result = self
-            .swap_key(self.enter.clone(), true)
+            .swap_key(lease, self.enter.clone(), true)
             .and_then(|()| self.wait_for_consumption());
         let restoration = if result.is_err() {
             exchange
                 .request_restore_after_attempt(&editor.text)
-                .and_then(|()| self.restore_editor_transfer(&exchange, &key, &backspace, true))
+                .and_then(|()| {
+                    self.restore_editor_transfer(&exchange, &key, &backspace, true, lease)
+                })
         } else {
-            self.restore_editor(&exchange, &key, &backspace)
+            self.restore_editor(&exchange, &key, &backspace, lease)
         };
         match restoration {
             Ok(()) => lease.restored(),
