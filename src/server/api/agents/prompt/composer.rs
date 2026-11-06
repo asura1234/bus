@@ -7,6 +7,50 @@ mod diagnostics;
 mod ownership;
 mod preservation;
 
+/// The final submission guard asks only whether native input is available.
+/// It never compares the rendered body with the message Bus just wrote.
+fn submission_available(kind: AgentKind, screen: &str) -> bool {
+    let plain = screen
+        .lines()
+        .map(|line| {
+            styled_chars(line)
+                .iter()
+                .map(|c| c.character)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detected = crate::agents::manifest::detect_with_osc(
+        kind,
+        crate::agents::manifest::DetectionInput {
+            screen: &plain,
+            osc_title: "",
+            osc_progress: "",
+        },
+    );
+    !detected.visible_blocker
+        && !crate::terminal::driver::has_input_controls(&plain)
+        && input(kind, screen).is_some()
+}
+
+fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
+    if !submission_available(kind, screen) {
+        return false;
+    }
+    let Some(body) = input_since_launch(kind, screen, cursor, pristine) else {
+        return false;
+    };
+    body.is_empty()
+        || match kind {
+            AgentKind::Claude => {
+                preservation::default_claude_stash_binding()
+                    && !preservation::native_stash_present(screen)
+            }
+            AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi => !preservation::opaque(&body),
+            _ => false,
+        }
+}
+
 #[cfg(test)]
 pub(super) fn preserving_observer(
     kind: AgentKind,
@@ -119,29 +163,14 @@ pub(super) fn observe_since_launch(
 /// Provider chrome distinguishes editable numbered instructions from chooser
 /// rows, and an empty live composer from quoted blocker text in the transcript.
 fn composer_frame(kind: AgentKind, screen: &str) -> bool {
-    let lines: Vec<_> = screen.lines().map(str::trim).collect();
+    let lines: Vec<_> = screen.lines().map(str::to_owned).collect();
     let marker = match kind {
         AgentKind::Claude => '❯',
         AgentKind::Codex => '›',
         _ => return false,
     };
-    let Some(index) = lines.iter().rposition(|line| line.starts_with(marker)) else {
-        return false;
-    };
-    match kind {
-        AgentKind::Claude => {
-            index > 0
-                && lines[index - 1].starts_with('─')
-                && lines[index + 1..].iter().any(|line| line.starts_with('─'))
-        }
-        AgentKind::Codex => lines[index + 1..]
-            .iter()
-            .take_while(|line| !line.starts_with(['─', '╰', '└', '▀']))
-            .any(|line| {
-                line.starts_with("GPT-") || line.starts_with("gpt-") || *line == "? for shortcuts"
-            }),
-        _ => false,
-    }
+    crate::terminal::driver::editable_composer_region(&lines)
+        .is_some_and(|region| lines[region.start].trim_start().starts_with(marker))
 }
 
 /// Claude Code shows a pasted line that is one quoted image path as a leading

@@ -1,4 +1,4 @@
-//! Generic input-control evidence, never provider vocabulary or answer policy.
+//! Input-control evidence outside editable widgets, never answer policy.
 use super::Grid;
 use sha2::{Digest, Sha256};
 use std::ops::Range;
@@ -19,7 +19,7 @@ struct Controls {
 /// Opaque content identity. A pending answer shortcut can coexist with live
 /// activity; only foreground controls interrupt that activity.
 pub(crate) fn blocker(grid: &Grid, working: bool) -> Option<String> {
-    let rows = grid.rows_text();
+    let rows = outside_composer(grid.rows_text());
     let controls = controls(&rows)?;
     if working && controls.kind == ControlKind::Pending {
         return None;
@@ -54,8 +54,45 @@ pub(crate) fn has_input_controls(screen: &str) -> bool {
 }
 
 pub(crate) fn has_blocking_input_controls(screen: &str, working: bool) -> bool {
-    controls(&screen.lines().map(str::to_owned).collect::<Vec<_>>())
-        .is_some_and(|controls| !working || controls.kind == ControlKind::Foreground)
+    controls(&outside_composer(
+        screen.lines().map(str::to_owned).collect(),
+    ))
+    .is_some_and(|controls| !working || controls.kind == ControlKind::Foreground)
+}
+
+/// The same prompt/border/footer boundaries used by the composer reader.
+/// Editable rows cannot introduce controls or change a control fingerprint.
+pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> {
+    let start = rows
+        .iter()
+        .rposition(|row| plain(row).starts_with(['❯', '›', '>', '→']))?;
+    let border = |row: &str| row.starts_with(['─', '╭', '╰', '┌', '└', '▀']);
+    let footer = |row: &str| {
+        row.starts_with("GPT-")
+            || row.starts_with("gpt-")
+            || row.starts_with("? for")
+            || row.starts_with("/ commands")
+    };
+    let end = (start + 1..rows.len())
+        .find(|&index| border(plain(&rows[index])) || footer(plain(&rows[index])))?;
+    let framed = start > 0 && border(plain(&rows[start - 1])) && border(plain(&rows[end]));
+    (framed || footer(plain(&rows[end]))).then_some(start..end)
+}
+
+fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
+    if let Some(region) = editable_composer_region(&rows) {
+        // Keep the prompt as a boundary against older transcript controls.
+        if let Some((column, marker)) = rows[region.start]
+            .char_indices()
+            .find(|(_, ch)| matches!(ch, '❯' | '›' | '>' | '→'))
+        {
+            rows[region.start].truncate(column + marker.len_utf8());
+        }
+        for row in &mut rows[region.start + 1..region.end] {
+            row.clear();
+        }
+    }
+    rows
 }
 
 fn plain(row: &str) -> &str {

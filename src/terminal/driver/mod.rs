@@ -6,7 +6,9 @@ pub(crate) mod input;
 mod press;
 mod selection;
 
-pub(crate) use blocker::{blocker, has_blocking_input_controls, has_input_controls};
+pub(crate) use blocker::{
+    blocker, editable_composer_region, has_blocking_input_controls, has_input_controls,
+};
 pub(crate) use grid::Grid;
 pub(super) use press::DriverState;
 pub(crate) use press::{press, validate_press};

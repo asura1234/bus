@@ -51,14 +51,30 @@ impl ObservedSubmission {
         let pristine = self
             .startup_suggestion_open
             .load(std::sync::atomic::Ordering::Acquire);
-        if initial != InputObservation::Empty && self.inspect.editor_frame_readable(&screen) {
+        if self.inspect.submission_available(&screen) {
             if let Some(editor) = self
                 .inspect
                 .editor_submission()
-                .filter(|editor| Exchange::has_recoverable_draft(&editor.directory))
+                .filter(|editor| Exchange::has_preserved_draft(&editor.directory))
             {
+                let exchange = Exchange::begin_restoration(
+                    editor.directory.clone(),
+                    self.clock.remaining(self.hard_deadline),
+                )
+                .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+                self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)?;
+                lease.restored();
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
+        }
+        if initial != InputObservation::Empty && self.inspect.editor_frame_readable(&screen) {
+            if let Some(editor) = self.inspect.editor_submission().filter(|editor| {
+                editor.verification_error.is_some()
+                    && Exchange::has_recoverable_draft(&editor.directory)
+            }) {
                 self.recover_editor_draft(&editor, &screen, lease)?;
-                return self.submit_through_editor(editor, delay, lease);
+                lease.restored();
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
         }
         let preservation = self
@@ -66,43 +82,38 @@ impl ObservedSubmission {
             .draft_preservation_since_launch(&screen, cursor, pristine);
         match initial {
             InputObservation::Empty if preservation.is_none() => {
-                if let Some(editor) = self.inspect.editor_submission() {
-                    return self.submit_through_editor(editor, delay, lease);
+                if self.inspect.always_use_editor() {
+                    if let Some(editor) = self.inspect.editor_submission() {
+                        return self.preserve_editor(
+                            text,
+                            delay,
+                            editor.key,
+                            editor.backspace,
+                            editor.directory,
+                            lease,
+                        );
+                    }
                 }
                 let result = self.run(text, delay, Some(lease), None);
-                if self
-                    .inspect
-                    .native_draft_restored(&self.terminal.active_ansi())
-                    || matches!(
-                        self.observe("input_replay_preflight"),
-                        InputObservation::Empty | InputObservation::Accepted
-                    )
-                {
+                if result.is_ok() {
                     lease.restored();
                 }
                 return result;
             }
             InputObservation::Empty | InputObservation::Other | InputObservation::Pending => {}
-            _ => {
+            _ if preservation.is_none() || !self.inspect.submission_available(&screen) => {
                 lease.restored();
                 return self.run(text, delay, Some(lease), None);
             }
+            _ => {}
         }
         let Some(preservation) = preservation else {
             lease.restored();
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         };
-        // This lock is also held by the render task. Never act on a changed
-        // frame, including a dialog that appeared after the first inspection.
-        let guard = self
-            .content_lock
-            .lock()
-            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        if self.terminal.active_ansi() != screen {
-            lease.restored();
-            return Err(io::Error::other(PromptNotShown::ComposerBusy));
-        }
-        drop(guard);
+        // The lease buffers incoming developer keys. Each native editing key
+        // checks the current blocker independently; transcript animation need
+        // not keep the initial screen byte-identical.
         match preservation {
             DraftPreservation::Hold => {
                 lease.restored();
@@ -189,7 +200,7 @@ impl ObservedSubmission {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        if let Err(error) = self.transfer_key(key.clone()) {
+        if let Err(error) = self.swap_key(key.clone(), false) {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
@@ -206,6 +217,16 @@ impl ObservedSubmission {
         }
         self.reset_confirmation(delay);
         let result = self.run(text, delay, Some(lease), None);
+        if result.is_ok() {
+            if let Err(error) = self.wait_transfer(|| {
+                Ok(self
+                    .inspect
+                    .native_draft_restored(&self.terminal.active_ansi()))
+            }) {
+                self.recovery_log(&exchange, &error);
+                return Err(error);
+            }
+        }
         // Native stash pops at the next submit. On an unsubmitted attempt,
         // restore only into an empty composer; never toggle over another draft.
         if !self
@@ -245,8 +266,54 @@ impl ObservedSubmission {
     }
 
     fn editor_handoff(&self, exchange: &Exchange, key: &Bytes) -> io::Result<()> {
-        self.transfer_key(key.clone())?;
+        self.swap_key(key.clone(), false)?;
         self.wait_transfer(|| exchange.acknowledged())
+    }
+
+    fn swap_key(&self, key: Bytes, submit: bool) -> io::Result<()> {
+        let deadline = if submit {
+            self.deadline.get()
+        } else {
+            self.hard_deadline
+        };
+        let guard = self
+            .content_lock
+            .lock()
+            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+        let screen = self
+            .terminal
+            .active_ansi_if_complete()
+            .filter(|screen| self.inspect.submission_available(screen))
+            .ok_or_else(|| io::Error::other("Native input is blocked"))?;
+        if self.clock.now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Draft transfer expired",
+            ));
+        }
+        let key = if submit {
+            self.inspect.editor_submit_key(&screen, &key)
+        } else {
+            key
+        };
+        if submit {
+            self.diagnostics.enter(&key, self.clock.now());
+        }
+        let completion = self.io.queue_input_write_scoped(
+            key,
+            Bytes::new(),
+            Duration::ZERO,
+            Some(deadline),
+            &self.scope,
+        )?;
+        drop(guard);
+        let result = completion
+            .recv_timeout(self.clock.remaining(deadline))
+            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+        if submit {
+            self.diagnostics.entered(&result, self.clock.now());
+        }
+        result
     }
 
     pub(super) fn verify_clipped_input(
@@ -516,11 +583,13 @@ impl ObservedSubmission {
         for _ in exchange.marker().bytes() {
             keys.extend_from_slice(backspace);
         }
-        self.transfer_key(Bytes::from(keys))?;
+        self.swap_key(Bytes::from(keys), false)?;
         self.wait_transfer(|| {
-            Ok(!self
-                .inspect
-                .restoration_marker_visible(&self.terminal.active_ansi(), exchange.marker()))
+            let screen = self.terminal.active_ansi();
+            Ok(self.inspect.submission_available(&screen)
+                && !self
+                    .inspect
+                    .restoration_marker_visible(&screen, exchange.marker()))
         })
     }
 
@@ -530,14 +599,26 @@ impl ObservedSubmission {
         key: &Bytes,
         backspace: &Bytes,
     ) -> io::Result<()> {
+        self.restore_editor_transfer(exchange, key, backspace, false)
+    }
+
+    fn restore_editor_transfer(
+        &self,
+        exchange: &Exchange,
+        key: &Bytes,
+        backspace: &Bytes,
+        requested: bool,
+    ) -> io::Result<()> {
         // A failed Bus withdrawal can leave an owned or edited prompt behind.
         // Retain the recovery file instead of replacing or merging that input.
-        if self.observe("editor_restore_preflight") != InputObservation::Empty {
+        if !requested && self.observe("editor_restore_preflight") != InputObservation::Empty {
             return Err(io::Error::other(
                 "Composer changed; saved draft was not merged",
             ));
         }
-        exchange.request_restore()?;
+        if !requested {
+            exchange.request_restore()?;
+        }
         self.editor_handoff(exchange, key)?;
         self.remove_marker(exchange, backspace)?;
         // A native editor round-trip is the authoritative exact read, including
@@ -550,30 +631,54 @@ impl ObservedSubmission {
 
     fn preserve_editor(
         &self,
-        text: Bytes,
+        _text: Bytes,
         delay: Duration,
         key: Bytes,
         backspace: Bytes,
         directory: PathBuf,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
-        let exchange = self.exchange(directory).inspect_err(|_| lease.restored())?;
+        let editor = self
+            .inspect
+            .editor_submission()
+            .ok_or_else(|| io::Error::other("Native editor input is unavailable"))?;
+        let exchange =
+            Exchange::begin_preserving(directory.clone(), self.clock.remaining(self.hard_deadline))
+                .map_err(|error| {
+                    tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
+                    io::Error::other(PromptNotShown::ComposerBusy)
+                })
+                .inspect_err(|_| lease.restored())?;
         exchange
-            .request_capture()
+            .request_swap(&editor.text)
             .inspect_err(|_| lease.restored())?;
-        let captured = self.editor_handoff(&exchange, &key).and_then(|()| {
-            exchange.captured_text()?;
-            self.wait_transfer(|| Ok(self.observe("await_editor_clear") == InputObservation::Empty))
-        });
+        let captured = self
+            .editor_handoff(&exchange, &key)
+            .and_then(|()| self.remove_marker(&exchange, &backspace));
         if let Err(error) = captured {
+            if !Exchange::has_preserved_draft(exchange.path()) {
+                lease.restored();
+            }
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, Some(lease), Some(&exchange));
-        match self.restore_editor(&exchange, &key, &backspace) {
+        let result = self
+            .swap_key(self.enter.clone(), true)
+            .and_then(|()| self.wait_for_consumption(false));
+        let restoration = if result.is_err() {
+            exchange
+                .request_restore_after_attempt(&editor.text)
+                .and_then(|()| self.restore_editor_transfer(&exchange, &key, &backspace, true))
+        } else {
+            self.restore_editor(&exchange, &key, &backspace)
+        };
+        match restoration {
             Ok(()) => lease.restored(),
-            Err(error) => self.recovery_log(&exchange, &error),
+            Err(error) => {
+                self.recovery_log(&exchange, &error);
+                return Err(error);
+            }
         }
         result
     }
