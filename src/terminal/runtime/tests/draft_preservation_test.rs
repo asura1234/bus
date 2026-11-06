@@ -52,7 +52,6 @@ impl SubmissionInspector for Preserver {
             directory: self.directory.clone(),
             key: Bytes::from_static(b"\x07"),
             backspace: Bytes::from_static(b"\x7f"),
-            verification_error: None,
         })
     }
 }

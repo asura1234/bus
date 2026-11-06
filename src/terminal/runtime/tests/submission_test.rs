@@ -198,7 +198,6 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         inspect: Box::new(move |_: &str| {
             match seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
                 0..=2 => InputObservation::Empty,
-                3 | 4 => InputObservation::Pending,
                 _ => {
                     observed_clock.pause();
                     observed_clock.advance(
@@ -214,11 +213,19 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
         deadline: std::cell::Cell::new(deadline),
         hard_deadline: deadline + Duration::from_secs(1),
         withdraw_grace: WITHDRAW_GRACE,
-        clock,
+        clock: clock.clone(),
         diagnostics: Default::default(),
         startup_suggestion_open: runtime.startup_suggestion_open.clone(),
     };
-    let result = submission.run(Bytes::from_static(b"hello"), Duration::ZERO, None, None);
+    // Editor preservation still awaits consumption after its one guarded submit.
+    let result = submission
+        .run(Bytes::from_static(b"hello"), Duration::ZERO)
+        .and_then(|()| submission.wait_for_consumption());
+    assert!(
+        clock.now() > deadline,
+        "the acceptance observation crossed the deadline"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
     assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"hello"));
     assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
     assert!(writes.try_recv().is_err(), "one paste and one Enter only");
@@ -231,88 +238,6 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
             .startup_suggestion_open
             .load(std::sync::atomic::Ordering::Acquire),
         "a successful prompt paste closes the fresh-launch placeholder"
-    );
-}
-
-#[tokio::test]
-async fn an_owned_draft_edited_before_first_enter_is_preserved() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
-    let clock = runtime.test_submission_clock().unwrap();
-    clock.pause();
-    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
-    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
-    let first_owned = AtomicBool::new(true);
-    let completion = runtime
-        .queue_observed_input_submission(
-            Bytes::from_static(b"owned draft"),
-            Bytes::from_static(b"\r"),
-            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
-            Duration::ZERO,
-            None,
-            move |screen| {
-                if screen.contains("owned draft + developer edit") {
-                    InputObservation::Other
-                } else if screen.contains("owned draft") {
-                    if first_owned.swap(false, Ordering::SeqCst) {
-                        seen_tx.send(()).unwrap();
-                        resume_rx
-                            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
-                            .unwrap();
-                    }
-                    InputObservation::Pending
-                } else {
-                    InputObservation::Empty
-                }
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        writes.recv().await.unwrap(),
-        Bytes::from_static(b"owned draft")
-    );
-    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned draft");
-    seen_rx
-        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
-        .unwrap();
-    // Ownership was established; a developer edits before the first Enter.
-    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned draft + developer edit");
-    clock.advance(Duration::from_millis(2100));
-    resume_tx.send(()).unwrap();
-    let mut result = tokio::task::spawn_blocking(move || {
-        completion
-            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
-            .unwrap()
-    });
-    let (error, destructive) = tokio::select! {
-        result = &mut result => (result.unwrap().unwrap_err(), None),
-        key = writes.recv() => {
-            // Let the bad implementation terminate before asserting its write.
-            clock.advance(Duration::from_secs(2));
-            (result.await.unwrap().unwrap_err(), key)
-        }
-    };
-    assert_eq!(
-        destructive, None,
-        "cleanup must not edit input after ownership is lost"
-    );
-    assert!(
-        !PromptNotShown::is(&error),
-        "changed input is unsafe to replay: {error}"
-    );
-    for detail in ["draft was left", "edited", "transcript", "before resending"] {
-        assert!(
-            error.to_string().contains(detail),
-            "missing {detail}: {error}"
-        );
-    }
-    assert!(runtime
-        .terminal
-        .visible_ansi()
-        .contains("owned draft + developer edit"));
-    assert!(
-        writes.try_recv().is_err(),
-        "no Enter or destructive clear keys"
     );
 }
 

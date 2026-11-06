@@ -45,6 +45,7 @@ async fn input_or_result(
     result: &mut tokio::task::JoinHandle<std::io::Result<()>>,
 ) -> Bytes {
     tokio::select! {
+        biased;
         write = writes.recv() => write.expect("input channel closed"),
         result = result => panic!("later message refused instead of recovering the late own paste: {result:?}"),
     }
@@ -60,13 +61,13 @@ async fn uncertain(
 ) {
     let clock = runtime.test_submission_clock().unwrap();
     let deadline = under_load.then(|| clock.now() + Duration::from_millis(1400));
+    let release = clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
     let result = send(runtime, kind, text, deadline);
     let paste = tokio::time::timeout(WAIT, writes.recv())
         .await
         .unwrap()
         .unwrap();
     assert!(paste.starts_with(b"\x1b[200~"));
-    clock.wait_for_draft_wait();
     if let Some(partial) = partial {
         show(runtime, kind, partial);
     }
@@ -75,6 +76,7 @@ async fn uncertain(
     } else {
         Duration::from_secs(3)
     });
+    release.send(()).unwrap();
     let error = result.recv_timeout(WAIT).unwrap().unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
@@ -308,16 +310,17 @@ async fn a_render_that_completes_before_the_deadline_submits_normally() {
         show(&runtime, kind, "");
         let clock = runtime.test_submission_clock().unwrap();
         clock.pause();
+        let release = clock.hold_next_write_completion();
         let completion = send(&runtime, kind, "old message", None);
         let mut result =
             tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap());
         assert!(input_or_result(&mut writes, &mut result)
             .await
             .starts_with(b"\x1b[200~"));
-        clock.wait_for_draft_wait();
         show(&runtime, kind, "old");
         clock.advance(Duration::from_millis(100));
         show(&runtime, kind, "old message");
+        release.send(()).unwrap();
         assert_eq!(
             input_or_result(&mut writes, &mut result).await.as_ref(),
             b"\r"

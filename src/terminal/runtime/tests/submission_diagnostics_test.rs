@@ -89,9 +89,6 @@ async fn submission_diagnostics_record_attempts_without_prompt_or_screen_content
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[HSECRET_DIAGNOSTIC_PROMPT");
     assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\r"));
     clock.wait_for_enters(1);
-    clock.advance(Duration::from_millis(250));
-    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\r"));
-    clock.wait_for_enters(2);
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
     completion
         .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
@@ -102,9 +99,9 @@ async fn submission_diagnostics_record_attempts_without_prompt_or_screen_content
         "bus.terminal.submission.summary",
         "diagnostic-api",
         "scratch-pane",
-        "enter_attempts=2",
-        "enter_flushed=2",
-        "owned_seen=true",
+        "enter_attempts=1",
+        "enter_flushed=1",
+        "owned_seen=false",
         "paste_flushed=true",
         "final_observation=Some(Empty)",
     ] {

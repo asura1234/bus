@@ -1,6 +1,7 @@
 use super::*;
+use crate::terminal::runtime::{InputObservation, PromptNotShown};
 
-async fn write_or_done<T: std::fmt::Debug>(
+pub(super) async fn write_or_done<T: std::fmt::Debug>(
     writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
     response: &mut (
         impl std::future::Future<Output = Result<T, tokio::task::JoinError>> + Unpin,
@@ -26,26 +27,82 @@ async fn write_or_done<T: std::fmt::Debug>(
     }
 }
 
+pub(super) async fn finish_response<T>(
+    response: (
+        impl std::future::Future<Output = Result<T, tokio::task::JoinError>>,
+        Option<T>,
+    ),
+) -> T {
+    match response {
+        (_, Some(result)) => result,
+        (response, None) => response.await.unwrap(),
+    }
+}
+
+pub(super) async fn fail_custom_enter_receipt(
+    app: &mut App,
+    method: Method,
+    text: &str,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    render: impl FnOnce(&App),
+) -> String {
+    let native_clock = clock(app);
+    let paste_receipt = native_clock.hold_next_write_completion();
+    let response = start(app, method);
+    assert_eq!(
+        next_write(writes).await,
+        Bytes::from(format!("\x1b[200~{text}\x1b[201~"))
+    );
+    render(app);
+    let enter_receipt = native_clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next_write(writes).await, Bytes::from_static(b"\r"));
+    enter_receipt.send(()).unwrap();
+    let reply = response.recv_timeout(WAIT).unwrap();
+    assert!(reply.contains("timeout"), "{reply}");
+    assert!(
+        !reply.contains("agent_prompted"),
+        "lost Enter receipt is not acceptance: {reply}"
+    );
+    assert!(
+        !reply.contains("agent_prompt_not_shown"),
+        "Enter may have run: {reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "one paste and one Enter; no automatic cleanup or replay"
+    );
+    reply
+}
+
+fn native_screen(app: &App) -> String {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane).unwrap().visible_ansi()
+}
+
 async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
-    let expiry = confirmation_expiry(&method);
     let Method::AgentPromptIfIdle(mut params) = method else {
         unreachable!()
     };
-    params.text = "header\nmiddle words\nlast".into();
-    let response = start(&mut app, Method::AgentPromptIfIdle(params));
+    const TEXT: &str = "header\nmiddle words\nlast";
+    params.text = TEXT.into();
+    let old_reply = fail_custom_enter_receipt(
+        &mut app,
+        Method::AgentPromptIfIdle(params),
+        TEXT,
+        &mut writes,
+        |app| {
+            redraw(app, AgentKind::Codex, "header\r\n  middle words\r\n  last");
+        },
+    )
+    .await;
+    // A fresh lease recovers the old uncertain paste, then deliberately refuses new input.
+    let completion = recovery_without_new_input(&app, None);
     let mut response = (
-        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap()),
         None,
     );
-    assert_eq!(
-        next_write(&mut writes).await,
-        Bytes::from_static(b"\x1b[200~header\nmiddle words\nlast\x1b[201~")
-    );
-    redraw(&app, AgentKind::Codex, "header\r\n  middle words\r\n  last");
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock(&app).wait_for_enters(1);
-    clock(&app).advance(expiry);
     assert_eq!(
         write_or_done(&mut writes, &mut response).await.unwrap(),
         Bytes::from_static(b"\x01")
@@ -57,8 +114,9 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
     );
     if let Some(edit) = edit_after_first_kill {
         redraw(&app, AgentKind::Codex, edit);
-        let reply = match write_or_done(&mut writes, &mut response).await {
-            Err(reply) => reply,
+        let saved = native_screen(&app);
+        let result = match write_or_done(&mut writes, &mut response).await {
+            Err(result) => result,
             Ok(key) => {
                 clock(&app).advance(Duration::from_secs(2));
                 if response.1.is_none() {
@@ -67,15 +125,23 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
                 panic!("cleanup sent {key:?} after a developer edit");
             }
         };
-        assert!(reply.contains("could not be safely cleared"), "{reply}");
+        let error = result.unwrap_err();
+        assert!(
+            PromptNotShown::composer_busy(&error),
+            "old cleanup must refuse a foreign edit: {error}"
+        );
+        assert_eq!(
+            native_screen(&app),
+            saved,
+            "the exact edited native frame must remain unchanged"
+        );
         assert!(
             writes.try_recv().is_err(),
             "never delete or submit a developer edit"
         );
         return;
     }
-    // These are the provider's line-editing effects, including Ctrl+U joining
-    // an empty last line to the preceding line. Each key is a separate event.
+    // Independent line-local editor, including Ctrl+U joining the empty final line.
     redraw(&app, AgentKind::Codex, "header\r\n  middle words");
     for (key, remaining) in [
         (b"\x15".as_slice(), "header\r\n  middle words"),
@@ -94,19 +160,22 @@ async fn withdraw_inline_draft(edit_after_first_kill: Option<&str>) {
         );
         redraw(&app, AgentKind::Codex, remaining);
     }
-    let reply = response.0.await.unwrap();
-    assert!(reply.contains("remaining draft was cleared"), "{reply}");
+    let error = finish_response(response).await.unwrap_err();
     assert!(
-        !reply.contains("agent_prompted"),
-        "clearing is not acceptance: {reply}"
+        PromptNotShown::is(&error) && !PromptNotShown::composer_busy(&error),
+        "old recovery finished; only the fresh unavailable input is refused: {error}"
     );
     assert!(
-        !reply.contains("agent_prompt_not_shown"),
-        "Enter may have run: {reply}"
+        !native_screen(&app).contains("header"),
+        "no old multiline fragment remains"
+    );
+    assert!(
+        !old_reply.contains("agent_prompted") && !old_reply.contains("agent_prompt_not_shown"),
+        "clearing later does not erase old Enter uncertainty: {old_reply}"
     );
     assert!(
         writes.try_recv().is_err(),
-        "one paste, one Enter, no replay"
+        "one old paste/Enter; no new input or replay"
     );
 }
 
@@ -173,27 +242,27 @@ fn paint_grok(app: &App, lines: &[&str]) {
 
 async fn withdraw_grok_owned_draft(edit_after_first_kill: Option<&[&str]>) {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Grok, true, "");
-    // The shared fixture paints a Codex prompt. Replace it before Bus looks,
-    // or Grok refuses the foreign frame and never types.
     paint_grok(&app, &[]);
-    let expiry = confirmation_expiry(&method);
     let Method::AgentPromptIfIdle(mut params) = method else {
         unreachable!()
     };
-    params.text = "header\nmiddle words\nlast".into();
-    let response = start(&mut app, Method::AgentPromptIfIdle(params));
+    const TEXT: &str = "header\nmiddle words\nlast";
+    params.text = TEXT.into();
+    let old_reply = fail_custom_enter_receipt(
+        &mut app,
+        Method::AgentPromptIfIdle(params),
+        TEXT,
+        &mut writes,
+        |app| {
+            paint_grok(app, &["header", "middle words", "last"]);
+        },
+    )
+    .await;
+    let completion = recovery_without_new_input(&app, None);
     let mut response = (
-        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap()),
         None,
     );
-    assert_eq!(
-        next_write(&mut writes).await,
-        Bytes::from_static(b"\x1b[200~header\nmiddle words\nlast\x1b[201~")
-    );
-    paint_grok(&app, &["header", "middle words", "last"]);
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock(&app).wait_for_enters(1);
-    clock(&app).advance(expiry);
     assert_eq!(
         write_or_done(&mut writes, &mut response).await.unwrap(),
         Bytes::from_static(b"\x01")
@@ -205,8 +274,9 @@ async fn withdraw_grok_owned_draft(edit_after_first_kill: Option<&[&str]>) {
     );
     if let Some(edit) = edit_after_first_kill {
         paint_grok(&app, edit);
-        let reply = match write_or_done(&mut writes, &mut response).await {
-            Err(reply) => reply,
+        let saved = native_screen(&app);
+        let result = match write_or_done(&mut writes, &mut response).await {
+            Err(result) => result,
             Ok(key) => {
                 clock(&app).advance(Duration::from_secs(2));
                 if response.1.is_none() {
@@ -215,7 +285,16 @@ async fn withdraw_grok_owned_draft(edit_after_first_kill: Option<&[&str]>) {
                 panic!("cleanup sent {key:?} after a developer edit");
             }
         };
-        assert!(reply.contains("could not be safely cleared"), "{reply}");
+        let error = result.unwrap_err();
+        assert!(
+            PromptNotShown::composer_busy(&error),
+            "old cleanup must refuse a foreign edit: {error}"
+        );
+        assert_eq!(
+            native_screen(&app),
+            saved,
+            "the exact Grok edit must remain unchanged"
+        );
         assert!(
             writes.try_recv().is_err(),
             "never delete or submit a developer edit"
@@ -241,23 +320,22 @@ async fn withdraw_grok_owned_draft(edit_after_first_kill: Option<&[&str]>) {
         );
         paint_grok(&app, remaining);
     }
-    let reply = response.0.await.unwrap();
-    assert!(reply.contains("remaining draft was cleared"), "{reply}");
+    let error = finish_response(response).await.unwrap_err();
     assert!(
-        reply.contains("may have run"),
-        "an unconfirmed submit must be reported as failed: {reply}"
+        PromptNotShown::is(&error) && !PromptNotShown::composer_busy(&error),
+        "old recovery finished; fresh input remains unavailable: {error}"
     );
     assert!(
-        !reply.contains("agent_prompted"),
-        "clearing is not acceptance: {reply}"
+        !native_screen(&app).contains("header"),
+        "no old Grok line remains"
     );
     assert!(
-        !reply.contains("agent_prompt_not_shown"),
-        "Enter may have run: {reply}"
+        !old_reply.contains("agent_prompted") && !old_reply.contains("agent_prompt_not_shown"),
+        "clearing is not old-request acceptance or definite non-delivery: {old_reply}"
     );
     assert!(
         writes.try_recv().is_err(),
-        "one paste, one Enter, no replay"
+        "one old paste/Enter; no new input or replay"
     );
 }
 
@@ -315,23 +393,25 @@ async fn grok_queued_submission_is_accepted_instead_of_withdrawn() {
     );
 }
 
-/// The composer emptying after Enter is this module's acceptance signal.
-/// Seen before any cleanup key, it must not be reported as Bus clearing it.
+/// Acceptance in old pending-paste recovery stops cleanup without a clear key.
 #[tokio::test]
 async fn acceptance_seen_by_first_cleanup_check_is_not_reported_as_cleared() {
-    use crate::terminal::runtime::InputObservation;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
     for accepted in [InputObservation::Empty, InputObservation::Accepted] {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         let (app, _, mut writes) = provider_fixture(AgentKind::Claude, true, "");
-        let clock = clock(&app);
-        clock.pause();
-        let start_at = clock.now();
-        let observed_clock = clock.clone();
-        let expired_calls = AtomicUsize::new(0);
+        let native_clock = clock(&app);
+        native_clock.pause();
         let pane = app.state.workspaces[0].tabs[0].root_pane;
-        let completion = app
-            .lookup_runtime_sender(0, pane)
-            .unwrap()
+        let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+        let ready = Arc::new(AtomicBool::new(false));
+        let observed_ready = ready.clone();
+        let recovery_checks = Arc::new(AtomicUsize::new(0));
+        let observed_checks = recovery_checks.clone();
+        let paste_receipt = native_clock.hold_next_write_completion();
+        let completion = runtime
             .queue_observed_input_submission(
                 Bytes::from_static(b"PROBE"),
                 Bytes::from_static(b"\r"),
@@ -339,10 +419,8 @@ async fn acceptance_seen_by_first_cleanup_check_is_not_reported_as_cleared() {
                 Duration::ZERO,
                 None,
                 move |screen| {
-                    if observed_clock.now() >= start_at + Duration::from_millis(2000) {
-                        // First post-deadline check (confirm) still sees the
-                        // draft; the provider then accepts before cleanup looks.
-                        if expired_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    if observed_ready.load(Ordering::SeqCst) {
+                        if observed_checks.fetch_add(1, Ordering::SeqCst) == 0 {
                             InputObservation::Pending
                         } else {
                             accepted
@@ -356,29 +434,43 @@ async fn acceptance_seen_by_first_cleanup_check_is_not_reported_as_cleared() {
             )
             .unwrap();
         assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"PROBE"));
-        app.lookup_runtime_sender(0, pane)
-            .unwrap()
-            .test_process_pty_bytes(b"\x1b[2J\x1b[HPROBE");
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[HPROBE");
+        let enter_receipt = native_clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
+        paste_receipt.send(()).unwrap();
         assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-        clock.wait_for_enters(1);
-        clock.advance(Duration::from_millis(2100));
-        let result = completion.recv_timeout(WAIT).unwrap();
-        assert!(writes.try_recv().is_err(), "no cleanup key was sent");
+        enter_receipt.send(()).unwrap();
+        let old_error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
         assert!(
-            result.is_ok(),
-            "composer emptied after Enter with no Bus clear key, yet reported: {result:?}"
+            !PromptNotShown::is(&old_error),
+            "old Enter remains uncertain: {old_error}"
+        );
+        ready.store(true, Ordering::SeqCst);
+        let recovery = recovery_without_new_input(&app, None);
+        let error = recovery.recv_timeout(WAIT).unwrap().unwrap_err();
+        assert!(
+            PromptNotShown::is(&error) && !PromptNotShown::composer_busy(&error),
+            "accepted old work is resolved before refusing fresh input: {error}"
+        );
+        assert_eq!(
+            recovery_checks.load(Ordering::SeqCst),
+            2,
+            "recovery first saw Pending, then clear_step observed acceptance"
+        );
+        assert!(
+            writes.try_recv().is_err(),
+            "no cleanup key, old replay or fresh input after acceptance"
         );
     }
 }
 
 #[tokio::test]
 async fn positive_acceptance_during_withdrawal_stops_further_clear_keys() {
-    use crate::terminal::runtime::InputObservation;
     let (app, _, mut writes) = provider_fixture(AgentKind::Claude, true, "");
-    let clock = clock(&app);
-    clock.pause();
+    let native_clock = clock(&app);
+    native_clock.pause();
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    let paste_receipt = native_clock.hold_next_write_completion();
     let completion = runtime
         .queue_observed_input_submission(
             Bytes::from_static(b"BRIEF"),
@@ -399,18 +491,26 @@ async fn positive_acceptance_during_withdrawal_stops_further_clear_keys() {
         .unwrap();
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"BRIEF"));
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[HBRIEF");
+    let enter_receipt = native_clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
+    paste_receipt.send(()).unwrap();
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock.wait_for_enters(1);
-    clock.advance(Duration::from_millis(2100));
+    enter_receipt.send(()).unwrap();
+    let old_error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(
+        !PromptNotShown::is(&old_error),
+        "old Enter remains uncertain: {old_error}"
+    );
+    let recovery = recovery_without_new_input(&app, None);
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[HWORKING");
+    let error = recovery.recv_timeout(WAIT).unwrap().unwrap_err();
     assert!(
-        completion.recv_timeout(WAIT).unwrap().is_ok(),
-        "a visible turn started"
+        PromptNotShown::is(&error) && !PromptNotShown::composer_busy(&error),
+        "old work resolves before fresh unavailable input: {error}"
     );
     assert!(
         writes.try_recv().is_err(),
-        "no cleanup key after acceptance"
+        "no cleanup key after acceptance, duplicate Enter or fresh paste"
     );
 }
 
@@ -435,6 +535,7 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
     let expiry = confirmation_expiry(&method);
     let hard_budget = crate::protocol::api::submission::method_budget(&method).unwrap();
     let render = |text: &str| text.trim_end_matches('\n').replace('\n', "\r\n  ");
+    let paste_receipt = clock(&app).fail_next_write_completion(std::io::ErrorKind::TimedOut);
     let response = start(&mut app, method);
     let started = clock(&app).now();
     let mut response = (
@@ -444,11 +545,10 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
     let paste = next_write(&mut writes).await;
     assert!(paste.starts_with(b"\x1b[200~item 01"));
     redraw(&app, AgentKind::Codex, &render(&text));
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock(&app).wait_for_enters(1);
     let mut acknowledge_key = clock(&app).hold_next_write_completion();
     clock(&app).advance(expiry);
     let withdrawal_started = clock(&app).now();
+    paste_receipt.send(()).unwrap();
     // Independent line-local fake editor; cursor starts at the end of paste.
     let mut cursor = text.len();
     let mut keys = 0;
@@ -511,8 +611,8 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
         assert!(!reply.contains("remaining draft was cleared"), "{reply}");
     } else {
         assert!(
-            reply.contains("remaining draft was cleared"),
-            "{keys} keys sent; left {:?}; reply={reply}",
+            reply.contains("agent_prompt_not_shown"),
+            "{keys} keys sent; clearing before any Enter is definite non-delivery; left {:?}; reply={reply}",
             render(&text)
         );
         assert!(
@@ -523,15 +623,11 @@ async fn long_inline_withdrawal(line_count: usize, separator: &str, ignore_keys:
             !reply.contains("agent_prompted"),
             "clearing is not acceptance: {reply}"
         );
-        assert!(
-            !reply.contains("agent_prompt_not_shown"),
-            "Enter may have run: {reply}"
-        );
     }
     assert!(clock(&app).now() <= started + hard_budget);
     assert!(
         writes.try_recv().is_err(),
-        "one paste/Enter and no keys after completion"
+        "one paste, no Enter and no keys after completion"
     );
 }
 
