@@ -4,6 +4,7 @@ use super::{
     io, launch, resume, schema, AgentId, BTreeMap, BusState, Duration, Path, PathBuf,
     ResponseResult, RoomAgent, RuntimeStatus, Worker,
 };
+use crate::messaging::model::DeliveryEpoch;
 
 impl Worker {
     pub(super) fn poll(&mut self) -> Result<Option<Vec<schema::AgentInfo>>, String> {
@@ -41,6 +42,9 @@ impl Worker {
             self.poll_failures = 0;
         }
         let mut state = self.state.clone();
+        // Retain the previous observation as legacy evidence until this poll's
+        // migrated state is durable; a failed save must not erase that boundary.
+        migrate_legacy_requests(&mut state, &infos, self.serving_generation)?;
         let mut rebound = Vec::new();
         let mut waits = Vec::new();
         let observed_agents: Vec<_> = self.state.agents().cloned().collect();
@@ -100,6 +104,9 @@ impl Worker {
         }
         self.directory_checks.poll(&mut state)?;
         self.apply_poll(state)?;
+        if let Some(generation) = infos.iter().map(|info| info.generation).max() {
+            self.serving_generation = generation;
+        }
         self.close_exited_terminals()?;
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
@@ -151,6 +158,56 @@ impl Worker {
         }
         self.apply_poll(state)
     }
+}
+
+fn migrate_legacy_requests(
+    state: &mut BusState,
+    infos: &[schema::AgentInfo],
+    generation: u64,
+) -> Result<(), String> {
+    let generation_advanced =
+        generation > 0 && infos.iter().any(|info| info.generation > generation);
+    let legacy: Vec<_> = state
+        .unsettled_requests()
+        .filter(|request| {
+            request.delivery_epoch.is_none()
+                && matches!(
+                    request.phase,
+                    super::RequestPhase::Submitting | super::RequestPhase::Active
+                )
+        })
+        .map(|request| (request.id, request.agent_id))
+        .collect();
+    for (id, agent) in legacy {
+        let owner = state.agent(agent).ok_or("Unknown legacy agent")?;
+        let info = polled_agent(state, owner, infos);
+        if info.is_none() && !generation_advanced {
+            continue;
+        }
+        let (Some(terminal), Some(pane)) = (
+            &owner.runtime_identity.terminal_id,
+            &owner.runtime_identity.pane_id,
+        ) else {
+            continue;
+        };
+        let epoch = DeliveryEpoch {
+            generation: if generation_advanced {
+                generation
+            } else if let Some(info) =
+                info.filter(|info| terminal == &info.terminal_id && pane == &info.pane_id)
+            {
+                info.generation
+            } else {
+                0
+            },
+            terminal_id: terminal.clone(),
+            pane_id: pane.clone(),
+        };
+        state
+            .stamp_delivery_epoch(id, epoch)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn rebind_agent(
