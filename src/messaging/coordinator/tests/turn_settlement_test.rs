@@ -3,6 +3,413 @@ use super::*;
 // The callback spool gets a bounded grace period after the first settled poll.
 const CALLBACK_GRACE_MS: u64 = crate::messaging::model::TURN_SETTLE_MS;
 
+fn reload(fixture: &mut Fixture) {
+    let placeholder = Worker::open(
+        fixture.dir.join("restart-placeholder"),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+}
+
+fn restart(fixture: &mut Fixture) {
+    reload(fixture);
+    fixture.worker.serving_generation = 2;
+}
+
+fn server_restart(fixture: &mut Fixture) {
+    let record = crate::utils::restart_record::RestartLog {
+        at_ms: fixture.now,
+        who: "user:restart-test".into(),
+        old_sha: "old".into(),
+        new_sha: "new".into(),
+        old_binary: "/old".into(),
+        new_binary: "/new".into(),
+        outcome: "restarted".into(),
+        reason: String::new(),
+    };
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::outcome_path(&fixture.dir),
+        &record,
+    )
+    .unwrap();
+    fixture.worker.announce_recorded_restart().unwrap();
+    fixture.worker.serving_generation = 2;
+}
+
+struct RestartLifecycleNative {
+    methods: Arc<Mutex<Vec<Method>>>,
+    info: schema::AgentInfo,
+}
+
+impl Transport for RestartLifecycleNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(&method, Method::AgentListWithDetectionContext(_)) {
+            self.methods.lock().unwrap().push(method);
+            return Ok(ResponseResult::AgentList {
+                agents: vec![self.info.clone()],
+            });
+        }
+        Native(self.methods.clone()).request(method)
+    }
+}
+
+fn restart_lifecycle_transport(fixture: &Fixture, rebind: bool) -> Box<dyn Transport> {
+    let kind = crate::messaging::identity::provider_kind(fixture.provider).label();
+    let info = serde_json::from_value(json!({
+        "generation": if rebind { 2 } else { fixture.worker.serving_generation },
+        "terminal_id": if rebind { "restored-terminal" } else { "terminal" },
+        "pane_id": if rebind { "restored-pane" } else { "pane" },
+        "name": crate::messaging::identity::managed_name(fixture.room, fixture.agent),
+        "agent": kind, "agent_status": "idle", "interactive_ready": true,
+        "workspace_id": "workspace", "tab_id": "tab", "focused": false, "revision": 1,
+        "agent_session": {"source": crate::messaging::identity::managed_source(fixture.provider),
+            "agent": kind, "kind": "id", "value": "session"}
+    }))
+    .unwrap();
+    Box::new(RestartLifecycleNative {
+        methods: fixture.native.clone(),
+        info,
+    })
+}
+
+fn restart_lifecycle_reopen(fixture: &mut Fixture, rebind: bool) {
+    let placeholder = Worker::open(
+        fixture.dir.join("lifecycle-placeholder"),
+        Box::new(Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        restart_lifecycle_transport(fixture, rebind),
+    )
+    .unwrap();
+}
+
+fn restart_lifecycle_receipt(fixture: &Fixture, outcome: &str) {
+    let record = crate::utils::restart_record::RestartLog {
+        at_ms: fixture.now,
+        who: "user:lifecycle".into(),
+        old_sha: "old".into(),
+        new_sha: "new".into(),
+        old_binary: "/old".into(),
+        new_binary: "/new".into(),
+        outcome: outcome.into(),
+        reason: String::new(),
+    };
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::outcome_path(&fixture.dir),
+        &record,
+    )
+    .unwrap();
+}
+
+#[test]
+fn restart_lifecycle_late_outcome_keeps_the_request_delivered_after_native_rebind() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let interrupted = fixture.send("in flight before whole-session restart", false);
+    fixture.deliver();
+    let queued = fixture.send(
+        "queued before restart, delivered by the resumed coordinator",
+        true,
+    );
+    restart_lifecycle_reopen(&mut fixture, true);
+    fixture.worker.tick().unwrap();
+    assert_eq!(fixture.request(interrupted).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Active);
+    restart_lifecycle_receipt(&fixture, "restarted");
+    fixture.worker.tick().unwrap();
+    assert_eq!(
+        fixture.request(queued).phase,
+        RequestPhase::Active,
+        "the health receipt describes the already-reconciled interruption, not work delivered by the replacement coordinator; reason={:?}",
+        fixture.request(queued).failure_reason
+    );
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+}
+
+#[test]
+fn restart_lifecycle_late_outcome_keeps_queued_work_without_a_loaded_current_request() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let queued = fixture.send(
+        "queued work delivered after resume with no old current request",
+        true,
+    );
+    restart_lifecycle_reopen(&mut fixture, true);
+    fixture.worker.tick().unwrap();
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Active);
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+    restart_lifecycle_receipt(&fixture, "restarted");
+    fixture.worker.tick().unwrap();
+    assert_eq!(
+        fixture.request(queued).phase,
+        RequestPhase::Active,
+        "an empty reopen request set contains no interrupted work; a late receipt must not capture newly delivered work; reason={:?}",
+        fixture.request(queued).failure_reason
+    );
+    assert_eq!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .current_request,
+        Some(queued)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_every_provider_queue()
+{
+    let mut failures = Vec::new();
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for server_only in [false, true] {
+            for start_bound in [false, true] {
+                let mut fixture = Fixture::new(provider);
+                if provider == Provider::Kimi {
+                    super::kimi_steering_tests::home(&fixture);
+                }
+                let interrupted = if start_bound {
+                    running(&mut fixture, "interrupted delivered request", "1")
+                } else {
+                    let request = fixture.send("interrupted awaiting-start request", false);
+                    fixture.deliver();
+                    request
+                };
+                let queued = fixture.send("queued behind the restart", true);
+                if server_only {
+                    server_restart(&mut fixture);
+                } else {
+                    restart(&mut fixture);
+                }
+                fixture.status(RuntimeStatus::Idle);
+                fixture.worker.settle_requests().unwrap();
+                let request = fixture.request(interrupted);
+                if request.phase != RequestPhase::Abandoned
+                    || request.failure_reason.as_deref() != Some("reply_not_captured")
+                    || fixture
+                        .worker
+                        .state
+                        .agent(fixture.agent)
+                        .unwrap()
+                        .current_request
+                        .is_some()
+                {
+                    failures.push(format!(
+                        "{provider:?}/server_only={server_only}/start_bound={start_bound}: old request remained {:?}/{:?}",
+                        request.phase, request.failure_reason
+                    ));
+                }
+                fixture.deliver();
+                if fixture.request(queued).phase == RequestPhase::Queued {
+                    failures.push(format!(
+                        "{provider:?}/server_only={server_only}/start_bound={start_bound}: queued message stayed blocked"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn restart_request_plain_coordinator_reopen_keeps_a_live_turn() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(
+        &mut fixture,
+        "continue after a plain coordinator reopen",
+        "turn-1",
+    );
+    reload(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.stopped("turn-1", "completed after the coordinator reopened");
+    fixture.consume();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("completed after the coordinator reopened")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_final() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        let mut fixture = Fixture::new(provider);
+        let lead = running(&mut fixture, "lead before restart", "turn-1");
+        let steering = fixture.send("steering before restart", false);
+        fixture.deliver();
+        let queued = fixture.send("after the interrupted group", true);
+        restart(&mut fixture);
+        fixture.status(RuntimeStatus::Idle);
+        fixture.worker.settle_requests().unwrap();
+        for request in [lead, steering] {
+            assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
+            assert_eq!(
+                fixture.request(request).failure_reason.as_deref(),
+                Some("reply_not_captured")
+            );
+        }
+        fixture.deliver();
+        assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+
+        let mut completed = Fixture::new(provider);
+        let answered = running(&mut completed, "finish just before restart", "turn-1");
+        completed.stopped("turn-1", "finished before the stop");
+        completed.consume();
+        let next = completed.send("next after the completed turn", true);
+        restart(&mut completed);
+        completed.status(RuntimeStatus::Idle);
+        completed.worker.settle_requests().unwrap();
+        assert_eq!(
+            completed.reply(answered).as_deref(),
+            Some("finished before the stop")
+        );
+        completed.deliver();
+        assert_ne!(completed.request(next).phase, RequestPhase::Queued);
+    }
+}
+
+#[test]
+fn restart_request_recovers_a_completed_codex_turn_from_its_rollout_before_releasing_the_queue() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-completion.jsonl");
+    let lead = running(&mut fixture, "finish without a Stop hook", "turn-1");
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&fixture, 1),
+            "turn-1",
+            &typed,
+            Some("recovered after restart"),
+        ),
+    );
+    let queued = fixture.send("queued after recovered final", true);
+    restart(&mut fixture);
+    fixture.record(json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume","transcript_path":rollout}));
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("recovered after restart")
+    );
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
+#[test]
+fn restart_request_recovers_codex_final_from_the_rollout_learned_before_stop() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let rollout = fixture.dir.join("rollout-before-stop.jsonl");
+    let lead = fixture.send("finish before Bus stops without a Stop hook", false);
+    fixture.deliver();
+    fixture.record(
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"turn-1","prompt":"finish before Bus stops without a Stop hook",
+        "transcript_path":rollout}),
+    );
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    let typed = fixture.typed().last().unwrap().0.clone();
+    append(
+        &rollout,
+        &codex_turn(
+            &rollout_at(&fixture, 1),
+            "turn-1",
+            &typed,
+            Some("committed before the stop"),
+        ),
+    );
+    let queued = fixture.send("next after the committed answer", true);
+    restart(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("committed before the stop"),
+        "a consumed pre-stop submit hook already identified the transcript; a fresh hook is not required"
+    );
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_request_recovers_a_completed_kimi_turn_from_its_wire_before_releasing_the_queue() {
+    let mut fixture = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&fixture);
+    let lead = running(&mut fixture, "finish on the committed Kimi wire", "1");
+    let prompt = fixture.worker.state.render_request_payload(lead).unwrap();
+    let rows = [
+        json!({"type":"turn.prompt","agentId":"main","turnId":1,"promptId":"p1","input":[{"type":"text","text":prompt}]}),
+        json!({"type":"agent.message.appended","message":{"meta":{"source":"llm"},"message":{"role":"assistant","content":[{"type":"text","text":"Kimi final recovered after restart"}]}}}),
+        json!({"type":"agent.turn.ended","turnId":1,"outcome":"done"}),
+        json!({"type":"turn.ended","agentId":"main","turnId":1,"reason":"completed"}),
+        json!({"type":"prompt.completed","agentId":"main","promptId":"p1","reason":"completed"}),
+    ];
+    std::fs::write(
+        wire,
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let queued = fixture.send("queued after the Kimi final", true);
+    restart(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Kimi final recovered after restart")
+    );
+    fixture.deliver();
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
 #[test]
 fn reply_capture_diagnostics_identify_every_abandoned_group_member() {
     let capture = crate::utils::logging::test_capture::Capture::default();
@@ -1373,4 +1780,322 @@ fn provider_flake_reset_diagnostics_follow_successful_persistence_once() {
     ] {
         assert!(rows[0].contains(&field), "missing {field}: {}", rows[0]);
     }
+}
+
+#[test]
+fn restart_published_recovers_distinct_committed_steering_final() {
+    for restored in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        let rollout = f.dir.join("rollout-finished-steering.jsonl");
+        let lead = f.send("finish the first task", false);
+        f.deliver();
+        let lead_payload = f.typed().last().unwrap().0.clone();
+        f.record(
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+            "turn_id":"turn-1","prompt":"finish the first task","transcript_path":rollout}),
+        );
+        f.consume();
+        f.status(RuntimeStatus::Working);
+        let member = f.send("answer the independent followup", false);
+        f.deliver();
+        let member_payload = f.typed().last().unwrap().0.clone();
+        assert!(f.request(member).steered && !f.request(member).trusted_start_bound);
+        append(
+            &rollout,
+            &codex_turn(
+                &rollout_at(&f, 1),
+                "turn-1",
+                &lead_payload,
+                Some("first committed answer"),
+            ),
+        );
+        append(
+            &rollout,
+            &codex_turn(
+                &rollout_at(&f, 2),
+                "turn-2",
+                &member_payload,
+                Some("second committed answer"),
+            ),
+        );
+        f.record(json!({"hook_event_name":"Stop","session_id":"session",
+            "turn_id":"turn-1","last_assistant_message":"first committed answer","transcript_path":rollout}));
+        f.consume();
+        assert_eq!(f.reply(lead).as_deref(), Some("first committed answer"));
+        assert!(f.request(lead).pending_final.is_some());
+        if restored {
+            restart_lifecycle_reopen(&mut f, true);
+            f.worker.tick().unwrap();
+        } else {
+            f.status(RuntimeStatus::Idle);
+            f.worker.settle_requests().unwrap();
+        }
+        let outcomes: Vec<_> = [lead, member]
+            .into_iter()
+            .map(|id| {
+                (
+                    f.request(id).phase,
+                    f.reply(id),
+                    f.request(id).failure_reason.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                (
+                    RequestPhase::Completed,
+                    Some("first committed answer".into()),
+                    None
+                ),
+                (
+                    RequestPhase::Completed,
+                    Some("second committed answer".into()),
+                    None
+                ),
+            ],
+            "restored={restored}: every committed turn retains its own reply"
+        );
+    }
+}
+
+#[test]
+fn restart_published_settles_the_pre_stop_started_successor() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "first task before restart", "turn-1");
+    let member = f.send("followup started before restart", false);
+    f.deliver();
+    assert!(f.request(member).steered && !f.request(member).trusted_start_bound);
+    let queued = f.send("fresh queued task", true);
+    f.stopped("turn-1", "first task completed");
+    f.started("turn-2", "followup started before restart");
+    restart_lifecycle_reopen(&mut f, true);
+    f.worker.tick().unwrap();
+    assert_eq!(f.reply(lead).as_deref(), Some("first task completed"));
+    assert_eq!(
+        f.request(member).provider_turn_id.as_deref(),
+        Some("turn-2")
+    );
+    assert_eq!(
+        (f.request(member).phase, f.request(member).failure_reason.as_deref()),
+        (RequestPhase::Abandoned, Some("reply_not_captured")),
+        "the saved Started belongs to the replaced execution, not a surviving turn; owner={:?}, queued={:?}",
+        f.worker.state.agent(f.agent).unwrap().current_request, f.request(queued).phase,
+    );
+    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_published_settles_earlier_independent_kimi_inputs() {
+    let mut f = Fixture::new(Provider::Kimi);
+    let wire = super::kimi_steering_tests::home(&f);
+    std::fs::write(&wire, "").unwrap();
+    let first = running(&mut f, "older independent input", "0");
+    let second = f.send("newer independent input", false);
+    f.deliver();
+    f.started("1", "newer independent input");
+    f.consume();
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(second)
+    );
+    for id in [first, second] {
+        assert_eq!(f.request(id).phase, RequestPhase::Active);
+        assert!(f.request(id).trusted_start_bound);
+        assert_eq!(f.request(id).group, None);
+    }
+    let queued = f.send("pending after both old inputs", true);
+    restart_lifecycle_reopen(&mut f, true);
+    f.worker.tick().unwrap();
+    let outcomes: Vec<_> = [first, second]
+        .into_iter()
+        .map(|id| (f.request(id).phase, f.request(id).failure_reason.clone()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (RequestPhase::Abandoned, Some("reply_not_captured".into())),
+            (RequestPhase::Abandoned, Some("reply_not_captured".into())),
+        ],
+        "every outstanding submitted root belongs to the replaced execution; queued={:?}",
+        f.request(queued).phase
+    );
+    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+}
+
+#[test]
+fn restart_published_logs_only_durable_interrupted_closures_once() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "lead interrupted by restore", "turn-1");
+    let member = f.send("steering interrupted by restore", false);
+    f.deliver();
+    restart(&mut f);
+    f.status(RuntimeStatus::Idle);
+    f.worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        assert!(f.worker.settle_requests().is_err());
+        assert!(
+            !capture.text().contains("bus.message.recovered"),
+            "no closure before persistence"
+        );
+        assert!(!f.request(lead).settled());
+        assert!(!f.request(member).settled());
+        f.worker.settle_requests().unwrap();
+        f.worker.settle_requests().unwrap();
+    });
+    let log = capture.text();
+    let rows: Vec<_> = log
+        .lines()
+        .filter(|l| l.contains("bus.message.recovered") && l.contains("reply_not_captured"))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "each durable affected request logs once: {log}"
+    );
+    for id in [lead, member] {
+        assert!(
+            rows.iter()
+                .any(|line| line.contains(&format!("request_id={}", id.0))
+                    && line.contains(&format!("lead_id={}", lead.0))),
+            "{log}"
+        );
+    }
+}
+
+#[test]
+fn restart_published_retained_receipt_after_saved_ack_preserves_successor() {
+    for boundary in ["same-worker", "consumed-reopen", "retained-reopen"] {
+        let mut f = Fixture::new(Provider::Codex);
+        let old = running(&mut f, "old interrupted execution", "turn-1");
+        let successor = f.send("fresh successor after native replacement", true);
+        f.worker.transport = restart_lifecycle_transport(&f, true);
+        f.worker.tick().unwrap();
+        assert_eq!(
+            f.request(old).failure_reason.as_deref(),
+            Some("reply_not_captured")
+        );
+        assert_eq!(f.request(successor).phase, RequestPhase::Active);
+
+        f.now += 1;
+        restart_lifecycle_receipt(&f, "restarted");
+        let path = crate::utils::restart_record::outcome_path(&f.dir);
+        let receipt = std::fs::read(&path).unwrap();
+        f.worker.announce_recorded_restart().unwrap();
+        assert!(!path.exists());
+        assert_eq!(f.request(successor).phase, RequestPhase::Active);
+
+        if boundary != "consumed-reopen" {
+            // Reconstruct the exact reachable crash cut after the receipt's
+            // durable state save but before its following outcome-file unlink.
+            // Only the identical disk receipt is retained; no model field changes.
+            std::fs::write(&path, &receipt).unwrap();
+        }
+        if boundary != "same-worker" {
+            // The same restored terminal is still alive: this is coordinator
+            // reconnect, not a second replacement that could mask replay.
+            restart_lifecycle_reopen(&mut f, true);
+        }
+        f.worker.tick().unwrap();
+        assert_eq!(
+            (
+                f.request(successor).phase,
+                f.request(successor).failure_reason.as_deref()
+            ),
+            (RequestPhase::Active, None),
+            "boundary={boundary}: an already acknowledged receipt must not interrupt its successor"
+        );
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(successor)
+        );
+    }
+}
+
+// Portable behavioral proof: the generation is wire metadata, so this same
+// test also compiles on an older server/client that ignores that JSON field.
+#[cfg(unix)]
+struct RestartGenerationProofNative {
+    methods: Arc<Mutex<Vec<Method>>>,
+    info: schema::AgentInfo,
+}
+#[cfg(unix)]
+impl Transport for RestartGenerationProofNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(
+            &method,
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_)
+        ) {
+            self.methods.lock().unwrap().push(method);
+            return Ok(ResponseResult::AgentList {
+                agents: vec![self.info.clone()],
+            });
+        }
+        Native(self.methods.clone()).request(method)
+    }
+}
+#[cfg(unix)]
+fn restart_generation_proof_native(f: &Fixture, generation: u64) -> Box<dyn Transport> {
+    let kind = crate::messaging::identity::provider_kind(f.provider).label();
+    Box::new(RestartGenerationProofNative {
+        methods: f.native.clone(),
+        info: serde_json::from_value(json!({
+            "generation":generation,"terminal_id":"terminal","pane_id":"pane",
+            "name":crate::messaging::identity::managed_name(f.room,f.agent),
+            "agent":kind,"agent_status":"idle","interactive_ready":true,
+            "workspace_id":"workspace","tab_id":"tab","focused":false,"revision":1,
+            "agent_session":{"source":crate::messaging::identity::managed_source(f.provider),
+                "agent":kind,"kind":"id","value":"session"}
+        }))
+        .unwrap(),
+    })
+}
+#[cfg(unix)]
+#[test]
+fn restart_generation_serving_change_without_rebind_or_receipt_releases_all_provider_queues() {
+    let mut failures = Vec::new();
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for bound in [false, true] {
+            let mut f = Fixture::new(provider);
+            if provider == Provider::Kimi {
+                super::kimi_steering_tests::home(&f);
+            }
+            f.worker.transport = restart_generation_proof_native(&f, 1);
+            f.worker.tick().unwrap();
+            let old = if bound {
+                running(&mut f, "interrupted delivery", "1")
+            } else {
+                let id = f.send("interrupted awaiting-start delivery", false);
+                f.deliver();
+                id
+            };
+            let queued = f.send("queued successor", true);
+            assert_eq!(f.request(old).phase, RequestPhase::Active);
+            assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+            f.worker.transport = restart_generation_proof_native(&f, 2);
+            f.worker.tick().unwrap();
+            if f.request(old).phase != RequestPhase::Abandoned
+                || f.request(old).failure_reason.as_deref() != Some("reply_not_captured")
+                || f.request(queued).phase == RequestPhase::Queued
+            {
+                failures.push(format!(
+                    "{provider:?}/bound={bound}: old={:?}/{:?}, queued={:?}",
+                    f.request(old).phase,
+                    f.request(old).failure_reason,
+                    f.request(queued).phase
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
