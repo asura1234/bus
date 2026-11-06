@@ -724,7 +724,7 @@ fn a_late_worker_woken_orchestrator_decision_is_published_in_master_once() {
 }
 
 #[test]
-fn a_late_decision_for_a_developer_lead_with_worker_steering_reaches_master_once() {
+fn a_late_decision_for_a_developer_lead_with_worker_notification_reaches_master_once() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (room, orchestrator, builder) = (bus.room, bus.orchestrator, bus.builder);
     let typed = bus.deliver(
@@ -758,7 +758,7 @@ fn a_late_decision_for_a_developer_lead_with_worker_steering_reaches_master_once
         .observe_status(orchestrator, RuntimeStatus::Working, now)
         .unwrap();
     let member = state
-        .submit_message_from(
+        .submit_bus_message_with(
             room,
             Draft {
                 text: "The worker result changes the decision.".into(),
@@ -767,8 +767,10 @@ fn a_late_decision_for_a_developer_lead_with_worker_steering_reaches_master_once
             },
             Author::Agent(builder),
             now,
+            false,
         )
         .unwrap()[0];
+    assert!(state.request(member).unwrap().bus_generated);
     let steering = state.render_request_payload(member).unwrap();
     assert_eq!(state.next_steering(orchestrator), Some((member, lead)));
     state.begin_steering(member, lead).unwrap();
