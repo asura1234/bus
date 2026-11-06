@@ -35,6 +35,15 @@ fn observes_composer(kind: crate::agents::AgentKind) -> bool {
     )
 }
 
+fn has_native_draft(runtime: &crate::terminal::TerminalRuntime) -> bool {
+    runtime
+        .active_input_snapshot()
+        .is_some_and(|(screen, cursor)| {
+            composer::observe_with_cursor(crate::agents::AgentKind::Codex, &screen, "", cursor)
+                == crate::terminal::runtime::InputObservation::Other
+        })
+}
+
 struct StyledChar {
     character: char,
     faint: bool,
@@ -242,6 +251,21 @@ impl App {
         respond_to: std::sync::mpsc::Sender<String>,
         started: std::time::Instant,
     ) -> bool {
+        if let crate::protocol::api::schema::Method::AgentSendKeys(params) = &request.method {
+            if params.native_interrupt.is_some() {
+                match self.prepare_agent_send_keys(request.id, params.clone()) {
+                    Ok(job) => {
+                        std::thread::spawn(move || {
+                            let _ = respond_to.send(job());
+                        });
+                    }
+                    Err(response) => {
+                        let _ = respond_to.send(response);
+                    }
+                }
+                return true;
+            }
+        }
         let Some(budget) = crate::protocol::api::submission::method_budget(&request.method) else {
             return false;
         };
@@ -263,9 +287,15 @@ impl App {
         }
         let api_request_id = request.id.clone();
         let queued = match request.method {
-            crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params, false, hard_deadline, false)
-            }
+            crate::protocol::api::schema::Method::AgentPrompt(params) => self.queue_agent_prompt(
+                request.id,
+                params,
+                false,
+                hard_deadline,
+                false,
+                None,
+                false,
+            ),
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
             }
@@ -344,6 +374,8 @@ impl App {
             true,
             hard_deadline,
             false,
+            None,
+            false,
         )
     }
 
@@ -364,7 +396,13 @@ impl App {
         let agent = self
             .agent_info_for_target(&params.target)
             .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
-        if let Err((code, message)) = check_prompt_identity_and_idle(&agent, &params) {
+        let rejection = check_prompt_identity_and_idle(&agent, &params).err();
+        #[cfg(unix)]
+        let native_only = rejection.is_some_and(|(code, _)| code == "agent_not_idle")
+            && super::codex_native::can_check_idle(&agent);
+        #[cfg(not(unix))]
+        let native_only = false;
+        if let Some((code, message)) = rejection.filter(|_| !native_only) {
             return Err(encode_error(id, code, message));
         }
         self.queue_agent_prompt(
@@ -377,6 +415,8 @@ impl App {
             true,
             hard_deadline,
             params.steer,
+            params.expected_turn_id,
+            native_only,
         )
     }
 
@@ -387,6 +427,8 @@ impl App {
         observe: bool,
         hard_deadline: std::time::Instant,
         steer: bool,
+        expected_turn_id: Option<String>,
+        native_only: bool,
     ) -> Result<
         (
             String,
@@ -418,7 +460,12 @@ impl App {
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        if terminal.state == crate::agents::AgentState::Blocked {
+        if terminal.state == crate::agents::AgentState::Blocked
+            && !(native_only
+                && self
+                    .lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
+                    .is_some_and(has_native_draft))
+        {
             return Err(encode_error(
                 id,
                 "agent_blocked",
@@ -460,37 +507,97 @@ impl App {
                 deadline.min(hard_deadline)
             }),
         );
-        if expected_agent == crate::agents::AgentKind::GithubCopilot {
-            // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
-            let focus =
-                match crate::terminal::vt::encode_focus(crate::terminal::vt::FocusEvent::Gained) {
-                    Ok(focus) => focus,
-                    Err(err) => {
-                        return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
-                    }
-                };
-            if let Err(err) = runtime.try_send_bytes(Bytes::from(focus)) {
-                return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
-            }
-        }
+        focus_copilot(runtime, expected_agent)
+            .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
-        let _entered = span.enter();
-        let completion = queue_prompt_input(
+        queue_prompt_submission(
             runtime,
+            agent,
             expected_agent,
-            params.text,
+            params,
             observe,
             submit_delay,
             submit_deadline,
-            Some(crate::platform::draft_editor::directory(&agent.pane_id)),
             steer,
+            NativePromptOptions {
+                expected_turn_id,
+                native_only,
+            },
+            hard_deadline,
+            id,
         )
-        .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
-        Ok((id, agent, completion))
     }
+}
+
+struct NativePromptOptions {
+    expected_turn_id: Option<String>,
+    native_only: bool,
+}
+
+fn queue_prompt_submission(
+    runtime: &crate::terminal::TerminalRuntime,
+    agent: crate::protocol::api::schema::AgentInfo,
+    expected_agent: crate::agents::AgentKind,
+    params: AgentPromptParams,
+    observe: bool,
+    submit_delay: Duration,
+    submit_deadline: Option<std::time::Instant>,
+    steer: bool,
+    native: NativePromptOptions,
+    hard_deadline: std::time::Instant,
+    id: String,
+) -> Result<
+    (
+        String,
+        crate::protocol::api::schema::AgentInfo,
+        InputCompletion,
+    ),
+    String,
+> {
+    let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
+    let _entered = span.enter();
+    #[cfg(unix)]
+    if let Some(completion) = super::codex_native::queue(
+        runtime,
+        &agent,
+        &params.text,
+        steer,
+        native.expected_turn_id,
+        &id,
+        hard_deadline,
+        native.native_only,
+        || {
+            prepare_prompt_input(
+                runtime,
+                expected_agent,
+                params.text.clone(),
+                observe,
+                submit_delay,
+                submit_deadline,
+                Some(crate::platform::draft_editor::directory(&agent.pane_id)),
+                steer,
+            )
+        },
+        submit_delay,
+    )? {
+        return Ok((id, agent, completion));
+    }
+    #[cfg(not(unix))]
+    let _ = (native.expected_turn_id, native.native_only);
+    let completion = queue_prompt_input(
+        runtime,
+        expected_agent,
+        params.text,
+        observe,
+        submit_delay,
+        submit_deadline,
+        Some(crate::platform::draft_editor::directory(&agent.pane_id)),
+        steer,
+    )
+    .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
+    Ok((id, agent, completion))
 }
 
 fn queue_prompt_input(
@@ -503,6 +610,30 @@ fn queue_prompt_input(
     draft_directory: Option<std::path::PathBuf>,
     steer: bool,
 ) -> std::io::Result<InputCompletion> {
+    prepare_prompt_input(
+        runtime,
+        kind,
+        text,
+        observe,
+        delay,
+        deadline,
+        draft_directory,
+        steer,
+    )?()
+}
+
+type PreparedPrompt = Box<dyn FnOnce() -> std::io::Result<InputCompletion> + Send>;
+
+fn prepare_prompt_input(
+    runtime: &crate::terminal::TerminalRuntime,
+    kind: crate::agents::AgentKind,
+    text: String,
+    observe: bool,
+    delay: Duration,
+    deadline: Option<std::time::Instant>,
+    draft_directory: Option<std::path::PathBuf>,
+    steer: bool,
+) -> std::io::Result<PreparedPrompt> {
     use crate::agents::AgentKind;
     let (mut encoded, enter) =
         crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
@@ -523,13 +654,17 @@ fn queue_prompt_input(
             }
         }
     }
-    if !observe || !observes_composer(kind) {
-        return runtime.queue_user_input_submission(
-            Bytes::from(encoded),
-            Bytes::from(enter),
-            delay,
-            deadline,
-        );
+    let observed = observe && observes_composer(kind);
+    let submission = runtime.submission_handle(!observed);
+    if !observed {
+        return Ok(Box::new(move || {
+            submission.queue_user_input_submission(
+                Bytes::from(encoded),
+                Bytes::from(enter),
+                delay,
+                deadline,
+            )
+        }));
     }
     let clear = crate::server::api::input_encoding::encode_api_keys(
         runtime,
@@ -553,14 +688,16 @@ fn queue_prompt_input(
         } else {
             Box::new(composer::observer(kind, text))
         };
-    runtime.queue_observed_input_with_inspector(
-        Bytes::from(encoded),
-        Bytes::from(enter),
-        clear.into_iter().map(Bytes::from).collect(),
-        delay,
-        deadline,
-        inspector,
-    )
+    Ok(Box::new(move || {
+        submission.queue_observed_input_with_inspector(
+            Bytes::from(encoded),
+            Bytes::from(enter),
+            clear.into_iter().map(Bytes::from).collect(),
+            delay,
+            deadline,
+            inspector,
+        )
+    }))
 }
 
 /// Keep cancellation owned until the response has been formatted, including
@@ -631,4 +768,19 @@ pub(super) fn complete_agent_prompt(
             encode_error(id, "agent_prompt_failed", "pty actor closed")
         }
     }
+}
+
+fn focus_copilot(
+    runtime: &crate::terminal::TerminalRuntime,
+    agent: crate::agents::AgentKind,
+) -> std::io::Result<()> {
+    if agent == crate::agents::AgentKind::GithubCopilot {
+        // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
+        let focus = crate::terminal::vt::encode_focus(crate::terminal::vt::FocusEvent::Gained)
+            .map_err(std::io::Error::other)?;
+        runtime
+            .try_send_bytes(Bytes::from(focus))
+            .map_err(std::io::Error::other)?;
+    }
+    Ok(())
 }

@@ -146,6 +146,9 @@ pub(crate) enum AgentDetection {
     Disabled,
 }
 
+#[cfg(unix)]
+pub(crate) mod native_input;
+
 /// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
 /// Dropping this aborts async tasks and closes the PTY. An already-running bounded
 /// compression step may finish before releasing its terminal reference.
@@ -168,6 +171,8 @@ pub struct TerminalRuntime {
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
+    #[cfg(unix)]
+    native_input: Mutex<Option<native_input::NativeInputHandle>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_prompt_generation: Arc<AtomicU64>,
@@ -289,5 +294,19 @@ impl TerminalRuntime {
 
     pub(crate) fn content_seq(&self) -> u64 {
         self.content_seq.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(unix)]
+impl TerminalRuntime {
+    pub(crate) fn native_input(&self) -> Option<native_input::NativeInputHandle> {
+        self.native_input
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn bind_native_input(&self, input: native_input::NativeInputHandle) {
+        *self.native_input.lock().unwrap_or_else(|e| e.into_inner()) = Some(input);
     }
 }

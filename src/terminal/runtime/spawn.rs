@@ -77,6 +77,10 @@ pub(super) enum PaneLaunchIdentity {
 }
 
 impl PaneLaunchEnv {
+    pub(crate) fn extra(&self) -> &[(String, String)] {
+        &self.extra
+    }
+
     pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
         Self {
             extra,
@@ -821,6 +825,8 @@ impl TerminalRuntime {
             managed_launch_pending,
             detection_context,
             kimi_code_home,
+            #[cfg(unix)]
+            native_input: Default::default(),
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_prompt_generation: Arc::new(AtomicU64::new(0)),

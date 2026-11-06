@@ -259,6 +259,7 @@ async fn rejected_post_restart_prompt_does_not_reset_native_resume_deadline() {
                             expected_agent: "codex".into(),
                             expected_session_id: "saved-session".into(),
                             steer: false,
+                            expected_turn_id: None,
                         },
                     ),
                 },
@@ -430,4 +431,128 @@ async fn render_without_pending_resume_does_not_derive_resume_geometry() {
             > 0
     );
     shutdown_test_runtimes(&mut server);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
+    use crate::agents::{AgentKind, AgentState};
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    const WAIT: Duration = crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
+    let mut server = test_headless_server();
+    let workspace = crate::server::workspaces::Workspace::test_new("native-interrupt");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.ensure_test_terminals();
+    let terminal = server.app.state.terminals.get_mut(&terminal_id).unwrap();
+    let now = Instant::now();
+    terminal.begin_managed_agent(
+        "bus-r1-a2".into(),
+        AgentKind::Codex,
+        now,
+        Duration::ZERO,
+        Duration::from_secs(10),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
+    terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+    terminal.set_agent_session_ref_for_session_start(
+        "bus".into(),
+        "codex".into(),
+        crate::agents::resume::catalog::AgentSessionRef::id("session"),
+        Some(1),
+        None,
+        &[],
+    );
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_process_pty_bytes(b"\x1b[?2004h\x1b[2J\x1b[H> draft\r\n\r\n GPT-6 /repo");
+    server.app.state.insert_test_runtime(pane, runtime);
+    let info = server.app.agent_info(0, pane).unwrap();
+    let dir = crate::utils::test_temp::unique_temp_path("codex-interrupt-dispatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let (returned, dispatcher_returned) = mpsc::channel();
+    let native_peer = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        dispatcher_returned.recv_timeout(WAIT).unwrap();
+        let Ok(mut ws) = tungstenite::accept(stream) else {
+            return false;
+        };
+        let mut interrupted = false;
+        let mut enumerated = false;
+        while let Ok(frame) = ws.read() {
+            let value: serde_json::Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            let Some(id) = value.get("id") else { continue };
+            let method = value["method"].as_str().unwrap();
+            let result = match method {
+                "initialize" => serde_json::json!({"userAgent":"fixture"}),
+                "thread/read" => serde_json::json!({"thread":{
+                    "id":"session", "status":if interrupted {serde_json::json!({"type":"idle"})} else {serde_json::json!({"type":"active","activeFlags":[]})},
+                    "turns":[{"id":"interrupt-turn","status":"inProgress","items":[]}]
+                }}),
+                "thread/turns/list" => {
+                    serde_json::json!({"data":[{"id":"interrupt-turn","status":if interrupted {"interrupted"} else {"inProgress"},"items":[]}],"nextCursor":null})
+                }
+                "turn/interrupt" => {
+                    interrupted = true;
+                    serde_json::json!({})
+                }
+                "thread/backgroundTerminals/list" => {
+                    enumerated = true;
+                    serde_json::json!({"data":[],"nextCursor":null})
+                }
+                other => panic!("unexpected interrupt operation {other}"),
+            };
+            if ws
+                .send(tungstenite::Message::Text(
+                    serde_json::json!({"id":id,"result":result})
+                        .to_string()
+                        .into(),
+                ))
+                .is_err()
+            {
+                return false;
+            }
+            if enumerated && method == "thread/turns/list" {
+                return true;
+            }
+        }
+        false
+    });
+    crate::server::terminals::native_input::test_bind(
+        server.app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
+    let params: crate::protocol::api::schema::AgentSendKeysParams = serde_json::from_value(serde_json::json!({
+        "target":info.pane_id,"keys":["esc"],
+        "native_interrupt":{"expected_terminal_id":info.terminal_id,"expected_session_id":"session"}
+    })).unwrap();
+    let (send, response) = mpsc::channel();
+    // Exercise the real server API routing, not the App helper in isolation.
+    server.handle_timed_api_request(crate::server::api::ApiRequestMessage {
+        received_at: Instant::now(),
+        request: crate::protocol::api::schema::Request {
+            id: "headless-interrupt-dispatch".into(),
+            method: crate::protocol::api::schema::Method::AgentSendKeys(params),
+        },
+        respond_to: send,
+    });
+    returned.send(()).unwrap();
+    let value = response.recv_timeout(WAIT).unwrap();
+    let interrupted = native_peer.join().unwrap();
+    assert!(
+        interrupted && value.contains("\"type\":\"agent_interrupted\""),
+        "interrupt must complete after dispatch returned: {value}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "a native interrupt must not press Esc"
+    );
 }

@@ -344,6 +344,26 @@ impl TerminalRuntime {
         self.terminal.visible_ansi()
     }
 
+    /// A complete native input frame and cursor, independent of scrollback.
+    /// Reading does not acknowledge rendering or acquire submission ownership.
+    pub(crate) fn active_input_snapshot(&self) -> Option<(String, Option<(u16, u16)>)> {
+        for _ in 0..3 {
+            let before = self.content_seq();
+            if !before.is_multiple_of(2) || self.synchronized_output_active() {
+                continue;
+            }
+            let screen = self.terminal.active_ansi_if_complete()?;
+            let cursor = self
+                .terminal
+                .cursor_state()
+                .map(|cursor| (cursor.x, cursor.y));
+            if before == self.content_seq() && !self.synchronized_output_active() {
+                return Some((screen, cursor));
+            }
+        }
+        None
+    }
+
     pub fn detection_text(&self) -> String {
         self.terminal.detection_text()
     }
