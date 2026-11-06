@@ -340,10 +340,17 @@ fn fill_replaces_every_placeholder() {
             "missing {anchor}"
         );
     }
-    // Tasks go out with --async in the background, never a blocking wait.
-    assert!(text.contains("bus send --room 7 --as orch --to AGENT --async --text"));
-    assert!(text.contains("run_in_background"));
-    assert!(!text.contains("bus wait"));
+    // Background dispatch is the default. Providers without background wake
+    // support (including Codex) use the documented bounded foreground fallback.
+    let (background, fallback) = text
+        .split_once("If background completion cannot wake your provider,")
+        .unwrap();
+    assert!(background.contains("bus send --room 7 --as orch --to AGENT --async --text"));
+    assert!(background.contains("run_in_background"));
+    assert!(!background.contains("bus wait"));
+    let fallback = flat(fallback.split("4. **Follow and adapt.**").next().unwrap());
+    assert!(fallback.contains("dispatch without `--async` and follow ordinary worker messages or bounded foreground `bus wait` calls."));
+    assert!(fallback.contains("Do not rely on background completion to resume your turn."));
     let unassigned = fill(DEFAULT_PROMPT, &values(None, data));
     assert!(unassigned.contains("Your room: none yet"), "{unassigned}");
 }
