@@ -707,19 +707,42 @@ fn dev_send_as_counts_the_agent_message_as_unread_in_a_room_out_of_view() {
 }
 
 #[test]
-fn state_reports_how_the_running_bus_was_built() {
-    let (mut worker, _room, _agent, _dir) = fixture();
+fn state_reports_distinct_client_and_server_build_identities() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let server_binary = dir.join("server-build-b");
+    let server_sha = "b".repeat(40);
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&dir),
+        &json!({
+            "binary": server_binary,
+            "sha": server_sha,
+            "pid": std::process::id(),
+        }),
+    )
+    .unwrap();
+
     let state = call(&mut worker, "state-build", "state", json!({}));
-    let expected = if cfg!(debug_assertions) {
+
+    let expected_profile = if cfg!(debug_assertions) {
         "debug"
     } else {
         "release"
     };
-    assert_eq!(state.result["build"]["profile"], expected);
+    assert_eq!(state.result["build"]["client"]["profile"], expected_profile);
     assert_eq!(
-        state.result["build"]["binary"],
+        state.result["build"]["client"]["binary"],
         json!(std::env::current_exe().unwrap())
     );
+    assert_eq!(
+        state.result["build"]["client"]["sha"],
+        env!("BUS_BUILD_SHA")
+    );
+    assert_eq!(
+        state.result["build"]["server"],
+        json!({"binary": server_binary, "sha": "b".repeat(40), "pid": std::process::id()})
+    );
+    assert!(state.result["build"].get("binary").is_none());
+    assert!(state.result["build"].get("profile").is_none());
     assert_eq!(
         state.result["launch"]["yolo"],
         json!(crate::utils::env::yolo_enabled())
@@ -728,6 +751,33 @@ fn state_reports_how_the_running_bus_was_built() {
         state.result["launch"]["dev"],
         json!(std::env::var_os("BUS_DEV").is_some_and(|value| value == "1"))
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn state_reports_missing_corrupt_and_stale_server_identities_as_unknown() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let path = crate::utils::restart_record::build_path(&dir);
+    let state = call(&mut worker, "state-missing-server", "state", json!({}));
+    assert!(state.result["build"]["client"]["binary"].is_string());
+    assert!(state.result["build"]["server"].is_null());
+
+    crate::utils::restart_record::write_json(&path, &json!({"not": "a build"})).unwrap();
+    let state = call(&mut worker, "state-corrupt-server", "state", json!({}));
+    assert!(state.result["build"]["client"]["binary"].is_string());
+    assert!(state.result["build"]["server"].is_null());
+
+    crate::utils::restart_record::write_json(
+        &path,
+        &json!({"binary": "/tmp/server-b", "sha": "b".repeat(40), "pid": u32::MAX}),
+    )
+    .unwrap();
+    let state = call(&mut worker, "state-stale-server", "state", json!({}));
+    assert!(state.result["build"]["client"]["binary"].is_string());
+    assert!(state.result["build"]["server"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

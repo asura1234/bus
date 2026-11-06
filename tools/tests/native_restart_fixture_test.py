@@ -27,7 +27,10 @@ class NativeRestartFixtureTests(unittest.TestCase):
                 self.assertEqual(starts, 1, "restart must send before polling readiness")
                 return {"rooms": [{"name": "bus"}], "agents": [
                     {"name": "restart-agent", "runtime_identity": {"pane_id": "pane"}},
-                ]}
+                ], "build": {
+                    "client": {"binary": str(binary), "sha": "a" * 40},
+                    "server": {"binary": str(binary), "sha": "a" * 40, "pid": 1},
+                }}
             if args[:2] == ("agent", "add"):
                 return {}
             if args[0] == "send":
@@ -42,9 +45,23 @@ class NativeRestartFixtureTests(unittest.TestCase):
         bus.cli.side_effect = cli
         bus.native_agent.return_value = {"pane_id": "pane"}
         with tempfile.TemporaryDirectory() as directory, \
-                mock.patch.object(acceptance, "Bus", return_value=bus):
+                mock.patch.object(acceptance, "Bus", return_value=bus), \
+                mock.patch.object(acceptance, "build_identity", return_value="a" * 40), \
+                mock.patch.object(acceptance.subprocess, "Popen") as native_process:
+            binary = Path(directory) / "bus"
+            binary.write_bytes(b"")
+            bus.data = Path(directory) / "data"
+            def start_native(*args, **kwargs):
+                socket = bus.data / "herdr-config/sessions/bus/herdr.sock"
+                socket.parent.mkdir(parents=True)
+                socket.touch()
+                stamp = bus.data / "restarts/build.json"
+                stamp.parent.mkdir()
+                stamp.write_text('{"sha":"' + "a" * 40 + '"}')
+                return mock.Mock(poll=mock.Mock(return_value=None))
+            native_process.side_effect = start_native
             with self.assertRaises(AgentSetupReached):
-                acceptance.scenario(Path("/unused/bus"), Path(directory) / "run")
+                acceptance.scenario(binary, Path(directory) / "run")
         self.assertEqual(starts, 2)
         bus.wait_native_ready.assert_not_called()
 
@@ -78,6 +95,7 @@ class NativeRestartFixtureTests(unittest.TestCase):
         bus.cli.side_effect = cli
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.object(acceptance, "Bus", return_value=bus), \
+                mock.patch.object(acceptance, "build_identity", return_value="a" * 40), \
                 mock.patch("time.sleep"):
             with self.assertRaises(AgentSetupReached):
                 acceptance.scenario(Path("/unused/bus"), Path(directory) / "run")
