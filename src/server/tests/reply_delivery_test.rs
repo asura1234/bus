@@ -6,7 +6,7 @@ use crate::messaging::model::{Provider, RequestPhase, RuntimeStatus};
 use serde_json::json;
 
 #[tokio::test]
-async fn provider_fixture_descheduling_is_distinct_from_a_real_submission_timeout() {
+async fn provider_fixture_descheduling_does_not_expire_a_committed_submission() {
     for real_time in [true, false] {
         let mut f = Delivery::new(&[Provider::Codex], false);
         let agent = f.agents[0];
@@ -20,32 +20,15 @@ async fn provider_fixture_descheduling_is_distinct_from_a_real_submission_timeou
             .last_submission_response()
             .expect("no native submission response");
         eprintln!("real_time={real_time}; native response={response}");
-        if real_time {
-            // The provider was not serviced within the real confirmation window.
-            // Its native refusal/timeout must remain observable, with no Enter.
-            assert!(
-                matches!(
-                    response["error"]["code"].as_str(),
-                    Some("timeout" | "agent_prompt_not_shown")
-                ),
-                "{response}"
-            );
-            assert!(f.typed(agent).is_empty(), "{response}");
-            assert!(matches!(
-                f.state().request(request).unwrap().phase,
-                RequestPhase::Queued | RequestPhase::Submitting
-            ));
-        } else {
-            assert_eq!(response["result"]["type"], "agent_prompted", "{response}");
-            assert_eq!(f.typed_content(agent), ["delayed fake provider"]);
-            assert_eq!(
-                f.state().request(request).unwrap().phase,
-                RequestPhase::Active
-            );
-            assert!(!f.state().request(request).unwrap().uncertain_outcome);
-            f.tick();
-            assert_eq!(f.typed(agent).len(), 1, "must not submit twice");
-        }
+        assert_eq!(response["result"]["type"], "agent_prompted", "{response}");
+        assert_eq!(f.typed_content(agent), ["delayed fake provider"]);
+        assert_eq!(
+            f.state().request(request).unwrap().phase,
+            RequestPhase::Active
+        );
+        assert!(!f.state().request(request).unwrap().uncertain_outcome);
+        f.tick();
+        assert_eq!(f.typed(agent).len(), 1, "must not submit twice");
     }
 }
 
