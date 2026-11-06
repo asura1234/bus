@@ -11,11 +11,13 @@ use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
 mod callback_spool;
+mod codex_settlement;
 mod control_reads;
 mod history;
 mod kimi_settlement;
 mod restart_notice;
 mod restored_prompt;
+use codex_settlement::{recorded_codex_end, saved_rollouts};
 use control_reads::interrupts_delivery;
 use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 
@@ -30,6 +32,8 @@ pub(super) struct Worker {
     pub(super) state: BusState,
     /// Exact last committed model; observation-only polls may advance state.
     pub(super) durable_state: BusState,
+    /// Latest native-server generation observed by this coordinator.
+    pub(super) serving_generation: u64,
     pub(super) store: JsonStore,
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
@@ -124,6 +128,7 @@ impl Worker {
             .expire_stalled_queued_requests(io::now_ms())
             .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
+        let codex_rollouts = saved_rollouts(&state);
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
             super::recovery::check_saved_project_hooks(&mut state, id)?;
@@ -146,6 +151,7 @@ impl Worker {
             directory_checks: super::working_directory::DirectoryChecks::default(),
             attention: super::attention::Runtime::default(),
             durable_state: state.clone(),
+            serving_generation: 0,
             state,
             store,
             data_dir,
@@ -175,7 +181,7 @@ impl Worker {
             control_receipt_bytes: 0,
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
-            codex_rollouts: BTreeMap::new(),
+            codex_rollouts,
             settings_path: None,
             sound_dirs: None,
             batch: None,
@@ -636,6 +642,7 @@ impl Worker {
         let mut changed = false;
         for (agent, observed_at_ms) in agents {
             changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
+            let current = state.agent(agent).and_then(|owner| owner.current_request);
             let rollout = self.codex_rollouts.get(&agent);
             let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
                 .unwrap_or_else(|error| {
@@ -647,11 +654,32 @@ impl Worker {
             let kimi_recorded = &kimi_recorded;
             let recorded_end = |request: &crate::messaging::model::Request| {
                 if state_provider_is_kimi(&self.state, request.agent_id) {
-                    (*kimi_recorded).clone()
+                    (Some(request.id) == current)
+                        .then(|| (*kimi_recorded).clone())
+                        .flatten()
                 } else {
                     recorded_codex_end(rollout?, request)
                 }
             };
+            let mut interrupted: Vec<_> = state
+                .unsettled_requests()
+                .filter(|request| request.agent_id == agent)
+                .map(|request| request.id)
+                .chain(current)
+                .collect();
+            interrupted.sort_by_key(|request| (Some(*request) != current, *request));
+            interrupted.dedup();
+            for request in interrupted {
+                changed |= state
+                    .settle_generation_request(
+                        agent,
+                        request,
+                        self.serving_generation,
+                        observed_at_ms,
+                        recorded_end,
+                    )
+                    .is_some();
+            }
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
             changed |= state
                 .settle_ended_request(agent, observed_at_ms, recorded_end)
@@ -662,72 +690,6 @@ impl Worker {
         }
         Ok(())
     }
-}
-
-/// How Codex recorded the end of `request`'s turn in its rollout: the bound
-/// turn, or else the one turn that ran the typed prompt after it was sent.
-/// Why nothing could be read or attributed is logged, since the request then
-/// closes as `reply_not_captured`.
-fn recorded_codex_end(
-    rollout: &Path,
-    request: &crate::messaging::model::Request,
-) -> Option<crate::messaging::model::RecordedTurnEnd> {
-    use crate::agents::providers::codex::usage::{
-        codex_prompt_turn, codex_turn_prompts, read_codex_turn_end, CodexTurnEnd, PromptTurn,
-    };
-    use crate::messaging::model::RecordedTurnEnd;
-    let unreadable = |error: &std::io::Error| {
-        tracing::warn!(
-            event = "bus.message.rollout_unreadable",
-            request_id = request.id.0,
-            agent_id = request.agent_id.0,
-            error = %error,
-            "Codex rollout could not be read for the turn's reply"
-        );
-    };
-    let sent_ms = request.prompt.submitted_at_ms;
-    let turn_id = match &request.provider_turn_id {
-        Some(turn) => turn.clone(),
-        None => match codex_prompt_turn(rollout, sent_ms, |prompt| {
-            request.matches_callback_payload(prompt)
-        }) {
-            Ok(PromptTurn::Found(turn)) => turn,
-            Ok(outcome) => {
-                tracing::info!(
-                    event = "bus.message.rollout_unattributed",
-                    request_id = request.id.0,
-                    agent_id = request.agent_id.0,
-                    outcome = ?outcome,
-                    "No rollout turn provably ran this message"
-                );
-                return None;
-            }
-            Err(error) => {
-                unreadable(&error);
-                return None;
-            }
-        },
-    };
-    let end = match read_codex_turn_end(rollout, &turn_id) {
-        Ok(end) => end?,
-        Err(error) => {
-            unreadable(&error);
-            return None;
-        }
-    };
-    Some(match end {
-        CodexTurnEnd::Error(message) => RecordedTurnEnd::Error(message),
-        CodexTurnEnd::Final(text) => {
-            let prompts = codex_turn_prompts(rollout, &turn_id, sent_ms)
-                .inspect_err(unreadable)
-                .unwrap_or_default();
-            RecordedTurnEnd::Final {
-                turn_id,
-                text,
-                prompts,
-            }
-        }
-    })
 }
 
 /// How many commands may run ahead of a waiting status poll before it runs:
