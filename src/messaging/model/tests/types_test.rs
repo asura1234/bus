@@ -771,3 +771,6 @@ fn multi_recipient_batched_headers_keep_each_messages_own_recipients() {
 mod orchestrator_finals;
 #[path = "provider_retry_test.rs"]
 mod provider_retry_tests;
+
+#[path = "orchestrator_ordering_test.rs"]
+mod orchestrator_ordering_tests;
