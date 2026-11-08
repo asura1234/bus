@@ -98,11 +98,18 @@ pub(crate) fn append(
     // Identical hooks share one spool file, so a hook retry counts once. A session
     // start also keys on its process chain: a restart resuming the same conversation
     // sends the exited process's bytes, and must not be folded into its record.
+    // A stale global handler can mistake the paired native frontend for a nested
+    // provider. Its rejection must not shadow the current project handler's event.
     let id =
         if !reporter.is_empty() && matches!(parse(provider, &value), Ok(Parsed::Session { .. })) {
-            digest(&serde_json::to_vec(&(launch, &value, reporter))?)
+            digest(&serde_json::to_vec(&(
+                launch,
+                &value,
+                reporter,
+                nested_provider,
+            ))?)
         } else {
-            digest(&serde_json::to_vec(&(launch, &value))?)
+            digest(&serde_json::to_vec(&(launch, &value, nested_provider))?)
         };
     let record = Record {
         id,

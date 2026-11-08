@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(wire.as_object().unwrap().len(), 5);
         assert_eq!(
             wire["id"],
-            bus_io::digest(&serde_json::to_vec(&("launch", &payload)).unwrap())
+            bus_io::digest(&serde_json::to_vec(&("launch", &payload, false)).unwrap())
         );
         assert!(wire["at_ms"].as_u64().is_some());
         std::fs::remove_dir_all(dir).unwrap();
@@ -543,5 +543,126 @@ mod tests {
             .file_type()
             .is_symlink());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod verdict_identity {
+    use super::*;
+    use crate::agents::providers::spool::Record;
+    use serde_json::{json, Value};
+    use std::path::Path;
+
+    fn payloads() -> [Value; 2] {
+        [
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"s","turn_id":"t","transcript_path":"/terminal.jsonl","prompt":"owned input"}),
+            json!({"hook_event_name":"Stop","session_id":"s","turn_id":"t","transcript_path":"/terminal.jsonl","last_assistant_message":"owned reply"}),
+        ]
+    }
+
+    fn setup() -> (std::path::PathBuf, Manifest) {
+        let dir = crate::utils::test_temp::unique_temp_path("bus-spool-verdict");
+        let manifest = Manifest {
+            routing_key: RoutingKey(1),
+            provider: Provider::Codex,
+            launch_id: "launch".into(),
+        };
+        initialize(&dir, &manifest).unwrap();
+        (dir, manifest)
+    }
+
+    // Reproduce the on-disk envelope and key produced by pre-native global hooks.
+    // Do not call the current writer for this compatibility fixture.
+    fn legacy_nested(dir: &Path, manifest: &Manifest, value: &Value) {
+        let id = bus_io::digest(&serde_json::to_vec(&(&manifest.launch_id, value)).unwrap());
+        let path = dir.join(format!("event-{id}.json"));
+        if path.exists() {
+            return;
+        }
+        let sequence = boundary(dir).unwrap() + 1;
+        let record = Record {
+            id,
+            sequence,
+            at_ms: bus_io::now_ms(),
+            manifest: manifest.clone(),
+            value: value.clone(),
+            reporter: Vec::new(),
+            nested_provider: true,
+        };
+        std::fs::write(dir.join("sequence"), sequence.to_string()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn legacy_nested_verdict_cannot_shadow_the_current_project_hook() {
+        for value in payloads() {
+            let (dir, manifest) = setup();
+            legacy_nested(&dir, &manifest, &value);
+            append(&dir, "launch", Provider::Codex, value.clone(), &[], false).unwrap();
+            append(&dir, "launch", Provider::Codex, value.clone(), &[], false).unwrap();
+            let captured = records(&dir).unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+            assert_eq!(
+                captured.len(),
+                2,
+                "legacy rejection must retain a distinct valid callback"
+            );
+            assert_eq!(
+                captured.iter().filter(|(_, r)| !r.nested_provider).count(),
+                1
+            );
+            assert_eq!(
+                captured.iter().filter(|(_, r)| r.nested_provider).count(),
+                1
+            );
+            assert!(captured.iter().all(|(_, r)| r.value == value));
+            assert_ne!(captured[0].1.id, captured[1].1.id);
+        }
+    }
+
+    #[test]
+    fn a_later_legacy_nested_hook_does_not_downgrade_current_provenance() {
+        for value in payloads() {
+            let (dir, manifest) = setup();
+            append(&dir, "launch", Provider::Codex, value.clone(), &[], false).unwrap();
+            legacy_nested(&dir, &manifest, &value);
+            append(&dir, "launch", Provider::Codex, value.clone(), &[], false).unwrap();
+            let captured = records(&dir).unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+            let valid: Vec<_> = captured
+                .iter()
+                .filter(|(_, r)| !r.nested_provider)
+                .collect();
+            assert_eq!(
+                valid.len(),
+                1,
+                "one verified callback survives in either writer order"
+            );
+            assert_eq!(valid[0].1.value, value);
+        }
+    }
+
+    #[test]
+    fn opposite_verdicts_are_distinct_and_exact_retries_remain_stable() {
+        for order in [[true, false], [false, true]] {
+            for value in payloads() {
+                let (dir, _) = setup();
+                for nested in order {
+                    for _ in 0..2 {
+                        append(&dir, "launch", Provider::Codex, value.clone(), &[], nested)
+                            .unwrap();
+                    }
+                }
+                let captured = records(&dir).unwrap();
+                std::fs::remove_dir_all(dir).unwrap();
+                assert_eq!(
+                    captured.len(),
+                    2,
+                    "one envelope per verdict, not per attempt"
+                );
+                assert_ne!(captured[0].1.nested_provider, captured[1].1.nested_provider);
+                assert!(captured.iter().all(|(_, r)| r.value == value));
+            }
+        }
     }
 }
