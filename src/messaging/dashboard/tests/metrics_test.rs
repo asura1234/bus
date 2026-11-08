@@ -155,14 +155,7 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
             );
         }
     }
-    let identity = &report.all.identity;
-    assert!(
-        identity.contains(&format!(
-            "{} attempted = {} delivered + {} failed + {} external + {} pending",
-            counts.attempts, counts.replied, counts.bus_failures, counts.external, pending
-        )),
-        "{identity}"
-    );
+    assert_reliability_row(&report.all, "excluded attempts");
 }
 
 fn assert_reliability_row(series: &Series, label: &str) {
@@ -170,9 +163,46 @@ fn assert_reliability_row(series: &Series, label: &str) {
     let pending = counts.open + counts.reply_pending;
     assert_eq!(
         counts.attempts,
-        counts.replied + counts.bus_failures + counts.external + pending,
-        "{label}: attempted = delivered + failed + external + pending"
+        counts.delivered + counts.open + counts.delivery_bus + counts.delivery_external,
+        "{label}: attempted = delivered + pending + Bus failures + external"
     );
+    assert_eq!(
+        counts.failed,
+        counts.delivery_bus + counts.delivery_external,
+        "{label}"
+    );
+    let identity = &series.identity;
+    assert!(
+        identity.contains(&series.rates.delivery_share.caption),
+        "{label}: {identity}"
+    );
+    assert!(
+        identity.contains(&format!(
+            "{} attempted = {} delivered + {} pending + {} Bus failures + {} external",
+            counts.attempts,
+            counts.delivered,
+            counts.open,
+            counts.delivery_bus,
+            counts.delivery_external
+        )),
+        "{label}: {identity}"
+    );
+    let bus_denominator = counts.replied + counts.bus_failures;
+    if bus_denominator == 0 {
+        assert!(!identity.contains("0/0"), "{label}: {identity}");
+        assert!(
+            identity.contains("Bus reliability is —"),
+            "{label}: {identity}"
+        );
+    } else {
+        assert!(
+            identity.contains(&format!(
+                "Of conclusive replies, {}/{} failed for Bus-caused reasons",
+                counts.bus_failures, bus_denominator
+            )),
+            "{label}: {identity}"
+        );
+    }
     assert_eq!(
         series.rates.bus_reliability.numerator, counts.replied,
         "{label}"
@@ -615,4 +645,136 @@ fn dashboard_provider_hold_and_retry_remain_pending_without_failure_counters() {
             );
         }
     }
+}
+
+fn named_case(name: &str) -> super::Request {
+    cases()
+        .into_iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("missing fixture {name}"))
+        .record
+}
+
+fn assert_absent_bus_rate(series: &super::Series, label: &str) {
+    assert_eq!(
+        series.rates.bus_reliability.denominator, 0,
+        "{label} has no conclusive replies"
+    );
+    assert!(
+        series.rates.bus_reliability.caption.starts_with('—'),
+        "{label} card: {}",
+        series.rates.bus_reliability.caption
+    );
+    assert!(
+        !series.identity.contains("0/0"),
+        "{label} counts line still prints 0/0: {}",
+        series.identity
+    );
+    assert!(
+        series.identity.contains('—'),
+        "{label} counts line omits the card's em dash: {}",
+        series.identity
+    );
+}
+
+// An empty session, an all-pending session, and an all-external session have
+// no conclusive reply rate. The counts line must say so with the card's em dash.
+#[test]
+fn dashboard_wording_absent_rate_for_empty_all_pending_and_all_external() {
+    let empty = snapshot(&fixture_state(std::iter::empty()), singapore_hour);
+    assert_eq!(empty.all.counts.attempts, 0);
+    assert_eq!(empty.all.rates.delivery_share.caption, "—");
+    assert_eq!(empty.all.counts.oldest_open_ms, None);
+    assert_absent_bus_rate(&empty.all, "empty");
+
+    let open = named_case("awaiting-start");
+    let sent = open.prompt.submitted_at_ms;
+    let pending = snapshot(&fixture_state([open]), singapore_hour);
+    assert!(pending.all.counts.open > 0, "all pending");
+    assert_eq!(pending.all.counts.replied, 0);
+    assert_eq!(pending.all.counts.bus_failures, 0);
+    assert_eq!(pending.all.counts.oldest_open_ms, Some(sent));
+    assert_absent_bus_rate(&pending.all, "all pending");
+
+    let external = snapshot(
+        &fixture_state([named_case("interrupted-before-start")]),
+        singapore_hour,
+    );
+    assert!(external.all.counts.external > 0, "all external");
+    assert_eq!(external.all.counts.replied, 0);
+    assert_eq!(external.all.counts.bus_failures, 0);
+    assert_eq!(external.all.counts.delivered, 0);
+    assert_eq!(external.all.counts.oldest_open_ms, None);
+    assert_absent_bus_rate(&external.all, "all external");
+}
+
+// One completed delivery plus one bound reply_not_captured must not call the
+// reply miss "1 delivered + 1 failed" while the delivery card says 2 delivered
+// and 0 failed.
+#[test]
+fn dashboard_wording_identity_matches_delivery_counters() {
+    let report = snapshot(
+        &fixture_state([
+            named_case("completed-without-text"),
+            named_case("reply-not-captured-bound"),
+        ]),
+        singapore_hour,
+    );
+    let counts = &report.all.counts;
+    assert_eq!(counts.delivered, 2);
+    assert_eq!(counts.failed, 0);
+    assert_eq!(counts.replied, 1);
+    assert_eq!(counts.reply_not_captured, 1);
+    assert_eq!(counts.bus_failures, 1);
+    let card = &report.all.rates.delivery_share.caption;
+    assert!(card.contains("2/2"), "{card}");
+    assert!(card.contains("0 failed"), "{card}");
+    let identity = &report.all.identity;
+    assert!(
+        identity.contains(card),
+        "sentence and delivery card disagree: {identity} vs {card}"
+    );
+    assert!(
+        identity.contains("2 delivered"),
+        "sentence and delivery card disagree: {identity} vs {card}"
+    );
+    assert!(
+        identity.contains("0 failed"),
+        "sentence uses a different failed counter than the card ({card}): {identity}"
+    );
+    assert!(!identity.contains("1 delivered + 1 failed"), "{identity}");
+}
+
+// A message Bus delivered, with no reply yet, is a delivery success.
+#[test]
+fn dashboard_wording_unanswered_delivery_is_success() {
+    let report = snapshot(&fixture_state([named_case("delivered")]), singapore_hour);
+    let counts = &report.all.counts;
+    assert_eq!(counts.attempts, 1);
+    assert_eq!(counts.delivered, 1);
+    assert_eq!(counts.failed, 0);
+    assert_eq!(counts.replied, 0);
+    assert_eq!(counts.reply_pending, 1);
+    assert_eq!(counts.delivery_bus, 0);
+    assert_eq!(counts.delivery_external, 0);
+    assert_eq!(report.all.rates.delivery_share.percent, Some(100.0));
+    assert!(
+        report.all.identity.contains("1 delivered"),
+        "{}",
+        report.all.identity
+    );
+    assert!(
+        report
+            .all
+            .identity
+            .contains(&report.all.rates.delivery_share.caption),
+        "{}",
+        report.all.identity
+    );
+    assert!(
+        !report.all.identity.contains("1 failed"),
+        "{}",
+        report.all.identity
+    );
+    assert_absent_bus_rate(&report.all, "delivered without a reply");
 }

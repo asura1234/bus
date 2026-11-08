@@ -14,9 +14,16 @@ struct Counts {
     reply_pending: u64,
     bus_failures: u64,
     external: u64,
+    /// Delivery-stage failures only. A delivered message with no reply is not here.
+    delivery_bus: u64,
+    delivery_external: u64,
+    /// Earliest still-open send time, so the page can show the oldest pending age.
+    oldest_open_ms: Option<u64>,
     failure_reasons: BTreeMap<String, u64>,
     bus_reasons: BTreeMap<String, u64>,
     external_reasons: BTreeMap<String, u64>,
+    delivery_bus_reasons: BTreeMap<String, u64>,
+    delivery_external_reasons: BTreeMap<String, u64>,
     terminal_reasons: BTreeMap<String, u64>,
     stages: BTreeMap<String, u64>,
 }
@@ -28,8 +35,26 @@ impl Counts {
             "failed" => {
                 self.failed += 1;
                 increment(&mut self.failure_reasons, reason(request));
+                match outcome.cause {
+                    "bus" => {
+                        self.delivery_bus += 1;
+                        increment(&mut self.delivery_bus_reasons, reason(request));
+                    }
+                    "external" => {
+                        self.delivery_external += 1;
+                        increment(&mut self.delivery_external_reasons, reason(request));
+                    }
+                    _ => {}
+                }
             }
-            _ => self.open += 1,
+            _ => {
+                self.open += 1;
+                let sent = request.prompt.submitted_at_ms;
+                self.oldest_open_ms = Some(
+                    self.oldest_open_ms
+                        .map_or(sent, |current| current.min(sent)),
+                );
+            }
         }
         match outcome.capture {
             "replied" => self.replied += 1,
@@ -78,6 +103,8 @@ struct Series {
 #[derive(Default, Serialize)]
 struct Rates {
     delivery: Metric,
+    /// Delivered ÷ attempted. Pending stays in the denominator, so it cannot hide inside 100%.
+    delivery_share: Metric,
     reply_capture: Metric,
     bus_reliability: Metric,
 }
@@ -100,17 +127,44 @@ fn percent_label(percent: f64) -> String {
         format!("{}.{}%", tenths.div_euclid(10), tenths.rem_euclid(10))
     }
 }
+fn delivery_share(counts: &Counts) -> Metric {
+    let percent = rate(counts.delivered, counts.attempts);
+    let caption = match percent {
+        Some(value) => format!(
+            "{} of {}/{} delivered · {} pending · {} failed",
+            percent_label(value),
+            counts.delivered,
+            counts.attempts,
+            counts.open,
+            counts.failed,
+        ),
+        None => "—".to_string(),
+    };
+    Metric {
+        numerator: counts.delivered,
+        denominator: counts.attempts,
+        percent,
+        caption,
+    }
+}
 fn attempt_identity(counts: &Counts) -> String {
-    let pending = pending_attempts(counts);
+    let bus_denominator = counts.replied + counts.bus_failures;
+    let bus_rate = if bus_denominator == 0 {
+        "Bus reliability is — (no conclusive replies).".to_string()
+    } else {
+        format!(
+            "Of conclusive replies, {}/{} failed for Bus-caused reasons.",
+            counts.bus_failures, bus_denominator
+        )
+    };
     format!(
-        "{attempts} attempted = {delivered} delivered + {failed} failed + {external} external + {pending} pending. Bus reliability is {replied}/{denominator} conclusive; pending and external stay outside that percentage.",
+        "{attempts} attempted = {delivered} delivered + {pending} pending + {bus} Bus failures + {external} external. Delivery is {share}. {bus_rate}",
         attempts = counts.attempts,
-        delivered = counts.replied,
-        failed = counts.bus_failures,
-        external = counts.external,
-        pending = pending,
-        replied = counts.replied,
-        denominator = counts.replied + counts.bus_failures,
+        delivered = counts.delivered,
+        pending = counts.open,
+        bus = counts.delivery_bus,
+        external = counts.delivery_external,
+        share = delivery_share(counts).caption,
     )
 }
 fn conclusive_metric(numerator: u64, denominator: u64, excluded: &[(&str, u64)]) -> Metric {
@@ -143,6 +197,7 @@ impl From<&Counts> for Rates {
                 counts.delivered + counts.failed,
                 &[("still open", counts.open)],
             ),
+            delivery_share: delivery_share(counts),
             reply_capture: conclusive_metric(
                 counts.replied,
                 counts.replied + counts.reply_not_captured,

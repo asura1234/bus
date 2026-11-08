@@ -83,23 +83,27 @@ URL, serves one page with inline assets, and refreshes every thirty seconds.
 `BUS_DATA_DIR` selects an exact session root; otherwise the last session is read
 without recording a resume. It reads persisted state, journal and archived
 requests; it never sends control commands or saves session state. Stop with Ctrl+C.
-The page shows local send-hour delivery and reply capture rates, denominators,
-open requests, provider and room groups, and failure reasons. Bus reliability
-counts replied versus Bus-caused terminal failures, excluding deliberate
-interrupts, deleted agents/rooms, provider errors and pending requests. Each
-percentage states that conclusive denominator and the attempts it excluded.
-The full classification is printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
+The page leads with delivery. A direct message counts as delivered once Bus
+hands it off, including when the recipient has not replied. Delivery % is
+delivered ÷ attempted and names that fraction plus the pending and failed
+counts. Pending is still open, with the oldest pending age. Failed messages
+are split into Bus-caused and external, with causes. The order is the delivery
+headline, provider table, room table, hourly delivery graph, then a delay
+placeholder. End-to-end delay (p50 and p99) is not measured yet; the page
+reserves the place and shows no delay number. Reply capture comes after that,
+labelled as applying only to messages that expect a reply, so a missing reply
+is not presented as a delivery failure. Bus reliability sits below delivery as
+a note: of conclusive replies, how many failed for Bus-caused reasons. When
+that denominator is 0 the note and the counts line use an em dash and do not
+print 0/0. Provider and room rows show Delivered, Attempted, Pending,
+Delivery %, Bus failures and External. Attempted = Delivered + Pending + Bus
+failures + External. There is no per-recipient breakdown and no per-row cause
+list. Bus failure and external counts open undelivered request metadata and a
+copyable `bus message status MESSAGE_ID` command. The full classification is
+printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.
 
 Settings > Developer > Open delivery dashboard opens the attached session's
 page in the default browser. Repeated clicks and the dev CLI reuse one service
 per session (OS-released lock and verified loopback endpoint in
 `dashboard-runtime/`, separate from persisted message/request records).
-The whole-session headline is followed by an hourly graph with attempt counts,
-then provider and room tables. Each row shows Bus reliability, Delivered,
-Attempted, Pending, Bus failures and External. Attempted = Delivered + Bus
-failures + External + Pending. Delivered on that row is conclusive replies.
-Pending is still open plus reply pending, and pending attempts stay outside
-Bus reliability. There is no per-recipient breakdown and no per-row cause list.
-Bus failure and external counts open request metadata and a copyable
-`bus message status MESSAGE_ID` command.
