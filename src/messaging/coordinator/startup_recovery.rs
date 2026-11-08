@@ -52,6 +52,7 @@ impl Worker {
             } else {
                 (None, None, None)
             };
+        self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?;
         let mut state = self.state.clone();
         let mut startup = state
             .agent(agent.id)
@@ -71,6 +72,13 @@ impl Worker {
         state
             .observe_status(agent.id, RuntimeStatus::Launching, io::now_ms())
             .map_err(|e| e.to_string())?;
+        super::launch_metrics::bind_current(&mut state, agent.id);
+        let started_at_ms = state
+            .agent(agent.id)
+            .and_then(|a| a.startup.as_ref())
+            .ok_or("Saved startup disappeared")?
+            .started_at_ms;
+        state.watch_launch_command(agent.id, started_at_ms);
         self.save(state)?;
         self.missing_binary_checked.remove(&agent.id);
         let name = identity::managed_name(agent.room_id, agent.id);
