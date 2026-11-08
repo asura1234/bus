@@ -125,12 +125,11 @@ def scenario(binary, root, provider, master, retain_failure=False):
         delivered_request = rows[0]["delivery"]["requests"][0]
         assert delivered_request["reply"] is None, history
         assert delivered_request["stage"] == "ended", history
-        # A history map cannot reveal duplicate publication. Unviewed room
-        # counters and standalone notices are independent visible side effects.
+        # A turn that ends without --reply-to stores no reply, so the unviewed
+        # source room gains no unread mark. Repeated reads must not add one.
         state = durable()
         assert state["visible_room"] != source, state["visible_room"]
         expected = dict(before)
-        expected[str(source)] += 1
         assert {key: value["unread_count"] for key, value in state["rooms"].items()} == expected, state
         for target in ["master", "reply-work"]:
             other = bus.cli("history", "--room", target)

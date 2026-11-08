@@ -2182,15 +2182,26 @@ fn scriptable_fake_resumes_without_reusing_prior_turns() {
     );
     let resumed = send("after restart\nfake agent working");
     assert_turn_ended(&resumed);
+    let screen = agent_screen(&session, "resume-worker");
+    // The scripted fallback echoes the whole prompt, header included, so the
+    // prefix and the body are not one contiguous "fake reply: <body>" line.
+    let tail = screen
+        .rsplit_once("fake reply:")
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
     assert!(
-        agent_screen(&session, "resume-worker").contains("fake reply: after restart"),
-        "{resumed}"
+        tail.contains("after restart"),
+        "the unmatched prompt should get a normal fake reply: {screen}"
     );
     let repeated = send("CASE_RESUME_7");
     assert_turn_ended(&repeated);
     let screen = agent_screen(&session, "resume-worker");
+    let tail = screen
+        .rsplit_once("fake reply:")
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
     assert!(
-        screen.contains("fake reply: CASE_RESUME_7"),
+        tail.contains("CASE_RESUME_7") && !tail.contains("ONCE_7"),
         "the scripted turn is not reused after restart: {screen}"
     );
 }
