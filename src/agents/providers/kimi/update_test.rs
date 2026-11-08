@@ -183,6 +183,31 @@ fn kimi_yolo_refuses_auto_combined_with_legacy_yolo_before_saving() {
 }
 
 #[test]
+fn kimi_yolo_cluster_with_session_leaves_no_legacy_yolo_alias() {
+    let fixture = Fixture::new();
+    std::env::set_var("BUS_YOLO", "1");
+    let prepared = prepare(
+        &LaunchSpec {
+            provider: ProviderKind::Kimi,
+            cwd: fixture.root.to_string_lossy().into_owned(),
+            extra_args: "-yS -y".into(),
+            consent_project_hooks: false,
+            hooks: fixture.hooks.clone(),
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(prepared.args, ["--auto", "-S"]);
+    let saved = common::saved_options(ProviderKind::Kimi, &fixture.hooks.spool).unwrap();
+    assert_eq!(saved, ["-yS", "-y"]);
+    std::env::remove_var("BUS_YOLO");
+    let mut replay = common::resumable_options(ProviderKind::Kimi, &saved);
+    common::apply_run_permissions(ProviderKind::Kimi, &mut replay);
+    validate_run_permissions(&replay).unwrap();
+    assert_eq!(replay, ["-yS", "-y"]);
+}
+
+#[test]
 fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
     for (input, yolo, normal) in [
         ("", vec!["--auto"], vec![]),

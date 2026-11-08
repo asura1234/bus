@@ -30,6 +30,43 @@ fn kimi_hooks_bind_session_and_started_turn_without_treating_stop_as_final() {
 }
 
 #[test]
+fn kimi_optional_session_does_not_swallow_a_following_flag() {
+    let keep_flag = vec![
+        "--session".into(),
+        "-y".into(),
+        "--model".into(),
+        "synthetic".into(),
+    ];
+    assert_eq!(
+        super::kimi::launch::resumable_options(&keep_flag),
+        vec!["-y", "--model", "synthetic"]
+    );
+    let keep_id = vec![
+        "--session".into(),
+        "sid".into(),
+        "--model".into(),
+        "synthetic".into(),
+    ];
+    assert_eq!(
+        super::kimi::launch::resumable_options(&keep_id),
+        vec!["--model", "synthetic"]
+    );
+    assert_eq!(
+        super::kimi::launch::resumable_options(&["-S".into(), "-y".into()]),
+        vec!["-y"]
+    );
+    assert_eq!(
+        super::kimi::launch::resumable_options(&[
+            "-S".into(),
+            "sid".into(),
+            "--model".into(),
+            "synthetic".into()
+        ]),
+        vec!["--model", "synthetic"]
+    );
+}
+
+#[test]
 fn kimi_resume_options_retain_yolo_but_drop_new_session_file() {
     let options = vec![
         "--yolo".into(),
@@ -145,6 +182,7 @@ fn kimi_yolo_normalizes_resume_argv_and_replays_saved_options_normally() {
             vec!["--auto"],
             vec!["--auto", "--yolo"],
         ),
+        (vec!["-yS", "-y"], vec!["--auto", "-S"], vec!["-yS", "-y"]),
     ] {
         for (enabled, expected) in [(true, yolo), (false, normal)] {
             if enabled {

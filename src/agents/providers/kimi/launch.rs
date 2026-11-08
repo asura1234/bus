@@ -365,20 +365,28 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
     Ok(changed)
 }
 
-const SHORT_OPTIONS: &[(char, bool)] = &[
-    ('V', false),
-    ('S', true),
-    ('c', false),
-    ('y', false),
-    ('m', true),
-    ('p', true),
-    ('h', false),
+#[derive(Clone, Copy)]
+enum ShortValue {
+    Flag,
+    Required,
+    Optional,
+}
+
+const SHORT_OPTIONS: &[(char, ShortValue)] = &[
+    ('V', ShortValue::Flag),
+    ('S', ShortValue::Optional),
+    ('c', ShortValue::Flag),
+    ('y', ShortValue::Flag),
+    ('m', ShortValue::Required),
+    ('p', ShortValue::Required),
+    ('h', ShortValue::Flag),
 ];
 
 struct ParsedShortOption {
     yolo: bool,
     normalized: Option<String>,
     takes_next_value: bool,
+    optional_next: bool,
 }
 
 fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
@@ -388,19 +396,23 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
     let mut yolo = false;
     let mut normalized = "-".to_owned();
     let mut takes_next_value = false;
+    let mut optional_next = false;
     for (index, flag) in name.char_indices().skip(1) {
-        let takes_value = SHORT_OPTIONS
+        let value = SHORT_OPTIONS
             .iter()
-            .find_map(|(candidate, takes_value)| (*candidate == flag).then_some(*takes_value))?;
+            .find_map(|(candidate, value)| (*candidate == flag).then_some(*value))?;
         if flag == 'y' {
             yolo = true;
         } else {
             normalized.push(flag);
         }
-        if takes_value {
+        if !matches!(value, ShortValue::Flag) {
             let value_start = index + flag.len_utf8();
             normalized.push_str(&name[value_start..]);
-            takes_next_value = value_start == name.len();
+            if value_start == name.len() {
+                takes_next_value = true;
+                optional_next = matches!(value, ShortValue::Optional);
+            }
             break;
         }
     }
@@ -408,6 +420,7 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
         yolo,
         normalized: (normalized.len() > 1).then_some(normalized),
         takes_next_value,
+        optional_next,
     })
 }
 
@@ -420,6 +433,12 @@ pub(crate) fn normalize_yolo_option(name: &str) -> Option<Option<String>> {
 
 pub(crate) fn is_yolo_option(name: &str) -> bool {
     normalize_yolo_option(name).is_some()
+}
+
+/// Kimi `-S` / `--session` takes an optional id. A following token that starts
+/// with `-` is the next option, not that id.
+pub(crate) fn session_value_is_optional(name: &str) -> bool {
+    name == "--session" || parse_short_option(name).is_some_and(|option| option.optional_next)
 }
 
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
@@ -527,15 +546,21 @@ pub(crate) fn resumable_options(args: &[String]) -> Vec<String> {
             result.extend_from_slice(&args[index..]);
             break;
         }
+        let separated_value = arity == Some(1)
+            && !args[index].contains('=')
+            && !(session_value_is_optional(&args[index])
+                && !args
+                    .get(index + 1)
+                    .is_some_and(|value| !value.starts_with('-')));
         if option != "--agent-file" && option != "--session" && option != "-S" {
             result.push(args[index].clone());
-            if arity == Some(1) && !args[index].contains('=') {
+            if separated_value {
                 if let Some(value) = args.get(index + 1) {
                     result.push(value.clone());
                 }
             }
         }
-        index += 1 + usize::from(arity == Some(1) && !args[index].contains('='));
+        index += 1 + usize::from(separated_value);
     }
     result
 }
