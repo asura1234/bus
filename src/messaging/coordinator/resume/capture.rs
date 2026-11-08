@@ -195,6 +195,21 @@ fn capture_environment(
         })
         .into();
     env.extend(crate::agents::providers::launch::runtime_env(provider));
+    // A new tab opts in through `codex::launch::environment`. Resume must
+    // carry that same flag or the restored pane never binds the native port.
+    #[cfg(unix)]
+    if provider == ProviderKind::Codex {
+        let native = crate::agents::providers::codex::launch::environment(hooks);
+        if native
+            .get("BUS_CODEX_NATIVE")
+            .is_some_and(|value| value == "1")
+        {
+            if let Some(path) = native.get("PATH") {
+                env.push(("PATH".to_owned(), path.clone()));
+            }
+            env.push(("BUS_CODEX_NATIVE".to_owned(), "1".to_owned()));
+        }
+    }
     Ok(env)
 }
 

@@ -429,6 +429,25 @@ impl Fixture {
         .map(|(key, value)| (key.to_owned(), value))
         .into();
         env.extend(crate::agents::providers::launch::runtime_env(self.provider));
+        #[cfg(unix)]
+        if identity::provider_kind(self.provider) == crate::agents::providers::ProviderKind::Codex {
+            let native = crate::agents::providers::codex::launch::environment(
+                &crate::agents::providers::hook_json::HookContext {
+                    binary: self.binary.clone(),
+                    spool: self.root.join("callbacks/owned-launch"),
+                    launch_id: "owned-launch".into(),
+                },
+            );
+            if native
+                .get("BUS_CODEX_NATIVE")
+                .is_some_and(|value| value == "1")
+            {
+                if let Some(path) = native.get("PATH") {
+                    env.push(("PATH".to_owned(), path.clone()));
+                }
+                env.push(("BUS_CODEX_NATIVE".to_owned(), "1".to_owned()));
+            }
+        }
         env
     }
 }
@@ -1343,6 +1362,51 @@ fn yolo_resume_does_not_combine_codex_bypass_with_an_explicit_approval_policy() 
         failures.is_empty(),
         "Codex would refuse to start:\n{}",
         failures.join("\n")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_resume_environment_opts_into_the_native_runtime() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(Provider::Codex);
+    let bin = fixture.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let program = bin.join("codex");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let _path = crate::utils::env::PathOverride::set(&bin);
+    let extras = fixture.load().unwrap();
+    let callback = extras
+        .env
+        .iter()
+        .find(|(key, _)| key == "BUS_CALLBACK_DIR")
+        .map(|(_, value)| value.clone())
+        .expect("resume keeps the callback directory");
+    assert!(Path::new(&callback).is_absolute(), "{callback}");
+    assert_eq!(
+        extras
+            .env
+            .iter()
+            .find(|(key, _)| key == "BUS_CODEX_NATIVE")
+            .map(|(_, value)| value.as_str()),
+        Some("1"),
+        "resume env: {:?}",
+        extras.env
+    );
+    let mut runtime =
+        crate::agents::providers::codex::native::Runtime::from_environment(&extras.env)
+            .expect("the resume env should select the native runtime");
+    let launch = runtime
+        .launch(&[
+            program.to_string_lossy().into_owned(),
+            "resume".into(),
+            "160d1f8b-9023-44b8-9bc7-24333effb185".into(),
+        ])
+        .unwrap();
+    assert!(
+        launch.iter().any(|arg| arg == "--bus-codex-runtime"),
+        "{launch:?}"
     );
 }
 
