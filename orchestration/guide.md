@@ -357,8 +357,10 @@ For example:
 
 Run checks and remediation until every reviewer is Ready:
 
-1. Pin one head and give the checklist to two or more `review-pr` reviewers on
-   different providers and to the verifier. Launch their work and any bot review
+1. Pin one head and give the checklist to a `review-pr` reviewer and to the
+   verifier. One reviewer is the default; add a second independent lane only when
+   the change is high-risk (delivery, security, cross-cutting behavior) or the
+   first lane is uncertain. Launch their work and any bot review
    (for example Copilot) concurrently. For delivery, callbacks or launch, the
    verifier also runs `just e2e` (live round trips with every provider) and reports
    its table in this same round, rather than waiting for review to finish.
@@ -379,11 +381,18 @@ Run checks and remediation until every reviewer is Ready:
    Owners exclude out-of-goal findings and report them in finals for the
    orchestrator to decide and record. Turn remaining nonblocking work into follow-up
    steps with its recommendations and acceptance checks.
-4. Keep fixing until every reviewer is Ready. Follow each consolidated repair
-   batch with gates and concurrent review, verification and bot review of its
-   new head. Hold and escalate only real decisions: sharp reviewer disagreements,
-   goal changes, or destructive or outward-facing actions without existing
-   authorization. Keep independent work moving while a decision is pending.
+4. Keep fixing until the reviewer is Ready. That closes the review phase: from
+   then on, fixes are verified by the gate, not by another review round. Run the
+   gate on the final head; once it passes, run exactly one delta review of
+   everything that changed since the reviewed head - fix commits, rebases and
+   merge-conflict resolutions together - before merging. If that delta review
+   finds a defect, fix it, re-gate, and delta-review only the new delta. Do not
+   start a delta review before the gate passes, and do not review each fix: both
+   spend a lane on a head that still has to earn its gate. A change that only
+   touches markdown or plans/ needs no gate at all. Hold and escalate only real
+   decisions: sharp reviewer disagreements, goal changes, or destructive or
+   outward-facing actions without existing authorization. Keep independent work
+   moving while a decision is pending.
 5. Once the core goal holds on the enumerated checklist and required gates pass,
    report the evidence and route the PR, once every reviewer is Ready, through
    [auto-merge-pr](workflows/auto-merge-pr.md). Reuse its recorded start answer;
@@ -520,6 +529,18 @@ Run this audit every few events and on a timer while work remains open:
 - After a rebase, compare `git range-diff` or before/after PR diffs. Record an
   unchanged own diff to carry verification forward; re-run fast gates. Use the
   slow resource again only when the PR's own changes moved.
+- Prove a head can merge before spending a gate on it:
+  `git merge-tree --write-tree origin/<base> <head>` must report no conflicts.
+  Converge a conflicted head onto the current base first - rebase a short
+  branch, merge the base into a long-lived one - then prove it again.
+- Merge every PR the moment its gate is green. Land small independent PRs
+  first; converge a long-lived branch or train onto the current base and gate
+  it with other merges frozen, so the base cannot move under the gate. A gate
+  that aborts because HEAD or the worktree moved proves nothing. Never let a
+  second merge move the base while a gate is in flight.
+- A patch-identical rebase carries its review forward; a changed patch is
+  covered by the single post-gate delta review. A markdown-only or plans-only
+  change needs no gate and no delta review: merge it on review.
 
 For example, you have seven open PRs; Ready work stands still for about 1h45m,
 and only two merge in about 3h. You trust an unreachable-device report and pause

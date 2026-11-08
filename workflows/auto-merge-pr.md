@@ -95,6 +95,36 @@ start answer; do not ask for per-PR merge OK. A draft-only, manual-test or other
 developer hold remains binding. Clarify missing intent or authority only for the
 affected part; keep independent work moving.
 
+## Gate and delta review
+
+The review-and-repair loop above is the review phase. Use one reviewer by
+default; add a second independent lane only when the change is high-risk
+(delivery, security, cross-cutting behavior) or the first lane is uncertain.
+Once the reviewer is Ready on a head, that phase closes:
+
+1. Prove the head can merge before spending a gate on it:
+   `git merge-tree --write-tree origin/<base> <head>` must produce a tree with no
+   conflicts. Converge a conflicted head onto the current base first - rebase a
+   short branch, merge the base into a long-lived one - then prove it again.
+2. Run the gate on that exact head. Gate-and-fix is a loop: fix PR-caused
+   failures inside it and re-run until green; escalate only when the correct fix
+   would change the PR's intended behavior. A gate whose run aborts because HEAD
+   or the worktree moved proves nothing; re-run it on a frozen head.
+3. After the gate passes, run exactly one delta review of everything that
+   changed since the reviewed head - fix commits, rebases and merge resolutions
+   together, not one review per batch. Do not start it before the gate passes. A
+   patch-identical replay changes nothing and needs no delta.
+4. Merge on a clean delta. If the delta review finds a defect, fix it, re-gate,
+   and delta-review only the new delta.
+
+Merge order is part of the gate: merge each PR as soon as its gate is green,
+land small independent PRs first, and converge a long-lived branch or train onto
+the current base with other merges frozen so the base cannot move under its gate.
+Do not resume the queue until that merge completes.
+
+A change that only touches markdown or plans/ needs no gate and no delta review:
+merge it on review, or directly when the whole workflow is docs-only.
+
 For an explicit **manual-test hold**, the owner runs `merge-pr --hold-before-merge`.
 Once it is ready and holding, the developer tests that exact head and approves
 or rejects the merge. Approval releases only that head's manual-test hold: recheck size, current-head gates,
@@ -105,11 +135,12 @@ repair loop after the scope/FLAG/decision checks.
 Other hold types still hand back to the orchestrator; a manual-test approval
 does not clear them or authorize a goal change.
 
-Keep fixing until every reviewer is Ready. Review, verification, gates,
-bot/GitHub comments and developer feedback all enter the same repair loop.
-After each consolidated repair batch, push the new head to the named peers
-and collect fresh exact-head evidence. There is no repair counter or cap to
-configure, inherit or reset. These rules apply during `merge-pr` too.
+Keep fixing until the reviewer is Ready. During the review phase, review,
+verification, bot/GitHub comments and developer feedback all enter the same
+repair loop. Once that phase closes, repairs are verified by the gate and then
+by the single post-gate delta review, not by another review round. There is no
+repair counter or cap to configure, inherit or reset. These rules apply during
+`merge-pr` too.
 
 Hold and escalate only real decisions: sharp reviewer disagreements, a goal
 change, or a destructive or outward-facing action without existing authorization.
