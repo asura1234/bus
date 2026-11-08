@@ -563,18 +563,19 @@ async fn compaction_banner_server_sets_the_flag_from_the_pane() {
         (info.agent, info.compaction_banner)
     }
 
-    let (agent, banner) = flag(
-        "Auto-compacting conversation (82% full)...\r\n",
-        AgentKind::Grok,
-    );
+    let line = "Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n";
+    let (agent, banner) = flag(line, AgentKind::Grok);
     assert_eq!(agent.as_deref(), Some("grok"));
-    assert!(banner, "grok in-progress banner");
+    assert!(banner, "grok completion line");
 
     let (_, banner) = flag(
-        "Auto-compacting\r\nconversation (82% full)...\r\n",
+        "Context compacted: 209.9k ->\r\n37.8k tokens (131.2s)\r\n",
         AgentKind::Grok,
     );
-    assert!(banner, "wrapped grok banner still counts as visible");
+    assert!(
+        banner,
+        "wrapped grok completion line still counts as visible"
+    );
 
     let (_, banner) = flag("Conversation compacted.\r\n", AgentKind::Grok);
     assert!(banner, "grok completion banner");
@@ -582,18 +583,14 @@ async fn compaction_banner_server_sets_the_flag_from_the_pane() {
     let (_, banner) = flag("ready\r\n", AgentKind::Grok);
     assert!(!banner, "idle grok pane");
 
-    let (agent, banner) = flag("Context auto-compacted\r\n", AgentKind::Kimi);
-    assert_eq!(agent.as_deref(), Some("kimi"));
-    assert!(banner, "kimi banner");
-
-    let (agent, banner) = flag("Auto-compacting conversation\r\n", AgentKind::Claude);
+    let (agent, banner) = flag(line, AgentKind::Claude);
     assert_eq!(agent.as_deref(), Some("claude"));
     assert!(!banner, "claude keeps the hook path");
 }
 
 #[tokio::test]
 async fn compaction_banner_narrow_resize_stays_the_same_episode() {
-    let banner = b"Auto-compacting conversation (82% full)...";
+    let banner = b"Context compacted: 209.9k -> 37.8k tokens (131.2s)";
     let (runtime, _writes) = crate::terminal::TerminalRuntime::test_with_channel_capacity(26, 8, 4);
     runtime.test_process_pty_bytes(banner);
     let (grid, _) = crate::terminal::driver::observe(&runtime).expect("screen read");
@@ -613,16 +610,9 @@ fn compaction_banner_short_transcript_is_not_a_banner() {
     );
     assert!(
         !crate::agents::compaction_banner::visible(
-            Some("kimi"),
+            Some("grok"),
             "Context compacted, so continue from the summary."
         ),
-        "a Kimi phrase inside a sentence is not the status banner"
-    );
-    assert!(
-        !crate::agents::compaction_banner::visible(
-            Some("kimi"),
-            "Compacting context before the next reply."
-        ),
-        "a Kimi phrase that continues into a sentence is not the status banner"
+        "a sentence after the completion phrase is not the status banner"
     );
 }

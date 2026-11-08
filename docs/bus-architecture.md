@@ -189,7 +189,7 @@ Files are split by ownership, not by helper.
     - `mod.rs`, `types.rs` (ids, `Author`, `Room` and its MASTER kind, `RoomAgent`, `Prompt`, `Reply`), `state.rs` (`BusState`)
     - `rooms.rs`, `agents.rs` (participants, `orchestrates` link), `requests.rs` (queue, coalesce, steer, settle)
     - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup)
-    - `compactions.rs` (per-tick limit notice with saved latches, via `rooms::post_bus_notice`). Claude counts a SessionStart hook whose source is `compact`. Grok and Kimi count one episode of the compaction banner already read from the pane.
+    - `compactions.rs` (per-tick limit notice with saved latches, via `rooms::post_bus_notice`). Claude counts a SessionStart hook whose source is `compact`. Grok counts one episode of the compaction banner already read from the pane.
     - `idle_agents.rs` (per-room idle-count crossing notices to the bound orchestrator, with in-memory coordinator latches; see [idle agents alert](idle-agents-alert.md))
     - `attention.rs` (MASTER developer-attention notices via `post_developer_attention`); both notice paths use
       `Author::Bus`, shown as the grey sender `bus`

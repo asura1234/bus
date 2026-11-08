@@ -119,7 +119,7 @@ impl BusState {
         self.record_compaction(id, at_ms)
     }
 
-    /// Counts one Grok or Kimi compaction per banner episode.
+    /// Counts one Grok compaction per banner episode.
     ///
     /// The banner staying visible, including a resize that redraws it, does
     /// not count again. The caller skips this when the screen was not read,

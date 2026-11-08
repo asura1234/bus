@@ -1,42 +1,29 @@
-//! Compaction banners on a provider pane.
+//! Compaction banners on a Grok pane.
 //!
-//! Grok and Kimi do not emit Claude's SessionStart `source: "compact"` hook.
-//! Their TUIs print a short status line for one compaction. Bus already reads
-//! that pane. A banner that stays on screen, including after a resize wraps
-//! it, is still the same episode.
+//! Grok does not emit Claude's SessionStart `source: "compact"` hook. Its TUI
+//! prints a short status line for one compaction. Bus already reads that pane.
+//! A banner that stays on screen, including after a resize wraps it, is still
+//! the same episode.
 
 /// Status lines longer than this are transcript prose, not the banner.
 const MAX_BANNER_CHARS: usize = 160;
 
-const GROK_PHRASES: &[&str] = &[
-    "Auto-compacting conversation",
-    "Conversation compacted",
-    "Context compacted",
-];
-
-const KIMI_PHRASES: &[&str] = &[
-    "Compacting context",
-    "Context auto-compacted",
-    "Context compacted",
-];
+const GROK_PHRASES: &[&str] = &["Conversation compacted", "Context compacted"];
 
 /// Whether `screen` is showing one compaction banner for this provider label.
 ///
-/// Both the in-progress line and the completion line are the same episode.
-/// `None` and every provider other than Grok and Kimi never match, so Claude's
-/// hook path cannot also count the words if they appear on its pane.
+/// The completion line is one episode. `None` and every label other than
+/// `grok` never match, so Claude's hook path cannot also count the words.
 pub(crate) fn visible(agent: Option<&str>, screen: &str) -> bool {
-    let phrases = match agent {
-        Some("grok") => GROK_PHRASES,
-        Some("kimi") => KIMI_PHRASES,
-        _ => return false,
-    };
+    if agent != Some("grok") {
+        return false;
+    }
     let lines: Vec<String> = screen
         .lines()
         .map(|line| collapse_whitespace(line.trim()))
         .filter(|line| !line.is_empty())
         .collect();
-    if lines.iter().any(|line| status_line(line, phrases)) {
+    if lines.iter().any(|line| status_line(line, GROK_PHRASES)) {
         return true;
     }
     // A resize can split the status line on a word or mid-word. The mid-word
@@ -45,7 +32,7 @@ pub(crate) fn visible(agent: Option<&str>, screen: &str) -> bool {
     lines.windows(2).any(|pair| {
         let mid_word = format!("{}{}", pair[0], pair[1]);
         let word = format!("{} {}", pair[0], pair[1]);
-        status_line(&mid_word, phrases) || status_line(&word, phrases)
+        status_line(&mid_word, GROK_PHRASES) || status_line(&word, GROK_PHRASES)
     })
 }
 
@@ -115,14 +102,12 @@ mod tests {
     use super::visible;
 
     #[test]
-    fn compaction_banner_grok_in_progress_matches() {
-        assert!(visible(
+    fn compaction_banner_grok_in_progress_phrase_is_not_the_pane_line() {
+        // grok-5 printed this while compacting. It does not open an episode.
+        assert!(!visible(Some("grok"), "Context 80% full. Compacting…"));
+        assert!(!visible(
             Some("grok"),
             "Auto-compacting conversation (82% full)..."
-        ));
-        assert!(visible(
-            Some("grok"),
-            "Auto-compacting   conversation (82% full)..."
         ));
     }
 
@@ -175,7 +160,11 @@ mod tests {
     fn compaction_banner_grok_wrapped_banner_still_matches() {
         assert!(visible(
             Some("grok"),
-            "Auto-compacting\nconversation (82% full)..."
+            "Context compacted: 209.9k ->\n37.8k tokens (131.2s)"
+        ));
+        assert!(visible(
+            Some("grok"),
+            "Context compacted: 209.9k -> 37.8k tok\nens (131.2s)"
         ));
     }
 
@@ -184,7 +173,10 @@ mod tests {
         assert!(!visible(Some("grok"), "Auto-compact failed"));
         assert!(!visible(Some("grok"), "Auto-compact cancelled"));
         assert!(!visible(Some("grok"), "ready\nask anything"));
-        let prose = format!("Auto-compacting conversation {}", "x".repeat(MAX_PROSE));
+        let prose = format!(
+            "Context compacted: 209.9k -> 37.8k tokens {}",
+            "x".repeat(MAX_PROSE)
+        );
         assert!(
             !visible(Some("grok"), &prose),
             "a long transcript line is not the status banner"
@@ -192,21 +184,17 @@ mod tests {
     }
 
     #[test]
-    fn compaction_banner_kimi_status_phrases_match() {
-        assert!(visible(Some("kimi"), "Compacting context"));
-        assert!(visible(Some("kimi"), "Context compacted"));
-        assert!(visible(Some("kimi"), "Context auto-compacted"));
-        assert!(
-            !visible(Some("kimi"), "Compacting conversation context"),
-            "the longer transcript chunk is not the status banner"
-        );
-    }
-
-    #[test]
     fn compaction_banner_other_agents_never_match() {
-        for agent in [None, Some("claude"), Some("codex"), Some("cursor")] {
-            assert!(!visible(agent, "Auto-compacting conversation"));
-            assert!(!visible(agent, "Compacting context"));
+        let line = "Context compacted: 209.9k -> 37.8k tokens (131.2s)";
+        for agent in [
+            None,
+            Some("claude"),
+            Some("codex"),
+            Some("cursor"),
+            Some("kimi"),
+        ] {
+            assert!(!visible(agent, line));
+            assert!(!visible(agent, "Conversation compacted."));
         }
     }
 

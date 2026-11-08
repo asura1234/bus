@@ -747,7 +747,7 @@ fn fake_grok_compaction_banner_reaches_the_room_notice() {
     let session = Session::start("gcompact");
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     let settings = session_dir(&session.0).join("data/settings.json");
-    std::fs::write(&settings, r#"{"max_compactions_per_agent":2}"#).unwrap();
+    std::fs::write(&settings, r#"{"max_compactions_per_agent":5}"#).unwrap();
     let work = session_dir(&session.0).join("work");
     let added = scratch_bus(
         &session,
@@ -795,7 +795,7 @@ fn fake_grok_compaction_banner_reaches_the_room_notice() {
     // the latch before the prompts that must each count.
     std::thread::sleep(std::time::Duration::from_millis(800));
 
-    for n in 1..=2 {
+    for n in 1..=5 {
         let sent = scratch_bus(
             &session,
             &[
@@ -849,7 +849,7 @@ fn fake_grok_compaction_banner_reaches_the_room_notice() {
         &["history", "--room", "bus", "--limit", "50"],
     ));
     assert_eq!(code, 0, "{history}");
-    let notice = "g1 reached 2 compactions; get a handover note and replace it.";
+    let notice = "g1 reached 5 compactions; get a handover note and replace it.";
     let mentions = history.to_string().matches(notice).count();
     assert_eq!(mentions, 1, "the limit notice posts once: {history}");
 }

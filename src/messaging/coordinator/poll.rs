@@ -77,12 +77,9 @@ impl Worker {
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;
-            // Grok and Kimi print a compaction banner instead of Claude's
-            // compact hook. A skipped screen read is not "banner gone".
-            if matches!(
-                agent.provider,
-                super::Provider::Grok | super::Provider::Kimi
-            ) {
+            // Grok prints a compaction banner instead of Claude's compact
+            // hook. A skipped screen read is not "banner gone".
+            if agent.provider == super::Provider::Grok {
                 if let Some(info) = info {
                     if !info.screen_detection_skipped {
                         state

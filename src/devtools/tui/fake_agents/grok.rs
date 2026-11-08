@@ -636,9 +636,9 @@ impl Grok {
             return screen;
         } else if self.active.is_some() {
             screen.push_str("⠋ Working… [stop]\r\n");
-            // Captured from a live Grok 4.7 pane (grok-5). It stays for this
-            // turn so one poll counts the episode, then the idle screen drops it.
-            screen.push_str("Context compacted: 205.0k → 32.0k tokens (80.0s)\r\n");
+            // Completion line observed in this Bus run. It stays for this turn
+            // so one poll counts the episode, then the idle screen drops it.
+            screen.push_str("Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n");
         }
         screen.push_str(&format!(
             "╭{}╮\r\n│ ❯ {} │\r\n╰{}╯\r\n{}Shift+Tab:mode │ Ctrl+x:shortcuts\r\n",
