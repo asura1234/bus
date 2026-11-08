@@ -449,3 +449,98 @@ async fn pending_payload_with_a_preserved_draft_still_submits_once() {
     );
     assert!(outcome.is_ok(), "{outcome:?}");
 }
+
+#[tokio::test]
+async fn empty_composer_restore_failure_stays_retryable() {
+    struct FastEditor {
+        directory: PathBuf,
+    }
+    impl SubmissionInspector for FastEditor {
+        fn observe(&self, screen: &str) -> InputObservation {
+            if screen.contains("EMPTY") {
+                InputObservation::Empty
+            } else if screen.contains("BUS_PAYLOAD") {
+                InputObservation::Pending
+            } else {
+                InputObservation::Other
+            }
+        }
+        fn draft_preservation(&self, _: &str) -> Option<DraftPreservation> {
+            Some(DraftPreservation::Editor {
+                key: Bytes::from_static(b"\x07"),
+                backspace: Bytes::from_static(b"\x7f"),
+                directory: self.directory.clone(),
+            })
+        }
+        fn editor_submission(&self) -> Option<EditorSubmission> {
+            Some(EditorSubmission {
+                text: String::from_utf8(PAYLOAD.to_vec()).unwrap(),
+                directory: self.directory.clone(),
+                key: Bytes::from_static(b"\x07"),
+                backspace: Bytes::from_static(b"\x7f"),
+                verification_error: None,
+            })
+        }
+        fn editor_frame_readable(&self, _: &str) -> bool {
+            true
+        }
+        fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
+            screen.contains(marker)
+        }
+        fn preservation_budget(&self) -> Duration {
+            Duration::from_secs(3)
+        }
+    }
+
+    let root = crate::utils::test_temp::unique_temp_path("empty-restore-failure");
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("native-editor.txt");
+    let directory = root.join("exchange");
+    std::fs::write(&file, "original draft").unwrap();
+    {
+        let exchange = crate::platform::draft_editor::Exchange::begin_preserving(
+            directory.clone(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        exchange.request_swap("attempt").unwrap();
+        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+    }
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    render(&runtime, "EMPTY");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(PAYLOAD),
+            Bytes::from_static(b"\r"),
+            vec![],
+            Duration::ZERO,
+            None,
+            Box::new(FastEditor {
+                directory: directory.clone(),
+            }),
+        )
+        .unwrap();
+    let mut completion_task =
+        tokio::task::spawn_blocking(move || completion.recv_timeout(Duration::from_secs(8)));
+    let mut enters = 0;
+    let outcome = loop {
+        tokio::select! {
+            biased;
+            key = writes.recv() => {
+                let key = key.expect("input channel closed");
+                if key.as_ref() == b"\r" {
+                    enters += 1;
+                }
+            }
+            outcome = &mut completion_task => break outcome.unwrap().unwrap(),
+        }
+    };
+    assert_eq!(enters, 0, "a failed restore must not submit");
+    let error = outcome.expect_err("a failed restore defers the submit");
+    assert!(
+        crate::terminal::runtime::PromptNotShown::composer_busy(&error),
+        "{error}"
+    );
+    assert!(crate::platform::draft_editor::Exchange::has_preserved_draft(&directory));
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -77,7 +77,8 @@ impl ObservedSubmission {
                     self.clock.remaining(self.hard_deadline),
                 )
                 .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-                self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)?;
+                self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)
+                    .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
                 lease.restored();
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
