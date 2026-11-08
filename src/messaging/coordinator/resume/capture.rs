@@ -172,11 +172,6 @@ fn capture_environment(
     hooks: &HookContext,
 ) -> Result<Vec<(String, String)>, String> {
     match provider {
-        ProviderKind::Codex => {
-            return Ok(crate::agents::providers::codex::launch::environment(hooks)
-                .into_iter()
-                .collect())
-        }
         ProviderKind::Grok => {
             return Ok(crate::agents::providers::grok::launch::environment(hooks)?
                 .into_iter()

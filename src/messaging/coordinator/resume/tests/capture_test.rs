@@ -453,14 +453,6 @@ impl Fixture {
         ]
         .map(|(key, value)| (key.to_owned(), value))
         .into();
-        #[cfg(unix)]
-        if self.provider == Provider::Codex {
-            let bin = self.root.join("bin").to_string_lossy().into_owned();
-            env.extend([
-                ("BUS_CODEX_NATIVE".into(), "1".into()),
-                ("PATH".into(), format!("{bin}:{bin}")),
-            ]);
-        }
         env.extend(crate::agents::providers::launch::runtime_env(self.provider));
         #[cfg(unix)]
         if identity::provider_kind(self.provider) == crate::agents::providers::ProviderKind::Codex {
