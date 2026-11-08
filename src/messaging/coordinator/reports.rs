@@ -22,6 +22,10 @@ pub(super) struct PendingReport {
     launch: String,
     key: String,
     completed_owner: bool,
+    /// The turn already reached Completed. A final already seen for it is not
+    /// a new report. The first late decision, which no callback has handled,
+    /// still is.
+    settled_owner: bool,
     already_answered: bool,
 }
 
@@ -79,6 +83,7 @@ pub(super) fn pending_report(
     let completed_owner = owner.is_some_and(|request| {
         request.phase == RequestPhase::Completed && request.reply().is_some()
     });
+    let settled_owner = owner.is_some_and(|request| request.phase == RequestPhase::Completed);
     let already_answered = completed_owner
         && owner.is_some_and(|request| {
             request
@@ -109,14 +114,16 @@ pub(super) fn pending_report(
             crate::utils::time::digest(text.trim().as_bytes()),
         ),
         completed_owner,
+        settled_owner,
         already_answered,
     })
 }
 
-/// Posts late, unprompted or changed finals once their callback is applied.
-/// Normal accepted finals use request settlement and its MASTER publication.
-/// Changed finals of a completed, attested turn are separate follow-ups, each
-/// published once by text identity.
+/// Posts a late or unprompted final once. An accepted final settles the
+/// request and is not posted. A changed final is a follow-up only when the
+/// turn already stored an explicit reply. A final already seen for a settled
+/// turn is remembered so a later replay is not a new report; the first late
+/// decision after a silent close still is.
 pub(super) fn post_report(
     state: &mut BusState,
     report: PendingReport,
@@ -128,15 +135,28 @@ pub(super) fn post_report(
             false
         }
         CallbackDisposition::Rejected(
-            CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
-        ) => true,
-        CallbackDisposition::Rejected(
             CallbackRejection::DuplicateFinal
             | CallbackRejection::WrongTurn
             | CallbackRejection::WrongPrompt
             | CallbackRejection::UnboundFinal
             | CallbackRejection::BeforeSubmissionBoundary,
         ) if report.completed_owner => true,
+        CallbackDisposition::Rejected(
+            CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
+        ) => {
+            // Silent close records no report key. The first late decision
+            // therefore still posts. A replay of text already handled does not.
+            if report.settled_owner && state.has_reported_final(&report.key) {
+                return;
+            }
+            true
+        }
+        // The turn already settled and this text was rejected against it.
+        // Remember it so a replay after the queue moves on is not a report.
+        _ if report.settled_owner => {
+            state.record_reported_final(report.key, report.launch);
+            return;
+        }
         _ => return,
     };
     if state.has_reported_final(&report.key) {

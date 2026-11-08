@@ -230,13 +230,6 @@ pub(super) fn saved_history(
     requests
 }
 
-pub(super) fn is_reply(line: &history::Line) -> bool {
-    matches!(
-        line.raw_markdown,
-        Some((history::MarkdownSource::Reply(_), _))
-    )
-}
-
 pub(super) fn saved_exchange(
     ui: &mut BusUi,
     room: RoomId,

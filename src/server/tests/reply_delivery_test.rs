@@ -167,27 +167,23 @@ async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_set
     );
     assert_eq!(
         history["messages"][0]["delivery"]["requests"][0]["stage"],
-        "replied"
+        "ended"
     );
-    assert_eq!(
-        history["messages"][0]["delivery"]["requests"][0]["reply"]["text"],
-        "MASTER_DECISION: use the fallback"
-    );
+    assert!(history["messages"][0]["delivery"]["requests"][0]["reply"].is_null());
     let master = f.call("room.history", json!({"room":"master"}));
-    let decisions: Vec<_> = master["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["prompt"]["text"] == "MASTER_DECISION: use the fallback")
-        .collect();
-    assert_eq!(decisions.len(), 1, "{master}");
     assert_eq!(
-        decisions[0]["prompt"]["author"],
-        json!({"agent":orchestrator})
+        master["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["prompt"]["text"] == "MASTER_DECISION: use the fallback")
+            .count(),
+        0,
+        "a captured turn final is not published to MASTER: {master}"
     );
     assert!(
         f.typed(worker).is_empty(),
-        "MASTER decisions must not enter worker composers"
+        "captured finals must not enter worker composers"
     );
     f.reopen();
     f.tick();
@@ -199,7 +195,7 @@ async fn worker_to_orchestrator_delivers_queued_message_into_its_session_and_set
             .iter()
             .filter(|row| row["prompt"]["text"] == "MASTER_DECISION: use the fallback")
             .count(),
-        1
+        0
     );
 }
 
@@ -560,7 +556,7 @@ async fn cursor_injected_user_rows_and_advanced_transcript_keep_the_owned_final(
         f.tick();
         f.reopen();
         f.assert_reply(request, "Ready");
-        assert_eq!(f.state().room(f.work).unwrap().unread_count, 1);
+        assert_eq!(f.state().room(f.work).unwrap().unread_count, 0);
     }
 }
 
@@ -622,11 +618,8 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
     f.elapse(6_000);
     f.assert_reply(follow, "worker notice acknowledged");
     f.assert_reply(first, "working on it");
-    assert_eq!(f.state().room(f.master).unwrap().unread_count, 1);
-    assert_eq!(
-        f.state().room(f.work).unwrap().unread_count,
-        before_work + 1
-    );
+    assert_eq!(f.state().room(f.master).unwrap().unread_count, 0);
+    assert_eq!(f.state().room(f.work).unwrap().unread_count, before_work);
 }
 
 #[tokio::test]
@@ -737,7 +730,10 @@ async fn coalesced_sends_share_one_answer_and_one_history_publication() {
             f.assert_reply(request, "shared answer");
         }
         assert_eq!(f.state().room(f.work).unwrap().unread_count, unread);
-        assert_eq!(unread, 1, "one reply publication, despite three requests");
+        assert_eq!(
+            unread, 0,
+            "a captured final is not a publication, despite three requests"
+        );
     }
 }
 
@@ -777,7 +773,7 @@ async fn captured_reply_survives_unrelated_later_turn_and_duplicate_stop() {
         f.stop(agent, "owned", "owned reply", json!([]), json!([]));
         f.reopen();
         f.assert_reply(request, "owned reply");
-        assert_eq!(f.state().room(f.work).unwrap().unread_count, 1);
+        assert_eq!(f.state().room(f.work).unwrap().unread_count, 0);
     }
 }
 
@@ -970,14 +966,12 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
     );
     f.tick();
     let typed = f.typed(orch);
-    assert_eq!(typed.len(), 1, "typed payloads: {typed:#?}");
     assert!(
-        typed[0].contains("autonomous result"),
-        "typed payloads: {typed:#?}"
-    );
-    assert!(
-        !typed[0].contains("owned result"),
-        "a live waiter owns the original reply; typed payloads: {typed:#?}"
+        typed
+            .iter()
+            .all(|payload| !payload.contains("owned result")
+                && !payload.contains("autonomous result")),
+        "captured finals are not forwarded to the orchestrator: {typed:#?}"
     );
     f.assert_reply(request, "owned result");
     f.set_reply_waiter_time(waiter_time + std::time::Duration::from_secs(3));
@@ -985,10 +979,15 @@ async fn autonomous_worker_final_routes_even_while_original_reply_has_a_waiter()
     assert_eq!(
         f.state()
             .requests()
-            .filter(|r| r.agent_id == orch && r.prompt.text.contains("owned result"))
+            .filter(|r| {
+                r.agent_id == orch
+                    && (r.prompt.text.contains("owned result")
+                        || r.prompt.text.contains("autonomous result")
+                        || r.prompt.text.contains("Reply to message"))
+            })
             .count(),
-        1,
-        "the same unacknowledged reply routes once its waiter lease expires"
+        0,
+        "an expired waiter does not forward a captured final"
     );
 }
 
@@ -1114,7 +1113,7 @@ async fn failed_reply_persistence_replays_spool_after_restart_without_duplicatio
         f.reopen();
         f.tick();
         f.assert_reply(request, "saved after retry");
-        assert_eq!(f.state().room(f.work).unwrap().unread_count, 1);
+        assert_eq!(f.state().room(f.work).unwrap().unread_count, 0);
     }
 }
 
@@ -1132,17 +1131,13 @@ async fn worker_reply_wakes_orchestrator_once_without_waiter_and_survives_reopen
         f.age_request_progress(3_000);
         f.reopen();
         let typed = f.typed(orch);
-        assert_eq!(
-            typed.len(),
-            1,
-            "worker reply must reach orchestrator terminal"
+        assert!(
+            typed.is_empty(),
+            "a captured worker final must not wake the orchestrator: {typed:#?}"
         );
-        assert!(typed[0].contains("worker result"));
-        f.start(orch, "notice", &typed[0]);
-        f.stop(orch, "notice", "acknowledged", json!([]), json!([]));
         f.reopen();
         f.tick();
-        assert_eq!(f.typed(orch).len(), 1);
+        assert!(f.typed(orch).is_empty());
         f.assert_reply(request, "worker result");
     }
 }
@@ -1346,7 +1341,8 @@ fn run_soak() {
     );
     assert_eq!(
         f.state().room(f.work).unwrap().unread_count as usize,
-        completed + notices.len()
+        notices.len(),
+        "captured finals do not add unread on top of {completed} completed requests"
     );
     f.assert_publications();
     eprintln!("reply soak: {completed} completed load requests plus {} orchestrator inbox requests, {round} rounds, 12 load agents, {:?}, {} idle-worker notices", round * 30, began.elapsed(), notices.len());

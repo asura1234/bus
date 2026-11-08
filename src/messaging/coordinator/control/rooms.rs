@@ -1,6 +1,6 @@
 //! Rooms development commands on the single coordinator.
 use super::{mpsc, required, unique, BTreeMap, BusCommand, BusEvent, RoomId, Worker};
-use crate::messaging::model::{PromptId, Request, RequestId};
+use crate::messaging::model::{PromptId, Request};
 use serde_json::{json, Value};
 
 impl Worker {
@@ -100,7 +100,6 @@ impl Worker {
                 .or_default()
                 .push(request);
         }
-        let shared_sources = self.state.shared_reply_sources(room, |_| true);
         // Messages carry their delivery; notices (reports to the
         // developer, interrupts) were delivered to nobody.
         let mut messages = self
@@ -121,7 +120,7 @@ impl Worker {
         let next_before = (skip > 0)
             .then(|| messages.keys().nth(skip).copied())
             .flatten();
-        let mut result = json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().skip(skip).map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.history_delivery(*id, now, deliveries.get(id).cloned().unwrap_or_default(), &shared_sources)).flatten()})).collect::<Vec<_>>()});
+        let mut result = json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().skip(skip).map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.history_delivery(*id, now, deliveries.get(id).cloned().unwrap_or_default())).flatten()})).collect::<Vec<_>>()});
         if limit.is_some() {
             result["has_more"] = json!(skip > 0);
             result["next_before"] = json!(next_before);
@@ -129,34 +128,25 @@ impl Worker {
         Ok(result)
     }
 
-    /// History shows a shared body once; message status remains lossless.
+    /// History is a list of messages. Reply text, reply status, and group
+    /// badges stay off this projection. Message status remains lossless.
     fn history_delivery(
         &self,
         message: PromptId,
         now: u64,
         requests: Vec<&Request>,
-        sources: &BTreeMap<RequestId, RequestId>,
     ) -> Option<Value> {
-        let references: BTreeMap<_, _> = requests
-            .iter()
-            .filter_map(|request| {
-                let group = request.completed_reply.as_ref()?.group?;
-                let source = *sources.get(&group)?;
-                (source != request.id)
-                    .then(|| {
-                        self.state
-                            .request(source)
-                            .map(|lead| (request.id, lead.prompt.id))
-                    })
-                    .flatten()
-            })
-            .collect();
         let mut delivery = self.control_message_from(message, now, requests).ok()?;
         for request in delivery.get_mut("requests")?.as_array_mut()? {
-            let id = request.get("request_id")?.as_u64()?;
-            if let Some(source) = references.get(&RequestId(id)) {
-                request["reply"] = Value::Null;
-                request["answered_with_message"] = json!(source);
+            let Some(object) = request.as_object_mut() else {
+                continue;
+            };
+            object.insert("reply".into(), Value::Null);
+            object.insert("group".into(), Value::Null);
+            object.remove("answered_with_message");
+            object.insert("reply_ack".into(), Value::Bool(false));
+            if object.get("stage").and_then(Value::as_str) == Some("replied") {
+                object.insert("stage".into(), json!("ended"));
             }
         }
         Some(delivery)

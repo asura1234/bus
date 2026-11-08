@@ -228,7 +228,14 @@ fn a_reply_captured_before_the_stop_took_effect_completes_normally() {
     fixture.consume();
     assert!(interrupt(&mut fixture, json!({"agent": "builder"})).ok);
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("Parser written."));
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert!(fixture.request(lead).failure_reason.is_none());
+    assert!(fixture.reply(lead).is_none());
+    assert!(fixture.worker.state.requests().all(|request| {
+        request
+            .reply()
+            .is_none_or(|reply| reply.text != "Parser written.")
+    }));
     assert!(
         !fixture
             .worker
@@ -405,7 +412,22 @@ fn a_reply_captured_after_the_key_but_before_idle_completes_normally() {
     fixture.stopped("turn-1", "Parser written.");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("Parser written."));
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert!(fixture.request(lead).failure_reason.is_none());
+    assert!(fixture.reply(lead).is_none());
+    assert!(fixture.worker.state.requests().all(|request| {
+        request
+            .reply()
+            .is_none_or(|reply| reply.text != "Parser written.")
+    }));
+    assert!(
+        !fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .interrupt_pending
+    );
 }
 
 #[test]

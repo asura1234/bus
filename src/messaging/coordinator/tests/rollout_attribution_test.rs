@@ -1,7 +1,8 @@
 //! Adversarial attribution cases for the unbound rollout fallback, adopted
 //! from the bug-reply-not-captured verifier (2026-10-20, rounds 1 to 3):
-//! an unbound request takes a rollout answer only when the one turn that ran
-//! its prompt since the send can be proven; otherwise `reply_not_captured`.
+//! a proved rollout turn settles that request without storing its answer.
+//! An unattributed or ambiguous end still completes with no reply and no
+//! failure reason, and does not borrow another turn.
 use super::*;
 use crate::agents::providers::codex::usage::{
     find_codex_prompt_turn, read_codex_turn_end, CodexTurnEnd,
@@ -68,13 +69,42 @@ fn turn(f: &Fixture, id: &str, ms: u64, prompt: &str, answer: &str) -> String {
     ].iter().map(|value| format!("{value}\n")).collect()
 }
 
-fn no_answer(f: &Fixture, id: RequestId) {
-    assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
-    assert_eq!(
-        f.request(id).failure_reason.as_deref(),
-        Some("reply_not_captured")
+fn settled_without_reply(f: &Fixture, id: RequestId) {
+    let request = f.request(id);
+    assert_eq!(request.phase, RequestPhase::Completed, "{id:?}");
+    assert!(
+        request.failure_reason.is_none(),
+        "{id:?} {:?}",
+        request.failure_reason
     );
-    assert!(f.reply(id).is_none());
+    assert!(f.reply(id).is_none(), "{id:?} {:?}", f.reply(id));
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+}
+
+fn reply_text_absent(f: &Fixture, text: &str) {
+    assert!(
+        f.worker
+            .state
+            .requests()
+            .all(|request| { request.reply().is_none_or(|reply| reply.text != text) }),
+        "{text} stored on a request"
+    );
+    assert!(
+        f.worker
+            .state
+            .room(f.room)
+            .unwrap()
+            .latest_replies
+            .values()
+            .all(|reply| reply.text != text),
+        "{text} published"
+    );
 }
 
 fn bound(f: &mut Fixture, path: &Path, turn_id: &str, prompt: &str) -> RequestId {
@@ -99,11 +129,12 @@ fn send_boundary_is_inclusive_and_a_one_ms_older_turn_is_rejected() {
         let stamp = (since as i64 + offset) as u64;
         std::fs::write(&path, turn(&f, "candidate", stamp, "boundary", "RIGHT")).unwrap();
         idle_then_settle(&mut f, id);
-        if offset < 0 {
-            no_answer(&f, id);
-        } else {
-            assert_eq!(f.reply(id).as_deref(), Some("RIGHT"));
-        }
+        settled_without_reply(&f, id);
+        reply_text_absent(&f, "RIGHT");
+        assert!(
+            f.request(id).provider_turn_id.is_none(),
+            "offset {offset} borrowed a rollout turn"
+        );
     }
 }
 
@@ -119,7 +150,10 @@ fn two_matching_turns_in_the_send_millisecond_remain_ambiguous() {
     )
     .unwrap();
     idle_then_settle(&mut f, id);
-    no_answer(&f, id);
+    settled_without_reply(&f, id);
+    reply_text_absent(&f, "ONE");
+    reply_text_absent(&f, "TWO");
+    assert!(f.request(id).provider_turn_id.is_none());
 }
 
 #[test]
@@ -134,7 +168,9 @@ fn a_partially_written_final_never_delivers_its_partial_text() {
     let partial = lines[2].split("NOT COMPLETE").next().unwrap();
     std::fs::write(&path, prefix + partial + "NOT CO").unwrap();
     idle_then_settle(&mut f, id);
-    no_answer(&f, id);
+    settled_without_reply(&f, id);
+    reply_text_absent(&f, "NOT COMPLETE");
+    reply_text_absent(&f, "NOT CO");
 }
 
 #[test]
@@ -149,7 +185,9 @@ fn complete_final_json_without_a_trailing_newline_delivers_only_its_exact_text()
     )
     .unwrap();
     idle_then_settle(&mut f, id);
-    assert_eq!(f.reply(id).as_deref(), Some("EXACT"));
+    settled_without_reply(&f, id);
+    reply_text_absent(&f, "EXACT");
+    assert!(f.request(id).provider_turn_id.is_none());
 }
 
 #[test]
@@ -181,7 +219,14 @@ fn a_renamed_rollout_and_an_unregistered_new_file_deliver_no_foreign_answer() {
         )
         .unwrap();
         idle_then_settle(&mut f, id);
-        no_answer(&f, id);
+        settled_without_reply(&f, id);
+        reply_text_absent(&f, "ORIGINAL");
+        reply_text_absent(&f, "FOREIGN");
+        if is_bound {
+            assert_eq!(f.request(id).provider_turn_id.as_deref(), Some("original"));
+        } else {
+            assert!(f.request(id).provider_turn_id.is_none());
+        }
     }
 }
 
@@ -200,7 +245,13 @@ fn a_bound_completion_outside_the_tail_never_uses_a_later_turn_answer() {
         Some(CodexTurnEnd::Final("WRONG".into()))
     );
     idle_then_settle(&mut f, id);
-    no_answer(&f, id);
+    settled_without_reply(&f, id);
+    assert_eq!(
+        f.request(id).provider_turn_id.as_deref(),
+        Some("bound-turn")
+    );
+    reply_text_absent(&f, "BOUND");
+    reply_text_absent(&f, "WRONG");
 }
 
 #[test]
@@ -231,7 +282,10 @@ fn a_window_over_64_mib_refuses_attribution_instead_of_using_the_later_match() {
         None
     );
     idle_then_settle(&mut f, id);
-    no_answer(&f, id);
+    settled_without_reply(&f, id);
+    assert!(f.request(id).provider_turn_id.is_none());
+    reply_text_absent(&f, "FIRST");
+    reply_text_absent(&f, "LATER");
 }
 
 #[test]
@@ -249,7 +303,9 @@ fn an_unbound_long_turn_with_one_matching_prompt_still_delivers_its_own_final() 
     )
     .unwrap();
     idle_then_settle(&mut f, id);
-    assert_eq!(f.reply(id).as_deref(), Some("EXACT LONG FINAL"));
+    settled_without_reply(&f, id);
+    reply_text_absent(&f, "EXACT LONG FINAL");
+    assert!(f.request(id).provider_turn_id.is_none());
 }
 
 #[test]
@@ -282,7 +338,10 @@ fn clock_rollback_near_send_must_not_hide_an_earlier_matching_turn() {
             f.request(id).phase,
             f.reply(id)
         );
-        assert!(f.reply(id).is_none(), "an append-only rollout with two matching post-send starts must remain ambiguous despite clock rollback");
+        settled_without_reply(&f, id);
+        reply_text_absent(&f, "FIRST");
+        reply_text_absent(&f, "LATER");
+        assert!(f.request(id).provider_turn_id.is_none(), "an append-only rollout with two matching post-send starts must remain ambiguous despite clock rollback");
     }
 }
 
@@ -327,7 +386,10 @@ fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answe
             f.request(id).phase,
             f.reply(id)
         );
-        assert!(f.reply(id).is_none(), "a 1-second clock step after the send must not exclude the original input and publish the retry's answer");
+        settled_without_reply(&f, id);
+        reply_text_absent(&f, "ORIGINAL");
+        reply_text_absent(&f, "WRONG RETRY");
+        assert!(f.request(id).provider_turn_id.is_none(), "a 1-second clock step after the send must not exclude the original input and publish the retry's answer");
     }
 }
 
@@ -361,10 +423,9 @@ fn the_backward_window_keeps_both_matching_turns_for_rollbacks_up_to_sixty_secon
             f.reply(id)
         );
         assert!(selected.is_none());
-        assert!(f.reply(id).is_none());
-        assert_eq!(
-            f.request(id).failure_reason.as_deref(),
-            Some("reply_not_captured")
-        );
+        settled_without_reply(&f, id);
+        reply_text_absent(&f, "FIRST");
+        reply_text_absent(&f, "LATER");
+        assert!(f.request(id).provider_turn_id.is_none());
     }
 }

@@ -2,6 +2,50 @@ use super::*;
 use crate::messaging::model::{Draft, Provider};
 
 #[test]
+fn delivered_history_shows_the_message_without_a_reply_lifecycle() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    state
+        .set_draft_text(room, "PLAIN_MESSAGE for the worker")
+        .unwrap();
+    let request = state.submit_draft(room, 1000).unwrap()[0];
+    let mut document = serde_json::to_value(state).unwrap();
+    document["requests"][request.0.to_string()]["phase"] = "completed".into();
+    document["requests"][request.0.to_string()]["completed_reply"] = serde_json::json!({
+        "group": request.0,
+        "content": {
+            "callback_id": "final-1",
+            "text": "Reply to message 1\nREPLY_BODY",
+            "received_at_ms": 2000
+        }
+    });
+    let state: BusState = serde_json::from_value(document).unwrap();
+    let mut history = History::default();
+    let text = history
+        .lines(
+            &state,
+            state.room(room).unwrap(),
+            100,
+            1,
+            2001,
+            &mut Thumbnails::default(),
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("PLAIN_MESSAGE"), "{text}");
+    assert!(!text.contains("REPLY_BODY"), "{text}");
+    assert!(!text.contains("Reply to message"), "{text}");
+    assert!(!text.contains("answered with message"), "{text}");
+    assert!(!text.contains('…'), "{text}");
+}
+
+#[test]
 fn an_individual_answer_stays_visible_when_later_messages_join_the_same_open_turn() {
     let mut state = BusState::default();
     let room = state.create_room("work").unwrap();
@@ -43,8 +87,13 @@ fn an_individual_answer_stays_visible_when_later_messages_join_the_same_open_tur
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert_eq!(text.matches("INDIVIDUAL RESULT").count(), 1, "{text}");
-    assert!(text.contains("follow up"), "{text}");
+    let watch = text.find("watch").expect("lead prompt");
+    let follow = text.find("follow up").expect("later prompt");
+    assert!(watch < follow, "{text}");
+    assert!(!text.contains("INDIVIDUAL RESULT"), "{text}");
+    assert!(!text.contains("Reply to message"), "{text}");
+    assert!(!text.contains("answered with message"), "{text}");
+    assert!(!text.contains('…'), "{text}");
 }
 
 #[test]
@@ -191,15 +240,25 @@ fn a_cross_room_group_shows_its_reply_once_in_each_room() {
             3_000,
             &mut thumbnails,
         );
-        assert_eq!(
-            lines
-                .iter()
-                .filter(|line| line.text.contains("shared reply"))
-                .count(),
-            1,
-            "{room:?}"
-        );
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("shared reply"), "{room:?} {text}");
+        assert!(!text.contains("Reply to message"), "{room:?} {text}");
+        assert!(!text.contains("answered with message"), "{room:?} {text}");
         assert!(lines.iter().all(|line| !line.text.contains('…')));
+        if room == work {
+            let dialog = text.find("dialog").expect("work prompt");
+            let follow = text.find("follow-up").expect("work follow-up");
+            assert!(dialog < follow, "{text}");
+            assert!(!text.contains("developer question"), "{text}");
+        } else {
+            assert!(text.contains("developer question"), "{text}");
+            assert!(!text.contains("dialog"), "{text}");
+            assert!(!text.contains("follow-up"), "{text}");
+        }
     }
 }
 
@@ -309,25 +368,23 @@ fn consecutive_replies_to_one_message_are_separated_by_one_blank_row() {
         &mut Thumbnails::default(),
     );
     let rows: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
-    assert_eq!(
-        rows[1..],
-        [
-            "first",
-            "",
-            "    alpha  Claude Code",
-            "    fake reply: first",
-            "    ",
-            "    Quote",
-            "",
-            "    beta  Claude Code",
-            "    …",
-            "",
-            "    gamma  Claude Code",
-            "    …",
-            "",
-        ],
-        "{rows:?}"
-    );
+    let text = rows.join("\n");
+    let header = rows
+        .iter()
+        .position(|row| {
+            row.starts_with("You →")
+                && row.contains("alpha")
+                && row.contains("beta")
+                && row.contains("gamma")
+        })
+        .expect("recipient header");
+    let body = rows.iter().position(|row| *row == "first").expect("prompt");
+    assert!(header < body, "{rows:?}");
+    assert!(!text.contains("fake reply"), "{text}");
+    assert!(!text.contains("Reply to message"), "{text}");
+    assert!(!text.contains("answered with message"), "{text}");
+    assert!(!text.contains("Quote"), "{text}");
+    assert!(!text.contains('…'), "{text}");
 }
 
 #[test]
@@ -365,7 +422,7 @@ fn an_archived_group_still_shows_its_shared_reply_once() {
         state.finish_for_test(id, "shared completed answer", 2_000);
     }
     let render = |state: &BusState| {
-        History::default()
+        let text = History::default()
             .lines(
                 state,
                 state.room(room).unwrap(),
@@ -375,17 +432,22 @@ fn an_archived_group_still_shows_its_shared_reply_once() {
                 &mut Thumbnails::default(),
             )
             .iter()
-            .filter(|line| line.text.contains("shared completed answer"))
-            .count()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let first = text.find("first task").expect("first task");
+        let second = text.find("second task").expect("second task");
+        let third = text.find("third task").expect("third task");
+        assert!(first < second && second < third, "{text}");
+        assert!(!text.contains("shared completed answer"), "{text}");
+        assert!(!text.contains("Reply to message"), "{text}");
+        assert!(!text.contains("answered with message"), "{text}");
+        assert!(!text.contains('…'), "{text}");
     };
-    assert_eq!(render(&state), 1, "the live group shares one reply");
+    render(&state);
     assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
     assert_eq!(state.history().len(), 3);
-    assert_eq!(
-        render(&state),
-        1,
-        "archiving must preserve the group's single shared reply"
-    );
+    render(&state);
 }
 
 #[test]
@@ -485,10 +547,10 @@ fn returning_to_a_room_reuses_layout_until_width_changes() {
     }
     let mut history = History::default();
     for (room, width, expected) in [
-        (first, 80, 2),
-        (second, 80, 2),
+        (first, 80, 1),
+        (second, 80, 1),
         (first, 80, 0),
-        (first, 40, 2),
+        (first, 40, 1),
     ] {
         history.lines(
             &state,
@@ -502,7 +564,7 @@ fn returning_to_a_room_reuses_layout_until_width_changes() {
         assert!(history
             .cached()
             .iter()
-            .any(|line| line.text.trim() == "reply"));
+            .any(|line| line.text.trim() == "prompt"));
     }
     state.delete_room(second, 0).unwrap();
     history.lines(
@@ -516,7 +578,7 @@ fn returning_to_a_room_reuses_layout_until_width_changes() {
     assert_eq!(history.room_markdown.len(), 1);
     assert_eq!(
         history.markdown.len(),
-        2,
+        1,
         "deleted room's blocks are released"
     );
     assert_eq!(history.rendered, 0);
@@ -605,14 +667,10 @@ fn audit_history_renders_deleted_sender_recipient_and_reply_by_name() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    for expected in [
-        "sender [deleted]",
-        "reviewer [deleted]",
-        "original task",
-        "original verdict",
-    ] {
+    for expected in ["sender [deleted]", "reviewer [deleted]", "original task"] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
+    assert!(!text.contains("original verdict"), "{text}");
 }
 
 fn hidden_routing_envelope_fixture(
@@ -694,10 +752,14 @@ fn hidden_routing_envelope_keeps_the_authored_shared_reply_visible() {
     let text = hidden_routing_history(&state, room);
     assert!(text.contains("AUTHORED_QUESTION"), "{text}");
     assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
-    assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
+    assert!(!text.contains("SHARED_AUTHORED_ANSWER"), "{text}");
+    assert!(!text.contains("answered with message"), "{text}");
+    assert!(!text.contains('…'), "{text}");
     assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
     let text = hidden_routing_history(&state, room);
-    assert_eq!(text.matches("SHARED_AUTHORED_ANSWER").count(), 1, "{text}");
+    assert!(text.contains("AUTHORED_QUESTION"), "{text}");
+    assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
+    assert!(!text.contains("SHARED_AUTHORED_ANSWER"), "{text}");
 }
 
 #[test]
@@ -721,18 +783,13 @@ fn developer_question_stays_visible_when_an_agent_routing_envelope_cannot_coales
     let text = hidden_routing_history(&state, room);
     assert!(text.contains("AUTHORED_QUESTION"), "{text}");
     assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
-    assert_eq!(
-        text.matches("VISIBLE_DEVELOPER_ANSWER").count(),
-        1,
-        "{text}"
-    );
+    assert!(!text.contains("VISIBLE_DEVELOPER_ANSWER"), "{text}");
+    assert!(!text.contains("Reply to message"), "{text}");
     assert!(state.archive(2_000 + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
     let text = hidden_routing_history(&state, room);
-    assert_eq!(
-        text.matches("VISIBLE_DEVELOPER_ANSWER").count(),
-        1,
-        "{text}"
-    );
+    assert!(text.contains("AUTHORED_QUESTION"), "{text}");
+    assert!(!text.contains("VISIBLE_DEVELOPER_ANSWER"), "{text}");
+    assert!(!text.contains("HIDDEN_ROUTING_ENVELOPE"), "{text}");
     let hidden = state.request(hidden).unwrap();
     assert_eq!(hidden.phase, crate::messaging::model::RequestPhase::Queued);
     assert_eq!(hidden.group, None);
@@ -811,46 +868,44 @@ fn batch_history_lines(state: &BusState, room: RoomId) -> Vec<Line> {
 
 fn batch_history_assert_lines(state: &BusState, room: RoomId, visible: &[RequestId]) {
     let lines = batch_history_lines(state, room);
-    let lead_message = state.request(visible[0]).unwrap().prompt.id;
-    let bodies: Vec<_> = lines
+    let text = lines
         .iter()
-        .filter(|line| line.text.contains("SHARED_BATCH_ANSWER"))
-        .collect();
-    assert_eq!(bodies.len(), 1);
-    assert_eq!(
-        bodies[0].anchor.prompt, lead_message,
-        "body must belong to the lead exchange"
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains("SHARED_BATCH_ANSWER"),
+        "reply bodies are not history rows: {text}"
     );
-    assert_eq!(
-        bodies[0].raw_markdown.as_ref().unwrap().0,
-        MarkdownSource::Reply(visible[0])
+    assert!(
+        !text.to_lowercase().contains("answered with message"),
+        "{text}"
     );
-    for follower in &visible[1..] {
-        let message = state.request(*follower).unwrap().prompt.id;
+    assert!(!text.contains("Reply to message"), "{text}");
+    assert!(lines.iter().all(|line| !line.text.contains('…')), "{text}");
+    assert!(
+        lines
+            .iter()
+            .all(|line| !matches!(line.action, Some(Action::Quote(_)))),
+        "history has no quote row"
+    );
+    let mut cursor = 0;
+    for id in visible {
+        let request = state.request(*id).unwrap();
+        let prompt = request.prompt.text.as_str();
+        let at = text[cursor..]
+            .find(prompt)
+            .unwrap_or_else(|| panic!("missing {prompt}: {text}"))
+            + cursor;
         assert!(
             lines.iter().any(|line| {
-                line.anchor.prompt == message
-                    && line
-                        .text
-                        .to_lowercase()
-                        .contains(&format!("answered with message {}", lead_message.0))
-                    && line.raw_markdown.is_none()
+                line.anchor.prompt == request.prompt.id && line.text.contains(prompt)
             }),
-            "member {message:?} needs its answer reference"
+            "message {} keeps its prompt row",
+            request.prompt.id.0
         );
+        cursor = at + prompt.len();
     }
-    let quotes: Vec<_> = lines
-        .iter()
-        .filter_map(|line| match &line.action {
-            Some(Action::Quote(request)) => Some(*request),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        quotes,
-        [visible[0]],
-        "only the full body has a Quote action"
-    );
 }
 
 #[test]
@@ -890,30 +945,26 @@ fn batch_history_tui_individual_answer_does_not_steal_the_later_shared_final() {
     }
     let state: BusState = serde_json::from_value(document).unwrap();
     let lines = batch_history_lines(&state, room);
-    let individual = lines
+    let text = lines
         .iter()
-        .find(|line| line.text.contains("INDIVIDUAL_BATCH_ANSWER"))
-        .unwrap();
-    assert_eq!(
-        individual.anchor.prompt,
-        state.request(requests[0]).unwrap().prompt.id
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.contains("INDIVIDUAL_BATCH_ANSWER"), "{text}");
+    assert!(!text.contains("SHARED_BATCH_ANSWER"), "{text}");
+    assert!(
+        !text.to_lowercase().contains("answered with message"),
+        "{text}"
     );
-    let shared = lines
-        .iter()
-        .find(|line| line.text.contains("SHARED_BATCH_ANSWER"))
-        .unwrap();
-    assert_eq!(
-        shared.anchor.prompt,
-        state.request(requests[1]).unwrap().prompt.id
-    );
-    let lead_message = state.request(requests[1]).unwrap().prompt.id;
-    assert!(lines.iter().any(|line| {
-        line.anchor.prompt == state.request(requests[2]).unwrap().prompt.id
-            && line
-                .text
-                .to_lowercase()
-                .contains(&format!("answered with message {}", lead_message.0))
-    }));
+    let mut cursor = 0;
+    for id in &requests {
+        let prompt = state.request(*id).unwrap().prompt.text.clone();
+        let at = text[cursor..]
+            .find(&prompt)
+            .unwrap_or_else(|| panic!("missing {prompt}: {text}"))
+            + cursor;
+        cursor = at + prompt.len();
+    }
 }
 
 #[test]
@@ -925,4 +976,17 @@ fn batch_history_tui_cross_room_group_keeps_one_body_under_each_rooms_first_visi
     let state: BusState = serde_json::from_value(document).unwrap();
     batch_history_assert_lines(&state, work, &[requests[0], requests[2]]);
     batch_history_assert_lines(&state, master, &[requests[1]]);
+    let work_text = batch_history_lines(&state, work)
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let master_text = batch_history_lines(&state, master)
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!work_text.contains("second visible task"), "{work_text}");
+    assert!(!master_text.contains("first visible task"), "{master_text}");
+    assert!(!master_text.contains("third visible task"), "{master_text}");
 }

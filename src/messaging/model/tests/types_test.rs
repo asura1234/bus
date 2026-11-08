@@ -510,16 +510,13 @@ fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whi
         .observe_status(agent, RuntimeStatus::Idle, 13)
         .unwrap();
 
-    assert_eq!(
-        state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
-    assert_eq!(
-        state.room(room).unwrap().latest_replies[&agent].text,
-        "finished"
-    );
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
+    assert!(state.room(room).unwrap().latest_replies.is_empty());
     assert_eq!(state.next_queued_request(agent), Some(queued));
-    assert_eq!(state.request(request).unwrap().prompt.text, "Look \t");
+    assert_eq!(settled.prompt.text, "Look \t");
 }
 
 #[test]
@@ -774,3 +771,6 @@ mod provider_retry_tests;
 
 #[path = "orchestrator_ordering_test.rs"]
 mod orchestrator_ordering_tests;
+
+#[path = "explicit_replies_test.rs"]
+mod explicit_replies_tests;

@@ -93,6 +93,7 @@ fn history_status_keeps_mixed_live_and_archived_recipients_after_reopen() {
     assert_eq!(status["requests"].as_array().unwrap().len(), 2);
     assert_eq!(status["requests"][0]["agent_id"], peer.0);
     assert_eq!(status["requests"][0]["reply"]["text"], "archived answer");
+    assert_eq!(status["requests"][0]["stage"], "replied");
     assert_eq!(status["requests"][1]["agent_id"], agent.0);
     assert_eq!(status["requests"][1]["stage"], "queued");
     let history = reopened.control_response_with_events(
@@ -105,10 +106,17 @@ fn history_status_keeps_mixed_live_and_archived_recipients_after_reopen() {
     );
     assert!(history.ok, "{history:?}");
     assert_eq!(history.result["messages"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        history.result["messages"][0]["delivery"]["requests"],
-        status["requests"]
-    );
+    let archived = &history.result["messages"][0]["delivery"]["requests"];
+    assert_eq!(archived.as_array().unwrap().len(), 2);
+    assert_eq!(archived[0]["agent_id"], peer.0);
+    assert!(archived[0]["reply"].is_null());
+    assert!(archived[0]["group"].is_null());
+    assert!(archived[0].get("answered_with_message").is_none());
+    assert_eq!(archived[0]["reply_ack"], false);
+    assert_eq!(archived[0]["stage"], "ended");
+    assert_eq!(archived[1]["agent_id"], agent.0);
+    assert_eq!(archived[1]["stage"], "queued");
+    assert!(archived[1]["reply"].is_null());
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }

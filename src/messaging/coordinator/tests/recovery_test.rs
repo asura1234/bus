@@ -419,20 +419,24 @@ fn initial_recovery_tick_keeps_detached_room_reply_unread_until_selected() {
     };
     let mut recovered = Worker::open(dir.clone(), Box::new(fake)).unwrap();
     recovered.tick().unwrap();
-    assert_eq!(
-        recovered.state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
-    assert_eq!(
-        recovered.state.room(room_b).unwrap().latest_replies[&agent].text,
-        "completed while detached"
-    );
-    assert_eq!(recovered.state.room(room_b).unwrap().unread_count, 1);
+    let settled = recovered.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
+    assert!(recovered
+        .state
+        .room(room_b)
+        .unwrap()
+        .latest_replies
+        .get(&agent)
+        .is_none());
+    // A captured final is not a reply, so a detached room does not gain unread.
+    assert_eq!(recovered.state.room(room_b).unwrap().unread_count, 0);
     let (events, _) = mpsc::channel();
     recovered
         .command(BusCommand::SelectRoom(room_a), &events)
         .unwrap();
-    assert_eq!(recovered.state.room(room_b).unwrap().unread_count, 1);
+    assert_eq!(recovered.state.room(room_b).unwrap().unread_count, 0);
     assert_eq!(
         recovered
             .store
@@ -442,7 +446,7 @@ fn initial_recovery_tick_keeps_detached_room_reply_unread_until_selected() {
             .room(room_b)
             .unwrap()
             .unread_count,
-        1
+        0
     );
     recovered
         .command(BusCommand::SelectRoom(room_b), &events)

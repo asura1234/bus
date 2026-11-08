@@ -242,7 +242,7 @@ fn kimi_successful_silent_turn_completes_with_an_empty_reply() {
     );
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert_eq!(settled.reply().unwrap().text, "");
+    assert!(settled.reply().is_none());
     assert!(settled.failure_reason.is_none());
 }
 
@@ -580,7 +580,10 @@ fn every_provider_empty_final_is_durable_and_has_no_room_publication() {
                 serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
             let reply = restored.request(request).unwrap();
             assert_eq!(reply.phase, RequestPhase::Completed);
-            assert_eq!(reply.reply().unwrap().text, text, "{provider:?}");
+            assert!(
+                reply.reply().is_none(),
+                "{provider:?}: empty final stored a reply"
+            );
             assert!(reply.failure_reason.is_none());
             assert_eq!(restored.agent(agent).unwrap().current_request, None);
             assert!(restored.room(room).unwrap().latest_replies.is_empty());

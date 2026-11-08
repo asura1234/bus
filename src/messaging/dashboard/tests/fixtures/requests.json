@@ -354,7 +354,7 @@
         "phase": "completed"
       },
       "delivery": "delivered",
-      "capture": "replied",
+      "capture": "none",
       "cause": "success"
     },
     {
@@ -367,7 +367,7 @@
         "phase": "active",
         "completed_reply": {
           "content": {
-            "callback_id": "redacted",
+            "callback_id": "reply-to:124",
             "text": "[redacted reply]",
             "received_at_ms": 1793581205000,
             "provider_session_id": null,
@@ -391,7 +391,7 @@
         "phase": "abandoned",
         "completed_reply": {
           "content": {
-            "callback_id": "redacted",
+            "callback_id": "reply-to:125",
             "text": "[redacted reply]",
             "received_at_ms": 1793581205000,
             "provider_session_id": null,

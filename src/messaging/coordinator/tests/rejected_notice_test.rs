@@ -9,14 +9,18 @@ fn rejected_reply_notice_does_not_block_master_after_unrelated_turns_and_restart
         let source = f.send(Author::Agent(f.orch), "build this");
         f.finish(source, "Retain this important worker reply");
         f.worker.submit_ready().unwrap();
-        let notice = f.notices()[0].id;
-        let sent_at = f
-            .worker
-            .state
-            .request(notice)
-            .unwrap()
-            .prompt
-            .submitted_at_ms;
+        assert!(
+            f.notices().iter().all(|notice| {
+                !notice.prompt.text.contains("Reply to message")
+                    && !notice
+                        .prompt
+                        .text
+                        .contains("Retain this important worker reply")
+            }),
+            "a captured final must not become a reply notice: {:?}",
+            f.notices()
+        );
+        let sent_at = io::now_ms();
         let master = f.worker.state.master_room().unwrap().id;
         let mut state = f.worker.state.clone();
         let developer = state
@@ -56,11 +60,11 @@ fn rejected_reply_notice_does_not_block_master_after_unrelated_turns_and_restart
         assert_eq!(
             f.worker.state.queued_requests(f.orch).first(),
             Some(&developer),
-            "a retained rejected notice must yield to unattempted messages from another room"
+            "no captured-final notice may sit ahead of the developer message"
         );
         assert_eq!(
-            f.worker.state.request(notice).unwrap().phase,
-            RequestPhase::Queued
+            f.worker.state.request(source).unwrap().phase,
+            RequestPhase::Completed
         );
         f.worker.transport = Box::new(Accepting(f.calls.clone()));
         f.worker.withdrawn_at.clear();
@@ -75,14 +79,9 @@ fn rejected_reply_notice_does_not_block_master_after_unrelated_turns_and_restart
             .unwrap()
             .iter()
             .any(|text| text.contains("MASTER developer correction")));
-        assert!(f
-            .worker
-            .state
-            .request(source)
-            .unwrap()
-            .reply()
-            .unwrap()
-            .text
-            .contains("Retain this important worker reply"));
+        assert!(f.calls.lock().unwrap().iter().all(|text| {
+            !text.contains("Reply to message")
+                && !text.contains("Retain this important worker reply")
+        }));
     }
 }

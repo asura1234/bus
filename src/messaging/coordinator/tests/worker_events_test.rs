@@ -108,20 +108,44 @@ fn running(f: &mut Fixture, author: Author) -> RequestId {
     id
 }
 
+fn assert_completed_without_reply(f: &Fixture, id: RequestId) {
+    let request = f.worker.state.request(id).unwrap();
+    assert_eq!(request.phase, RequestPhase::Completed, "{request:?}");
+    assert!(request.reply().is_none(), "{request:?}");
+    assert!(request.failure_reason.is_none(), "{request:?}");
+    assert_eq!(request.delivery_stage(), "ended");
+}
+
+fn assert_no_captured_forwarding(f: &Fixture, texts: &[&str]) {
+    let calls = f.calls.lock().unwrap();
+    let notices = f.notices();
+    for needle in texts
+        .iter()
+        .copied()
+        .chain(["Reply to message", "Late reply", "Turn final"])
+    {
+        assert!(
+            calls.iter().all(|call| !call.contains(needle)),
+            "{needle} forwarded in {calls:?}"
+        );
+        assert!(
+            notices
+                .iter()
+                .all(|notice| !notice.prompt.text.contains(needle)),
+            "{needle} forwarded in {notices:?}"
+        );
+    }
+}
+
 #[test]
 fn autonomous_background_final_reaches_orchestrator_without_a_request() {
     let mut f = Fixture::new();
     ready_worker(&mut f);
     autonomous(&mut f, "background", "Background build completed.");
     collect(&mut f);
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "autonomous final must wake the orchestrator"
-    );
-    let text = &f.calls.lock().unwrap()[0];
-    assert!(text.contains("builder") && text.contains("Turn final") && text.contains("message"));
-    assert!(text.contains("Background build completed."));
+    assert_no_captured_forwarding(&f, &["Background build completed."]);
+    assert!(f.notices().is_empty());
+    assert!(f.calls.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -133,12 +157,13 @@ fn reply_and_autonomous_final_share_one_short_worker_burst() {
     f.finish(source, "Requested build complete.");
     autonomous(&mut f, "background", "Independent tests complete.");
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains("Requested build complete."));
-    assert!(
-        calls[0].contains("Independent tests complete."),
-        "all events in the burst must be delivered"
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_captured_forwarding(
+        &f,
+        &["Requested build complete.", "Independent tests complete."],
     );
 }
 
@@ -203,14 +228,9 @@ fn reply_not_captured_then_late_final_keeps_the_actual_result() {
     f.worker.save(state).unwrap();
     autonomous(&mut f, "owned", "The real late result.");
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains("The real late result."));
-    assert!(calls[0].contains("Late reply"));
-    assert!(
-        !calls[0].contains("reply_not_captured"),
-        "a result in the same minute is the only notice: {calls:?}"
-    );
+    assert_completed_without_reply(&f, source);
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+    assert_no_captured_forwarding(&f, &["The real late result.", "reply_not_captured"]);
 }
 
 fn answered_background_request(f: &mut Fixture) -> RequestId {
@@ -228,10 +248,6 @@ fn answered_background_request(f: &mut Fixture) -> RequestId {
         )),
         CallbackDisposition::AcceptedCompleted
     );
-    // The async sender already printed/acknowledged the interim and exited.
-    state
-        .see_worker_reply(source, f.orch, io::now_ms())
-        .unwrap();
     f.worker.save(state).unwrap();
     source
 }
@@ -258,9 +274,6 @@ fn captured_stop_late_same_turn_final_wakes_sender_after_restart() {
                     text: "Waiting for CI and background reviewers.".into(),
                 },
             ));
-            state
-                .see_worker_reply(source, f.orch, io::now_ms())
-                .unwrap();
             f.worker.save(state).unwrap();
             source
         };
@@ -307,14 +320,13 @@ fn captured_stop_late_same_turn_final_wakes_sender_after_restart() {
         .unwrap();
         f.worker.consume_callbacks(f.agent, &spool).unwrap();
         collect(&mut f);
-        let calls = f.calls.lock().unwrap();
-        assert_eq!(
-            calls.len(),
-            1,
-            "{provider:?}: late final must wake the original sender"
+        assert_no_captured_forwarding(
+            &f,
+            &[
+                "CI passed; the real final result.",
+                "Waiting for CI and background reviewers.",
+            ],
         );
-        assert!(calls[0].contains("Late reply to message"));
-        assert!(calls[0].contains("CI passed; the real final result."));
         assert_eq!(
             f.worker.state.agent(f.agent).unwrap().current_request,
             Some(next)
@@ -342,16 +354,7 @@ fn captured_stop_late_same_turn_final_wakes_sender_after_restart() {
                 .as_deref(),
             None
         );
-        assert_eq!(
-            f.worker
-                .state
-                .request(source)
-                .unwrap()
-                .reply()
-                .unwrap()
-                .text,
-            "Waiting for CI and background reviewers."
-        );
+        assert_completed_without_reply(&f, source);
     }
 }
 
@@ -373,10 +376,14 @@ fn background_timeout_does_not_spend_subsequent_changed_same_turn_finals() {
     ));
     f.worker.save(state).unwrap();
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains("Still waiting for the last reviewer."));
-    assert!(calls[0].contains("All reviewers and CI passed."));
+    assert_no_captured_forwarding(
+        &f,
+        &[
+            "Still waiting for the last reviewer.",
+            "All reviewers and CI passed.",
+            "Waiting for CI and background reviewers.",
+        ],
+    );
 }
 
 #[test]
@@ -427,12 +434,16 @@ fn background_timeout_late_notifications_deduplicate_text_and_preserve_identity(
     ));
     f.worker.save(state).unwrap();
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].matches("Real final.").count(), 1);
-    assert!(!calls[0].contains("Waiting for CI"));
-    assert!(!calls[0].contains("FOREIGN RESULT"));
-    assert!(!calls[0].contains("STALE RESULT"));
+    assert_no_captured_forwarding(
+        &f,
+        &[
+            "Real final.",
+            "Waiting for CI",
+            "FOREIGN RESULT",
+            "STALE RESULT",
+        ],
+    );
+    assert!(f.notices().is_empty());
 }
 
 struct ExitProbe {
@@ -489,6 +500,7 @@ fn pending_autonomous_burst_survives_restart_and_duplicate_turn_callbacks() {
     f.reopen();
     autonomous(&mut f, "background", "Durable result.");
     collect(&mut f);
+    assert_no_captured_forwarding(&f, &["Durable result."]);
     f.reopen();
     let cb = callback(
         &f,
@@ -510,8 +522,14 @@ fn pending_autonomous_burst_survives_restart_and_duplicate_turn_callbacks() {
     ));
     f.worker.save(state).unwrap();
     collect(&mut f);
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert_no_captured_forwarding(
+        &f,
+        &[
+            "Durable result.",
+            "Changed text on the same autonomous turn.",
+        ],
+    );
+    assert!(f.notices().is_empty());
     assert!(!f
         .worker
         .state
@@ -568,14 +586,11 @@ fn printed_reply_removes_only_its_component_of_a_queued_mixed_batch() {
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    let calls = f.calls.lock().unwrap();
     assert_eq!(
-        calls.len(),
-        1,
-        "Seen must preserve the unprinted components"
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
-    assert!(calls[0].contains("Unprinted autonomous result."));
-    assert!(!calls[0].contains("Printed reply."));
+    assert_no_captured_forwarding(&f, &["Unprinted autonomous result.", "Printed reply."]);
 }
 
 #[test]
@@ -672,9 +687,15 @@ fn late_stop_inside_settlement_grace_yields_one_reply_wake() {
     );
     f.worker.save(state).unwrap();
     collect(&mut f);
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Normal late Stop."));
-    assert!(!f.calls.lock().unwrap()[0].contains("Idle with open request"));
+    let source = f
+        .worker
+        .state
+        .requests()
+        .find(|request| request.prompt.text == "open work")
+        .unwrap()
+        .id;
+    assert_completed_without_reply(&f, source);
+    assert_no_captured_forwarding(&f, &["Normal late Stop.", "Idle with open request"]);
 }
 
 #[test]
@@ -694,12 +715,14 @@ fn long_autonomous_text_is_pinned_until_its_queued_pointer_delivers() {
     f.worker.save(state).unwrap();
     f.worker.archive_history(io::now_ms()).unwrap();
     f.reopen();
-    assert!(f.worker.state.notices(f.room).any(|p| p.text == full));
     collect(&mut f);
-    let text = &f.calls.lock().unwrap()[0];
-    assert!(text.contains("bus history --room"));
-    assert!(text.chars().count() < 1_000);
-    assert!(f.worker.state.notices(f.room).any(|p| p.text == full));
+    assert!(f
+        .worker
+        .state
+        .notices(f.room)
+        .all(|prompt| prompt.text != full));
+    assert_no_captured_forwarding(&f, &[&full]);
+    assert!(f.calls.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -810,7 +833,7 @@ fn provider_error_does_not_spend_the_later_real_final() {
     collect(&mut f);
     assert_eq!(f.notices().len(), 1);
     assert!(f.calls.lock().unwrap()[0].contains("provider_error"));
-    assert!(f.calls.lock().unwrap()[0].contains("Recovered final after error."));
+    assert_no_captured_forwarding(&f, &["Recovered final after error."]);
 }
 
 #[test]
@@ -870,8 +893,11 @@ fn late_final_for_old_request_does_not_attach_to_new_active_work() {
     );
     f.worker.save(state).unwrap();
     collect(&mut f);
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Original request result."));
+    assert_no_captured_forwarding(&f, &["Original request result."]);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Abandoned
+    );
     assert_eq!(
         f.worker.state.agent(f.agent).unwrap().current_request,
         Some(next)
@@ -896,26 +922,19 @@ fn distinct_turn_finals_join_a_still_queued_worker_batch() {
     f.worker.save(state).unwrap();
     autonomous(&mut f, "first-own", "First independent result.");
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
     autonomous(&mut f, "second-own", "Second independent result.");
     f.worker.submit_ready().unwrap();
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "queued same-worker events in the window share one message"
-    );
     let mut state = f.worker.state.clone();
     state
         .observe_status(f.orch, RuntimeStatus::Idle, io::now_ms())
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(
-        calls[0].contains("First independent result.")
-            && calls[0].contains("Second independent result.")
+    assert_no_captured_forwarding(
+        &f,
+        &["First independent result.", "Second independent result."],
     );
+    assert!(f.notices().is_empty());
 }
 
 #[test]
@@ -970,11 +989,12 @@ fn late_spooled_final_is_not_deferred_behind_a_new_unbound_request() {
         f.worker.own_turns.contains_key(&f.agent),
         "an old final cannot end the new autonomous turn guard"
     );
-    assert!(f
-        .worker
-        .state
-        .notices(f.room)
-        .any(|p| p.text == "Late while next request unbound."));
+    assert!(f.worker.state.notices(f.room).all(|p| {
+        p.text != "Late while next request unbound."
+            && !p.text.contains("Late reply")
+            && !p.text.contains("Turn final")
+            && !p.text.contains("Reply to message")
+    }));
     assert_eq!(
         f.worker.state.agent(f.agent).unwrap().current_request,
         Some(next)
@@ -1116,9 +1136,6 @@ fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {
                 text: "Interim result.".into(),
             },
         ));
-        state
-            .see_worker_reply(source, f.orch, io::now_ms())
-            .unwrap();
         f.worker.save(state).unwrap();
         source
     };
@@ -1151,12 +1168,12 @@ fn late_final_after_new_input_joins_the_completed_turn(provider: Provider) {
     ));
     f.worker.save(state).unwrap();
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1,
-        "{provider:?}: the original async sender must receive the late final; disposition={disposition:?}");
-    assert!(calls[0].contains("The real background result."));
-    let source_prompt = f.worker.state.request(source).unwrap().prompt.id;
-    assert!(calls[0].contains(&format!("Late reply to message {}", source_prompt.0)));
+    assert_completed_without_reply(&f, source);
+    assert!(
+        f.worker.state.request(next).unwrap().reply().is_none(),
+        "{provider:?}: disposition={disposition:?}"
+    );
+    assert_no_captured_forwarding(&f, &["The real background result.", "Interim result."]);
 }
 
 #[test]
@@ -1190,16 +1207,8 @@ fn background_wake_on_a_new_claude_prompt_after_the_cap_notifies_the_sender() {
     ));
     f.worker.save(state).unwrap();
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1, "the sender must be woken once: {calls:?}");
-    assert!(calls[0].contains("CI passed; the real final result."));
-    let prompt = f.worker.state.request(source).unwrap().prompt.id;
-    assert!(calls[0].contains("Turn final"));
-    assert!(
-        !calls[0].contains(&format!("Late reply to message {}", prompt.0)),
-        "a fresh turn has no proof tying it to the capped message: {}",
-        calls[0]
-    );
+    assert_completed_without_reply(&f, source);
+    assert_no_captured_forwarding(&f, &["CI passed; the real final result."]);
 }
 
 #[test]
@@ -1257,18 +1266,18 @@ fn late_final_reaches_orchestrator_message_steered_into_an_abandoned_developer_t
     );
     assert_eq!(
         state.request(member).unwrap().phase,
-        RequestPhase::Abandoned
+        RequestPhase::Completed
     );
+    assert!(state.request(member).unwrap().reply().is_none());
+    assert!(state.request(member).unwrap().failure_reason.is_none());
+    assert!(state.request(lead).unwrap().reply().is_none());
+    assert!(state.request(lead).unwrap().failure_reason.is_none());
     f.worker.save(state).unwrap();
     autonomous(&mut f, "owned", "The real late result.");
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert!(
-        calls
-            .iter()
-            .any(|text| text.contains("Late reply") && text.contains("The real late result.")),
-        "the orchestrator's steered message owes the late final: {calls:?}"
-    );
+    assert_completed_without_reply(&f, lead);
+    assert_completed_without_reply(&f, member);
+    assert_no_captured_forwarding(&f, &["The real late result."]);
 }
 
 fn replayed_autonomous_final_after_later_abandonment(provider: Provider) {
@@ -1276,8 +1285,7 @@ fn replayed_autonomous_final_after_later_abandonment(provider: Provider) {
     ready_worker(&mut f);
     autonomous(&mut f, "owned", "Earlier autonomous result.");
     collect(&mut f);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Turn final"));
+    assert_no_captured_forwarding(&f, &["Earlier autonomous result."]);
 
     let next = f.send(Author::Agent(f.orch), "continue this turn");
     let mut state = f.worker.state.clone();
@@ -1314,24 +1322,20 @@ fn replayed_autonomous_final_after_later_abandonment(provider: Provider) {
     f.worker.save(state).unwrap();
     f.reopen();
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
     assert_eq!(
         f.worker
             .state
             .notices(f.room)
             .filter(|prompt| prompt.text == "Earlier autonomous result.")
             .count(),
-        1,
-        "{provider:?}: replayed final must not be delivered again as a late reply to request {next:?}: {calls:?}"
+        0,
+        "{provider:?}: replayed final was published for request {next:?}"
     );
-    let notices = f.notices();
-    let result_notices: Vec<_> = notices
-        .iter()
-        .filter(|request| request.prompt.text.contains("Earlier autonomous result."))
-        .collect();
-    assert_eq!(result_notices.len(), 1, "{provider:?}: {notices:?}");
-    assert!(result_notices[0].prompt.text.contains("Turn final"));
-    assert!(!result_notices[0].prompt.text.contains("Late reply"));
+    assert_no_captured_forwarding(&f, &["Earlier autonomous result."]);
+    assert_eq!(
+        f.worker.state.request(next).unwrap().phase,
+        RequestPhase::Abandoned
+    );
 }
 
 #[test]
@@ -1471,14 +1475,21 @@ fn unrelated_send_does_not_hide_reply_not_captured() {
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    // One submit delivers only the queue head, which is the unrelated send.
-    // The no-reply is the next notice, so the proof is that notice, not the call.
+    assert_completed_without_reply(&f, source);
     let notices = f.notices();
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
-        "an unrelated send is not this request's result: {notices:?}"
+            .any(|notice| notice.prompt.text.contains("Already reported the head.")),
+        "the unrelated send is still a message: {notices:?}"
+    );
+    assert!(
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("reply_not_captured")
+                && !notice.prompt.text.contains("Reply to message")
+                && !notice.prompt.text.contains("No reply")
+        }),
+        "a completed turn is not a reply lifecycle: {notices:?}"
     );
 }
 
@@ -1497,9 +1508,11 @@ fn a_restart_burst_posts_no_per_request_reply_not_captured() {
         Some(source)
     );
     assert_eq!(
-        state.request(source).unwrap().failure_reason.as_deref(),
-        Some("reply_not_captured")
+        state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
+    assert!(state.request(source).unwrap().reply().is_none());
+    assert!(state.request(source).unwrap().failure_reason.is_none());
     assert!(state
         .announce_restart(
             &crate::utils::restart_record::RestartLog {
@@ -1547,32 +1560,17 @@ fn same_minute_late_result_replaces_pending_reply_not_captured() {
         Some(source)
     );
     state.retain_worker_outcomes(now);
-    let pending: Vec<_> = state
-        .worker_outcomes_for(state.request(source).unwrap())
-        .into_iter()
-        .filter(|(_, text)| text.contains("reply_not_captured"))
-        .collect();
-    assert_eq!(
-        pending.len(),
-        1,
-        "the quiet outcome is retained before the result arrives: {pending:?}"
+    assert!(
+        state
+            .worker_outcomes_for(state.request(source).unwrap())
+            .is_empty(),
+        "a normal turn end has no quiet no-reply"
     );
     f.worker.save(state).unwrap();
     autonomous(&mut f, "owned", "The real late result.");
     collect(&mut f);
-    let calls = f.calls.lock().unwrap();
-    assert!(
-        calls
-            .iter()
-            .any(|call| call.contains("The real late result.")),
-        "the late result still posts: {calls:?}"
-    );
-    assert!(
-        calls
-            .iter()
-            .all(|call| !call.contains("reply_not_captured")),
-        "a result in the same minute replaces the pending no-reply: {calls:?}"
-    );
+    assert_completed_without_reply(&f, source);
+    assert_no_captured_forwarding(&f, &["The real late result.", "reply_not_captured"]);
 }
 
 #[test]
@@ -1597,12 +1595,26 @@ fn identical_results_for_distinct_requests_each_wake_once() {
     f.finish(second, "Ready for review.");
     collect(&mut f);
     let calls = f.calls.lock().unwrap();
-    assert_eq!(
-        calls.len(),
-        2,
-        "the second request still owes its own outcome: {calls:?}"
+    assert!(
+        calls.iter().all(|call| !call.contains("Reply to message")),
+        "{calls:?}"
     );
-    assert!(calls[1].contains("Reply to message"), "{calls:?}");
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.contains("Ready for review."))
+            .count(),
+        1,
+        "the explicit send is one message, not a reply wake per request: {calls:?}"
+    );
+    assert_eq!(
+        f.worker.state.request(first).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        f.worker.state.request(second).unwrap().phase,
+        RequestPhase::Completed
+    );
 }
 
 #[test]
@@ -1658,11 +1670,13 @@ fn progress_message_does_not_hide_reply_not_captured() {
         .unwrap();
     state.retain_worker_outcomes(now);
     let outcomes = state.worker_outcomes_for(state.request(source).unwrap());
-    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
-    assert!(
-        outcomes[0].1.contains("reply_not_captured"),
-        "progress is not the request's result: {outcomes:?}"
+    assert!(outcomes.is_empty(), "{outcomes:?}");
+    assert_eq!(
+        state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
+    assert!(state.request(source).unwrap().reply().is_none());
+    assert!(state.request(source).unwrap().failure_reason.is_none());
 }
 
 #[test]
@@ -1699,11 +1713,16 @@ fn request_starting_after_restart_keeps_reply_not_captured() {
     );
     state.retain_worker_outcomes(settled_at);
     let outcomes = state.worker_outcomes_for(state.request(source).unwrap());
-    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
     assert!(
-        outcomes[0].1.contains("reply_not_captured"),
-        "this request did not exist during the restart: {outcomes:?}"
+        outcomes.is_empty(),
+        "a normal turn end is not reply_not_captured: {outcomes:?}"
     );
+    assert_eq!(
+        state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(state.request(source).unwrap().reply().is_none());
+    assert!(state.request(source).unwrap().failure_reason.is_none());
 }
 
 #[test]
@@ -1734,7 +1753,10 @@ fn explicit_send_withdraws_an_already_queued_duplicate_reply_wake() {
     let mut state = f.worker.state.clone();
     state.route_worker_replies(at, &BTreeSet::new()).unwrap();
     f.worker.save(state).unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert!(
+        f.notices().is_empty(),
+        "a captured final does not queue a reply wake"
+    );
 
     report(&mut f, "Built and tested.");
     let mut state = f.worker.state.clone();
@@ -1746,7 +1768,11 @@ fn explicit_send_withdraws_an_already_queued_duplicate_reply_wake() {
     let calls = f.calls.lock().unwrap();
     assert!(
         calls.iter().all(|call| !call.contains("Reply to message")),
-        "the explicit send must replace the queued wrapper: {calls:?}"
+        "{calls:?}"
+    );
+    assert!(
+        calls.iter().any(|call| call.contains("Built and tested.")),
+        "the explicit send is still a message: {calls:?}"
     );
 }
 
@@ -1785,24 +1811,22 @@ fn explicit_result_send_suppresses_reply_not_captured() {
         .unwrap();
     f.worker.save(state).unwrap();
 
+    assert_completed_without_reply(&f, source);
     let notices = f.notices();
     assert!(
         notices
             .iter()
             .any(|notice| notice.prompt.text.contains("The actual result.")),
-        "the explicit send is the delivery: {notices:?}"
+        "the plain send is still a message: {notices:?}"
     );
     assert!(
-        notices
-            .iter()
-            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
-        "a send tied to this request replaces the no-reply: {notices:?}"
-    );
-    assert!(
-        notices
-            .iter()
-            .all(|notice| !notice.prompt.text.contains("Late reply")),
-        "the explicit copy is the only wake: {notices:?}"
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("reply_not_captured")
+                && !notice.prompt.text.contains("Late reply")
+                && !notice.prompt.text.contains("Reply to message")
+                && !notice.prompt.text.contains("Turn final")
+        }),
+        "the send is not a reply lifecycle: {notices:?}"
     );
 }
 
@@ -1835,13 +1859,14 @@ fn identical_late_final_for_a_distinct_request_still_wakes() {
     autonomous(&mut f, "owned", "Done.");
     collect(&mut f);
 
-    let calls = f.calls.lock().unwrap();
-    assert!(
-        calls.iter().any(|call| {
-            call.contains("Late reply") && call.contains(&format!("request {}", source.0))
-        }),
-        "an earlier request's identical text must not consume this late result: {calls:?}"
-    );
+    assert_completed_without_reply(&f, source);
+    assert_no_captured_forwarding(&f, &["Late reply"]);
+    assert!(f
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| call.contains("Done.")));
 }
 
 #[test]
@@ -1850,13 +1875,7 @@ fn later_explicit_copy_is_not_claimed_by_an_earlier_identical_reply() {
     let first = f.send(Author::Agent(f.orch), "first task");
     f.finish(first, "Done.");
     collect(&mut f);
-    let held = f
-        .worker
-        .state
-        .agent(f.orch)
-        .and_then(|agent| agent.current_request)
-        .expect("first reply wrapper");
-    f.finish(held, "ack");
+    assert!(f.notices().is_empty());
 
     let second = f.send(Author::Agent(f.orch), "second task");
     f.finish(second, "Done.");
@@ -1865,14 +1884,24 @@ fn later_explicit_copy_is_not_claimed_by_an_earlier_identical_reply() {
 
     let notices = f.notices();
     assert!(
-        notices.iter().all(|notice| {
-            !notice.prompt.text.contains("Reply to message")
-                || !notice
-                    .prompt
-                    .text
-                    .contains(&format!("request {}", second.0))
-        }),
-        "the later request's explicit send is its only copy: {notices:?}"
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("Reply to message")),
+        "a captured final is not a reply lifecycle: {notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text.contains("Done.")),
+        "the explicit send is still a message: {notices:?}"
+    );
+    assert_eq!(
+        f.worker.state.request(first).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        f.worker.state.request(second).unwrap().phase,
+        RequestPhase::Completed
     );
 }
 
@@ -1970,9 +1999,20 @@ fn post_close_unrelated_message_does_not_hide_reply_not_captured() {
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
         "an unrelated post-close message is not this request's result: {notices:?}"
     );
+    assert_completed_without_reply(&f, source);
+    assert!(
+        notices.iter().any(|notice| notice
+            .prompt
+            .text
+            .contains("Still working on a different request.")),
+        "{notices:?}"
+    );
+    assert!(notices.iter().all(|notice| {
+        !notice.prompt.text.contains("Reply to message") && !notice.prompt.text.contains("No reply")
+    }));
 }
 
 #[test]
@@ -2010,9 +2050,16 @@ fn post_close_brief_read_does_not_hide_reply_not_captured() {
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
         "a brief-read note is not this request's result: {notices:?}"
     );
+    assert_completed_without_reply(&f, source);
+    assert!(notices
+        .iter()
+        .any(|notice| notice.prompt.text.contains("Brief read.")));
+    assert!(notices.iter().all(|notice| {
+        !notice.prompt.text.contains("Reply to message") && !notice.prompt.text.contains("No reply")
+    }));
 }
 
 #[test]
@@ -2050,9 +2097,17 @@ fn post_close_nothing_changed_does_not_hide_reply_not_captured() {
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
         "an unrelated status line is not this request's result: {notices:?}"
     );
+    assert_completed_without_reply(&f, source);
+    assert!(notices.iter().any(|notice| notice
+        .prompt
+        .text
+        .contains("Nothing changed on the other request.")));
+    assert!(notices.iter().all(|notice| {
+        !notice.prompt.text.contains("Reply to message") && !notice.prompt.text.contains("No reply")
+    }));
 }
 
 #[test]
@@ -2090,9 +2145,17 @@ fn post_close_arbitrary_message_does_not_hide_reply_not_captured() {
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
+            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
         "an arbitrary post-close message is not this request's result: {notices:?}"
     );
+    assert_completed_without_reply(&f, source);
+    assert!(notices.iter().any(|notice| notice
+        .prompt
+        .text
+        .contains("The warehouse door faces the alley.")));
+    assert!(notices.iter().all(|notice| {
+        !notice.prompt.text.contains("Reply to message") && !notice.prompt.text.contains("No reply")
+    }));
 }
 
 #[test]
@@ -2126,28 +2189,32 @@ fn explicit_answer_without_a_late_callback_suppresses_reply_not_captured() {
     f.worker.save(state).unwrap();
 
     let answered = f.worker.state.request(source).unwrap();
+    assert_eq!(answered.phase, RequestPhase::Completed);
+    assert_eq!(answered.delivery_stage(), "replied");
+    assert!(answered.failure_reason.is_none(), "{answered:?}");
     assert!(
         answered
             .reply()
             .is_some_and(|reply| reply.text.contains("The actual answer")),
         "the --reply-to answer is stored on the request"
     );
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+    assert!(f
+        .worker
+        .state
+        .room(f.room)
+        .unwrap()
+        .latest_replies
+        .values()
+        .any(|reply| reply.text.contains("The actual answer")));
     let notices = f.notices();
     assert!(
-        notices
-            .iter()
-            .all(|notice| !notice.prompt.text.contains("reply_not_captured")),
-        "a --reply-to answer completes the request: {notices:?}"
-    );
-    assert_eq!(
-        notices.len(),
-        1,
-        "the completed reply is delivered once: {notices:?}"
-    );
-    assert!(
-        notices[0].prompt.text.contains("Reply to message")
-            && notices[0].prompt.text.contains("The actual answer"),
-        "the first delivery of the --reply-to answer is Reply to message: {notices:?}"
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("reply_not_captured")
+                && !notice.prompt.text.contains("Reply to message")
+                && !notice.prompt.text.contains("The actual answer")
+        }),
+        "an explicit reply does not wake anyone: {notices:?}"
     );
 }
 
@@ -2184,18 +2251,20 @@ fn in_turn_plain_send_of_the_answer_keeps_reply_not_captured() {
         .unwrap();
     f.worker.save(state).unwrap();
 
+    assert_completed_without_reply(&f, source);
     let notices = f.notices();
     assert!(
         notices
             .iter()
             .any(|notice| notice.prompt.text.contains("The actual answer")),
-        "the plain send is still delivered: {notices:?}"
+        "the plain send is still a message: {notices:?}"
     );
     assert!(
-        notices
-            .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
-        "a plain send never completes the original request: {notices:?}"
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("reply_not_captured")
+                && !notice.prompt.text.contains("Reply to message")
+        }),
+        "a plain send is not a reply lifecycle: {notices:?}"
     );
 }
 
@@ -2230,18 +2299,20 @@ fn post_settlement_send_of_the_answer_keeps_reply_not_captured() {
         .unwrap();
     f.worker.save(state).unwrap();
 
+    assert_completed_without_reply(&f, source);
     let notices = f.notices();
     assert!(
         notices
             .iter()
             .any(|notice| notice.prompt.text.contains("The actual answer")),
-        "the post-settlement send is still delivered: {notices:?}"
+        "the post-settlement send is still a message: {notices:?}"
     );
     assert!(
-        notices
-            .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
-        "a send after the turn closes is not that request's result: {notices:?}"
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("reply_not_captured")
+                && !notice.prompt.text.contains("Reply to message")
+        }),
+        "a later send is not a reply lifecycle: {notices:?}"
     );
 }
 
@@ -2279,12 +2350,20 @@ fn in_turn_progress_does_not_hide_reply_not_captured() {
         .unwrap();
     f.worker.save(state).unwrap();
 
+    assert_completed_without_reply(&f, source);
     let notices = f.notices();
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("reply_not_captured")),
-        "in-turn progress is not the request's final result: {notices:?}"
+            .any(|notice| notice.prompt.text.contains("Still working on the request.")),
+        "progress is still a message: {notices:?}"
+    );
+    assert!(
+        notices.iter().all(|notice| {
+            !notice.prompt.text.contains("reply_not_captured")
+                && !notice.prompt.text.contains("Reply to message")
+        }),
+        "in-turn progress is not a reply lifecycle: {notices:?}"
     );
 }
 
@@ -2319,16 +2398,15 @@ fn during_turn_progress_send_still_posts_a_later_different_final() {
     f.worker.save(state).unwrap();
     autonomous(&mut f, "owned", "The real late result.");
     collect(&mut f);
-    // One submit delivers only the queue head, which is the in-turn progress
-    // send. The later final is the next notice, so the proof is that notice,
-    // not the call.
+    assert_completed_without_reply(&f, source);
     let notices = f.notices();
     assert!(
         notices
             .iter()
-            .any(|notice| notice.prompt.text.contains("The real late result.")),
-        "a later different final must still wake: {notices:?}"
+            .any(|notice| notice.prompt.text.contains("Brief read.")),
+        "the in-turn send is still a message: {notices:?}"
     );
+    assert_no_captured_forwarding(&f, &["The real late result."]);
 }
 
 #[path = "worker_event_waiter_overlap_test.rs"]

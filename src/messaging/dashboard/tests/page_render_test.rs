@@ -15,7 +15,7 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     assert!(page.contains("id=\"reply-section\""));
     assert!(page.contains("id=\"bus-note\""));
     assert!(page.contains("id=\"delay-section\""));
-    assert!(page.contains("messages that expect a reply"));
+    assert!(page.contains("explicit bus send --reply-to"));
     assert!(page.contains("not a delivery failure"));
     assert!(page.contains("p50"));
     assert!(page.contains("p99"));

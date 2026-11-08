@@ -137,11 +137,11 @@ pub(super) fn follow_message(
 /// when Bus abandoned a recipient's request (other than one settled as
 /// `reply_not_captured`), `None` while any recipient's request is still open.
 ///
-/// An ended turn is not enough: unclaimed steering must surface its uncertain
-/// outcome rather than borrow the group's answer, and an interrupt can still
-/// close it (live, #121's 100-follower e2e: 5 joined
-/// followers exited 0 with `complete` false). Settlement closes every ended
-/// turn, as replied or with a reason, so waiting for it cannot hang.
+/// An ended turn settles its request, with or without an explicit reply, so
+/// waiting for a reply cannot hang. Unclaimed steering must surface its
+/// uncertain outcome rather than borrow the group's answer, and an interrupt
+/// can still close it (live, #121's 100-follower e2e: 5 joined followers
+/// exited 0 with `complete` false).
 fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
     status["requests"].as_array()?;
     if let Some(error) = abandonment(status, true) {
@@ -175,8 +175,9 @@ fn settled_without_reply(r: &Value) -> bool {
 /// The first abandoned request as an error: `message_interrupted` when
 /// `agent interrupt` stopped its turn, `message_provider_error` when a
 /// provider error ended it (worth a retry), else `message_abandoned`.
-/// An async follower takes a turn settled without a reply as done; a bounded
-/// wait needs the reply, so it fails on that too.
+/// An async follower takes an abandoned `reply_not_captured` as done; a bounded
+/// wait fails on that abandonment. A turn that ends as completed is complete
+/// for both.
 fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)> {
     let abandoned = status["requests"]
         .as_array()?

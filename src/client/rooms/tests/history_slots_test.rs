@@ -114,10 +114,12 @@ fn waiting_tag_color_survives_wrapping_in_prompts_and_replies() {
         .state
         .set_draft_text(room, "[waiting-on-you]")
         .unwrap();
-    let request = snapshot.state.submit_draft(room, 1).unwrap()[0];
+    let plain = snapshot.state.submit_draft(room, 1).unwrap()[0];
     snapshot
         .state
-        .finish_for_test(request, "**[WAITING_ON_YOU]**", 2);
+        .set_draft_text(room, "**[WAITING_ON_YOU]**")
+        .unwrap();
+    let bold = snapshot.state.submit_draft(room, 2).unwrap()[0];
     for width in [8, 15, 24] {
         let lines = ui.history.lines(
             &snapshot.state,
@@ -127,10 +129,9 @@ fn waiting_tag_color_survives_wrapping_in_prompts_and_replies() {
             3,
             &mut Default::default(),
         );
-        for source in [
-            history::MarkdownSource::Prompt(snapshot.state.request(request).unwrap().prompt.id),
-            history::MarkdownSource::Reply(request),
-        ] {
+        for request in [plain, bold] {
+            let source =
+                history::MarkdownSource::Prompt(snapshot.state.request(request).unwrap().prompt.id);
             let body: Vec<_> = lines
                 .iter()
                 .filter(|line| {
@@ -170,13 +171,14 @@ fn waiting_tags_in_lists_quotes_and_cjk_text_color_only_the_tag() {
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.set_draft_recipients(room, [agent]).unwrap();
-    snapshot.state.set_draft_text(room, "ping").unwrap();
+    snapshot
+        .state
+        .set_draft_text(
+            room,
+            "Intro waiting\n\n- 请处理[waiting-on-you]谢谢\n- plain item\n\n> quoted [Waiting_On_You] note\n\nEnd [waiting-on-you]",
+        )
+        .unwrap();
     let request = snapshot.state.submit_draft(room, 1).unwrap()[0];
-    snapshot.state.finish_for_test(
-        request,
-        "Intro waiting\n\n- 请处理[waiting-on-you]谢谢\n- plain item\n\n> quoted [Waiting_On_You] note\n\nEnd [waiting-on-you]",
-        2,
-    );
     for width in [12, 20, 80] {
         let lines = ui.history.lines(
             &snapshot.state,
@@ -189,9 +191,11 @@ fn waiting_tags_in_lists_quotes_and_cjk_text_color_only_the_tag() {
         let body: Vec<_> = lines
             .iter()
             .filter(|line| {
-                line.raw_markdown
-                    .as_ref()
-                    .is_some_and(|(key, _)| *key == history::MarkdownSource::Reply(request))
+                line.raw_markdown.as_ref().is_some_and(|(key, _)| {
+                    *key == history::MarkdownSource::Prompt(
+                        snapshot.state.request(request).unwrap().prompt.id,
+                    )
+                })
             })
             .collect();
         let mut highlighted = String::new();
@@ -217,13 +221,14 @@ fn visible_waiting_tag_stays_colored_beside_link_whose_label_and_target_hide_tag
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.set_draft_recipients(room, [agent]).unwrap();
-    snapshot.state.set_draft_text(room, "ping").unwrap();
+    snapshot
+        .state
+        .set_draft_text(
+            room,
+            "[waiting-on-you](https://example.com/[waiting-on-you]) then [Waiting_On_You] done",
+        )
+        .unwrap();
     let request = snapshot.state.submit_draft(room, 1).unwrap()[0];
-    snapshot.state.finish_for_test(
-        request,
-        "[waiting-on-you](https://example.com/[waiting-on-you]) then [Waiting_On_You] done",
-        2,
-    );
     for width in [12, 20, 80] {
         let lines = ui.history.lines(
             &snapshot.state,
@@ -236,9 +241,11 @@ fn visible_waiting_tag_stays_colored_beside_link_whose_label_and_target_hide_tag
         let body: Vec<_> = lines
             .iter()
             .filter(|line| {
-                line.raw_markdown
-                    .as_ref()
-                    .is_some_and(|(key, _)| *key == history::MarkdownSource::Reply(request))
+                line.raw_markdown.as_ref().is_some_and(|(key, _)| {
+                    *key == history::MarkdownSource::Prompt(
+                        snapshot.state.request(request).unwrap().prompt.id,
+                    )
+                })
             })
             .collect();
         let mut highlighted = String::new();
@@ -309,17 +316,15 @@ fn pending_replies_reserve_indented_slots_in_recipient_order() {
         &mut Default::default(),
     );
     assert!(lines[0].text.starts_with("You → cursor1, author, claude1"));
-    let slot_headers = lines
+    assert!(lines.iter().any(|line| line.text == "review this"));
+    assert!(
+        lines.iter().all(|line| !line.text.starts_with("    ")),
+        "pending replies do not reserve indented slots"
+    );
+    assert!(lines.iter().all(|line| !line.text.contains('…')));
+    assert!(lines
         .iter()
-        .filter_map(|line| {
-            let text = line.text.strip_prefix("    ")?;
-            ["cursor1", "author", "claude1"]
-                .into_iter()
-                .find(|name| text.starts_with(name))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(slot_headers, ["cursor1", "author", "claude1"]);
-    assert_eq!(lines.iter().filter(|line| line.text == "    …").count(), 3);
+        .all(|line| !line.text.contains("Reply to message")));
 }
 
 #[test]
@@ -416,44 +421,47 @@ fn late_replies_stay_with_their_prompt_and_never_reorder_recipient_slots() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let positions = [
-        "first prompt",
+    let first = text.find("first prompt").expect("first prompt");
+    let second = text.find("second prompt").expect("second prompt");
+    assert!(first < second, "{text}");
+    for absent in [
         "cursor answer",
         "author answer",
         "claude answer",
-        "second prompt",
         "second answer",
-    ]
-    .map(|needle| {
-        text.find(needle)
-            .unwrap_or_else(|| panic!("missing {needle}:\n{text}"))
-    });
-    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        "answered with message",
+        "Reply to message",
+    ] {
+        assert!(
+            !text.contains(absent),
+            "missing absence of {absent}:\n{text}"
+        );
+    }
+    assert!(!text.contains('…'), "{text}");
 }
 
 #[test]
 fn quote_uses_the_clicked_historical_reply() {
     let (mut ui, room, agent) = fixture();
-    saved_history(&mut ui, room, agent, 3);
+    let mut requests = Vec::new();
+    for text in ["answer-00", "answer-01", "answer-02"] {
+        requests.push(saved_exchange(&mut ui, room, agent, text, text));
+    }
     ui.compute_view(100, 80);
-    let action = ui
+    assert!(ui
         .view
         .hits
         .iter()
-        .find(|hit| matches!(hit.action, render::Action::Quote(_)))
-        .unwrap()
-        .action
-        .clone();
-    ui.action(action);
+        .all(|hit| !matches!(hit.action, render::Action::Quote(_))));
+    ui.quote(requests[0]);
     assert_eq!(ui.locals[&room].text.text, "author: \"answer-00\"\n");
     assert!(!ui.locals[&room].text.text.contains("answer-02"));
 }
 
 #[test]
 fn quote_after_selecting_draft_text_appends_without_replacing_the_selection() {
-    use crossterm::event::{MouseButton::Left, MouseEventKind::Down};
     let (mut ui, room, agent) = fixture();
-    saved_history(&mut ui, room, agent, 1);
+    let request = saved_exchange(&mut ui, room, agent, "answer-00", "answer-00");
     ui.locals
         .get_mut(&room)
         .unwrap()
@@ -465,14 +473,12 @@ fn quote_after_selecting_draft_text_appends_without_replacing_the_selection() {
         drag_copy(&mut ui, (rect.x + 5, rect.y), (rect.x + 7, rect.y)).as_deref(),
         Some("all")
     );
-    let quote = ui
+    assert!(ui
         .view
         .hits
         .iter()
-        .find(|hit| matches!(hit.action, render::Action::Quote(_)))
-        .unwrap()
-        .rect;
-    assert_eq!(pointer(&mut ui, Down(Left), quote.x, quote.y), None);
+        .all(|hit| !matches!(hit.action, render::Action::Quote(_))));
+    ui.quote(request);
     assert_eq!(
         ui.locals[&room].text.text,
         "keep all of this\nauthor: \"answer-00\"\n"
@@ -587,8 +593,8 @@ fn agent_identity_color_matches_sidebar_chip_and_reply_header() {
         }
     }
     assert_eq!(
-        labels, 4,
-        "one consistent agent identity in the sidebar, chip, recipient and reply headers"
+        labels, 3,
+        "one consistent agent identity in the sidebar, chip and recipient header"
     );
 }
 
@@ -961,21 +967,17 @@ fn a_steered_group_shows_one_reply_under_the_lead_and_a_follower_reference() {
             .iter()
             .filter(|text| text.contains("streaming parser written"))
             .count(),
-        1
-    );
-    let lead = snapshot.state.request(ids[0]).unwrap().prompt.id;
-    let reference = format!("Answered with message {}", lead.0);
-    let positions = [
-        "write the parser",
-        "streaming parser written",
-        "use streaming instead",
-        &reference,
-    ]
-    .map(|needle| position(needle).unwrap_or_else(|| panic!("missing {needle}: {texts:?}")));
-    assert!(
-        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        0,
         "{texts:?}"
     );
+    let write = position("write the parser").expect("lead prompt");
+    let follow = position("use streaming instead").expect("follower prompt");
+    assert!(write < follow, "{texts:?}");
+    assert!(texts
+        .iter()
+        .all(|text| !text.to_lowercase().contains("answered with message")));
+    assert!(texts.iter().all(|text| !text.contains('…')));
+    assert!(texts.iter().all(|text| !text.contains("Reply to message")));
 }
 
 #[test]
@@ -1179,7 +1181,7 @@ fn two_images_in_one_message_render_in_order_with_distinct_placements() {
     ui.thumbnails.set_cell(Some(CELL));
     ui.compute_view(100, 40);
 
-    // Both images get their own rows, in message order, before the reply.
+    // Both images get their own rows, in message order, then a blank row.
     let lines = ui.history.cached();
     let owner = |line: &history::Line| line.thumbnail.as_ref().map(|t| t.path.to_path_buf());
     let order: Vec<_> = lines.iter().filter_map(owner).collect();
@@ -1187,16 +1189,16 @@ fn two_images_in_one_message_render_in_order_with_distinct_placements() {
         order,
         [vec![first.clone(); 4], vec![second.clone(); 3]].concat()
     );
-    let reply = lines
+    assert!(lines
         .iter()
-        .position(|line| line.text.starts_with("    author"))
+        .all(|line| !line.text.starts_with("    author")));
+    let last = lines
+        .iter()
+        .rposition(|line| line.thumbnail.is_some())
         .unwrap();
     assert!(
-        lines
-            .iter()
-            .rposition(|line| line.thumbnail.is_some())
-            .unwrap()
-            < reply
+        lines[last + 1].text.is_empty(),
+        "a blank row follows the images"
     );
 
     // Each one is placed, with a placement id no other thumbnail shares.

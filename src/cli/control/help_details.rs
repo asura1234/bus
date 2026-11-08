@@ -302,7 +302,7 @@ up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
 Running/queued/settling requests close as interrupted; no later replay. History
 records Interrupted NAME by --as (otherwise developer) in the target's home room.
-A reply captured before the stop still wins. --text sends a new normal message
+An explicit reply sent before the stop stays on the request. --text sends a new normal message
 after the stop, including to successfully stopped agents if another stop fails.
 Result: single agent {agent_id,name,room_id,conversation_room_id,author_id,outcome,
   reason?,key?,message_id?}; room form: {room_id,conversation_room_id,author_id,
@@ -385,8 +385,10 @@ Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
   message_id and send_receipt (the original receipt). Status has complete, prompt,
   files, waiting_on_dialog and per-agent requests with request_id, stage, reason,
   reply, turn_ended, settling and group. No overall deadline.
-  It waits through dialogs, unlike wait --async; succeeds only at complete:true,
-  including abandonment as reply_not_captured. Provider turn end alone is not done.
+  It waits through dialogs, unlike wait --async; succeeds only at complete:true.
+  A recipient turn that ends settles the request with no reply. Abandonment for
+  interrupt, provider error, or startup failure still fails the wait. An abandoned
+  reply_not_captured (steering the turn never claimed) is also complete for --async.
   Errors: message_interrupted: inspect history; message_provider_error: repair/retry the
   provider; message_abandoned: fix startup/unavailability then explicitly resend
   closed work. bus_down: four consecutive transport failures; restore Bus then
@@ -423,13 +425,13 @@ Claude/Codex take it into that turn, Cursor into its next generation answering
 the group. --queue gives its own idle turn/reply and never joins. Cross-room
 messages wait for a new turn. Blocked/launching recipients queue; accumulated
 ordinary messages form one ordered prompt/group with batch position/time headers.
-Explicit replies complete individually; the final answers outstanding requests
-without replacing earlier answers. Raw text/files remain queryable after restart.
-Replies and captured finals reach an agent requester through ordinary messages,
-except captured orchestrator finals to workers and captured finals of Bus-generated
-reply wakes. Empty or whitespace-only finals are not forwarded; they settle as
-replied with their raw text preserved. A non-empty worker-woken orchestrator final
-is published in MASTER.
+An explicit --reply-to settles that request while the turn stays open and does not
+release the queue. The turn's final text is not a reply and does not replace an
+earlier explicit reply. When the turn ends, every still-open request in it settles
+and the queue advances. Raw text/files remain queryable after restart.
+If you want an answer, say whom to reply to and in which room. If that agent no
+longer exists on Bus when you reply, ignore it; do not retry and do not treat it
+as an error. Bus does not forward a turn final as "Reply to message N".
 An explicit or inferred agent author async waiter renews a 3s lease deferring its reply wake
 (and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
@@ -452,26 +454,29 @@ Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],reque
   manual_recovery is null or {actor:"human"|{agent:AGENT_ID},at_ms:UNIX_MS};
   reason and detail retain any earlier native failure cause and error.
   Notices have stage:posted,requests:[],complete:true. Deleted requests survive.
-  complete is true only when every recipient request has replied or closed.
+  complete is true when every recipient request has settled: an explicit reply, a
+  turn that ended, or abandonment.
   turn_ended needs trusted Working/Blocked then Idle, a hook-bound turn start/end,
-  or captured final; explicit replies can finish while turn_ended remains false.
-  settling holds an ended turn briefly for a late final; group is the lead request
-  ID for joined steering. events retains even seen finals/exits/group summaries;
-  event_acks lists acknowledgeable unseen own outcomes; reply_ack names unseen reply.
+  or a final hook; explicit replies can finish while turn_ended remains false.
+  settling holds an ended turn briefly so a late error or final hook can land;
+  group is the lead request ID for joined steering and is not a history badge.
+  events retains exits and group summaries; event_acks lists acknowledgeable
+  unseen own outcomes; reply_ack stays false because nothing waits on a reply wake.
 Stages: queued persisted; submitting native write; awaiting_start typed but no
-trusted turn; delivered trusted start; joined same turn; replied answer captured;
-abandoned closed, will not run later. Queued untyped work may close abandoned after
+trusted turn; delivered trusted start; joined same turn; replied explicit
+--reply-to; ended the turn finished with no reply; abandoned closed, will not
+run later. Queued untyped work may close abandoned after
 2m not working (input_box_not_empty, agent_not_ready/blocked, session_hook_missing,
 prior_request_active, unavailable). Recovery deadlines stay internal and never
-change the reported stage. After 5m blocked the reason is blocked_unanswered. A
-captured Stop answer finishes without waiting for background work.
-Captured finals, including empty/whitespace text, settle as replied with raw text.
-Provider-proven no-reply completion also settles as replied, with empty text.
+change the reported stage. After 5m blocked the reason is blocked_unanswered.
+A turn that ends settles as ended, with no reply. The final text is not stored
+as a reply.
 Transient native provider errors retain the delivery and show Working while Bus retries
 with backoff or waits for a quota reset; details and deadlines go to the client log.
-Permanent-error settlement without a final closes as provider_error: MESSAGE; other
-settlement closes as reply_not_captured,
-or agent_unavailable; conclusive pre-delivery startup failure is agent_startup_failed.
+Permanent-error settlement without a final closes as provider_error: MESSAGE.
+An agent that is gone settles as agent_unavailable. Unclaimed steering that the
+turn did not include can close as reply_not_captured. A turn that simply ends
+does not. Conclusive pre-delivery startup failure is agent_startup_failed.
 Bus can abandon unclaimed steering after an autonomous turn ends and another
 starts or stays idle 5s; it releases later queued work. Late finals keep references.
 submission_unconfirmed may have run: inspect transcript/composer before resending
@@ -487,10 +492,11 @@ Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],
   requests:[{request_id,agent_id,agent_name,stage,reason,reply,turn_ended,settling,
   group,...}]}; reply holds raw text and received_at_ms. See message status help
   for every request field. Both stop for a dialog; send --async waits through it.
-Success requires
-complete:true; async also accepts closed reply_not_captured, bounded wait needs
-replies and fails on every abandoned request. Result is the full last status,
-including raw Markdown replies/files and per-recipient progress.
+Success requires complete:true. A turn that ends is complete for both bounded
+and async waits, with or without an explicit reply. An abandoned
+reply_not_captured fails a bounded wait and is accepted by an async wait.
+Interrupt and provider-error abandonment fail both. Result is the full last
+status, including raw Markdown replies/files and per-recipient progress.
 --as owning author renews a 3s waiter lease and acknowledges only printed
 completed replies/event_acks after stdout flush, deferring duplicate wakes while
 alive. Anonymous waits and message status never suppress delivery. Killing the

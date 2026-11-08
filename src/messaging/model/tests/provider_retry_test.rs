@@ -277,10 +277,10 @@ fn provider_flake_retries_the_original_request_only_after_backoff_and_rejects_th
         state.accept_callback(final_event),
         CallbackDisposition::AcceptedCompleted
     );
-    assert_eq!(
-        state.request(request).unwrap().reply().unwrap().text,
-        "completed once"
-    );
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
 }
 
 #[test]
@@ -594,10 +594,10 @@ fn provider_flake_native_new_turn_can_claim_unbound_steering_without_replaying_i
         state.accept_callback(final_event),
         CallbackDisposition::AcceptedCompleted
     );
-    assert_eq!(
-        state.request(member).unwrap().reply().unwrap().text,
-        "second task done"
-    );
+    let settled = state.request(member).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
     assert!(!state.request(lead).unwrap().settled());
     assert!(state.retry_provider_requests(1_000_001));
     assert_eq!(state.queued_requests(agent), &[lead, queued]);
@@ -769,10 +769,10 @@ fn provider_flake_review_interrupt_closes_the_independent_hold_before_and_after_
             assert!(state.request(id).unwrap().settled());
         }
         if finished {
-            assert_eq!(
-                state.request(member).unwrap().reply().unwrap().text,
-                "second done"
-            );
+            let settled = state.request(member).unwrap();
+            assert_eq!(settled.phase, RequestPhase::Completed);
+            assert!(settled.reply().is_none());
+            assert!(settled.failure_reason.is_none());
         } else {
             assert_eq!(
                 state.request(member).unwrap().failure_reason.as_deref(),
@@ -820,10 +820,10 @@ fn provider_flake_review_native_member_background_continuation_keeps_its_own_rep
         )),
         CallbackDisposition::AcceptedCompleted
     );
-    assert_eq!(
-        state.request(member).unwrap().reply().unwrap().text,
-        "second done"
-    );
+    let settled = state.request(member).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
     assert!(!state.request(lead).unwrap().settled());
     assert!(state.retry_provider_requests(1_000_000));
     assert_eq!(state.queued_requests(agent), &[lead, queued]);

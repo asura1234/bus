@@ -1,5 +1,12 @@
 use super::*;
 
+fn is_prompt(line: &history::Line) -> bool {
+    matches!(
+        line.raw_markdown,
+        Some((history::MarkdownSource::Prompt(_), _))
+    )
+}
+
 #[test]
 fn waiting_tags_keep_you_color_when_markdown_table_cells_wrap() {
     use ratatui::style::Color;
@@ -9,8 +16,8 @@ fn waiting_tags_keep_you_color_when_markdown_table_cells_wrap() {
         &mut ui,
         room,
         agent,
-        "prompt",
         "| Status | Next |\n| --- | --- |\n| [waiting-on-you] | confirm |",
+        "hidden reply",
     );
     let snapshot = Arc::clone(&ui.snapshot);
     for width in [12, 24, 32, 80] {
@@ -22,7 +29,7 @@ fn waiting_tags_keep_you_color_when_markdown_table_cells_wrap() {
             2_000,
             &mut Default::default(),
         );
-        let body: Vec<_> = lines.iter().filter(|line| is_reply(line)).collect();
+        let body: Vec<_> = lines.iter().filter(|line| is_prompt(line)).collect();
         let mut tag_characters = String::new();
         let mut tag_rows = 0;
         for line in body {
@@ -55,7 +62,14 @@ fn prompt_and_agent_reply_markdown_are_rendered() {
         room,
         agent,
         "**rendered prompt**\nsecond `line`",
+        "hidden reply",
+    );
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
         "# Heading\n\n- **bold** and `code`",
+        "hidden reply",
     );
     ui.compute_view(100, 40);
     let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
@@ -138,7 +152,7 @@ fn a_drag_inside_a_rendered_reply_selects_and_copies_only_those_characters() {
 
     let (mut ui, room, agent) = fixture();
     let markdown = "**bold** and [docs](https://example.com) and `code`";
-    saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
+    saved_exchange(&mut ui, room, agent, markdown, "hidden reply");
     ui.compute_view(100, 40);
     let (start, row) = locate(&ui, "and docs");
     // "and docs" is 8 cells; the release column is inclusive.
@@ -162,18 +176,17 @@ fn a_drag_inside_a_rendered_reply_selects_and_copies_only_those_characters() {
 #[test]
 fn a_drag_across_two_messages_copies_the_text_between_without_layout_indents() {
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "literal prompt", "**bold** reply");
+    saved_exchange(&mut ui, room, agent, "literal prompt", "hidden reply");
+    saved_exchange(&mut ui, room, agent, "**bold** reply", "hidden reply");
     ui.compute_view(100, 40);
     let (from, from_row) = locate(&ui, "prompt");
     let (to, to_row) = locate(&ui, "bold reply");
     assert!(to_row > from_row);
-    // From "prompt" in the developer's message to "bold" in the agent's reply:
-    // the blank separator row and the reply header in between are inside the
-    // selection, so they are copied, but the four-cell reply indent is layout
-    // and is not.
+    // From "prompt" through the next message header to "bold". The blank
+    // separator is copied; there is no reply indent and no quote row.
     assert_eq!(
         drag_copy(&mut ui, (from, from_row), (to + 3, to_row)).as_deref(),
-        Some("prompt\n\nauthor  Codex\nbold")
+        Some("prompt\n\n\nYou → author  > 1 day\nbold")
     );
 }
 
@@ -182,33 +195,31 @@ fn a_drag_across_a_wrapped_reply_line_rejoins_it_and_never_copies_quote() {
     let (mut ui, room, agent) = fixture();
     let words: Vec<String> = (0..30).map(|n| format!("w{n:02}")).collect();
     let reply = format!("**lead** {}", words.join(" "));
-    saved_exchange(&mut ui, room, agent, "literal prompt", &reply);
+    saved_exchange(&mut ui, room, agent, &reply, "hidden reply");
     ui.compute_view(60, 40);
     let rows: Vec<_> = ui
         .history
         .cached()
         .iter()
-        .filter(|line| is_reply(line))
+        .filter(|line| is_prompt(line))
         .map(|line| line.text.clone())
         .collect();
-    assert!(rows.len() >= 2, "the reply must wrap: {rows:?}");
+    assert!(rows.len() >= 2, "the message must wrap: {rows:?}");
     let (from, from_row) = locate(&ui, "lead");
     let (to, to_row) = locate(&ui, "w29");
     assert!(to_row > from_row);
-    let (_, quote_row) = locate(&ui, "Quote");
-    assert!(quote_row > to_row);
-    // Wrapped rows rejoin with one space, as the reply was written.
+    let gap_row = to_row + 1;
+    // Wrapped rows rejoin with one space, as the message was written.
     let expected = format!("lead {}", words.join(" "));
     assert_eq!(
         drag_copy(&mut ui, (from, from_row), (to + 2, to_row)).as_deref(),
         Some(expected.as_str())
     );
-    // Dragging on past the Quote button adds only the blank row above it: the
-    // button is not message text.
-    assert_eq!(
-        drag_copy(&mut ui, (from, from_row), (from + 4, quote_row)).as_deref(),
-        Some(format!("{expected}\n").as_str())
-    );
+    // Dragging onto the blank row under the message adds that row only.
+    // There is no Quote button to copy.
+    let copied = drag_copy(&mut ui, (from, from_row), (from + 4, gap_row));
+    assert_eq!(copied.as_deref(), Some(format!("{expected}\n").as_str()));
+    assert!(!copied.unwrap_or_default().contains("Quote"));
 }
 
 #[test]
@@ -237,7 +248,8 @@ fn a_drag_in_a_scrolled_history_selects_the_rows_on_screen() {
 #[test]
 fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_directions() {
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "literal prompt", "**raw reply**");
+    saved_exchange(&mut ui, room, agent, "literal prompt", "hidden reply");
+    saved_exchange(&mut ui, room, agent, "**raw reply**", "hidden reply");
     ui.compute_view(100, 40);
     let prompt = ui
         .history
@@ -249,8 +261,8 @@ fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_direct
         .history
         .cached()
         .iter()
-        .position(is_reply)
-        .expect("first Markdown reply row");
+        .position(|line| is_prompt(line) && line.text.contains("raw reply"))
+        .expect("markdown prompt row");
     let prompt_start = selection::Point {
         line: prompt,
         offset: 0,
@@ -278,29 +290,33 @@ fn clicking_right_of_quote_does_nothing() {
     use crossterm::event::{MouseButton::Left, MouseEventKind::*};
 
     let (mut ui, room, agent) = fixture();
-    let request = saved_exchange(&mut ui, room, agent, "prompt", "reply");
+    let request = saved_exchange(&mut ui, room, agent, "prompt", "prompt");
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft stays".into());
     ui.compute_view(100, 40);
-    let (label_x, y) = locate(&ui, "Quote");
-    assert_eq!(ui.view.hit_at(label_x + 5, y), None);
-
-    assert_eq!(pointer(&mut ui, Down(Left), label_x + 5, y), None);
-    assert_eq!(pointer(&mut ui, Up(Left), label_x + 5, y), None);
-
-    assert_eq!(ui.locals[&room].text.text, "draft stays");
-    assert!(
-        ui.history_selection.is_none(),
-        "blank Quote cells must not start selection"
-    );
-    assert!(
-        ui.last_click.is_none(),
-        "blank Quote cells must not dispatch an action"
-    );
     assert!(ui
         .view
         .hits
         .iter()
-        .any(|hit| hit.action == render::Action::Quote(request)));
+        .all(|hit| hit.action != render::Action::Quote(request)));
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .all(|line| !matches!(line.action, Some(render::Action::Quote(_)))));
+    let (x, y) = locate(&ui, "prompt");
+    let beside = x + 6;
+    assert_eq!(ui.view.hit_at(beside, y), None);
+    assert_eq!(pointer(&mut ui, Down(Left), beside, y), None);
+    assert_eq!(ui.locals[&room].text.text, "draft stays");
+    assert!(
+        ui.history_selection.is_some(),
+        "cells beside the prompt are an ordinary history row"
+    );
+    assert!(ui.last_click.is_none(), "no quote action is dispatched");
+    assert_eq!(pointer(&mut ui, Up(Left), beside, y), None);
+    assert_eq!(ui.locals[&room].text.text, "draft stays");
+    assert!(ui.history_selection.is_none());
+    assert!(ui.last_click.is_none());
 }
 
 #[test]
@@ -308,51 +324,50 @@ fn quote_padding_preserves_selection_and_draft() {
     use crossterm::event::{MouseButton::Left, MouseEventKind::*};
 
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "prompt", "reply");
+    saved_exchange(&mut ui, room, agent, "prompt", "prompt");
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft stays".into());
     ui.compute_view(100, 40);
-    let (x, y) = locate(&ui, "Quote");
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .all(|hit| !matches!(hit.action, render::Action::Quote(_))));
+    let (x, y) = locate(&ui, "prompt");
     let point = selection::Point { line: 0, offset: 0 };
     let selection = Some((point, point));
     ui.history_selection = selection;
-    for column in ui.view.history_text.x..ui.view.history_text.right() {
-        if (x..x + 5).contains(&column) {
-            continue;
-        }
-        assert_eq!(pointer(&mut ui, Down(Left), column, y), None);
-        assert_eq!(pointer(&mut ui, Up(Left), column, y), None);
-        assert_eq!(ui.locals[&room].text.text, "draft stays");
-        assert_eq!(ui.history_selection, selection);
-        assert!(ui.drag.is_none());
-        assert!(ui.last_click.is_none());
-    }
+    assert_eq!(pointer(&mut ui, Down(Left), x, y), None);
+    assert_eq!(ui.locals[&room].text.text, "draft stays");
+    assert_ne!(
+        ui.history_selection, selection,
+        "the prompt row selects; it is not inert quote padding"
+    );
+    assert!(ui.history_selection.is_some());
+    assert!(ui.last_click.is_none());
 }
 
 #[test]
 fn quote_hit_tracks_visible_label_cells_after_resize() {
-    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
-
     let (mut ui, room, agent) = fixture();
-    let request = saved_exchange(&mut ui, room, agent, "prompt", "reply");
+    let request = saved_exchange(&mut ui, room, agent, "reply", "reply");
     for cols in [36, 38, 80, 100] {
         ui.compute_view(cols, 40);
-        let (x, y) = locate(&ui, "Quote");
-        let visible = 5.min(ui.view.history_text.right().saturating_sub(x));
-        let hit = ui
-            .view
-            .hits
-            .iter()
-            .find(|hit| hit.action == render::Action::Quote(request));
-        assert_eq!(
-            hit.map(|hit| hit.rect),
-            (visible > 0).then_some(ratatui::layout::Rect::new(x, y, visible, 1))
+        assert!(
+            ui.view
+                .hits
+                .iter()
+                .all(|hit| !matches!(hit.action, render::Action::Quote(_))),
+            "width {cols} has no quote row"
         );
-        for column in x..x + visible {
-            ui.locals.get_mut(&room).unwrap().text = editor::Editor::default();
-            mouse(&mut ui, Down(Left), column, y);
-            mouse(&mut ui, Up(Left), column, y);
-            assert_eq!(ui.locals[&room].text.text, "author: \"reply\"\n");
-        }
+        let (x, y) = locate(&ui, "reply");
+        assert_eq!(
+            ui.view.hit_at(x, y),
+            None,
+            "the prompt text is not a button"
+        );
+        ui.locals.get_mut(&room).unwrap().text = editor::Editor::default();
+        ui.quote(request);
+        assert_eq!(ui.locals[&room].text.text, "author: \"reply\"\n");
     }
 }
 
@@ -360,18 +375,25 @@ fn quote_hit_tracks_visible_label_cells_after_resize() {
 fn quote_keeps_the_agent_reply_as_raw_markdown() {
     let (mut ui, room, agent) = fixture();
     let markdown = "**bold** and [docs](https://example.com) and `code`";
-    let request = saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
+    let request = saved_exchange(&mut ui, room, agent, markdown, markdown);
     ui.compute_view(100, 40);
-    let action = ui
+    let stored = ui
+        .history
+        .cached()
+        .iter()
+        .find_map(|line| match &line.raw_markdown {
+            Some((history::MarkdownSource::Prompt(_), raw)) => Some(raw.to_string()),
+            _ => None,
+        })
+        .expect("prompt line stores its markdown");
+    assert_eq!(stored, markdown);
+    assert!(ui
         .view
         .hits
         .iter()
-        .find(|hit| hit.action == render::Action::Quote(request))
-        .expect("quote action for reply")
-        .action
-        .clone();
+        .all(|hit| hit.action != render::Action::Quote(request)));
 
-    ui.action(action);
+    ui.quote(request);
 
     assert_eq!(
         ui.locals[&room].text.text,
@@ -382,7 +404,7 @@ fn quote_keeps_the_agent_reply_as_raw_markdown() {
 #[test]
 fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "literal prompt", "**cached reply**");
+    saved_exchange(&mut ui, room, agent, "**cached reply**", "hidden reply");
     let snapshot = Arc::clone(&ui.snapshot);
     let room = snapshot.state.room(room).expect("room");
 
@@ -398,9 +420,9 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
         .history
         .cached()
         .iter()
-        .filter(|line| is_reply(line))
+        .filter(|line| is_prompt(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
-        .expect("rendered reply source");
+        .expect("rendered prompt source");
     ui.history.lines(
         &snapshot.state,
         room,
@@ -413,13 +435,13 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
         .history
         .cached()
         .iter()
-        .filter(|line| is_reply(line))
+        .filter(|line| is_prompt(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
-        .expect("rendered reply source after timestamp refresh");
+        .expect("rendered prompt source after timestamp refresh");
 
     assert!(
         Arc::ptr_eq(&first, &second),
-        "timestamp refreshes reuse the immutable reply rendering"
+        "timestamp refreshes reuse the immutable prompt rendering"
     );
 }
 
@@ -433,13 +455,13 @@ fn markdown_rendering_survives_a_visit_to_another_room() {
         .create_agent(other, "helper", Provider::Codex, "/project".into(), None)
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
-    saved_exchange(&mut ui, room, agent, "first prompt", "**first reply**");
+    saved_exchange(&mut ui, room, agent, "**first reply**", "hidden reply");
     saved_exchange(
         &mut ui,
         other,
         other_agent,
-        "other prompt",
         "**other reply**",
+        "hidden reply",
     );
     let snapshot = Arc::clone(&ui.snapshot);
     let rendered_reply = |ui: &mut BusUi, id| {
@@ -454,9 +476,9 @@ fn markdown_rendering_survives_a_visit_to_another_room() {
         ui.history
             .cached()
             .iter()
-            .filter(|line| is_reply(line))
+            .filter(|line| is_prompt(line))
             .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
-            .expect("rendered reply source")
+            .expect("rendered prompt source")
     };
 
     let first = rendered_reply(&mut ui, room);
@@ -478,8 +500,8 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
         &mut ui,
         room,
         agent,
-        "literal prompt",
         "## 日本語 👩‍💻\n\n**強調 text**\n\n| A | B |\n| - | - |\n| 甲 | 🙂 |",
+        "hidden reply",
     );
     let snapshot = Arc::clone(&ui.snapshot);
     let room = snapshot.state.room(room).expect("room");
@@ -494,7 +516,7 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
             &mut Default::default(),
         )
         .iter()
-        .filter(|line| is_reply(line))
+        .filter(|line| is_prompt(line))
         .collect();
     let text = rendered
         .iter()
@@ -518,7 +540,7 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
     }));
 }
 
-fn copy_markdown_body_at_width(ui: &mut BusUi, room: RoomId, width: u16, prompt: bool) -> String {
+fn copy_markdown_body_at_width(ui: &mut BusUi, room: RoomId, width: u16) -> String {
     let snapshot = Arc::clone(&ui.snapshot);
     ui.history.lines(
         &snapshot.state,
@@ -528,14 +550,7 @@ fn copy_markdown_body_at_width(ui: &mut BusUi, room: RoomId, width: u16, prompt:
         2_000,
         &mut Default::default(),
     );
-    let body = |line: &history::Line| {
-        let matches_source = match line.raw_markdown.as_ref() {
-            Some((history::MarkdownSource::Prompt(_), _)) => prompt,
-            Some((history::MarkdownSource::Reply(_), _)) => !prompt,
-            None => false,
-        };
-        matches_source && !line.text.trim().is_empty()
-    };
+    let body = |line: &history::Line| is_prompt(line) && !line.text.trim().is_empty();
     let lines = ui.history.cached();
     let start = lines.iter().position(body).expect("first body row");
     let end = lines.iter().rposition(body).expect("last body row");
@@ -559,12 +574,12 @@ fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
         &mut ui,
         room,
         agent,
-        "prompt",
         "- alpha beta gamma delta epsilon zeta",
+        "hidden reply",
     );
 
     assert_eq!(
-        copy_markdown_body_at_width(&mut ui, room, 20, false),
+        copy_markdown_body_at_width(&mut ui, room, 20),
         "• alpha beta gamma delta epsilon zeta"
     );
 }
@@ -580,13 +595,13 @@ fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_wid
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau";
-    saved_exchange(&mut ui, room, agent, "first prompt", long);
+    saved_exchange(&mut ui, room, agent, long, "hidden reply");
     saved_exchange(
         &mut ui,
         other,
         other_agent,
-        "other prompt",
         "**other reply**",
+        "hidden reply",
     );
     let snapshot = Arc::clone(&ui.snapshot);
     let reply_rows = |ui: &mut BusUi, id, width| -> Vec<String> {
@@ -601,7 +616,7 @@ fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_wid
         ui.history
             .cached()
             .iter()
-            .filter(|line| is_reply(line))
+            .filter(|line| is_prompt(line))
             .map(|line| line.text.clone())
             .collect()
     };
@@ -638,20 +653,29 @@ fn quote_padding_in_a_scrolled_history_is_inert_while_neighbor_rows_still_select
     assert_eq!(ui.main_scroll, target - 5);
     let text = ui.view.history_text;
     let edge = text.right() - 1;
-    let mut quotes = 0;
+    let mut selectable = 0;
     for row in text.y..text.bottom() {
         let line = ui.history.cached()[ui.main_scroll + usize::from(row - text.y)].clone();
-        let quote = matches!(line.action, Some(render::Action::Quote(_)));
-        quotes += usize::from(quote);
+        assert!(
+            !matches!(line.action, Some(render::Action::Quote(_))),
+            "row {row} is not a quote button: {:?}",
+            line.text
+        );
         ui.history_selection = None;
         assert_eq!(pointer(&mut ui, Down(Left), edge, row), None);
+        let selects =
+            line.action.is_none() || matches!(line.action, Some(render::Action::OpenFile(_)));
         assert_eq!(
             ui.history_selection.is_some(),
-            !quote && line.action.is_none(),
+            selects,
             "row {row} ({:?}) padding press",
             line.text
         );
+        selectable += usize::from(selects);
         pointer(&mut ui, Up(Left), edge, row);
     }
-    assert!(quotes > 1, "the scrolled screen shows several Quote rows");
+    assert!(
+        selectable > 1,
+        "prompt rows on the scrolled screen still select"
+    );
 }

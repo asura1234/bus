@@ -1,4 +1,5 @@
-//! Durable routing of captured replies back to their requesters.
+//! Persisted reply-route records. A turn final is not forwarded as a reply,
+//! and nothing waits on a reply wake.
 use super::{AgentId, Author, BusState, ModelError, Request, RequestId};
 use std::collections::BTreeSet;
 
@@ -84,92 +85,6 @@ impl BusState {
             .is_some_and(|orchestrates| orchestrates.is_none())
     }
 
-    /// A decision made in response to a worker belongs in MASTER. The source
-    /// request keeps its durable answer, without opening a new worker task.
-    pub(super) fn publish_orchestrator_final(
-        &mut self,
-        lead: RequestId,
-        members: &[RequestId],
-        pending: &super::PendingFinal,
-    ) -> Result<(), ModelError> {
-        let Some(source) = self.request(lead) else {
-            return Ok(());
-        };
-        let Some(owner) = self
-            .agent(source.agent_id)
-            .filter(|agent| agent.orchestrates.is_some())
-        else {
-            return Ok(());
-        };
-        let Some(master) = self.master_room().map(|room| room.id) else {
-            return Ok(());
-        };
-        let agent = owner.id;
-        let launch = source
-            .expected_launch_id
-            .clone()
-            .ok_or(ModelError::MissingLaunchIdentity)?;
-        let session = pending
-            .provider_session_id
-            .clone()
-            .or_else(|| source.provider_session_id.clone());
-        let turn = pending
-            .provider_turn_id
-            .clone()
-            .or_else(|| source.provider_turn_id.clone());
-        let key = master_final_key(agent, &launch, &session, &turn, pending);
-        let group: Vec<_> = std::iter::once(&lead)
-            .chain(members)
-            .filter_map(|id| self.request(*id))
-            .collect();
-        // A work-room answer alone is not proof of MASTER publication: turn
-        // proof may establish a worker contribution only after that answer.
-        let visible = group.iter().any(|request| {
-            request.room_id == master && (!request.settled() || request.reply() == Some(pending))
-        });
-        let worker_request = group
-            .iter()
-            .find(|request| self.worker_author(&request.prompt.author));
-        if !pending.text.trim().is_empty() && !self.has_reported_final(&key) {
-            if visible {
-                self.record_reported_final(key, launch);
-            } else if let Some(worker_request) = worker_request {
-                let start = worker_request.prompt.submitted_at_ms;
-                let first = self.report_turn_start(
-                    master,
-                    agent,
-                    turn.as_deref().map(|turn| (&session, turn)),
-                );
-                // A queued request may predate the preceding turn's final.
-                // Only this provider turn's explicit copy can absorb it.
-                let explicit = self
-                    .notices(master)
-                    .rev()
-                    .take_while(|p| p.id.0 >= first)
-                    .any(|p| {
-                        p.author == Author::Agent(agent)
-                            && p.text.trim() == pending.text.trim()
-                            && (start..=pending.received_at_ms).contains(&p.submitted_at_ms)
-                    });
-                if !explicit {
-                    self.post_to_developer(
-                        master,
-                        agent,
-                        pending.text.clone(),
-                        vec![],
-                        pending.received_at_ms,
-                    )?;
-                }
-                self.record_reported_final(key, launch);
-            }
-        }
-        // Silent finals also end the explicit-copy window for the next turn.
-        if let Some(turn) = turn {
-            self.end_report_turn(master, agent, session, turn);
-        }
-        Ok(())
-    }
-
     /// Old routes belonged only to the room orchestrator, but used a group's
     /// lead ID even when that lead was authored by the developer or a peer.
     pub(crate) fn upgrade_requester_reply_routes(&mut self) {
@@ -208,13 +123,9 @@ impl BusState {
             .then_some(orchestrator.id)
     }
 
-    pub(crate) fn reply_needs_ack(&self, request: &Request) -> bool {
-        request
-            .reply()
-            .is_some_and(|reply| !reply.text.trim().is_empty())
-            && self.reply_recipient(request).is_some()
-            && self.reply_routes.get(&request.id) != Some(&ReplyRoute::Seen)
-            && (self.routing_source(request) || self.reply_routes.contains_key(&request.id))
+    /// A reply is just another message. Nothing forwards it or waits on an ack.
+    pub(crate) fn reply_needs_ack(&self, _request: &Request) -> bool {
+        false
     }
 
     pub(crate) fn is_reply_notification(&self, request: RequestId) -> bool {
@@ -275,23 +186,6 @@ impl BusState {
         }
         Ok(())
     }
-}
-
-fn master_final_key(
-    agent: AgentId,
-    launch: &str,
-    session: &Option<String>,
-    turn: &Option<String>,
-    pending: &super::PendingFinal,
-) -> String {
-    format!(
-        "master-final:{}\0{}\0{}\0{}\0{}",
-        agent.0,
-        launch,
-        session.as_deref().unwrap_or_default(),
-        turn.as_deref().unwrap_or(&pending.callback_id),
-        crate::utils::time::digest(pending.text.trim().as_bytes()),
-    )
 }
 
 pub(super) fn reply_key(request: &Request) -> RequestId {

@@ -37,6 +37,9 @@ mod dispatch_shell_hold_tests;
 #[path = "reply_to_test.rs"]
 mod reply_to_tests;
 
+#[path = "explicit_replies_test.rs"]
+mod explicit_replies_tests;
+
 #[cfg(unix)]
 #[path = "kimi_41980_test.rs"]
 mod kimi_41980_tests;
@@ -412,15 +415,30 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
         fixture.status(RuntimeStatus::Idle);
         for id in [lead, correction] {
             assert_eq!(
-                fixture.reply(id).as_deref(),
-                Some("parser written with the streaming API"),
-                "{provider:?}"
+                fixture.request(id).phase,
+                RequestPhase::Completed,
+                "{provider:?} {id:?}"
+            );
+            assert!(
+                fixture.request(id).failure_reason.is_none(),
+                "{provider:?} {id:?}"
+            );
+            assert!(fixture.reply(id).is_none(), "{provider:?} {id:?}");
+            assert_eq!(
+                fixture.request(id).provider_turn_id.as_deref(),
+                Some(steered_turn),
+                "{provider:?} {id:?}"
             );
             assert!(
                 fixture.request(id).latency.provider_started_at_ms.is_some(),
                 "{provider:?} request {id:?} is missing its provider start"
             );
         }
+        assert_eq!(
+            fixture.request(correction).group,
+            Some(lead),
+            "{provider:?}"
+        );
         assert_eq!(fixture.error(), None, "{provider:?}");
         let status = fixture
             .worker
@@ -428,10 +446,25 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
             .unwrap();
         assert_eq!(status["complete"], true);
         assert_eq!(status["requests"][0]["group"], lead.0);
-        assert_eq!(
-            status["requests"][0]["reply"]["text"],
-            "parser written with the streaming API"
-        );
+        assert!(status["requests"][0]["reply"].is_null(), "{status}");
+        assert_eq!(status["requests"][0]["stage"], "ended");
+        for text in ["parser written", "parser written with the streaming API"] {
+            assert!(
+                fixture
+                    .worker
+                    .state
+                    .requests()
+                    .all(|request| { request.reply().is_none_or(|reply| reply.text != text) }),
+                "{provider:?} stored {text}"
+            );
+        }
+        assert!(fixture
+            .worker
+            .state
+            .room(fixture.room)
+            .unwrap()
+            .latest_replies
+            .is_empty());
     }
 }
 
@@ -526,10 +559,14 @@ fn uncertain_steering_without_turn_proof_cannot_take_a_group_reply() {
     fixture.consume();
     assert_eq!(fixture.request(correction).phase, RequestPhase::Abandoned);
     assert!(fixture.reply(correction).is_none());
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("parser and tests written")
-    );
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert!(fixture.request(lead).failure_reason.is_none());
+    assert!(fixture.reply(lead).is_none());
+    assert!(fixture.worker.state.requests().all(|request| {
+        request
+            .reply()
+            .is_none_or(|reply| reply.text != "parser and tests written")
+    }));
     let status = fixture
         .worker
         .control_message(fixture.request(correction).prompt.id)
@@ -793,12 +830,28 @@ fn a_cursor_follow_up_after_a_captured_answer_keeps_both_answers() {
     fixture.stopped("turn-2", "parser written with the streaming API");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.request(correction).phase, RequestPhase::Completed);
+    assert!(fixture.request(lead).failure_reason.is_none());
+    assert!(fixture.request(correction).failure_reason.is_none());
+    assert!(fixture.reply(lead).is_none());
+    assert!(fixture.reply(correction).is_none());
     assert_eq!(
-        fixture.reply(correction).as_deref(),
-        Some("parser written with the streaming API")
+        fixture.request(lead).provider_turn_id.as_deref(),
+        Some("turn-1")
+    );
+    assert_eq!(
+        fixture.request(correction).provider_turn_id.as_deref(),
+        Some("turn-2")
     );
     assert_eq!(fixture.request(correction).group, None);
+    for text in ["parser written", "parser written with the streaming API"] {
+        assert!(fixture
+            .worker
+            .state
+            .requests()
+            .all(|request| { request.reply().is_none_or(|reply| reply.text != text) }));
+    }
 }
 
 /// Typed messages answered in separate turns keep their own turn's reply,
@@ -822,11 +875,48 @@ fn typed_messages_keep_their_own_turn_reply_and_folded_ones_share_it() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
-    for id in [second, folded] {
-        assert_eq!(fixture.reply(id).as_deref(), Some("tests and docs written"));
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.request(lead).provider_turn_id.as_deref(),
+        Some("turn-1")
+    );
+    assert_eq!(fixture.request(lead).group, None);
+    assert_eq!(fixture.request(second).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.request(second).provider_turn_id.as_deref(),
+        Some("turn-2")
+    );
+    assert_eq!(fixture.request(second).group, None);
+    assert_eq!(fixture.request(folded).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.request(folded).provider_turn_id.as_deref(),
+        Some("turn-2")
+    );
+    assert_eq!(fixture.request(folded).group, Some(second));
+    assert_eq!(fixture.request(fourth).phase, RequestPhase::Completed);
+    assert_eq!(
+        fixture.request(fourth).provider_turn_id.as_deref(),
+        Some("turn-3")
+    );
+    assert_eq!(fixture.request(fourth).group, None);
+    for id in [lead, second, folded, fourth] {
+        assert!(fixture.request(id).failure_reason.is_none(), "{id:?}");
+        assert!(fixture.reply(id).is_none(), "{id:?}");
     }
-    assert_eq!(fixture.reply(fourth).as_deref(), Some("lint clean"));
+    for text in ["parser written", "tests and docs written", "lint clean"] {
+        assert!(fixture
+            .worker
+            .state
+            .requests()
+            .all(|request| { request.reply().is_none_or(|reply| reply.text != text) }));
+    }
+    assert!(fixture
+        .worker
+        .state
+        .room(fixture.room)
+        .unwrap()
+        .latest_replies
+        .is_empty());
     assert_eq!(fixture.error(), None);
 }
 

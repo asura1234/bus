@@ -58,19 +58,36 @@ fn master_guard_worker_explicit_and_turn_final_replies_land_in_the_request_room(
             let reply = answer(&mut f, message, agent, "worker answer");
             assert!(reply.ok, "{reply:?}");
             assert_eq!(reply.result["stage"], "replied");
+            let outcome = status(&mut f, request);
+            assert_eq!(outcome["requests"][0]["reply"]["text"], "worker answer");
+            assert_eq!(outcome["requests"][0]["stage"], "replied");
+            let reply = &f.worker.state.room(master).unwrap().latest_replies[&f.agent];
+            assert_eq!(reply.request_id, request);
+            assert_eq!(reply.text, "worker answer");
         } else {
             f.stopped("master-answer", "worker answer");
             f.consume();
             f.status(RuntimeStatus::Idle);
             f.worker.settle_requests().unwrap();
+            assert_eq!(f.request(request).phase, RequestPhase::Completed);
+            assert!(f.request(request).failure_reason.is_none());
+            assert!(f.reply(request).is_none());
+            let outcome = status(&mut f, request);
+            assert!(outcome["requests"][0]["reply"].is_null(), "{outcome}");
+            assert_eq!(outcome["requests"][0]["stage"], "ended");
+            assert!(f
+                .worker
+                .state
+                .room(master)
+                .unwrap()
+                .latest_replies
+                .is_empty());
+            assert!(f.worker.state.requests().all(|candidate| {
+                candidate
+                    .reply()
+                    .is_none_or(|reply| reply.text != "worker answer")
+            }));
         }
-        assert_eq!(
-            status(&mut f, request)["requests"][0]["reply"]["text"],
-            "worker answer"
-        );
-        let reply = &f.worker.state.room(master).unwrap().latest_replies[&f.agent];
-        assert_eq!(reply.request_id, request);
-        assert_eq!(reply.text, "worker answer");
         assert!(f
             .worker
             .state
@@ -116,16 +133,23 @@ fn reply_to_completes_the_lead_without_ending_its_turn_or_stopping_later_steerin
         status(&mut f, lead)["requests"][0]["reply"]["text"],
         "watcher ready"
     );
-    assert_eq!(
-        status(&mut f, next)["requests"][0]["reply"]["text"],
-        "outstanding work finished"
+    let next_status = status(&mut f, next);
+    assert_eq!(f.request(next).phase, RequestPhase::Completed);
+    assert!(f.request(next).failure_reason.is_none());
+    assert!(
+        next_status["requests"][0]["reply"].is_null(),
+        "{next_status}"
     );
+    assert_eq!(next_status["requests"][0]["stage"], "ended");
+    assert_eq!(f.request(next).group, Some(lead));
+    assert!(f.worker.state.requests().all(|request| {
+        request
+            .reply()
+            .is_none_or(|reply| reply.text != "outstanding work finished")
+    }));
+    let published = &f.worker.state.room(f.room).unwrap().latest_replies[&agent];
+    assert_eq!(published.text, "watcher ready");
     assert_eq!(f.worker.state.agent(agent).unwrap().current_request, None);
-    assert_ne!(
-        f.request(lead).reply_key(),
-        f.request(next).reply_key(),
-        "reading the direct answer must not suppress the later group final"
-    );
 }
 
 #[test]
@@ -438,7 +462,9 @@ fn reply_to_does_not_publish_a_late_final_after_the_answered_anchor_is_abandoned
         Some(lead)
     );
     f.worker.save(state).unwrap();
-    assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert!(f.request(lead).failure_reason.is_none());
+    assert_eq!(f.request(lead).reply().unwrap().text, "already answered");
     let notices = f.worker.state.notices(f.room).count();
     let events = serde_json::to_value(&f.worker.state).unwrap()["worker_events"].clone();
     let requests = f.worker.state.requests().count();

@@ -246,12 +246,17 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
         &typed,
         "Review is done; merging next.",
     );
-    // The final was taken as the reply, which already shows in MASTER under
-    // the developer's message.
-    assert_eq!(
-        bus.reply(),
-        Some((master, "Review is done; merging next.".into()))
-    );
+    // The turn final settles the MASTER request and is not published again.
+    assert_eq!(bus.reply(), None);
+    let answered = bus
+        .worker
+        .state
+        .requests()
+        .find(|request| request.agent_id == orchestrator && request.room_id == master)
+        .map(|request| (request.phase, request.failure_reason.clone()))
+        .unwrap();
+    assert_eq!(answered.0, RequestPhase::Completed);
+    assert!(answered.1.is_none());
     assert!(bus.reports().is_empty(), "{:?}", bus.reports());
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
 }
@@ -272,14 +277,19 @@ fn a_turn_that_answers_a_worker_keeps_its_reply_and_reports_in_master() {
         &typed,
         "builder finished; tests pass.",
     );
-    // Keep the durable answer in the source room and publish the developer's
-    // MASTER report, without making another work-room post.
-    assert_eq!(
-        bus.reply(),
-        Some((room, "builder finished; tests pass.".to_owned()))
-    );
+    // An accepted turn final is not stored and is not copied into MASTER.
+    assert_eq!(bus.reply(), None);
+    let answered = bus
+        .worker
+        .state
+        .requests()
+        .find(|request| request.agent_id == orchestrator && request.room_id == room)
+        .map(|request| (request.phase, request.failure_reason.clone()))
+        .unwrap();
+    assert_eq!(answered.0, RequestPhase::Completed);
+    assert!(answered.1.is_none());
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
-    assert_eq!(bus.reports(), ["builder finished; tests pass."]);
+    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
 }
 
 #[test]
@@ -300,18 +310,18 @@ fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_reports_its_decision_in_master
         &typed,
         "I approved formatting one test file. Nothing is waiting on you.",
     );
-    assert_eq!(
-        bus.reply(),
-        Some((
-            room,
-            "I approved formatting one test file. Nothing is waiting on you.".to_owned()
-        ))
-    );
+    assert_eq!(bus.reply(), None);
+    let answered = bus
+        .worker
+        .state
+        .requests()
+        .find(|request| request.agent_id == orchestrator && request.room_id == room)
+        .map(|request| (request.phase, request.failure_reason.clone()))
+        .unwrap();
+    assert_eq!(answered.0, RequestPhase::Completed);
+    assert!(answered.1.is_none());
     assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
-    assert_eq!(
-        bus.reports(),
-        ["I approved formatting one test file. Nothing is waiting on you."]
-    );
+    assert!(bus.reports().is_empty(), "{:?}", bus.reports());
 }
 
 #[test]
@@ -353,9 +363,12 @@ fn worker_turns_never_post_to_master() {
     assert!(master.notices.is_empty(), "{:?}", master.notices);
     assert!(master.latest_prompt.is_none());
     let room = bus.worker.state.room(bus.room).unwrap();
-    assert_eq!(room.notices.len(), 1);
-    assert_eq!(room.notices[0].author, Author::Agent(builder));
-    assert_eq!(room.notices[0].text, "Background build finished.");
+    assert!(
+        room.notices.is_empty(),
+        "a captured worker final is not published: {:?}",
+        room.notices
+    );
+    assert!(room.latest_replies.get(&builder).is_none());
 }
 
 #[test]
@@ -575,10 +588,9 @@ fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
 
 #[test]
 fn a_late_reply_to_a_developer_master_message_still_shows_in_master() {
-    // The developer asked in MASTER; the orchestrator's turn started, went
-    // idle, and its Stop hook landed after the settle window closed the
-    // request as `reply_not_captured`. The text is still the answer to the
-    // developer's MASTER message, so it belongs in MASTER, not the work room.
+    // The developer asked in MASTER. Idle grace completes that turn with no
+    // stored reply. The Stop that arrives afterward is a late report, so its
+    // text belongs in MASTER, not the work room.
     let mut bus = fixture(Provider::ClaudeCode);
     let (master, orchestrator) = (bus.master, bus.orchestrator);
     let typed = bus.deliver(master, Author::Developer, orchestrator, "How is the PR?");
@@ -708,10 +720,10 @@ fn a_late_worker_woken_orchestrator_decision_is_published_in_master_once() {
         ),
         Some(request)
     );
-    assert_eq!(
-        state.request(request).unwrap().failure_reason.as_deref(),
-        Some("reply_not_captured")
-    );
+    let closed = state.request(request).unwrap();
+    assert_eq!(closed.phase, RequestPhase::Completed);
+    assert!(closed.reply().is_none());
+    assert!(closed.failure_reason.is_none());
     bus.worker.save(state).unwrap();
     for _ in 0..2 {
         callbacks::append(&spool, "orch", Provider::ClaudeCode,
@@ -840,11 +852,9 @@ fn a_late_decision_for_a_developer_lead_with_worker_notification_reaches_master_
     );
     for id in [lead, member] {
         let request = state.request(id).unwrap();
-        assert_eq!(request.phase, RequestPhase::Abandoned);
-        assert_eq!(
-            request.failure_reason.as_deref(),
-            Some("reply_not_captured")
-        );
+        assert_eq!(request.phase, RequestPhase::Completed);
+        assert!(request.reply().is_none());
+        assert!(request.failure_reason.is_none());
         assert!(request.trusted_start_bound);
         assert_eq!(request.provider_session_id.as_deref(), Some("session-orch"));
         assert_eq!(request.provider_turn_id.as_deref(), Some("mixed-late"));

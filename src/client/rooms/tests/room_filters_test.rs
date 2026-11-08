@@ -66,11 +66,17 @@ fn shortcuts_filter_history_directly_and_combine_with_text_search() {
             key(&mut ui, KeyCode::Char(c), KeyModifiers::NONE);
         }
         room_screen(&mut ui, 100, 60);
-        assert_eq!(ui.view.search_matches.len(), 6, "master: {master}");
+        assert!(
+            !incoming.contains("ordinary peer answer")
+                && !incoming.contains("Needle developer answer")
+                && !incoming.contains("Needle @you reply mention"),
+            "stored replies are not history rows: {incoming}"
+        );
+        assert_eq!(ui.view.search_matches.len(), 4, "master: {master}");
         key(&mut ui, KeyCode::Char('o'), KeyModifiers::ALT);
         apply_filter_commands(&mut ui);
         room_screen(&mut ui, 100, 60);
-        assert_eq!(ui.view.search_matches.len(), 7, "union: master {master}");
+        assert_eq!(ui.view.search_matches.len(), 5, "union: master {master}");
         assert_visible_directions(&ui, true, true);
 
         key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
@@ -315,19 +321,30 @@ fn incoming_filter_preserves_a_shared_answer_to_a_developer_member() {
     ui.receive_snapshot(Arc::new(snapshot));
     ui.open_room(room);
     let before = room_screen(&mut ui, 100, 60);
+    let worker = before
+        .find("ordinary worker prompt")
+        .expect("worker prompt");
+    let follow = before.find("developer followup").expect("developer prompt");
+    assert!(worker < follow, "{before}");
     assert_eq!(
         before.matches("SHARED ANSWER FOR DEVELOPER").count(),
-        1,
+        0,
         "{before}"
     );
+    assert!(!before.contains("answered with message"), "{before}");
     key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
     apply_filter_commands(&mut ui);
     let after = room_screen(&mut ui, 100, 60);
     assert_eq!(
         after.matches("SHARED ANSWER FOR DEVELOPER").count(),
-        1,
-        "incoming filter must retain exactly one developer reply: {after}"
+        0,
+        "{after}"
     );
+    assert!(
+        !after.contains("developer followup") && !after.contains("ordinary worker prompt"),
+        "incoming filter keeps only messages to you, not the stored reply: {after}"
+    );
+    assert_visible_directions(&ui, true, false);
 }
 
 #[test]

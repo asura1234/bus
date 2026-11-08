@@ -18,12 +18,13 @@ fn late_reply_expansion_above_viewport_preserves_the_visible_anchor() {
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(100, 24);
     let anchor = "anchor-prompt-5";
-    ui.main_scroll = ui
+    let scroll = ui
         .history
         .cached()
         .iter()
         .position(|line| line.text == anchor)
         .unwrap();
+    ui.main_scroll = scroll;
     ui.history_follow_tail = false;
 
     complete_requests(
@@ -32,7 +33,29 @@ fn late_reply_expansion_above_viewport_preserves_the_visible_anchor() {
     );
     ui.compute_view(100, 24);
 
-    assert_eq!(ui.history.cached()[ui.main_scroll].text, anchor);
+    // Settling adds no reply body. The message that was on screen stays in the viewport.
+    let at = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text == anchor)
+        .unwrap();
+    let height = usize::from(ui.view.history.height).max(1);
+    assert!(
+        (ui.main_scroll..ui.main_scroll + height).contains(&at),
+        "anchor left the viewport: was {scroll}, now {at}, scroll {}, height {height}",
+        ui.main_scroll
+    );
+    let text = ui
+        .history
+        .cached()
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.contains("one\ntwo\nthree"), "{text}");
+    assert!(text.contains("anchor-prompt-0"), "{text}");
+    assert!(text.contains(anchor), "{text}");
 }
 
 #[test]
@@ -41,10 +64,11 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
     saved_history(&mut ui, room, agent, 20);
     let bottom = room_screen(&mut ui, 100, 30);
     assert!(
-        bottom.contains("answer-19"),
-        "newest reply is visible on opening"
+        bottom.contains("prompt-19"),
+        "newest message is visible on opening"
     );
     assert!(!bottom.contains("prompt-00"));
+    assert!(!bottom.contains("answer-19"));
     let composer = composer_rect(&ui);
     let mut seen = String::new();
     for _ in 0..=ui.view.history_max_scroll {
@@ -54,10 +78,16 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
         assert_eq!(composer_rect(&ui), composer);
     }
     let top = room_screen(&mut ui, 100, 30);
-    assert!(top.find("prompt-00").unwrap() < top.find("answer-00").unwrap());
+    assert!(top.find("prompt-00").unwrap() < top.find("prompt-01").unwrap());
     for i in 0..20 {
-        assert!(seen.contains(&format!("prompt-{i:02}")));
-        assert!(seen.contains(&format!("answer-{i:02}")));
+        assert!(
+            seen.contains(&format!("prompt-{i:02}")),
+            "missing prompt-{i:02}"
+        );
+        assert!(
+            !seen.contains(&format!("answer-{i:02}")),
+            "reply answer-{i:02} is not history text"
+        );
     }
     // New arrivals do not yank the viewport away while reading older messages.
     saved_history(&mut ui, room, agent, 1);
@@ -70,5 +100,5 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
     }
     assert_eq!(ui.main_scroll, ui.view.history_max_scroll);
     ui.open_room(room);
-    assert!(room_screen(&mut ui, 100, 30).contains("answer-19"));
+    assert!(room_screen(&mut ui, 100, 30).contains("prompt-19"));
 }

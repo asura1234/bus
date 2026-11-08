@@ -217,10 +217,11 @@ fn dev_history_retains_twenty_ordered_messages_and_their_own_final_replies() {
     for (i, message) in history.iter().enumerate() {
         assert_eq!(message["prompt"]["id"], messages[i]);
         assert_eq!(message["delivery"]["complete"], true);
-        assert_eq!(
-            message["delivery"]["requests"][0]["reply"]["text"],
-            format!("reply-{i}")
-        );
+        let delivery = &message["delivery"]["requests"][0];
+        assert!(delivery["reply"].is_null(), "{delivery}");
+        assert_eq!(delivery["stage"], "ended");
+        assert_eq!(delivery["reply_ack"], false);
+        assert!(delivery["group"].is_null());
     }
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

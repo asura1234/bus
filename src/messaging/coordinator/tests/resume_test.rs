@@ -731,22 +731,22 @@ fn cold_resume_preserves_uncertain_request_and_settles_its_original_reply_once()
     worker
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();
-    assert_eq!(
-        worker.state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
-    assert_eq!(
-        worker.state.room(room).unwrap().latest_replies[&agent].request_id,
-        request
-    );
-    assert_eq!(
-        worker.state.room(room).unwrap().latest_replies[&agent].text,
-        "original reply after restart"
-    );
+    let settled = worker.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
+    assert!(worker
+        .state
+        .room(room)
+        .unwrap()
+        .latest_replies
+        .get(&agent)
+        .is_none());
     assert_eq!(
         worker.state.request(queued).unwrap().phase,
         RequestPhase::Queued
     );
+    assert!(worker.state.request(queued).unwrap().reply().is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -803,14 +803,17 @@ fn interactive_ready_releases_setup_gate_but_pending_deletion_stays_closed() {
                 restored.actionable_error.as_deref(),
                 Some("keep setup or deletion warning")
             );
-            assert_eq!(
-                worker.state.request(request).unwrap().phase,
-                RequestPhase::Completed
-            );
-            assert_eq!(
-                worker.state.room(room).unwrap().latest_replies[&agent].text,
-                "pending final"
-            );
+            let settled = worker.state.request(request).unwrap();
+            assert_eq!(settled.phase, RequestPhase::Completed);
+            assert!(settled.reply().is_none());
+            assert!(settled.failure_reason.is_none());
+            assert!(worker
+                .state
+                .room(room)
+                .unwrap()
+                .latest_replies
+                .get(&agent)
+                .is_none());
         } else {
             assert_eq!(restored.status, RuntimeStatus::Idle);
             assert!(restored.actionable_error.is_none());

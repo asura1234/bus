@@ -323,30 +323,7 @@ impl BusState {
         &self.history
     }
 
-    /// Shared answers are displayed once per room, including the group's anchor.
-    /// Individual explicit replies retain their own body even inside a turn group.
-    pub(crate) fn shared_reply_sources(
-        &self,
-        room: RoomId,
-        visible: impl Fn(&Request) -> bool,
-    ) -> BTreeMap<RequestId, RequestId> {
-        let mut sources = BTreeMap::new();
-        for request in self
-            .requests()
-            .filter(|request| request.room_id == room && visible(request))
-        {
-            if let Some(group) = request
-                .completed_reply
-                .as_ref()
-                .and_then(|reply| reply.group)
-            {
-                sources.entry(group).or_insert(request.id);
-            }
-        }
-        sources
-    }
-
-    /// Settles `id` with `reply`, as a final callback does, and releases its agent.
+    /// Settles `id` with `reply` for tests that still store an explicit answer.
     #[cfg(test)]
     pub(crate) fn finish_for_test(&mut self, id: RequestId, reply: &str, at_ms: u64) {
         let request = self.requests.get_mut(&id).expect("request");

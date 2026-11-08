@@ -1,7 +1,6 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 mod background;
 mod exchange;
-mod groups;
 mod markdown;
 mod search;
 mod source;
@@ -25,7 +24,7 @@ mod phases {
 }
 
 use super::{render::Action, LocalSendStatus};
-use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
+use crate::messaging::model::{AgentId, PromptId, RoomId};
 pub(super) use exchange::reply;
 #[cfg(test)]
 use exchange::timestamp;
@@ -105,7 +104,6 @@ pub(super) struct ThumbnailRow {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum MarkdownSource {
     Prompt(PromptId),
-    Reply(RequestId),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -124,9 +122,6 @@ enum RowKind {
     PromptBody,
     File,
     Thumbnail,
-    ReplyHeader,
-    ReplyBody,
-    Quote,
     Gap,
 }
 

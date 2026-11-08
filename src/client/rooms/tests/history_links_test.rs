@@ -5,6 +5,25 @@ use ratatui::style::Modifier;
 
 const LINK_FG: ratatui::style::Color = ratatui::style::Color::Rgb(90, 150, 255);
 
+fn is_prompt(line: &history::Line) -> bool {
+    matches!(
+        line.raw_markdown,
+        Some((history::MarkdownSource::Prompt(_), _))
+    )
+}
+
+fn show_agent_prompt(ui: &mut BusUi, room: RoomId, agent: AgentId, text: &str) {
+    // An agent notice is authored by that agent, so relative paths use the
+    // agent's working directory. A request cannot be submitted with no recipients.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .post_to_developer(room, agent, text.into(), Vec::new(), 1_000)
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
 /// A short directory, so its paths fit on one history row.
 fn scratch(label: &str) -> std::path::PathBuf {
     let root = if cfg!(unix) {
@@ -81,7 +100,7 @@ fn wrapped_cells(ui: &BusUi, target: &str) -> Vec<Vec<(u16, u16)>> {
         .cached()
         .iter()
         .enumerate()
-        .filter(|(_, line)| is_reply(line))
+        .filter(|(_, line)| is_prompt(line))
     {
         let body = &line.text[line.copy_from..];
         let fragment = body.split(" AFTER").next().unwrap();
@@ -109,7 +128,13 @@ fn wrapped_cells(ui: &BusUi, target: &str) -> Vec<Vec<(u16, u16)>> {
 fn wrapped_url_styles_every_fragment_and_leaves_following_text_plain() {
     let (mut ui, room, agent) = fixture();
     let url = wrapped_url();
-    saved_exchange(&mut ui, room, agent, "go", &format!("{url} AFTER"));
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        &format!("{url} AFTER"),
+        "hidden reply",
+    );
     let buffer = settled_screen(&mut ui);
     for row in wrapped_cells(&ui, &url) {
         for at in row {
@@ -128,7 +153,13 @@ fn wrapped_url_styles_every_fragment_and_leaves_following_text_plain() {
 fn wrapped_url_click_on_every_row_opens_the_whole_target() {
     let (mut ui, room, agent) = fixture();
     let url = wrapped_url();
-    saved_exchange(&mut ui, room, agent, "go", &format!("{url} AFTER"));
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        &format!("{url} AFTER"),
+        "hidden reply",
+    );
     settled_screen(&mut ui);
     for row in wrapped_cells(&ui, &url) {
         assert_eq!(
@@ -145,7 +176,13 @@ fn wrapped_existing_path_styles_and_opens_every_fragment() {
     std::fs::write(&doc, "wrapped path").unwrap();
     let target = doc.display().to_string();
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "go", &format!("`{target}` AFTER"));
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        &format!("`{target}` AFTER"),
+        "hidden reply",
+    );
     let buffer = settled_screen(&mut ui);
     for row in wrapped_cells(&ui, &target) {
         for &at in &row {
@@ -175,14 +212,14 @@ fn wrapped_links_keep_targets_in_prompts_code_lists_and_after_resize() {
         format!("- {url} AFTER"),
     ] {
         let (mut ui, room, agent) = fixture();
-        saved_exchange(&mut ui, room, agent, &body, &body);
+        saved_exchange(&mut ui, room, agent, &body, "hidden reply");
         for width in [120, 100] {
             ui.compute_view(width, 40);
             let mut buffer =
                 ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, 40));
             ui.render(&mut buffer);
             let hits = ui.view.history_links.clone();
-            assert!(hits.len() >= 6, "prompt and reply both wrap: {body}");
+            assert!(hits.len() >= 3, "the prompt wraps: {body}");
             for (rect, target) in hits {
                 assert_eq!(target, links::Target::Url(url.clone()));
                 assert!(is_link(&buffer, (rect.x, rect.y)));
@@ -201,8 +238,8 @@ fn wrapped_links_do_not_join_hard_lines_or_same_target_occurrences() {
         &mut ui,
         room,
         agent,
-        "go",
         &format!("https://example.test/short\n\nAFTER\n\n{url} AFTER {url} AFTER"),
+        "hidden reply",
     );
     let buffer = settled_screen(&mut ui);
     let short = locate(&ui, "https://example.test/short");
@@ -215,7 +252,7 @@ fn wrapped_links_do_not_join_hard_lines_or_same_target_occurrences() {
         .cached()
         .iter()
         .enumerate()
-        .filter(|(_, line)| is_reply(line))
+        .filter(|(_, line)| is_prompt(line))
     {
         for (offset, _) in line.text.match_indices("AFTER") {
             use unicode_width::UnicodeWidthStr;
@@ -246,13 +283,7 @@ fn wrapped_quoted_path_includes_spaces_and_keeps_the_author_base() {
         .create_agent(room, "worker", Provider::Codex, dir.clone(), None)
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
-    saved_exchange(
-        &mut ui,
-        room,
-        agent,
-        "go",
-        &format!("\"./{name}:12:3\" AFTER"),
-    );
+    show_agent_prompt(&mut ui, room, agent, &format!("\"./{name}:12:3\" AFTER"));
     let buffer = settled_screen(&mut ui);
     let expected = dir.join(format!("./{name}"));
     let hits = ui.view.history_links.clone();
@@ -288,10 +319,10 @@ fn attachments_read_as_links_without_brackets_and_open_on_click() {
         .position(|line| line.text == "lovart_产品设计文档.md")
         .expect("attachment row without brackets");
     assert_eq!(lines[file - 1].text, "see attached", "follows its message");
-    assert_eq!(lines[file + 1].text, "", "a blank row before the reply");
+    assert_eq!(lines[file + 1].text, "", "a blank row closes the message");
     assert!(
-        lines[file + 2].text.contains("author"),
-        "then the reply header"
+        lines.iter().all(|line| line.text.trim() != "ok"),
+        "the stored reply is not a history row"
     );
 
     let at = locate(&ui, "lovart");
@@ -312,7 +343,7 @@ fn only_an_existing_path_in_a_reply_is_underlined_and_a_click_opens_it() {
         doc.display(),
         dir.display()
     );
-    saved_exchange(&mut ui, room, agent, "send it", &reply);
+    saved_exchange(&mut ui, room, agent, &reply, "hidden reply");
     let buffer = settled_screen(&mut ui);
 
     let path = doc.display().to_string();
@@ -355,8 +386,8 @@ fn dragging_across_a_link_copies_plain_text_and_opens_nothing() {
         &mut ui,
         room,
         agent,
-        "go",
         &format!("see {} now", doc.display()),
+        "hidden reply",
     );
     settled_screen(&mut ui);
     let (x, y) = locate(&ui, "see ");
@@ -386,11 +417,10 @@ fn urls_and_relative_paths_from_the_agent_cwd_open_on_click() {
         .create_agent(room, "worker", Provider::Codex, dir.clone(), None)
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
-    saved_exchange(
+    show_agent_prompt(
         &mut ui,
         room,
         agent,
-        "where?",
         "In src/main.rs:12:5, docs at https://example.test/a.",
     );
     let buffer = settled_screen(&mut ui);
@@ -440,8 +470,8 @@ fn releasing_over_a_link_after_pressing_other_text_does_not_open_it() {
         &mut ui,
         room,
         agent,
-        "go",
         "before https://example.test after",
+        "hidden reply",
     );
     settled_screen(&mut ui);
     let (x, y) = locate(&ui, "before ");
@@ -523,12 +553,18 @@ fn dragging_within_a_picture_does_not_open_it() {
     assert_eq!(opened(&all), None, "a thumbnail drag is not a click");
 }
 
-/// Every reply row that shows part of the wrapped URL has a hit, every hit
+/// Every prompt row that shows part of the wrapped URL has a hit, every hit
 /// opens the complete URL, and the following word stays plain.
 fn assert_wrapped_reply_url_links_on_every_row(body: &str) {
     let (mut ui, room, agent) = fixture();
     let url = wrapped_url();
-    saved_exchange(&mut ui, room, agent, "go", &body.replace("{url}", &url));
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        &body.replace("{url}", &url),
+        "hidden reply",
+    );
     let buffer = settled_screen(&mut ui);
     let hits = ui.view.history_links.clone();
     let mut rows = 0;
@@ -537,7 +573,7 @@ fn assert_wrapped_reply_url_links_on_every_row(body: &str) {
         .cached()
         .iter()
         .enumerate()
-        .filter(|(_, line)| is_reply(line))
+        .filter(|(_, line)| is_prompt(line))
     {
         if !(line.text.contains("https://example.feishu") || line.text.contains("synthetic")) {
             continue;

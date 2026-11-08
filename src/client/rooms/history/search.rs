@@ -1,6 +1,6 @@
 //! Find selection follows the logical message when older pages prepend rows.
-use super::{History, Line, MarkdownSource, RowAnchor, RowKind};
-use crate::messaging::model::{BusState, PromptId};
+use super::{History, Line, RowAnchor};
+use crate::messaging::model::BusState;
 use std::ops::Range;
 
 pub(in crate::client::rooms) struct SearchAnchor {
@@ -51,22 +51,8 @@ impl SearchAnchor {
     }
 }
 
-fn identity(line: &Line, state: &BusState) -> RowAnchor {
-    let mut anchor = line.anchor;
-    if matches!(
-        anchor.kind,
-        RowKind::ReplyHeader | RowKind::ReplyBody | RowKind::Quote
-    ) {
-        let request = match &line.raw_markdown {
-            Some((MarkdownSource::Reply(id), _)) => state.request(*id),
-            _ => state
-                .requests_for_message(anchor.prompt)
-                .find(|request| Some(request.agent_id) == anchor.agent),
-        };
-        if let Some(request) = request {
-            // A shared body may move to an older group member as the page grows.
-            anchor.prompt = PromptId(request.reply_key().0);
-        }
-    }
-    anchor
+fn identity(line: &Line, _state: &BusState) -> RowAnchor {
+    // History rows are the message itself. A reply is not a separate row whose
+    // anchor has to follow a group member onto an older page.
+    line.anchor
 }
