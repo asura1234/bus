@@ -610,6 +610,56 @@ impl ObservedSubmission {
             })
     }
 
+    /// One Enter after a submittable frame. An incomplete or blank redraw is
+    /// waited out; a complete frame that still cannot take input is refused.
+    fn await_submit_key(&self) -> io::Result<()> {
+        let blocked = || {
+            Self::before_enter_failure(
+                io::Error::other("Native input is blocked"),
+                "Saved input is retained; no submission key was sent",
+            )
+        };
+        loop {
+            let generation = self.clock.generation();
+            let queued = {
+                let _guard = self
+                    .content_lock
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+                match self.terminal.active_ansi_if_complete() {
+                    Some(screen) if self.inspect.submission_available(&screen) => {
+                        self.check_deadline()?;
+                        let key = self.inspect.editor_submit_key(&screen, &self.enter);
+                        self.diagnostics.enter(&key, self.clock.now());
+                        Some(self.io.queue_input_write_scoped(
+                            Bytes::new(),
+                            key,
+                            Duration::ZERO,
+                            Some(self.deadline.get()),
+                            &self.scope,
+                        ))
+                    }
+                    Some(screen) if screen.trim().is_empty() => None,
+                    Some(_) => return Err(blocked()),
+                    None => None,
+                }
+            };
+            if let Some(queued) = queued {
+                // The content lock is released before the write is awaited.
+                return self.finish_enter(queued);
+            }
+            if let Err(error) = self.check_deadline() {
+                return Err(Self::before_enter_failure(
+                    error,
+                    "Saved input is retained; no submission key was sent",
+                ));
+            }
+            #[cfg(test)]
+            self.clock.waiting_for_draft();
+            self.clock.sleep(Duration::from_millis(20), generation);
+        }
+    }
+
     fn run(
         &self,
         text: Bytes,
@@ -639,34 +689,8 @@ impl ObservedSubmission {
         }
         // Do not read back or attribute the pasted text. The pane lease keeps
         // developer input buffered; only a fresh complete blocker reading may
-        // refuse the one submission key.
-        let completion = {
-            let _guard = self
-                .content_lock
-                .lock()
-                .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-            let screen = self
-                .terminal
-                .active_ansi_if_complete()
-                .filter(|screen| self.inspect.submission_available(screen))
-                .ok_or_else(|| {
-                    Self::before_enter_failure(
-                        io::Error::other("Native input is blocked"),
-                        "Saved input is retained; no submission key was sent",
-                    )
-                })?;
-            self.check_deadline()?;
-            let key = self.inspect.editor_submit_key(&screen, &self.enter);
-            self.diagnostics.enter(&key, self.clock.now());
-            self.io.queue_input_write_scoped(
-                Bytes::new(),
-                key,
-                Duration::ZERO,
-                Some(self.deadline.get()),
-                &self.scope,
-            )
-        };
-        self.finish_enter(completion)?;
+        // refuse the one submission key. A blank redraw is not that reading.
+        self.await_submit_key()?;
         let _ = lease;
         #[cfg(test)]
         self.clock.entered();

@@ -1475,6 +1475,55 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         .is_ok());
 }
 
+#[tokio::test]
+async fn cursor_submit_waits_through_a_blank_redraw_before_enter() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(131, 45, 32);
+    let show = |screen: &str| {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        runtime.test_process_pty_bytes(
+            screen
+                .replace("\r\n", "\n")
+                .replace('\n', "\r\n")
+                .as_bytes(),
+        );
+    };
+    show(include_str!("fixtures/cursor_20261014_empty.ansi"));
+    let text = "first line\n\nGPT-6 and Claude\nlast line";
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    // Hold the paste receipt so the clear lands before the submit guard runs.
+    let release = clock.hold_next_write_completion();
+    let completion = super::super::queue_prompt_input(
+        &runtime,
+        AgentKind::Cursor,
+        text.into(),
+        true,
+        std::time::Duration::ZERO,
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
+        None,
+        false,
+    )
+    .unwrap();
+    let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(paste.as_ref(), text.as_bytes());
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    release.send(()).unwrap();
+    show(include_str!("fixtures/cursor_20261014_draft.ansi"));
+    let enter = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(enter.as_ref(), b"\r");
+    assert!(completion
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+        .unwrap()
+        .is_ok());
+}
+
 #[test]
 fn cursor_background_composer_keeps_directory_tree_lines_in_the_draft() {
     let screen =
