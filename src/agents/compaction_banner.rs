@@ -32,17 +32,16 @@ pub(crate) fn visible(agent: Option<&str>, screen: &str) -> bool {
         .map(|line| collapse_whitespace(line.trim()))
         .filter(|line| !line.is_empty())
         .collect();
-    if lines
-        .iter()
-        .any(|line| short_banner(line) && contains_phrase(line, phrases))
-    {
+    if lines.iter().any(|line| status_line(line, phrases)) {
         return true;
     }
-    // A resize can wrap the status line onto the next row. Joining only a
-    // short pair keeps a long transcript row from matching.
+    // A resize can split the status line on a word or mid-word. The mid-word
+    // break has no space; the word break does. Only one short pair is joined,
+    // so a long transcript still cannot match.
     lines.windows(2).any(|pair| {
-        let joined = format!("{} {}", pair[0], pair[1]);
-        short_banner(&joined) && contains_phrase(&joined, phrases)
+        let mid_word = format!("{}{}", pair[0], pair[1]);
+        let word = format!("{} {}", pair[0], pair[1]);
+        status_line(&mid_word, phrases) || status_line(&word, phrases)
     })
 }
 
@@ -50,8 +49,17 @@ fn short_banner(line: &str) -> bool {
     line.chars().count() <= MAX_BANNER_CHARS
 }
 
-fn contains_phrase(line: &str, phrases: &[&str]) -> bool {
-    phrases.iter().any(|phrase| line.contains(phrase))
+/// The phrase is the whole status line, or its prefix plus a terminator.
+/// A period ends the completion line. ` (` starts the progress suffix.
+/// A later sentence that merely contains the phrase does not match.
+fn status_line(line: &str, phrases: &[&str]) -> bool {
+    short_banner(line)
+        && phrases.iter().any(|phrase| {
+            let Some(rest) = line.strip_prefix(phrase) else {
+                return false;
+            };
+            rest.is_empty() || rest == "." || rest.starts_with(" (")
+        })
 }
 
 fn collapse_whitespace(line: &str) -> String {

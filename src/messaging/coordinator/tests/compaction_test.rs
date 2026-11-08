@@ -386,6 +386,30 @@ fn compaction_banner_grok_counts_once_and_sets_last_at_ms() {
 }
 
 #[test]
+fn compaction_banner_narrow_wrap_between_full_lines_counts_once() {
+    let full = "Auto-compacting conversation (82% full)...";
+    let wrapped = "Auto-compacting conversati\non (82% full)...";
+    let flags = [full, wrapped, full]
+        .map(|screen| crate::agents::compaction_banner::visible(Some("grok"), screen));
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        flags
+            .into_iter()
+            .map(|banner| banner_listing("grok", banner, false))
+            .collect(),
+    );
+    poll_banner(&mut worker, 1_000);
+    poll_banner(&mut worker, 2_000);
+    poll_banner(&mut worker, 3_000);
+    assert_eq!(
+        worker.state.agent(agent).unwrap().compactions.count,
+        1,
+        "a wrapped frame of the same banner must not close the latch: {flags:?}"
+    );
+    cleanup(worker, dir);
+}
+
+#[test]
 fn compaction_banner_grok_repeat_poll_does_not_increment() {
     let (mut worker, agent, _, dir, _) = fixture(
         Provider::Grok,

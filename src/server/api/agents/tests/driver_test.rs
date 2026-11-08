@@ -590,3 +590,39 @@ async fn compaction_banner_server_sets_the_flag_from_the_pane() {
     assert_eq!(agent.as_deref(), Some("claude"));
     assert!(!banner, "claude keeps the hook path");
 }
+
+#[tokio::test]
+async fn compaction_banner_narrow_resize_stays_the_same_episode() {
+    let banner = b"Auto-compacting conversation (82% full)...";
+    let (runtime, _writes) = crate::terminal::TerminalRuntime::test_with_channel_capacity(26, 8, 4);
+    runtime.test_process_pty_bytes(banner);
+    let (grid, _) = crate::terminal::driver::observe(&runtime).expect("screen read");
+    let text = grid.text();
+    assert!(
+        crate::agents::compaction_banner::visible(Some("grok"), &text),
+        "a 26-column wrap of the same banner must stay visible so the latch does not close\n{text:?}"
+    );
+}
+
+#[test]
+fn compaction_banner_short_transcript_is_not_a_banner() {
+    let screen = "Conversation compacted, so continue from the summary.";
+    assert!(
+        !crate::agents::compaction_banner::visible(Some("grok"), screen),
+        "a short transcript sentence that quotes the phrase is not the status banner"
+    );
+    assert!(
+        !crate::agents::compaction_banner::visible(
+            Some("kimi"),
+            "Context compacted, so continue from the summary."
+        ),
+        "a Kimi phrase inside a sentence is not the status banner"
+    );
+    assert!(
+        !crate::agents::compaction_banner::visible(
+            Some("kimi"),
+            "Compacting context before the next reply."
+        ),
+        "a Kimi phrase that continues into a sentence is not the status banner"
+    );
+}
