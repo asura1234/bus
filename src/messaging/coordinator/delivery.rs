@@ -100,7 +100,14 @@ impl Worker {
             }) {
                 continue;
             }
-            let waited = self.delivery_waits.contains_key(&agent.id);
+            let head = self.state.queued_requests(agent.id).first().copied();
+            // The flag belongs to the request about to be sent. A stale map
+            // entry for an older head must not mark this one.
+            let waited = head.is_some_and(|request| {
+                self.delivery_waits
+                    .get(&agent.id)
+                    .is_some_and(|(waited_for, _)| *waited_for == request)
+            });
             if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
                 // Dialog blocks the send below without entering wait_reason.
                 // That function keeps its precedence, including the Codex

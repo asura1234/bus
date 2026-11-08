@@ -2340,6 +2340,44 @@ fn delivery_latency_excludes_idle_dialog_wait() {
 }
 
 #[test]
+fn stale_delivery_wait_does_not_mark_the_request_that_is_sent() {
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::Codex, vec![composer_available()]);
+    worker
+        .state
+        .observe_dialog(agent, true, io::now_ms())
+        .unwrap();
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "this request never waited"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+    worker.submit_ready().unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    worker
+        .delivery_waits
+        .insert(agent, (RequestId(request.0 + 100), "agent_dialog"));
+    worker
+        .state
+        .observe_dialog(agent, false, io::now_ms())
+        .unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert!(
+        !worker.state.request(request).unwrap().latency.agent_waited,
+        "a stale wait for another request must not mark the one that was sent"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn grok_resume_of_superseded_session_is_not_silently_retired() {
     // Grok 1.0.70 `/resume <id>` reloads a session in place and reports
     // session_start source=load. After a Bus clear (session -> fresh), resuming
