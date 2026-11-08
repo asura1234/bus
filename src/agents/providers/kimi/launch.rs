@@ -375,8 +375,12 @@ enum ShortValue {
 const SHORT_OPTIONS: &[(char, ShortValue)] = &[
     ('V', ShortValue::Flag),
     ('S', ShortValue::Optional),
+    // Hidden boolean. Kimi folds it into the same continue bit as `-c`.
+    ('C', ShortValue::Flag),
     ('c', ShortValue::Flag),
     ('y', ShortValue::Flag),
+    // Hidden optional session id, the same shape as `-S` / `--session`.
+    ('r', ShortValue::Optional),
     ('m', ShortValue::Required),
     ('p', ShortValue::Required),
     ('h', ShortValue::Flag),
@@ -401,6 +405,7 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
     let mut normalized = "-".to_owned();
     let mut takes_next_value = false;
     let mut optional_next = false;
+    let mut saw_unmapped = false;
     for (index, flag) in name.char_indices().skip(1) {
         if flag == 'y' {
             yolo = true;
@@ -410,12 +415,10 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
             .iter()
             .find_map(|(candidate, value)| (*candidate == flag).then_some(*value))
         else {
-            // A `y` already seen is still Kimi's yolo bit. Keep the later
-            // letters (`-yr` → `-r`). An unmapped letter before `y` (`-ry`)
-            // is not that bit, so the whole cluster stays unrecognized.
-            if !yolo {
-                return None;
-            }
+            // A `y` anywhere in the cluster is still Kimi's yolo bit (`-Qy`).
+            // Keep the unmapped letter. A cluster with no `y` stays
+            // unrecognized below so its arity is not guessed.
+            saw_unmapped = true;
             normalized.push(flag);
             continue;
         };
@@ -429,6 +432,11 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
             }
             break;
         }
+    }
+    // `-ry` is a resume id because `-r` consumed `y`. An unmapped cluster
+    // with no yolo bit (`-Q`) still has unknown arity.
+    if saw_unmapped && !yolo {
+        return None;
     }
     Some(ParsedShortOption {
         yolo,
@@ -449,10 +457,12 @@ pub(crate) fn is_yolo_option(name: &str) -> bool {
     normalize_yolo_option(name).is_some()
 }
 
-/// Kimi `-S` / `--session` takes an optional id. A following token that starts
-/// with `-` is the next option, not that id.
+/// Kimi `-S` / `--session` and hidden `-r` / `--resume` take an optional id.
+/// A following token that starts with `-` is the next option, not that id.
 pub(crate) fn session_value_is_optional(name: &str) -> bool {
-    name == "--session" || parse_short_option(name).is_some_and(|option| option.optional_next)
+    name == "--session"
+        || name == "--resume"
+        || parse_short_option(name).is_some_and(|option| option.optional_next)
 }
 
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
@@ -463,8 +473,8 @@ pub(crate) fn option_arity(name: &str) -> Option<usize> {
         return Some(usize::from(option.takes_next_value));
     }
     match name {
-        "--session" | "--agent-file" | "--agent" | "--model" | "--output-format" | "--prompt"
-        | "--skills-dir" | "--add-dir" => Some(1),
+        "--session" | "--resume" | "--agent-file" | "--agent" | "--model" | "--output-format"
+        | "--prompt" | "--skills-dir" | "--add-dir" => Some(1),
         "--auto" | "--continue" | "--plan" | "--help" | "--version" => Some(0),
         _ => None,
     }

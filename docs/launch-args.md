@@ -132,7 +132,7 @@ command/option position:
 | Claude | `--bare`, `--safe-mode` | These explicitly disable hooks required for session ownership and request completion. |
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
 | Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, or positional input | These replace Bus's interactive prompt, agent file, session, or version/help ownership. |
-| Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this native permission combination. Bus rejects that raw combination before saving, including while Bus `--yolo` is on. During a yolo run, normalization still removes legacy `--yolo` / `-y` from effective argv before this check, including on resume of an already saved alias. |
+| Kimi | `--auto` with `--yolo`, hidden `--yes` or `--auto-approve`, or a short cluster whose `y` is a flag | Kimi rejects this native permission combination. Bus rejects that raw combination before saving, including while Bus `--yolo` is on. Hidden `-C` is a boolean and hidden `-r` / `--resume` take an optional session id, so neither hides a later `--auto` and yolo flag. An unmapped letter does not hide a `y` in the same cluster. During a yolo run, normalization still removes that legacy yolo bit from effective argv before this check, including on resume of an already saved alias. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`
