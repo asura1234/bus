@@ -29,7 +29,10 @@ impl Worker {
                     .send(BusEvent::DevFocusRequested {
                         room,
                         agent,
-                        form_generation: Some(super::super::current_form_generation()),
+                        form_generation: Some(
+                            self.queued_focus_generation
+                                .unwrap_or_else(super::super::current_form_generation),
+                        ),
                     })
                     .map_err(|_| "Bus UI event channel disconnected")?;
                 let mut result = json!({"stage":"queued", "room_id":room});

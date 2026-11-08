@@ -502,6 +502,8 @@ impl Client {
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;
         let started = Instant::now();
         let deadline = started + worker_timeout(&request.method);
+        let form_generation = matches!(request.method.as_str(), "room.focus" | "agent.focus")
+            .then(crate::messaging::coordinator::current_form_generation);
         match commands.try_send((
             command_id,
             BusCommand::Control(ControlCall {
@@ -509,6 +511,7 @@ impl Client {
                 reply,
                 deadline: Some(deadline),
                 _poll_permit: poll_budget.cloned(),
+                form_generation,
             }),
         )) {
             Ok(()) => {
