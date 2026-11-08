@@ -47,7 +47,7 @@ fn startup_poll_timeout_retries_without_status_or_composer_error_then_recovers()
     );
     assert!(worker.snapshot().error.is_none());
     assert!(calls.lock().unwrap().iter().all(|call| {
-        **call != "agent.prompt_if_idle" && **call != "agent.prompt_if_idle_at_generation"
+        *call != "agent.prompt_if_idle" && *call != "agent.prompt_if_idle_at_generation"
     }));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
