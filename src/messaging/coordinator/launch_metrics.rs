@@ -140,7 +140,13 @@ fn observe_generation(
             .attach_launch_attempt(id, agent.id)
             .map_err(|e| e.to_string())?;
     }
-    if owned {
+    // An identity already on the agent before this attempt must not fill an
+    // unbound record. A still-listed previous terminal would otherwise settle
+    // an unsent resume as usable. Absence still times out that record later.
+    let identity_predates_attempt = unbound_pending
+        && previous.runtime_identity.launch_id == agent.runtime_identity.launch_id
+        && previous.runtime_identity.terminal_id == agent.runtime_identity.terminal_id;
+    if owned && !identity_predates_attempt {
         bind_current(state, agent.id);
     }
     Ok(())

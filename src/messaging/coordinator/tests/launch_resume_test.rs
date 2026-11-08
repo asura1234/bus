@@ -132,6 +132,92 @@ fn prepare_resume(worker: &mut Worker, agent: AgentId, recovery: Option<StartupR
         .unwrap();
     worker.save(state).unwrap();
 }
+/// Pane close can report success while the previous terminal is still listed.
+/// An uncertain tab create must not adopt that terminal as the new resume.
+struct StaleResume {
+    state_path: PathBuf,
+    agent: AgentId,
+    lists: u32,
+}
+impl StaleResume {
+    fn ready(&self) -> schema::AgentInfo {
+        let s = JsonStore::new(self.state_path.clone())
+            .load()
+            .unwrap()
+            .unwrap();
+        let a = s.agent(self.agent).unwrap();
+        let mut info = native_info("pane", "codex", "session");
+        info.name = Some(crate::messaging::identity::managed_name(a.room_id, a.id));
+        info.terminal_id = "terminal".into();
+        info.native_ready = true;
+        info.interactive_ready = true;
+        info.agent_status = schema::AgentStatus::Idle;
+        info
+    }
+}
+impl Transport for StaleResume {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                self.lists += 1;
+                let agents = if self.lists == 1 {
+                    Vec::new()
+                } else {
+                    vec![self.ready()]
+                };
+                Ok(ResponseResult::AgentList { agents })
+            }
+            Method::TabCreate(_) => Err(TransportError {
+                code: None,
+                message: "lost tab create".into(),
+                definitely_rejected: false,
+            }),
+            _ => Ok(ResponseResult::Ok {}),
+        }
+    }
+}
+
+#[test]
+fn launch_metrics_uncertain_resume_tab_does_not_adopt_the_previous_terminal() {
+    let _providers = provider_binaries();
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, u64::MAX);
+    let hooks = worker.data_dir.join(".codex/hooks.json");
+    let document = crate::agents::providers::hook_json::merge_hooks(
+        json!({}),
+        crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let mut state = worker.state.clone();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 1)
+        .unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(StaleResume {
+        state_path: dir.join("state.json"),
+        agent,
+        lists: 0,
+    });
+    let result = worker.resume_room(room).unwrap();
+    let reason = result["agents"][0]["reason"].as_str().unwrap_or("");
+    assert!(
+        reason.contains("Terminal creation outcome needs inspection"),
+        "probe must stop on the uncertain tab create: {result}"
+    );
+    worker.poll().unwrap();
+    let saved = ledger(&worker);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_ne!(
+        saved["2"]["outcome"], "usable",
+        "unsent resume adopted the previous terminal: {saved}"
+    );
+    assert_ne!(saved["2"]["terminal_id"], "terminal", "{saved}");
+}
+
 #[test]
 fn launch_metrics_explicit_resume_records_before_input_and_preserves_failed_predecessor() {
     let _providers = provider_binaries();
