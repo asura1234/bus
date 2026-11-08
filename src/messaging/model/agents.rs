@@ -48,6 +48,7 @@ impl BusState {
                 cwd,
                 branch,
                 runtime_identity: AgentRuntimeIdentity::default(),
+                launch_attempt_id: None,
                 claude_shells: None,
                 startup: None,
                 details_disclosed: false,
@@ -145,6 +146,7 @@ impl BusState {
 
     /// Retire the runtime; keep every message, reply and historical identity.
     pub(crate) fn delete_agent(&mut self, id: AgentId, now_ms: u64) -> Result<(), ModelError> {
+        self.cancel_pending_launch(id, AGENT_DELETED, now_ms);
         let removed = self
             .agents
             .remove(&id)

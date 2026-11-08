@@ -227,6 +227,7 @@ impl Worker {
             std::thread::sleep(Duration::from_millis(delay));
         }
     }
+
     /// Runs the archive pass at most once per [`ARCHIVE_EVERY`].
     fn archive_when_due(&mut self) -> Result<(), String> {
         let now = std::time::Instant::now();

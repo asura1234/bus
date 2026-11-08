@@ -220,6 +220,7 @@ impl Worker {
         diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
         diagnostics::recoveries(&self.durable_state, &state);
         diagnostics::provider_resets(&self.durable_state, &state);
+        super::launch_metrics::log_outcomes(&self.durable_state, &state);
         for agent in state.agents() {
             if self
                 .durable_state
@@ -349,6 +350,7 @@ impl Worker {
             return;
         }
         diagnostics::recoveries(&self.durable_state, &self.state);
+        super::launch_metrics::log_outcomes(&self.durable_state, &self.state);
         self.durable_state = self.state.clone();
         self.durable_state
             .hide_completed_replies(&self.unstamped_replies);

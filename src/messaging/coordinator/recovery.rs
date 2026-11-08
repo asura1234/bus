@@ -6,6 +6,7 @@ use super::{
 use crate::agents::providers::launch;
 use crate::agents::resume::catalog::{self, AgentSessionRefKind};
 use crate::messaging::identity;
+use crate::messaging::model::{LaunchKind, LaunchOutcome, StartupRecovery};
 use serde_json::{json, Value};
 
 /// Old snapshots may have confirmed hooks solely from file contents. Hold
@@ -86,7 +87,28 @@ impl Worker {
 
     fn resume_saved_agent(&mut self, agent: &RoomAgent) -> Result<(), String> {
         if let Err(error) = self.ensure_provider_binary(agent.room_id, agent.provider) {
+            let recovery = agent.startup.as_ref().and_then(|s| s.recovery.as_ref());
+            let tracked = !matches!(recovery, Some(StartupRecovery::Requested));
+            if tracked {
+                self.begin_agent_launch(
+                    agent,
+                    if matches!(recovery, Some(StartupRecovery::Unsubmitted { .. })) {
+                        LaunchKind::Recovery
+                    } else {
+                        LaunchKind::Resume
+                    },
+                )?;
+            }
             let mut state = self.state.clone();
+            if tracked {
+                super::launch_metrics::settle_current(
+                    &mut state,
+                    agent.id,
+                    LaunchOutcome::Failed,
+                    Some("missing_executable"),
+                    super::io::now_ms(),
+                );
+            }
             state
                 .block_missing_binary(agent.id, agent.provider.executable(), super::io::now_ms())
                 .map_err(|e| e.to_string())?;
@@ -133,6 +155,7 @@ impl Worker {
             project: crate::agents::providers::launch::project_root(&agent.cwd),
             binary: std::env::current_exe().map_err(|e| e.to_string())?,
         };
+        let attempt = self.begin_agent_launch(agent, LaunchKind::Resume)?;
         let extras = super::resume::for_native_resume(
             &context,
             &super::resume::NativeResumeFacts {
@@ -141,8 +164,9 @@ impl Worker {
                 session: Some(session),
             },
             &plan,
-        )?;
-        self.launch_saved_agent(agent, kind, plan, extras)
+        );
+        let extras = self.track_launch_result(attempt, "resume_preparation_failed", extras)?;
+        self.launch_saved_agent(agent, kind, plan, extras, attempt)
     }
 
     fn launch_saved_agent(
@@ -151,9 +175,10 @@ impl Worker {
         kind: &str,
         plan: catalog::AgentResumePlan,
         extras: super::resume::LaunchExtras,
+        attempt: u64,
     ) -> Result<(), String> {
-        let (executable, grok_home, kimi_home) =
-            if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
+        let prepared: Result<_, String> = (|| {
+            let binding = if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
                 let env = extras.env.iter().cloned().collect();
                 let executable =
                     launch::selected_executable(identity::provider_kind(agent.provider), &env)?
@@ -169,7 +194,12 @@ impl Worker {
             } else {
                 (None, None, None)
             };
-        self.close_resume_terminal(agent)?;
+            Ok(binding)
+        })();
+        let (executable, grok_home, kimi_home) =
+            self.track_launch_result(attempt, "resume_preparation_failed", prepared)?;
+        let closed = self.close_resume_terminal(agent);
+        self.track_launch_result(attempt, "resume_terminal_close_failed", closed)?;
         let mut args = plan.argv[1..].to_vec();
         args.extend(extras.args);
         let created = self
@@ -187,7 +217,12 @@ impl Worker {
                 let argv = std::iter::once(plan.argv[0].clone())
                     .chain(args.iter().cloned())
                     .collect();
-                return self.record_failed_launch_creation(agent.id, argv, &error.message);
+                return self.record_failed_launch_creation(
+                    agent.id,
+                    argv,
+                    &error.message,
+                    error.code.as_deref().unwrap_or("terminal_creation_failed"),
+                );
             }
             other => {
                 return Err(format!(
@@ -206,6 +241,7 @@ impl Worker {
                 },
             )
             .map_err(|e| e.to_string())?;
+        super::launch_metrics::bind_current(&mut state, agent.id);
         state
             .observe_status(agent.id, RuntimeStatus::Launching, super::io::now_ms())
             .map_err(|e| e.to_string())?;
@@ -232,6 +268,10 @@ impl Worker {
             Ok(ResponseResult::AgentStarted { .. }) => {}
             other => return self.record_failed_agent_start(agent.id, args, other),
         }
+        self.finish_resume_start(agent, root_pane.pane_id)
+    }
+
+    fn finish_resume_start(&mut self, agent: &RoomAgent, pane_id: String) -> Result<(), String> {
         // The new launch now owns diagnosis. Keeping the previous missing
         // marker would suppress both startup settlement and a second outage.
         let mut state = self.state.clone();
@@ -245,7 +285,7 @@ impl Worker {
         self.report_adopted_session(
             agent.id,
             agent.provider,
-            root_pane.pane_id,
+            pane_id,
             agent
                 .runtime_identity
                 .session_id
@@ -273,6 +313,12 @@ impl Worker {
         state
             .set_agent_startup(id, Some(startup))
             .map_err(|e| e.to_string())?;
+        let started_at_ms = state
+            .agent(id)
+            .and_then(|a| a.startup.as_ref())
+            .ok_or("Resume startup disappeared")?
+            .started_at_ms;
+        state.watch_launch_command(id, started_at_ms);
         self.save(state)
     }
 

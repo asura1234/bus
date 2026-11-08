@@ -1,4 +1,5 @@
 //! Persisted DTOs, identities and payload representation.
+pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
 use super::{payload::payload_matches, DeliveryLatency, DialogNoticeDelivery, QueuedRejection};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -373,6 +374,9 @@ pub(crate) struct RoomAgent {
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
     pub(crate) runtime_identity: AgentRuntimeIdentity,
+    /// Current durable launch attempt; earlier attempts remain in the ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) launch_attempt_id: Option<u64>,
     /// Observed shell boundary for this launch/session, saved with callbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) claude_shells: Option<ClaudeShells>,
@@ -797,17 +801,3 @@ pub(crate) enum CallbackDisposition {
     AcceptedError,
     Rejected(CallbackRejection),
 }
-
-/// How long a queued message may wait on an agent that is not working before
-/// it needs recovery. Delivery normally starts within a status tick of the
-/// agent going idle, so two minutes means something refuses it.
-pub(crate) const QUEUED_STALL_MS: u64 = 2 * 60 * 1000;
-/// How long a typed message may sit with its agent idle and no hook progress.
-/// Longer than the queued grace: providers can take a while to report the
-/// turn start or the final reply after the screen goes idle.
-pub(crate) const DELIVERED_STALL_MS: u64 = 3 * 60 * 1000;
-/// How long an agent may stay blocked (a dialog, question or trust prompt)
-/// before `message status` reports `blocked_unanswered`. Answering takes a
-/// person or the orchestrator a moment; five minutes untouched means nobody
-/// saw it.
-pub(crate) const BLOCKED_STALL_MS: u64 = 5 * 60 * 1000;

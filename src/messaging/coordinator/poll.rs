@@ -45,6 +45,7 @@ impl Worker {
         let mut waits = Vec::new();
         let observed_agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in &observed_agents {
+            let previous_agent = agent;
             let info = polled_agent(&self.state, agent, &infos);
             if let Some(info) = info {
                 if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
@@ -74,6 +75,7 @@ impl Worker {
                 )?;
             }
             confirm_interactive_agent(&mut state, agent, info)?;
+            super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;

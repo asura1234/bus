@@ -1,4 +1,5 @@
 //! The single Bus coordinator. UI commands/snapshots contain data only.
+mod agent_creation;
 pub(crate) mod agents;
 pub(crate) mod attention;
 mod automatic_input;
@@ -12,6 +13,7 @@ mod error_pipe_tests;
 mod exit_snapshot;
 mod expiry;
 mod first_message;
+mod launch_metrics;
 #[cfg(test)]
 #[path = "tests/operational_notice_retirement_test.rs"]
 mod operational_notice_retirement_tests;

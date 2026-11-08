@@ -854,6 +854,18 @@ mod control_priority_tests;
 #[path = "provider_recovery_test.rs"]
 mod provider_recovery;
 
+#[path = "launch_metrics_test.rs"]
+mod launch_metrics_tests;
+
+#[path = "native_launch_failures_test.rs"]
+mod native_launch_failures_tests;
+
+#[path = "launch_boundaries_test.rs"]
+mod launch_boundaries_tests;
+
+#[path = "launch_resume_test.rs"]
+mod launch_resume_tests;
+
 #[test]
 fn kimi_restore_preserves_a_persisted_provider_hold_until_its_original_request_can_retry() {
     #[cfg(target_os = "macos")]

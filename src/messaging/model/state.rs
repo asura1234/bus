@@ -14,6 +14,8 @@ use {
 pub(crate) struct BusState {
     pub(super) next_id: u64,
     pub(super) next_status_revision: u64,
+    #[serde(default, with = "super::launch_attempts::records")]
+    pub(super) launch_attempts: Arc<BTreeMap<u64, super::launch_attempts::LaunchAttempt>>,
     pub(super) rooms: BTreeMap<RoomId, Room>,
     #[serde(deserialize_with = "deserialize_agents")]
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
@@ -137,6 +139,7 @@ impl BusState {
 
     pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
         if self.next_id != previous.next_id
+            || self.launch_attempts != previous.launch_attempts
             || self.retired_agents != previous.retired_agents
             || self.rooms != previous.rooms
             || self.routing_before_ms != previous.routing_before_ms
@@ -171,13 +174,14 @@ impl BusState {
     }
 
     pub(crate) fn is_pristine(&self) -> bool {
-        self.next_id == 1
+        self.next_id == 1 && self.launch_attempts.is_empty()
     }
 
     pub(crate) fn new() -> Self {
         Self {
             next_id: 1,
             next_status_revision: 1,
+            launch_attempts: Arc::default(),
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),
             retired_agents: BTreeMap::new(),
