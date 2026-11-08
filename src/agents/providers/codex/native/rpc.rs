@@ -46,6 +46,10 @@ fn preflight_refusal(source: io::Error) -> io::Error {
     io::Error::new(io::ErrorKind::WouldBlock, PreflightRefusal { source })
 }
 
+fn lost_response(method: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("Codex native {method}: {error}"))
+}
+
 pub(super) struct Rpc {
     socket: WebSocket<UnixStream>,
     next_id: u64,
@@ -94,7 +98,8 @@ impl Rpc {
     fn call(&mut self, method: &str, params: Value) -> io::Result<Value> {
         self.next_id += 1;
         let id = self.next_id;
-        self.timeout()?;
+        self.timeout()
+            .map_err(|error| lost_response(method, error))?;
         // From here a transport error must never cause fallback or replay.
         self.socket
             .send(tungstenite::Message::Text(
@@ -102,20 +107,25 @@ impl Rpc {
                     .to_string()
                     .into(),
             ))
-            .map_err(io::Error::other)?;
+            .map_err(|error| lost_response(method, io::Error::other(error)))?;
         loop {
-            self.timeout()?;
-            let frame = self.socket.read().map_err(io::Error::other)?;
+            self.timeout()
+                .map_err(|error| lost_response(method, error))?;
+            let frame = self
+                .socket
+                .read()
+                .map_err(|error| lost_response(method, io::Error::other(error)))?;
             let tungstenite::Message::Text(text) = frame else {
                 if frame.is_close() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "Codex app-server disconnected",
+                    return Err(lost_response(
+                        method,
+                        io::Error::new(io::ErrorKind::BrokenPipe, "Codex app-server disconnected"),
                     ));
                 }
                 continue;
             };
-            let value: Value = serde_json::from_str(&text)?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|error| lost_response(method, io::Error::other(error)))?;
             // Server requests use an independent ID namespace. The TUI handles
             // approvals; only a response may settle this client's admission.
             if value.get("method").is_some() || value.get("id") != Some(&json!(id)) {
@@ -278,6 +288,13 @@ impl Rpc {
                 .ok_or_else(|| io::Error::other("Codex admitted queue receipt has no identity"))?;
             // Interrupt pauses Codex's queue. Wake exactly the receipted entry;
             // turn/start could accidentally steer a racing developer turn.
+            tracing::info!(
+                event = "bus.codex.native_request",
+                api_request_id = message,
+                thread_id = thread,
+                method = "thread/queue/start",
+                "Starting admitted Codex native input"
+            );
             match self.call(
                 "thread/queue/start",
                 json!({"threadId":thread,"queuedSubmissionId":queued}),
@@ -420,6 +437,7 @@ pub(crate) mod tests {
     // Native external dependency is a wire fixture, not a fake Bus component.
     // Removing expectedTurnId, changing text bytes, or resuming a second writer
     // breaks the observed requests below.
+
     fn server(
         active: bool,
         lost_ack: bool,
@@ -654,14 +672,37 @@ pub(crate) mod tests {
     fn codex_native_lost_ack_never_repeats_a_mutation() {
         let (path, handle) = server(false, true);
         let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
-        assert!(rpc
+        let error = rpc
             .prompt("owned-thread", "once", false, "bus-msg-9", None)
-            .is_err());
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("thread/queue/add"),
+            "lost admission must name its method: {error}"
+        );
+        assert!(!error.to_string().contains("thread/queue/start"));
         let calls = handle.join().unwrap();
         assert_eq!(
             calls
                 .iter()
                 .filter(|call| call["method"] == "thread/queue/add")
+                .count(),
+            1
+        );
+        let (path, handle) = server(true, true);
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        let error = rpc
+            .prompt("owned-thread", "once", true, "bus-msg-9", Some("busy-turn"))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("turn/steer"),
+            "lost steer must name its method: {error}"
+        );
+        drop(rpc);
+        let calls = handle.join().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call["method"] == "turn/steer")
                 .count(),
             1
         );
@@ -856,6 +897,10 @@ pub(crate) mod tests {
             let error = result
                 .expect_err("lost/rejected wakeup must not claim success or replay admitted input");
             assert_ne!(error.kind(), io::ErrorKind::WouldBlock);
+            assert!(
+                error.to_string().contains("thread/queue/start"),
+                "lost or rejected wakeup must name thread/queue/start: {error}"
+            );
             assert_eq!(
                 calls
                     .iter()
