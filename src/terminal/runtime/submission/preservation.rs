@@ -56,30 +56,7 @@ impl ObservedSubmission {
                 .editor_submission()
                 .filter(|editor| Exchange::has_preserved_draft(&editor.directory))
             {
-                match self.observe("preserved_draft") {
-                    // The Bus payload is already on screen. One Enter submits
-                    // that attempt; opening the editor would replace it.
-                    InputObservation::Pending => {
-                        let submitted = self.swap_key(self.enter.clone(), true);
-                        lease.restored();
-                        return submitted;
-                    }
-                    InputObservation::Empty => {}
-                    // Developer text after the interrupted swap stays put.
-                    _ => {
-                        lease.restored();
-                        return Err(io::Error::other(PromptNotShown::ComposerBusy));
-                    }
-                }
-                let exchange = Exchange::begin_restoration(
-                    editor.directory.clone(),
-                    self.clock.remaining(self.hard_deadline),
-                )
-                .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-                self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)
-                    .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-                lease.restored();
-                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                return self.finish_preserved_draft(editor, lease);
             }
         }
         let preservation = self
@@ -144,6 +121,37 @@ impl ObservedSubmission {
                 directory,
             } => self.preserve_editor(delay, key, backspace, directory, lease),
         }
+    }
+
+    fn finish_preserved_draft(
+        &self,
+        editor: EditorSubmission,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
+        match self.observe("preserved_draft") {
+            // The Bus payload is already on screen. One Enter submits
+            // that attempt; opening the editor would replace it.
+            InputObservation::Pending => {
+                let submitted = self.swap_key(self.enter.clone(), true);
+                lease.restored();
+                return submitted;
+            }
+            InputObservation::Empty => {}
+            // Developer text after the interrupted swap stays put.
+            _ => {
+                lease.restored();
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
+        }
+        let exchange = Exchange::begin_restoration(
+            editor.directory.clone(),
+            self.clock.remaining(self.hard_deadline),
+        )
+        .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+        self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)
+            .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+        lease.restored();
+        Err(io::Error::other(PromptNotShown::ComposerBusy))
     }
 
     fn exchange(&self, directory: PathBuf) -> io::Result<Exchange> {
