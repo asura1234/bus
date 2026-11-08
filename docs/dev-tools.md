@@ -93,8 +93,9 @@ placeholder. End-to-end delay (p50 and p99) is not measured yet; the page
 reserves the place and shows no delay number. Reply capture comes after that,
 labelled as applying only to messages that expect a reply, so a missing reply
 is not presented as a delivery failure. Bus reliability sits below delivery as
-a note: of conclusive replies, how many failed for Bus-caused reasons. When
-that denominator is 0 the note and the counts line use an em dash and do not
+a note: of conclusive replies, how many succeeded. The caption is that success
+share. When that denominator is 0 the note and the counts line use an em dash
+and do not
 print 0/0. Provider and room rows show Delivered, Attempted, Pending,
 Delivery %, Bus failures and External. Attempted = Delivered + Pending + Bus
 failures + External. There is no per-recipient breakdown and no per-row cause

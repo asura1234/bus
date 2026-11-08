@@ -42,6 +42,12 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     let reply = page.find("id=\"reply-section\"").unwrap();
     let bus = page.find("id=\"bus-note\"").unwrap();
     let delay = page.find("id=\"delay-section\"").unwrap();
+    let failure = page.find("id=\"failure-section\"").unwrap();
+    let note = &page[bus..failure];
+    assert!(note.contains("how many succeeded"), "{note}");
+    assert!(!note.contains("how many failed"), "{note}");
+    assert!(page.contains("series.rates.bus_reliability.caption"));
+    assert!(!page.contains("how many failed"));
     assert!(providers < reply && reply < bus && delay < reply);
     assert!(page.contains("drill.mode==='providers'"));
     assert!(page.contains("drill.mode==='rooms'"));

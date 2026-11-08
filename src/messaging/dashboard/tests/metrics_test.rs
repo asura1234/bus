@@ -197,10 +197,15 @@ fn assert_reliability_row(series: &Series, label: &str) {
     } else {
         assert!(
             identity.contains(&format!(
-                "Of conclusive replies, {}/{} failed for Bus-caused reasons",
-                counts.bus_failures, bus_denominator
+                "Of conclusive replies, {}",
+                series.rates.bus_reliability.caption
             )),
             "{label}: {identity}"
+        );
+        assert!(
+            !identity.contains("failed for Bus-caused reasons"),
+            "{label}: sentence asks about failures beside {caption}",
+            caption = series.rates.bus_reliability.caption
         );
     }
     assert_eq!(
@@ -743,6 +748,39 @@ fn dashboard_wording_identity_matches_delivery_counters() {
         "sentence uses a different failed counter than the card ({card}): {identity}"
     );
     assert!(!identity.contains("1 delivered + 1 failed"), "{identity}");
+}
+
+// Zero Bus failures is a 100% success caption. The counts line must repeat
+// that caption, not ask how many replies failed.
+#[test]
+fn dashboard_wording_zero_bus_failures_match_the_success_caption() {
+    let report = snapshot(
+        &fixture_state([named_case("completed-without-text")]),
+        singapore_hour,
+    );
+    let counts = &report.all.counts;
+    assert_eq!(counts.bus_failures, 0);
+    assert!(counts.replied > 0, "conclusive replies");
+    let caption = &report.all.rates.bus_reliability.caption;
+    assert_eq!(report.all.rates.bus_reliability.percent, Some(100.0));
+    assert!(caption.starts_with("100%"), "{caption}");
+    assert!(
+        caption.contains(&format!(
+            "of {}/{} conclusive",
+            counts.replied, counts.replied
+        )),
+        "{caption}"
+    );
+    let identity = &report.all.identity;
+    assert!(
+        identity.contains(&format!("Of conclusive replies, {caption}")),
+        "{identity}"
+    );
+    assert!(!identity.contains("how many failed"), "{identity}");
+    assert!(
+        !identity.contains("failed for Bus-caused reasons"),
+        "{identity}"
+    );
 }
 
 // A message Bus delivered, with no reply yet, is a delivery success.

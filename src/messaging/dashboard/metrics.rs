@@ -147,15 +147,22 @@ fn delivery_share(counts: &Counts) -> Metric {
         caption,
     }
 }
+fn bus_reliability(counts: &Counts) -> Metric {
+    conclusive_metric(
+        counts.replied,
+        counts.replied + counts.bus_failures,
+        &[
+            ("pending", pending_attempts(counts)),
+            ("external", counts.external),
+        ],
+    )
+}
 fn attempt_identity(counts: &Counts) -> String {
-    let bus_denominator = counts.replied + counts.bus_failures;
-    let bus_rate = if bus_denominator == 0 {
-        "Bus reliability is — (no conclusive replies).".to_string()
+    let caption = bus_reliability(counts).caption;
+    let bus_rate = if counts.replied + counts.bus_failures == 0 {
+        format!("Bus reliability is {caption}.")
     } else {
-        format!(
-            "Of conclusive replies, {}/{} failed for Bus-caused reasons.",
-            counts.bus_failures, bus_denominator
-        )
+        format!("Of conclusive replies, {caption}.")
     };
     format!(
         "{attempts} attempted = {delivered} delivered + {pending} pending + {bus} Bus failures + {external} external. Delivery is {share}. {bus_rate}",
@@ -190,7 +197,6 @@ fn conclusive_metric(numerator: u64, denominator: u64, excluded: &[(&str, u64)])
 }
 impl From<&Counts> for Rates {
     fn from(counts: &Counts) -> Self {
-        let pending = pending_attempts(counts);
         Self {
             delivery: conclusive_metric(
                 counts.delivered,
@@ -207,11 +213,7 @@ impl From<&Counts> for Rates {
                     ("failed before delivery", counts.failed),
                 ],
             ),
-            bus_reliability: conclusive_metric(
-                counts.replied,
-                counts.replied + counts.bus_failures,
-                &[("pending", pending), ("external", counts.external)],
-            ),
+            bus_reliability: bus_reliability(counts),
         }
     }
 }
