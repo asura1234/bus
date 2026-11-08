@@ -20,7 +20,6 @@ pub(crate) struct NativeInterruptCompletion {
 }
 
 pub(crate) trait NativeInput: Send + Sync {
-    fn launch(&self, argv: &[String]) -> io::Result<Vec<String>>;
     /// Must be nonblocking: this is queried on the App dispatch thread.
     fn has_session(&self) -> bool;
     fn prompt(&self, input: NativePrompt<'_>) -> Option<io::Result<()>>;
@@ -47,18 +46,6 @@ impl PaneCodex {
 }
 
 impl NativeInput for PaneCodex {
-    fn launch(&self, argv: &[String]) -> io::Result<Vec<String>> {
-        match self
-            .0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_mut()
-        {
-            Some(runtime) => runtime.launch(argv),
-            None => Ok(argv.to_vec()),
-        }
-    }
-
     fn has_session(&self) -> bool {
         match self.0.try_lock() {
             Ok(runtime) => runtime

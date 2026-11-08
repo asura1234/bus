@@ -635,9 +635,6 @@ mod interrupt_completion_fact {
 
     struct CompletedPort(Option<bool>);
     impl NativeInput for CompletedPort {
-        fn launch(&self, argv: &[String]) -> std::io::Result<Vec<String>> {
-            Ok(argv.to_vec())
-        }
         fn has_session(&self) -> bool {
             self.0.is_some()
         }
