@@ -6,7 +6,7 @@ mod runtime;
 pub(crate) use runtime::test_support;
 pub(crate) use runtime::Runtime;
 
-pub(crate) fn remote_argv(argv: &[String], endpoint: &str) -> Vec<String> {
+fn remote_argv(argv: &[String], endpoint: &str) -> Vec<String> {
     let args = &argv[1..];
     let removed: std::collections::HashSet<_> =
         crate::agents::providers::launch::argument_positions(
