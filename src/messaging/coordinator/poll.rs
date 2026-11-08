@@ -107,15 +107,9 @@ impl Worker {
         }
         self.directory_checks.poll(&mut state)?;
         self.apply_poll(state)?;
-        if let Some(generation) = infos.iter().map(|info| info.generation).max() {
-            self.serving_generation = generation;
-        }
+        note_serving_generation(&mut self.serving_generation, &infos);
         self.close_exited_terminals()?;
-        for (agent, previous, current) in rebound {
-            tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
-                previous_terminal_id = ?previous, terminal_id = current,
-                "Reconnected the saved provider conversation; request ownership preserved");
-        }
+        log_rebinds(rebound);
         self.notify_dialogs(waits)?;
         Ok(Some(infos))
     }
@@ -182,6 +176,20 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         self.apply_poll(state)
+    }
+}
+
+fn note_serving_generation(serving: &mut u64, infos: &[schema::AgentInfo]) {
+    if let Some(generation) = infos.iter().map(|info| info.generation).max() {
+        *serving = generation;
+    }
+}
+
+fn log_rebinds(rebound: Vec<(AgentId, Option<String>, String)>) {
+    for (agent, previous, current) in rebound {
+        tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
+            previous_terminal_id = ?previous, terminal_id = current,
+            "Reconnected the saved provider conversation; request ownership preserved");
     }
 }
 
