@@ -11,6 +11,19 @@ struct Case {
     cause: String,
 }
 
+fn assert_reply_capture_rate_is_absent(report: &Dashboard, label: &str) {
+    let encoded = serde_json::to_value(report).unwrap();
+    assert!(
+        encoded["all"]["rates"].get("reply_capture").is_none(),
+        "{label} still publishes reply_capture: {}",
+        encoded["all"]["rates"]
+    );
+    assert!(
+        !encoded.to_string().contains("\"reply_capture\""),
+        "{label} JSON still names reply_capture"
+    );
+}
+
 fn cases() -> Vec<Case> {
     {
         let mut cases: Vec<Case> =
@@ -56,6 +69,16 @@ fn recorded_outcomes_classify_every_phase_and_preserve_reply_precedence() {
         assert_eq!(actual.capture, case.capture, "{} capture", case.name);
         assert_eq!(actual.cause, case.cause, "{} cause", case.name);
     }
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/requests.json")).unwrap();
+    let omitted = document["omitted_rates"]
+        .as_array()
+        .expect("requests fixture names dashboard rates that are gone");
+    assert!(
+        omitted.iter().any(|rate| rate == "reply_capture"),
+        "requests fixture still re-semanticises reply capture instead of dropping it"
+    );
+    assert_reply_capture_rate_is_absent(&snapshot(&state, singapore_hour), "requests fixture");
 }
 
 // Each recipient is counted even when two requests share the same prompt.
@@ -87,7 +110,7 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
         report.all.rates.delivery.denominator,
         c.delivered + c.delivery_bus
     );
-    assert_eq!(report.all.rates.reply_capture.percent, Some(0.0));
+    assert_reply_capture_rate_is_absent(&report, "hourly denominators");
     assert!((report.all.rates.bus_reliability.percent.unwrap() - 100.0 / 3.0).abs() < 0.001);
     assert_eq!(c.failure_reasons["submission_unconfirmed"], 1);
     assert_eq!(c.bus_reasons["reply_not_captured"], 1);
@@ -143,8 +166,8 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     );
     assert_ne!(caption.as_str(), "100%");
     assert!(!caption.ends_with('%'), "{caption}");
+    assert_reply_capture_rate_is_absent(&report, "complete bus reliability");
     for rate in [
-        &report.all.rates.reply_capture,
         &report.all.rates.bus_reliability,
     ] {
         if rate.percent.is_some() {
@@ -344,7 +367,7 @@ fn local_hour_boundary_and_repeated_dst_hours_stay_distinct() {
 fn empty_denominators_are_absent_and_missing_reasons_are_bus_caused() {
     let report = snapshot(&BusState::new(), singapore_hour);
     assert_eq!(report.all.rates.delivery.percent, None);
-    assert_eq!(report.all.rates.reply_capture.percent, None);
+    assert_reply_capture_rate_is_absent(&report, "empty denominators");
     assert_eq!(report.all.rates.bus_reliability.percent, None);
     assert!(report.all.hours.is_empty());
     let state = fixture_state(
@@ -644,7 +667,7 @@ fn dashboard_provider_hold_and_retry_remain_pending_without_failure_counters() {
             }
         );
         assert!(report.failures.is_empty());
-        assert_eq!(report.all.rates.reply_capture.denominator, 0);
+        assert_reply_capture_rate_is_absent(&report, "retry stays pending");
         assert_eq!(report.all.rates.bus_reliability.denominator, 0);
         if phase <= 1 {
             assert_eq!(
@@ -666,7 +689,7 @@ fn named_case(name: &str) -> super::Request {
 fn assert_absent_bus_rate(series: &super::Series, label: &str) {
     assert_eq!(
         series.rates.bus_reliability.denominator, 0,
-        "{label} has no conclusive replies"
+        "{label} has no conclusive deliveries"
     );
     assert!(
         series.rates.bus_reliability.caption.starts_with('—'),
@@ -686,7 +709,7 @@ fn assert_absent_bus_rate(series: &super::Series, label: &str) {
 }
 
 // An empty session, an all-pending session, and an all-external session have
-// no conclusive reply rate. The counts line must say so with the card's em dash.
+// no conclusive delivery rate. The counts line must say so with the card's em dash.
 #[test]
 fn dashboard_wording_absent_rate_for_empty_all_pending_and_all_external() {
     let empty = snapshot(&fixture_state(std::iter::empty()), singapore_hour);
@@ -754,7 +777,7 @@ fn dashboard_wording_identity_matches_delivery_counters() {
 }
 
 // Zero Bus failures is a 100% success caption. The counts line must repeat
-// that caption, not ask how many replies failed.
+// that caption, not ask how many failed.
 #[test]
 fn dashboard_wording_zero_bus_failures_match_the_success_caption() {
     let report = snapshot(

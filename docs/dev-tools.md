@@ -95,13 +95,10 @@ counts. Pending is still open, with the oldest pending age. Failed messages
 are split into Bus-caused and external, with causes. The order is the delivery
 headline, provider table, room table, hourly delivery graph, then a delay
 note. End-to-end delay (p50 and p99) ends at room delivery and is shown on
-the delivery latency page; this section shows no delay number. Reply capture comes after that
-and counts only an explicit `bus send --reply-to`. A turn that ends with no
-explicit reply is a successful delivery, not a missing reply. Bus reliability
-sits below delivery as a note: of conclusive terminal deliveries (explicit
-replies plus turns that ended with no reply), how many succeeded versus
-Bus-caused failures. The caption is that success share. When that denominator
-is 0 the note and the counts line use an em dash and do not print 0/0.
+the delivery latency page; this section shows no delay number. Bus reliability sits below
+delivery as a note: of conclusive deliveries, how many succeeded. The caption
+is that success share. When that denominator is 0 the note and the counts line
+use an em dash and do not print 0/0.
 Provider and room rows show Delivered, Attempted, Pending, Delivery %, Bus
 failures and External. Attempted = Delivered + Pending + Bus failures +
 External. There is no per-recipient breakdown and no per-row cause list. Bus

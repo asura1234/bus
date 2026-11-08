@@ -1,5 +1,6 @@
 {
-  "note": "Synthetic edge cases overlay this complete request. Recorded request fixtures remain unmodified in recorded.json.",
+  "note": "Synthetic edge cases overlay this complete request. capture is the classifier label, not a dashboard rate. omitted_rates names JSON rate fields the report built from these cases must not publish. Recorded request fixtures remain unmodified in recorded.json.",
+  "omitted_rates": ["reply_capture"],
   "base": {
     "id": 100,
     "room_id": 1,

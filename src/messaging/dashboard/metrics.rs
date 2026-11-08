@@ -110,7 +110,6 @@ struct Rates {
     delivery: Metric,
     /// Same rate as `delivery`: delivered ÷ (delivered + Bus-caused delivery failures).
     delivery_share: Metric,
-    reply_capture: Metric,
     bus_reliability: Metric,
 }
 #[derive(Default, Serialize)]
@@ -229,16 +228,6 @@ impl From<&Counts> for Rates {
         Self {
             delivery: delivery_rate(counts),
             delivery_share: delivery_rate(counts),
-            reply_capture: conclusive_metric(
-                counts.replied,
-                counts.replied + counts.reply_not_captured,
-                &[
-                    ("ended without a reply", counts.ended),
-                    ("reply pending", counts.reply_pending),
-                    ("still open", counts.open),
-                    ("failed before delivery", counts.failed),
-                ],
-            ),
             bus_reliability: bus_reliability(counts),
         }
     }
