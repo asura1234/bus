@@ -341,7 +341,18 @@ impl History {
             crate::utils::perf::Timer::new("client.history.request");
         let _timer = REQUEST.start();
         self.reset_metrics();
+        let switching = self.window_room != Some((room, filters));
         self.select_window(room, filters);
+        if switching {
+            if let Some(layout) = self
+                .background
+                .as_ref()
+                .and_then(|background| background.layouts.get(&room))
+                .filter(|layout| layout.filters == filters)
+            {
+                self.record_limit = layout.key.limit;
+            }
+        }
         let Some(background) = self.background.as_mut() else {
             if let Some(room) = snapshot.state.room(room) {
                 self.lines_with_submissions(

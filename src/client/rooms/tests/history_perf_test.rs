@@ -1129,3 +1129,383 @@ fn sparse_filtered_window_reaches_matches_behind_recent_peer_traffic() {
         .iter()
         .any(|line| line.text.contains("hidden peer")));
 }
+
+#[test]
+fn pagination_preserves_loaded_window_after_room_return() {
+    let mut state = BusState::default();
+    let room = state.create_room("paged").unwrap();
+    let other = state.create_room("other").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    for index in 0..600 {
+        state
+            .post_to_developer(
+                room,
+                agent,
+                format!("page-record-{index}"),
+                vec![],
+                1000 + index,
+            )
+            .unwrap();
+    }
+    state
+        .set_room_history_filters(
+            room,
+            crate::messaging::model::RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    assert!(history.load_older());
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "page-record-100"));
+
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        other,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+    await_layout(
+        &mut history,
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+    );
+
+    assert!(
+        history
+            .cached()
+            .iter()
+            .any(|line| line.text == "page-record-100"),
+        "returning to the room shrank the loaded window"
+    );
+}
+
+#[test]
+fn pagination_ignores_foreign_notices() {
+    let mut state = BusState::default();
+    let quiet = state.create_room("quiet").unwrap();
+    let busy = state.create_room("busy").unwrap();
+    let agent = state
+        .create_agent(busy, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    for index in 0..600 {
+        state
+            .post_to_developer(
+                busy,
+                agent,
+                format!("foreign-record-{index}"),
+                vec![],
+                1000 + index,
+            )
+            .unwrap();
+    }
+    state
+        .set_room_history_filters(
+            quiet,
+            crate::messaging::model::RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    await_layout(&mut history, snapshot, quiet, 80, 2000, &mut thumbnails);
+    assert!(history.cached().is_empty());
+    assert_eq!(
+        history.record_limit,
+        super::super::window::PAGE_RECORDS,
+        "foreign traffic triggered another page in a room with no older records"
+    );
+}
+
+fn pagination_foreign_requests(archived: bool) {
+    let mut state = BusState::default();
+    let quiet = state.create_room("quiet").unwrap();
+    let busy = state.create_room("busy").unwrap();
+    let agent = state
+        .create_agent(busy, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    for index in 0..600 {
+        let id = state
+            .submit_message_from(
+                busy,
+                Draft {
+                    text: format!("foreign-request-{index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1000 + index,
+            )
+            .unwrap()[0];
+        state.finish_for_test(id, "foreign answer", 2000);
+    }
+    if archived {
+        state.archive(1_000_000);
+    }
+    assert_eq!(state.requests().count(), 600);
+    assert_eq!(state.history().len(), if archived { 600 } else { 0 });
+    state
+        .set_room_history_filters(
+            quiet,
+            crate::messaging::model::RoomHistoryFilters {
+                to_you: true,
+                from_you: false,
+            },
+        )
+        .unwrap();
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    await_layout(
+        &mut history,
+        snapshot,
+        quiet,
+        80,
+        2000,
+        &mut Thumbnails::default(),
+    );
+    assert!(history.cached().is_empty());
+    assert_eq!(
+        history.record_limit,
+        super::super::window::PAGE_RECORDS,
+        "foreign requests triggered extra pages in an empty room (archived={archived})"
+    );
+}
+
+#[test]
+fn pagination_ignores_foreign_live_requests() {
+    pagination_foreign_requests(false);
+}
+
+#[test]
+fn pagination_ignores_foreign_archived_requests() {
+    pagination_foreign_requests(true);
+}
+
+#[test]
+fn filtered_large_request_archive_projects_only_recent_bodies() {
+    let mut state = BusState::default();
+    let room = state.create_room("large").unwrap();
+    let other = state.create_room("other").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    for index in 0..50_000 {
+        let id = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("archived prompt {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1000 + index,
+            )
+            .unwrap()[0];
+        state.finish_for_test(id, &format!("archived answer {index}"), 100_000);
+    }
+    state.archive(1_000_000);
+    assert_eq!(state.history().len(), 50_000);
+    let mut history = History::default();
+    let filters = crate::messaging::model::RoomHistoryFilters {
+        to_you: true,
+        from_you: false,
+    };
+    history.lines_filtered(
+        &state,
+        state.room(room).unwrap(),
+        80,
+        1,
+        1_000_000,
+        &mut Thumbnails::default(),
+        filters,
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("archived answer 49999")));
+    assert_eq!(history.rebuilt, 256);
+    assert_eq!(history.rendered, 256);
+    assert!(!history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("archived answer 0")));
+    history.lines_filtered(
+        &state,
+        state.room(other).unwrap(),
+        80,
+        1,
+        1_000_000,
+        &mut Thumbnails::default(),
+        filters,
+    );
+    assert!(history.cached().is_empty());
+    assert!(!history.has_older());
+}
+
+#[test]
+fn filtered_submission_status_rejects_stale_job_without_a_revision_change() {
+    use super::super::LocalSendStatus;
+    let mut state = BusState::default();
+    let room = state.create_room("paged").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    let mut newest = None;
+    for index in 0..600 {
+        let id = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: format!("outgoing {index}"),
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1000 + index,
+            )
+            .unwrap()[0];
+        newest = Some(state.request(id).unwrap().prompt.id);
+    }
+    let filters = crate::messaging::model::RoomHistoryFilters {
+        to_you: false,
+        from_you: true,
+    };
+    let snapshot = snapshot(state, 7);
+    let prompt = newest.unwrap();
+    let pending = BTreeMap::from([(prompt, LocalSendStatus::Pending)]);
+    let failed = BTreeMap::from([(prompt, LocalSendStatus::Failed)]);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    history.request_lines_with_submissions(
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        filters,
+        pending.clone(),
+    );
+    let started = Instant::now();
+    while !history.poll() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "pending job did not complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // The completed Pending result is still in the mailbox. It must never be
+    // applied after the same snapshot's local submission status becomes Failed.
+    history.request_lines_with_submissions(
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        filters,
+        failed.clone(),
+    );
+    assert!(!history
+        .cached()
+        .iter()
+        .any(|line| line.text.contains("[pending]")));
+    let started = Instant::now();
+    loop {
+        history.request_lines_with_submissions(
+            Arc::clone(&snapshot),
+            room,
+            80,
+            2000,
+            &mut thumbnails,
+            filters,
+            failed.clone(),
+        );
+        if history.background.as_ref().unwrap().is_current(
+            7,
+            room,
+            80,
+            2000,
+            thumbnails.layout_key(),
+        ) {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "failed badge layout did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        history
+            .cached()
+            .iter()
+            .filter(|line| line.text.contains("[failed]"))
+            .count(),
+        1
+    );
+    assert!(history
+        .cached()
+        .iter()
+        .any(|line| line.text == "outgoing 599"));
+    assert!(history.rebuilt <= 256);
+    assert!(history.load_older());
+    history.request_lines_with_submissions(
+        Arc::clone(&snapshot),
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        filters,
+        failed,
+    );
+    // A filter change rejects that completed/running outgoing page as well.
+    history.request_lines_with_submissions(
+        snapshot,
+        room,
+        80,
+        2000,
+        &mut thumbnails,
+        crate::messaging::model::RoomHistoryFilters {
+            to_you: true,
+            from_you: false,
+        },
+        pending,
+    );
+    assert!(history.cached().is_empty());
+}
