@@ -1,7 +1,9 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 mod background;
 mod exchange;
+mod groups;
 mod markdown;
+mod window;
 mod wrapped_links;
 
 // Separate the costs of a rebuild so a slow operation identifies its phase.
@@ -235,6 +237,10 @@ pub(super) struct History {
     rendered: usize,
     rebuilt: usize,
     projected: usize,
+    window_room: Option<(RoomId, crate::messaging::model::RoomHistoryFilters)>,
+    record_limit: usize,
+    loaded_limit: usize,
+    has_older: bool,
 }
 
 impl History {
@@ -245,18 +251,6 @@ impl History {
 
     pub fn current_filters(&self) -> crate::messaging::model::RoomHistoryFilters {
         self.displayed_filters
-    }
-
-    fn reusable_layout(&self, key: LayoutKey, now: u64) -> bool {
-        self.key.is_some_and(|previous| {
-            previous.0 == key.0
-                && previous.1 == key.1
-                && previous.2 == key.2
-                && previous.4 == key.4
-                && previous.5 == key.5
-                && previous.6 == key.6
-                && (previous.3 == key.3 || self.age_valid.contains(&now))
-        })
     }
 
     pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {

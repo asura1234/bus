@@ -238,8 +238,30 @@ impl BusState {
     /// Live and archived requests, in id order.
     pub(crate) fn requests(&self) -> impl Iterator<Item = &Request> {
         MergeById {
+            newest_first: false,
             live: self.requests.values().peekable(),
             archived: self.history.requests.values().map(Arc::as_ref).peekable(),
+        }
+    }
+
+    /// A bounded history reader can seek backwards without collecting or sorting
+    /// the permanent request archive. IDs are allocated in submission order.
+    pub(crate) fn recent_requests(&self, before: u64) -> impl Iterator<Item = &Request> {
+        MergeById {
+            newest_first: true,
+            live: self
+                .requests
+                .range(..RequestId(before))
+                .rev()
+                .map(|(_, request)| request)
+                .peekable(),
+            archived: self
+                .history
+                .requests
+                .range(..RequestId(before))
+                .rev()
+                .map(|(_, request)| request.as_ref())
+                .peekable(),
         }
     }
 
@@ -252,10 +274,12 @@ impl BusState {
     /// A message's recipients in request order, without rescanning permanent history.
     pub(crate) fn requests_for_message(&self, message: PromptId) -> impl Iterator<Item = &Request> {
         MergeById {
+            newest_first: false,
             live: self
                 .requests
-                .values()
-                .filter(move |r| r.prompt.id == message)
+                .range(RequestId(message.0.saturating_add(1))..)
+                .map(|(_, request)| request)
+                .take_while(move |request| request.prompt.id == message)
                 .peekable(),
             archived: self.history.requests_for_message(message).peekable(),
         }
@@ -334,6 +358,7 @@ impl BusState {
 
 /// Two id-ordered request iterators merged into one id-ordered iterator.
 struct MergeById<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> {
+    newest_first: bool,
     live: std::iter::Peekable<L>,
     archived: std::iter::Peekable<A>,
 }
@@ -345,7 +370,9 @@ impl<'a, L: Iterator<Item = &'a Request>, A: Iterator<Item = &'a Request>> Itera
 
     fn next(&mut self) -> Option<&'a Request> {
         match (self.live.peek(), self.archived.peek()) {
-            (Some(live), Some(archived)) if archived.id < live.id => self.archived.next(),
+            (Some(live), Some(archived)) if (archived.id < live.id) != self.newest_first => {
+                self.archived.next()
+            }
             (Some(_), _) => self.live.next(),
             (None, _) => self.archived.next(),
         }
