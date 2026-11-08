@@ -113,7 +113,6 @@ impl PtyIoActorRunner {
                     .unwrap_or_else(|error| error.into_inner())
                     .enter_written_at_ms
                     .get_or_insert(crate::utils::time::now_ms());
-                tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter_flushed", pane_id = self.pane_id);
                 let _ = submission.reply.send(Ok(()));
             }
         }
