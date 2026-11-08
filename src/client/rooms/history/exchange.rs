@@ -1,14 +1,12 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, wrap, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::source::{visible_request, Direction, Exchange};
+use super::source::{visible_request, Direction};
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
 };
-use crate::messaging::model::{
-    AgentId, Author, BusState, Prompt, Request, RequestId, Room, RoomId,
-};
+use crate::messaging::model::{AgentId, Author, BusState, Prompt, RequestId, Room, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

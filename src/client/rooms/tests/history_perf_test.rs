@@ -1338,20 +1338,17 @@ fn filtered_large_request_archive_projects_only_recent_bodies() {
     let agent = state
         .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
         .unwrap();
+    // The body under test is the message itself. A stored reply is not a row.
     for index in 0..50_000 {
-        let id = state
-            .submit_message_from(
+        state
+            .post_to_developer(
                 room,
-                Draft {
-                    text: format!("archived prompt {index}"),
-                    files: vec![],
-                    recipient_ids: [agent].into(),
-                },
-                Author::Developer,
+                agent,
+                format!("archived answer {index}"),
+                vec![],
                 1000 + index,
             )
-            .unwrap()[0];
-        state.finish_for_test(id, &format!("archived answer {index}"), 100_000);
+            .unwrap();
     }
     state.archive(1_000_000);
     assert_eq!(state.history().len(), 50_000);
