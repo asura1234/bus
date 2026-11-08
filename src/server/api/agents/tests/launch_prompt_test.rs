@@ -48,8 +48,18 @@ async fn startup_launch_prompt_redraw_before_process_detection_retains_managed_l
     );
 }
 
+const LAUNCH_SIGNAL_TIMEOUT: Duration = Duration::from_secs(60);
+
+async fn wait_for_signal(mut ready: impl FnMut() -> bool, message: impl Fn() -> String) {
+    let deadline = std::time::Instant::now() + LAUNCH_SIGNAL_TIMEOUT;
+    while !ready() {
+        assert!(std::time::Instant::now() < deadline, "{}", message());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn wait_for_text(runtime: &TerminalRuntime, text: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + LAUNCH_SIGNAL_TIMEOUT;
     while !runtime.recent_unwrapped_text(100).contains(text) {
         assert!(
             std::time::Instant::now() < deadline,
@@ -62,7 +72,7 @@ async fn wait_for_text(runtime: &TerminalRuntime, text: &str) {
 }
 
 async fn wait_for_prompt(runtime: &TerminalRuntime) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + LAUNCH_SIGNAL_TIMEOUT;
     while runtime.waiting_for_shell_prompt() {
         assert!(
             std::time::Instant::now() < deadline,

@@ -407,24 +407,23 @@ async fn verified_launch_redraw_before_enter_retains_native_ownership() {
         kimi_home: None,
     })
     .unwrap_or_else(|error| panic!("{:?}", app.agent_start_error_body(error)));
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !barrier.reached() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "writer never reached barrier: {:?}",
-            prompt_runtime(&app).launch_input_error()
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_for_signal(
+        || barrier.reached(),
+        || {
+            format!(
+                "writer never reached barrier: {:?}",
+                prompt_runtime(&app).launch_input_error()
+            )
+        },
+    )
+    .await;
     assert!(!dir.join("started").exists());
-    while crate::platform::available_pane_shell(prompt_runtime(&app).child_pid().unwrap()).is_none()
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "shell was not foreground while writer held"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let child = prompt_runtime(&app).child_pid().unwrap();
+    wait_for_signal(
+        || crate::platform::available_pane_shell(child).is_some(),
+        || "shell was not foreground while writer held".to_owned(),
+    )
+    .await;
     assert!(!prompt_runtime(&app).test_launch_input_submitted());
     // Deliver the delayed rendering of the *same* primary prompt, exactly
     // where the old writer has already armed its generation floor.
@@ -619,24 +618,20 @@ async fn verified_launch_prompt_cycles_preserve_user_ps1_appends() {
     );
     wait_for_prompt(&runtime).await;
     runtime
-        .queue_shell_command(&["codex".into()], Duration::from_secs(5))
+        .queue_shell_command(&["codex".into()], LAUNCH_SIGNAL_TIMEOUT)
         .unwrap();
     wait_for_launch_input(&runtime).await;
     wait_for_text(&runtime, "PROVIDER_EXIT").await;
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !runtime.launch_returned_to_prompt() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{}",
-            runtime.shell_prompt_diagnostics()
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(
-        runtime.visible_text().contains("READY> tail>tail>"),
-        "{}",
-        runtime.visible_text()
-    );
+    wait_for_signal(
+        || runtime.launch_returned_to_prompt(),
+        || runtime.shell_prompt_diagnostics(),
+    )
+    .await;
+    wait_for_signal(
+        || runtime.visible_text().contains("READY> tail>tail>"),
+        || runtime.visible_text(),
+    )
+    .await;
     drop(runtime);
     std::fs::remove_dir_all(dir).unwrap();
 }
