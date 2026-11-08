@@ -8,7 +8,10 @@
 /// Status lines longer than this are transcript prose, not the banner.
 const MAX_BANNER_CHARS: usize = 160;
 
-const GROK_PHRASES: &[&str] = &["Conversation compacted", "Context compacted"];
+const CONTEXT_COMPACTED: &str = "Context compacted";
+
+/// Empty remainder, a final period, or a ` (` progress tail. No token report.
+const OLDER_PHRASES: &[&str] = &["Auto-compacting conversation", "Conversation compacted"];
 
 /// Whether `screen` is showing one compaction banner for this provider label.
 ///
@@ -23,7 +26,7 @@ pub(crate) fn visible(agent: Option<&str>, screen: &str) -> bool {
         .map(|line| collapse_whitespace(line.trim()))
         .filter(|line| !line.is_empty())
         .collect();
-    if lines.iter().any(|line| status_line(line, GROK_PHRASES)) {
+    if lines.iter().any(|line| status_line(line)) {
         return true;
     }
     // A resize can split the status line on a word or mid-word. The mid-word
@@ -32,7 +35,7 @@ pub(crate) fn visible(agent: Option<&str>, screen: &str) -> bool {
     lines.windows(2).any(|pair| {
         let mid_word = format!("{}{}", pair[0], pair[1]);
         let word = format!("{} {}", pair[0], pair[1]);
-        status_line(&mid_word, GROK_PHRASES) || status_line(&word, GROK_PHRASES)
+        status_line(&mid_word) || status_line(&word)
     })
 }
 
@@ -40,19 +43,27 @@ fn short_banner(line: &str) -> bool {
     line.chars().count() <= MAX_BANNER_CHARS
 }
 
-/// The phrase is the whole status line, or its prefix plus a terminator.
-/// A period ends the completion line. ` (` starts the progress suffix.
-/// `: <n>k → <n>k tokens` is the Grok 4.7 token report, with either arrow.
+/// `Context compacted` matches only the token report. The two older phrases
+/// match the whole line, a final period, or a ` (` progress tail.
 /// A later sentence that merely contains the phrase does not match.
-fn status_line(line: &str, phrases: &[&str]) -> bool {
-    short_banner(line) && phrases.iter().any(|phrase| phrase_suffix(line, phrase))
+fn status_line(line: &str) -> bool {
+    short_banner(line)
+        && (context_token_report(line)
+            || OLDER_PHRASES
+                .iter()
+                .any(|phrase| older_suffix(line, phrase)))
 }
 
-fn phrase_suffix(line: &str, phrase: &str) -> bool {
+fn context_token_report(line: &str) -> bool {
+    line.strip_prefix(CONTEXT_COMPACTED)
+        .is_some_and(token_report)
+}
+
+fn older_suffix(line: &str, phrase: &str) -> bool {
     let Some(rest) = line.strip_prefix(phrase) else {
         return false;
     };
-    rest.is_empty() || rest == "." || rest.starts_with(" (") || token_report(rest)
+    rest.is_empty() || rest == "." || rest.starts_with(" (")
 }
 
 /// `: 205.0k → 32.0k tokens (80.0s)` or ASCII `->`. A colon sentence does not match.
@@ -105,10 +116,6 @@ mod tests {
     fn compaction_banner_grok_in_progress_phrase_is_not_the_pane_line() {
         // grok-5 printed this while compacting. It does not open an episode.
         assert!(!visible(Some("grok"), "Context 80% full. Compacting…"));
-        assert!(!visible(
-            Some("grok"),
-            "Auto-compacting conversation (82% full)..."
-        ));
     }
 
     #[test]
@@ -181,6 +188,54 @@ mod tests {
             !visible(Some("grok"), &prose),
             "a long transcript line is not the status banner"
         );
+    }
+
+    #[test]
+    fn compaction_banner_context_compacted_is_only_the_token_report() {
+        for screen in [
+            "Context compacted: 205.0k → 32.0k tokens (80.0s)",
+            "Context compacted: 206.0k → 35.2k tokens (94.1s)",
+            "Context compacted: 209.9k -> 37.8k tokens (131.2s)",
+            "Context compacted: 204.8k -> 38.4k tokens",
+            "Context compacted: 206.7k -> 37.6k tokens (1.0s)",
+            "Context compacted: 205.8k -> 34.4k tokens (2.0s)",
+        ] {
+            assert!(
+                visible(Some("grok"), screen),
+                "an observed token report stays visible: {screen}"
+            );
+        }
+        for screen in [
+            "Context compacted",
+            "Context compacted.",
+            "Conversation compacted: 205.0k -> 32.0k tokens (80.0s)",
+        ] {
+            assert!(
+                !visible(Some("grok"), screen),
+                "only the Context compacted token report matches: {screen}"
+            );
+        }
+        assert!(visible(Some("grok"), "Conversation compacted."));
+        assert!(visible(
+            Some("grok"),
+            "Auto-compacting conversation (82% full)"
+        ));
+    }
+
+    #[test]
+    fn compaction_banner_kimi_status_phrases_do_not_match() {
+        for screen in [
+            "Compacting context",
+            "Context compacted",
+            "Context auto-compacted",
+            "Context compacted: 205.0k → 32.0k tokens (80.0s)",
+            "Compacting conversation context",
+        ] {
+            assert!(
+                !visible(Some("kimi"), screen),
+                "a Kimi label does not match: {screen}"
+            );
+        }
     }
 
     #[test]

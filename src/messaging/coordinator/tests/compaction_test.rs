@@ -596,6 +596,23 @@ async fn grok_observed_completion_line_reaches_the_limit_notice() {
 }
 
 #[test]
+fn compaction_banner_kimi_does_not_count() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Kimi,
+        vec![
+            banner_listing("kimi", true, false),
+            banner_listing("kimi", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 8_000);
+    poll_banner(&mut worker, 9_000);
+    let compactions = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(compactions.count, 0);
+    assert!(compactions.last_at_ms.is_none());
+    cleanup(worker, dir);
+}
+
+#[test]
 fn compaction_banner_claude_hook_counts_once_ignoring_the_pane() {
     let (mut worker, agent, _, dir, _) = fixture(
         Provider::ClaudeCode,
