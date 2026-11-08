@@ -438,6 +438,38 @@ pub(crate) mod tests {
     // Removing expectedTurnId, changing text bytes, or resuming a second writer
     // breaks the observed requests below.
 
+    /// Client frames are masked, so a raw socket read cannot see `"method"`.
+    /// Read through the websocket after a failure that leaves the socket writable.
+    fn drain_replays(socket: &mut WebSocket<UnixStream>, calls: &mut Vec<Value>) {
+        socket
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_millis(500) {
+            match socket.read() {
+                Ok(message) => {
+                    let Ok(text) = message.to_text() else {
+                        continue;
+                    };
+                    let Ok(value) = serde_json::from_str::<Value>(text) else {
+                        continue;
+                    };
+                    if value.get("method").is_some() {
+                        calls.push(value);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn lose_without_closing(socket: &mut WebSocket<UnixStream>) {
+        socket
+            .send(tungstenite::Message::Text("not-json".to_string().into()))
+            .unwrap();
+    }
+
     fn server(
         active: bool,
         lost_ack: bool,
@@ -500,6 +532,10 @@ pub(crate) mod tests {
                     }
                     "thread/queue/add" | "turn/steer" | "thread/queue/start" => {
                         if lost_ack {
+                            // Invalid JSON fails the call immediately and leaves the socket
+                            // writable, so a replay is still delivered to this read.
+                            lose_without_closing(&mut ws);
+                            drain_replays(&mut ws, &mut calls);
                             break;
                         }
                         if method == "thread/queue/add" {
@@ -797,7 +833,10 @@ pub(crate) mod tests {
                                     json!({"id":id,"error":error}).to_string().into(),
                                 ))
                                 .unwrap();
+                            } else {
+                                lose_without_closing(&mut ws);
                             }
+                            drain_replays(&mut ws, &mut calls);
                             break;
                         }
                         json!({"turn":{"id":"after-interrupt-turn","status":"inProgress"}})
