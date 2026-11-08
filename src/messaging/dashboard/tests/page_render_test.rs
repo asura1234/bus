@@ -19,7 +19,9 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     assert!(page.contains("not a delivery failure"));
     assert!(page.contains("p50"));
     assert!(page.contains("p99"));
-    assert!(page.contains("not measured yet"));
+    assert!(page.contains("ends at room delivery"));
+    assert!(page.contains("href=\"/latency\""));
+    assert!(!page.contains("not measured yet"));
     assert!(page.contains("How these are counted"));
     assert!(!page.contains("id=\"group-mode\""));
     assert!(!page.contains(">Recipients<"));

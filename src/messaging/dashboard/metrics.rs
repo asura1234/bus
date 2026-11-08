@@ -1,5 +1,5 @@
 //! Read-only delivery metrics over the same live/archive requests as message status.
-use crate::messaging::model::{BusState, Request, RequestPhase};
+use crate::messaging::model::{AgentId, BusState, Request, RequestPhase, RoomId};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -289,11 +289,9 @@ impl GroupBuilder {
         }
     }
 }
-#[derive(Clone)]
-pub(super) struct HourKey {
-    pub(super) start_ms: i64,
-    pub(super) label: String,
-}
+#[cfg(test)]
+pub(super) use super::clock::hour_with_offset;
+pub(super) use super::clock::{local_hour, HourKey};
 struct Outcome {
     delivery: &'static str,
     capture: &'static str,
@@ -385,6 +383,21 @@ impl SeriesBuilder {
         }
     }
 }
+pub(super) fn provider_label(state: &BusState, id: AgentId) -> &'static str {
+    state
+        .agent(id)
+        .map(|agent| agent.provider)
+        .or_else(|| state.retired_agent(id).and_then(|agent| agent.provider))
+        .map_or("unknown", |provider| provider.label())
+}
+
+pub(super) fn room_label(state: &BusState, id: RoomId) -> String {
+    state
+        .history_room_name(id)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Room {} [deleted]", id.0))
+}
+
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
     let mut all = SeriesBuilder::default();
     let mut providers: BTreeMap<_, _> = PROVIDERS
@@ -394,22 +407,11 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
     let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut failures = Vec::new();
     for request in state.requests() {
-        let provider = state
-            .agent(request.agent_id)
-            .map(|a| a.provider)
-            .or_else(|| {
-                state
-                    .retired_agent(request.agent_id)
-                    .and_then(|a| a.provider)
-            })
-            .map_or("unknown", |p| p.label());
+        let provider = provider_label(state, request.agent_id);
         let hour = clock(request.prompt.submitted_at_ms);
         let outcome = classify(state, request);
         let name = state.agent_label(request.agent_id);
-        let room = state
-            .history_room_name(request.room_id)
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("Room {} [deleted]", request.room_id.0));
+        let room = room_label(state, request.room_id);
         rooms
             .entry(request.room_id.0.to_string())
             .or_insert_with(|| GroupBuilder {
@@ -454,35 +456,6 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
             .map(|(p, s)| (p, s.finish()))
             .collect(),
     }
-}
-fn hour_with_offset(ms: u64, offset_seconds: i32) -> Option<HourKey> {
-    let offset = time::UtcOffset::from_whole_seconds(offset_seconds).ok()?;
-    let local = time::OffsetDateTime::from_unix_timestamp(i64::try_from(ms / 1000).ok()?)
-        .ok()?
-        .to_offset(offset);
-    let start = local.replace_time(time::Time::from_hms(local.hour(), 0, 0).ok()?);
-    Some(HourKey {
-        start_ms: start.unix_timestamp() * 1000,
-        label: format!(
-            "{} {:02}:00 UTC{}{:02}:{:02}",
-            local.date(),
-            local.hour(),
-            if offset_seconds < 0 { "-" } else { "+" },
-            offset_seconds.abs() / 3600,
-            offset_seconds.abs() % 3600 / 60
-        ),
-    })
-}
-pub(super) fn local_hour(ms: u64) -> HourKey {
-    let key = i64::try_from(ms / 1000).ok().and_then(|seconds| {
-        let local = crate::platform::local_datetime_at(seconds)?;
-        let offset = i32::try_from(local.assume_utc().unix_timestamp() - seconds).ok()?;
-        hour_with_offset(ms, offset)
-    });
-    key.unwrap_or_else(|| HourKey {
-        start_ms: i64::MAX,
-        label: "Unknown timestamp".into(),
-    })
 }
 #[cfg(test)]
 #[path = "tests/metrics_test.rs"]

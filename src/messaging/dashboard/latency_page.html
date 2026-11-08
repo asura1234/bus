@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bus delivery latency</title>
+<style>
+:root{--bg:#000;--text:#fff;--accent:#66ff66;--selection:#2c5838;--grey:#91949f;--failure:#f38ba8;font:15px/1.5 system-ui,sans-serif;color:var(--text);background:var(--bg);color-scheme:dark}
+*{box-sizing:border-box}body{margin:0}main{max-width:1440px;margin:auto;padding:32px 28px}header{display:flex;align-items:start;justify-content:space-between;gap:24px}h1{font-size:27px;margin:2px 0 8px;letter-spacing:-.6px}h2{font-size:18px;margin:0 0 14px}p{margin:6px 0 14px}a,button{color:var(--accent)}a:hover,button:hover{background:var(--selection)}
+.eyebrow{font-size:12px;color:var(--accent);letter-spacing:1.5px;font-weight:700;text-transform:uppercase}.muted,small{color:var(--grey)}label{display:block;font-size:12px;font-weight:700;margin-bottom:5px}select{font:inherit;color:var(--text);padding:9px 28px 9px 12px;border:1px solid var(--grey);border-radius:7px;background:var(--bg)}.selectors{display:flex;gap:14px;flex-wrap:wrap}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0 16px}.card,section{background:var(--bg);border:1px solid var(--grey);border-radius:10px;padding:20px}.card h2{font-size:14px;margin-bottom:8px}.value{font-size:34px;line-height:1.2;font-weight:650;color:var(--accent);font-variant-numeric:tabular-nums}.card p{margin:8px 0 0;font-size:13px}
+.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;text-align:left;font-size:13px}th{font-weight:650;background:var(--bg);white-space:nowrap}th,td{padding:12px;border-bottom:1px solid var(--grey);vertical-align:top}td:first-child{white-space:nowrap}td strong{font-weight:650}td details{min-width:220px;max-width:440px}details table{margin-top:8px}details th,details td{padding:6px}
+summary{cursor:pointer;color:var(--accent)}section{margin-top:20px}.help{cursor:help;text-decoration:underline dotted;text-underline-offset:3px}.empty{text-align:center;padding:40px;color:var(--grey)}#updated{font-size:12px;color:var(--grey)}.legend{margin-top:14px;font-size:12px;color:var(--grey)}.pill{display:inline-block;border:1px solid var(--accent);color:var(--accent);padding:3px 9px;border-radius:20px;font-size:12px;font-weight:600}button{font:inherit;border:0;background:transparent;padding:0;text-decoration:underline;cursor:pointer;text-align:left}button:focus-visible,select:focus-visible,.help:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;background:var(--selection)}.selected{background:var(--selection);box-shadow:inset 3px 0 var(--accent)}.nav{font-size:13px;margin-top:8px}.slowest{max-height:560px;overflow:auto}.slowest th{position:sticky;top:0;z-index:1}
+@media(max-width:800px){main{padding:20px 12px}.cards{grid-template-columns:1fr;gap:10px}header{flex-direction:column}.value{font-size:28px}.card{padding:16px}}
+</style>
+<main>
+<header><div><div class="eyebrow">Bus · developer tools</div><h1>Delivery latency</h1><p class="muted">End-to-end delay ends at room delivery. Accepted-to-box and ready queue omit requests that waited for an agent. Model thinking is not its own phase.</p><span class="pill">Read only · refreshes every 30 seconds</span><div class="nav"><a href="/">Delivery</a></div></div><div class="selectors"><div><label for="group-mode">Break down by</label><select id="group-mode"><option value="recipients">Recipient</option><option value="providers">Provider</option></select></div><div><label for="phase">Bus phase</label><select id="phase"></select></div></div></header>
+<p id="updated" aria-live="polite">No data</p>
+<div class="cards" id="cards"></div>
+<section><h2 id="group-heading">Recipients</h2><div class="scroll"><table aria-label="Latency by recipient"><thead><tr><th>Recipient / group</th><th>p50</th><th>p90</th><th>p99</th><th>Samples (n)</th></tr></thead><tbody id="groups"></tbody></table></div><p class="legend">Select a group for its hourly distribution. Ready queue and accepted-to-box exclude requests that waited for an agent.</p></section>
+<section><h2 id="series-heading">Whole session · hourly</h2><div class="scroll"><table aria-label="Hourly Bus latency"><thead><tr><th>Local hour</th><th>p50</th><th>p90</th><th>p99</th><th>Samples (n)</th></tr></thead><tbody id="hours"></tbody></table></div></section>
+<section><h2 id="slow-heading">Slowest ready requests</h2><p class="muted">Sorted by send accepted to exact text write. Open a request for its complete Bus phase breakdown.</p><div class="scroll slowest" tabindex="0" role="region" aria-labelledby="slow-heading"><table aria-label="Slowest request phase breakdown"><thead><tr><th>Request</th><th>Recipient</th><th>Provider</th><th>Room</th><th>Send time (local)</th><th>Accepted → text write</th><th>Phase breakdown</th></tr></thead><tbody id="slowest"></tbody></table></div></section>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const phases={
+ end_to_end:['Accepted → room delivery','Send accepted until durable room delivery. This is the end-to-end delay. Reply capture is not an endpoint.'],
+ accepted_to_box:['Accepted → text write','Send accepted to the actor flushing the complete prompt text. Only requests ready at enqueue with no later agent wait. The text write must belong to the current native attempt.'],
+ enqueue:['Accepted → durable queued','Coordinator acceptance to the durable queue marker.'],
+ ready_queue:['Ready queue wait','Durable queue to delivery selection, only for requests ready at enqueue with no later agent wait. Busy/blocked time is excluded.'],
+ dispatch:['Picked → native request','Delivery selection to the coordinator native API request.'],
+ native_transport:['Coordinator → native server','Coordinator native request to server acceptance.'],
+ writer_queue:['Server → native writer','Server acceptance to native terminal writer queue.'],
+ paste_prepare:['Writer → paste start','Native writer queue to paste preparation/write start.'],
+ text_write:['Paste start → text write','Paste write start to the actor flushing the complete text. This is the exact in-box boundary.'],
+ paste_pacing:['Text write → paste complete','Post-write pacing delay before ownership confirmation. The 300 ms fixed wait lives here.'],
+ ownership_wait:['Paste complete → ownership seen','Post-delay completion to Bus confirming the owned composer draft.'],
+ enter_dispatch:['Ownership seen → Enter sent','Ownership confirmation to Enter being queued.'],
+ enter_write:['Enter sent → Enter written','Enter queue to the actor flushing Enter.'],
+ post_enter_confirmation:['Enter written → native confirmed','Enter flush to native submission confirmation; not the provider Started hook.'],
+ native_total:['Whole native submission','Coordinator native request to native submission confirmation, within that same native attempt.']
+};
+const phaseOrder=Object.keys(phases), names={all:'Whole session',claude:'Claude',codex:'Codex',kimi:'Kimi',grok:'Grok',cursor:'Cursor',unknown:'Unknown'};
+let latest=null,selected='all';
+for(const id of phaseOrder){const option=document.createElement('option');option.value=id;option.textContent=phases[id][0];$('phase').append(option)}
+function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
+function button(text,action){const b=node('button',text);b.type='button';b.addEventListener('click',action);return b}
+function explain(e,text){e.title=text;e.setAttribute('aria-label',`${e.textContent}. ${text}`);e.tabIndex=0;e.classList.add('help');return e}
+for(const th of document.querySelectorAll('th')){const text=th.textContent;if(text==='p50'||text==='p90'||text==='p99')explain(th,'Nearest-rank percentile of complete timestamp pairs for the selected Bus phase.');else if(text==='Samples (n)')explain(th,'Number of requests with both phase timestamps. Missing legacy timestamps are not sampled.');else if(text==='Accepted → text write')explain(th,phases.accepted_to_box[1]);else if(text==='Phase breakdown')explain(th,'All Bus phase durations in milliseconds. A reversed timestamp pair is omitted, and native stamps from another attempt are omitted.')}
+function metric(id){return latest?.metrics?.all?.phases?.[id]||{n:0,p50:null,p90:null,p99:null}}
+function series(){if(selected==='all')return latest?.metrics?.all;const groups=latest?.metrics?.[$('group-mode').value]||{};return $('group-mode').value==='providers'?groups[selected]:groups[selected]?.series}
+function groupName(id,g){return $('group-mode').value==='providers'?(names[id]||id):`${g.name} (#${id})`}
+function fmt(value){return value===null||value===undefined?'—':`${value} ms`}
+function renderCards(){const m=metric($('phase').value);$('cards').replaceChildren();for(const key of ['p50','p90','p99']){const card=node('div',undefined,'card'),heading=explain(node('h2',key),phases[$('phase').value][1]);card.append(heading,node('div',fmt(m[key]),'value'),node('p',`${phases[$('phase').value][0]} · n=${m.n}`));$('cards').append(card)}}
+function renderGroups(){const mode=$('group-mode').value;$('group-heading').textContent=mode==='recipients'?'Recipients':'Providers';$('groups').replaceChildren();const all=latest?.metrics?.all;if(!all)return;const groups=Object.entries(latest.metrics[mode]||{}).map(([id,g])=>[id,groupName(id,g),mode==='providers'?g:g.series]);groups.sort((a,b)=>(b[2].phases[$('phase').value]?.n||0)-(a[2].phases[$('phase').value]?.n||0));for(const [id,name,s] of [['all','Whole session',all],...groups]){const m=s.phases[$('phase').value],tr=node('tr',undefined,id===selected?'selected':'');const cell=node('td');cell.append(button(name,()=>{selected=id;renderGroups();renderHours();renderSlowest()}));tr.append(cell);for(const key of ['p50','p90','p99','n'])tr.append(node('td',key==='n'?String(m?.n||0):fmt(m?.[key])));$('groups').append(tr)}}
+function hourRow(label,m){const tr=node('tr');tr.append(node('td',label));for(const key of ['p50','p90','p99'])tr.append(node('td',fmt(m?.[key])));tr.append(node('td',String(m?.n||0)));return tr}
+function renderHours(){const s=series(),name=selected==='all'?'Whole session':groupName(selected,(latest.metrics[$('group-mode').value]||{})[selected]);$('series-heading').textContent=`${name} · hourly`;$('hours').replaceChildren();if(!s)return;$('hours').append(hourRow('Overall',s.phases[$('phase').value]));for(const h of s.hours)$('hours').append(hourRow(h.hour,h.phases[$('phase').value]))}
+function matchingSlowest(){if(selected==='all')return latest?.metrics?.slowest||[];const mode=$('group-mode').value,groups=mode==='providers'?latest?.metrics?.provider_slowest:latest?.metrics?.recipient_slowest;return (groups?.[selected]||[]).filter(r=>mode==='providers'?r.provider===selected:String(r.recipient_id)===selected)}
+function breakdown(r){const details=node('details'),summary=node('summary','View phases');details.append(summary);const table=node('table');for(const id of phaseOrder){if(r.phases[id]===undefined)continue;const tr=node('tr');tr.append(explain(node('th',phases[id][0]),phases[id][1]),node('td',fmt(r.phases[id])));table.append(tr)}if(r.phases.queue_total!==undefined){const tr=node('tr');tr.append(explain(node('th','Total queue wait'),'Includes any agent busy or blocked time; excluded from ready Bus percentiles.'),node('td',fmt(r.phases.queue_total)));table.append(tr)}details.append(table);return details}
+function renderSlowest(){const rows=matchingSlowest();$('slow-heading').textContent=`Slowest ready requests (${rows.length})`;$('slowest').replaceChildren();for(const r of rows){const tr=node('tr');for(const value of [r.request_id,`${r.recipient} (#${r.recipient_id})`,names[r.provider]||r.provider,`${r.room} (#${r.room_id})`,new Date(r.sent_at_ms).toLocaleString(),fmt(r.accepted_to_box_ms)])tr.append(node('td',value));const cell=node('td');cell.append(breakdown(r));tr.append(cell);$('slowest').append(tr)}if(!rows.length){const tr=node('tr'),td=node('td','No ready requests with exact text-write timestamps','empty');td.colSpan=7;tr.append(td);$('slowest').append(tr)}}
+function render(){if(selected!=='all'){const groups=latest?.metrics?.[$('group-mode').value]||{};if(!groups[selected])selected='all'}renderCards();renderGroups();renderHours();renderSlowest()}
+async function refresh(){try{const r=await fetch('/latency/data',{cache:'no-store'});if(!r.ok)throw new Error('unavailable');latest=await r.json();$('updated').textContent=`${latest.timezone} · Updated ${new Date(latest.generated_at_ms).toLocaleTimeString()}`;render()}catch{latest=null;$('updated').textContent='No data';render()}finally{setTimeout(refresh,30000)}}
+$('group-mode').addEventListener('change',()=>{selected='all';render()});$('phase').addEventListener('change',render);refresh();
+</script>
+</html>
