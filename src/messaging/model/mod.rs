@@ -12,6 +12,7 @@ mod history;
 mod history_index;
 mod idle_agents;
 mod interrupts;
+mod launch_attempts;
 mod payload;
 mod provider_failure;
 mod provider_retry;
@@ -66,3 +67,7 @@ pub(crate) use {
 #[cfg(test)]
 #[path = "tests/types_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/launch_attempts_test.rs"]
+mod launch_attempts_test;
