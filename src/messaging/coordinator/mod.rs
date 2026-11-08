@@ -384,6 +384,8 @@ mod steering_tests;
 #[cfg(test)]
 #[path = "tests/poll_test.rs"]
 mod tests;
+#[cfg(all(test, feature = "dev-tools"))]
+pub(crate) use tests::compaction_tests::poll_observed_grok_banner;
 
 use crate::agents::providers::launch;
 use crate::agents::providers::spool as callbacks;
