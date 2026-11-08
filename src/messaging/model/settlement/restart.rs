@@ -33,6 +33,11 @@ impl BusState {
             return None;
         }
         let current = owner.current_request;
+        // Closing the turn calls abandon_current_request, which clears the
+        // agent's hold even when this request does not own it.
+        // finish_completed_turn clears a hold only for its own lead; keep a
+        // hold that still belongs to a different delivery.
+        let retained_hold = owner.provider_retry.clone();
         let mut successor = None;
         for member in self.group_members(id) {
             let member = self.requests.get_mut(&member)?;
@@ -93,7 +98,12 @@ impl BusState {
             answered.pending_final = None;
             self.requests.insert(id, answered);
         }
+        let restore_hold = retained_hold
+            .filter(|hold| hold.lead != id && !self.group_members(hold.lead).contains(&id));
         let owner = self.agents.get_mut(&agent)?;
+        if owner.provider_retry.is_none() {
+            owner.provider_retry = restore_hold;
+        }
         owner.current_request = current
             .filter(|previous| *previous != id)
             .or(successor)

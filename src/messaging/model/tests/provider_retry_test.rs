@@ -961,3 +961,68 @@ fn accept_callback_stamps_provider_start_on_the_rebound_member() {
         "rebinding must not give the previous lead the member's provider start"
     );
 }
+
+#[test]
+fn restart_settling_an_independent_input_keeps_the_provider_retry_hold() {
+    let (mut state, agent, lead, member, _queued) = steering_failure(false, false);
+    let start = ProviderCallback {
+        callback_id: "native-queued-start".into(),
+        sequence: 24,
+        occurred_at_ms: 200,
+        agent_id: agent,
+        launch_id: "launch-codex".into(),
+        provider_session_id: Some("provider-session".into()),
+        provider_turn_id: Some("native-next-turn".into()),
+        provider_prompt_id: None,
+        prompt_payload: Some("second task".into()),
+        kind: CallbackEventKind::PromptStarted,
+    };
+    assert_eq!(
+        state.accept_callback(start),
+        CallbackDisposition::AcceptedSteering
+    );
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(member));
+    assert_eq!(
+        state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .map(|hold| hold.lead),
+        Some(lead)
+    );
+    for id in [lead, member] {
+        state
+            .stamp_delivery_epoch(
+                id,
+                DeliveryEpoch {
+                    generation: 1,
+                    terminal_id: "terminal".into(),
+                    pane_id: "pane".into(),
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        state.settle_generation_request(agent, member, 2, 200, |_| None),
+        Some(member)
+    );
+    assert_eq!(
+        state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .map(|hold| hold.lead),
+        Some(lead),
+        "settling the independent interrupted input must keep the failed delivery's retry hold"
+    );
+    assert_eq!(
+        state.settle_generation_request(agent, lead, 2, 201, |_| None),
+        None
+    );
+    assert!(
+        !state.request(lead).unwrap().settled(),
+        "the held delivery stays open for provider retry"
+    );
+}
