@@ -173,7 +173,9 @@ fn launch_metrics_failed_initial_save_prevents_preparation_and_native_input() {
 #[test]
 fn launch_metrics_unsubmitted_recovery_preparation_failure_settles_a_failed_attempt() {
     let (mut worker, agent, _, dir, calls) = fixture(Provider::Kimi, vec![]);
+    seed_launch(&mut worker, agent, u64::MAX);
     let saved_agent = worker.state.agent(agent).unwrap().clone();
+    assert_eq!(saved_agent.launch_attempt_id, Some(1));
     let result = worker.retry_unsubmitted_agent_start(&saved_agent, vec![]);
     assert!(
         result
@@ -186,10 +188,13 @@ fn launch_metrics_unsubmitted_recovery_preparation_failure_settles_a_failed_atte
     let current = worker.state.agent(agent).unwrap().clone();
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
-    assert_eq!(saved["1"]["kind"], "recovery");
-    assert_eq!(saved["1"]["outcome"], "failed");
-    assert_eq!(saved["1"]["cause"], "resume_preparation_failed");
-    assert_eq!(current.launch_attempt_id, Some(1));
+    assert_eq!(current.launch_attempt_id, Some(1), "{saved}");
+    assert_eq!(saved["1"]["outcome"], "pending", "{saved}");
+    assert!(saved["1"]["cause"].is_null(), "{saved}");
+    assert_eq!(saved["2"]["kind"], "recovery");
+    assert_eq!(saved["2"]["outcome"], "failed");
+    assert_eq!(saved["2"]["cause"], "resume_preparation_failed");
+    assert!(saved["2"]["agent_id"].is_null(), "{saved}");
     assert!(current.startup.is_none());
 }
 

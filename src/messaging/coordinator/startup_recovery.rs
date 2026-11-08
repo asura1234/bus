@@ -19,8 +19,6 @@ impl Worker {
         else {
             return Err("Saved launch terminal identity is incomplete; no retry was sent".into());
         };
-        let attempt =
-            self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?;
         let prepared = (|| -> Result<(Option<String>, Option<String>, Option<String>), String> {
             if !matches!(agent.provider, Provider::Grok | Provider::Kimi) {
                 return Ok((None, None, None));
@@ -54,6 +52,18 @@ impl Worker {
             }
             Ok((Some(executable), grok_home, kimi_home))
         })();
+        // A rejected preparation is an audit record only. begin_agent_launch would
+        // cancel the live pending attempt and replace launch_attempt_id.
+        let attempt = if prepared.is_err() {
+            self.begin_tracked_launch(
+                &agent.name,
+                agent.provider,
+                agent.room_id,
+                crate::messaging::model::LaunchKind::Recovery,
+            )?
+        } else {
+            self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?
+        };
         let (executable, grok_home, kimi_home) =
             self.track_launch_result(attempt, "resume_preparation_failed", prepared)?;
         let mut state = self.state.clone();
