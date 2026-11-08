@@ -51,7 +51,7 @@ impl BusUi {
         self.refill_orchestrator_prompt();
     }
 
-    pub(super) fn start_rename(&mut self, target: RenameTarget) {
+    pub(in crate::client::rooms) fn start_rename(&mut self, target: RenameTarget) {
         if let RenameTarget::Room(id) = &target {
             if self.is_master_room(*id) {
                 let error = ModelError::MasterRoomFixed.to_string();
@@ -69,6 +69,9 @@ impl BusUi {
             RenameTarget::Agent(id) => self.snapshot.state.agent(id).map(|a| a.name.clone()),
         };
         if let Some(name) = name {
+            // Same contract as set_form: a focus stamped earlier no longer matches.
+            self.form_generation = self.form_generation.wrapping_add(1);
+            crate::messaging::coordinator::publish_form_generation(self.form_generation);
             self.rename = Some(Rename {
                 target,
                 editor: Editor::new(name),

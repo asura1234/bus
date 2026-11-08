@@ -117,6 +117,57 @@ fn dev_focus_ack_completes_when_form_predates_request() {
 }
 
 #[test]
+fn dev_focus_ack_preserves_a_rename_opened_after_the_request() {
+    use crate::client::rooms::forms::RenameTarget;
+
+    let (mut ui, first, second, _a, b) = fixture();
+    // Stamp the request before the rename opens. The production opener must
+    // advance form generation, or this acknowledgement still owns the rename.
+    let requested_generation = ui.form_generation;
+    ui.start_rename(RenameTarget::Room(first));
+    let Some(rename) = &mut ui.rename else {
+        panic!("rename did not open");
+    };
+    rename.editor.text = "typed-after-focus-request".into();
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+        form_generation: Some(requested_generation),
+    });
+
+    assert_eq!(ui.room, Some(first), "stale focus moved the room context");
+    assert!(ui.terminal.is_none());
+    let Some(rename) = &ui.rename else {
+        panic!("rename opened after the focus request was discarded");
+    };
+    assert_eq!(rename.editor.text, "typed-after-focus-request");
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::FocusTerminal(id) if id == b)));
+}
+
+#[test]
+fn dev_focus_ack_completes_a_rename_that_predates_the_request() {
+    use crate::client::rooms::forms::RenameTarget;
+
+    let (mut ui, first, second, _a, b) = fixture();
+    ui.start_rename(RenameTarget::Room(first));
+    let requested_generation = ui.form_generation;
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+        form_generation: Some(requested_generation),
+    });
+
+    assert_eq!(ui.room, Some(second));
+    assert_eq!(ui.terminal, Some(b));
+    assert!(ui.rename.is_none());
+}
+
+#[test]
 fn dev_quit_runs_the_ui_save_and_quit_and_dev_settings_apply() {
     let (mut ui, _first, _second, _a, _b) = fixture();
     assert!(ui.quitting.is_none());
