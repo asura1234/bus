@@ -13,7 +13,7 @@ pub(crate) struct TransportError {
     pub(crate) code: Option<String>,
     pub(crate) message: String,
     pub(crate) definitely_rejected: bool,
-    pub(crate) timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
+    pub(crate) timestamps: Box<crate::protocol::api::schema::NativeSubmissionTimestamps>,
 }
 
 pub(crate) trait Transport: Send {
@@ -162,7 +162,7 @@ fn classify_error(error: ApiClientError) -> TransportError {
     TransportError {
         timestamps: match &error {
             ApiClientError::ErrorResponse(response) => {
-                response.error.timestamps.unwrap_or_default()
+                response.error.timestamps.clone().unwrap_or_default()
             }
             _ => Default::default(),
         },

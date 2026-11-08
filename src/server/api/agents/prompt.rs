@@ -647,7 +647,7 @@ fn complete_agent_prompt_with_timestamps(
             crate::protocol::api::schema::ErrorBody {
                 code: code.into(),
                 message,
-                timestamps: Some(timestamps),
+                timestamps: Some(Box::new(timestamps)),
             },
         )
     };

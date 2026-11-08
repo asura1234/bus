@@ -319,18 +319,22 @@ fn legacy_agent_prompted_response_defaults_to_empty_timestamps() {
 
 #[test]
 fn native_error_response_preserves_observed_timestamps() {
-    let response = crate::server::api::errors::encode_error_body(
-        "slow-failure".into(),
-        crate::protocol::api::schema::ErrorBody {
+    let response = ErrorResponse {
+        id: "slow-failure".into(),
+        error: ErrorBody {
             code: "timeout".into(),
             message: "confirmation timed out".into(),
-            timestamps: Some(crate::protocol::api::schema::NativeSubmissionTimestamps {
-                text_written_at_ms: Some(42),
-                ..Default::default()
-            }),
+            timestamps: Some(Box::new(
+                crate::protocol::api::schema::NativeSubmissionTimestamps {
+                    text_written_at_ms: Some(42),
+                    ..Default::default()
+                },
+            )),
         },
-    );
-    let restored: ErrorResponse = serde_json::from_str(&response).unwrap();
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    let restored: ErrorResponse = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, response);
     assert_eq!(
         restored.error.timestamps.unwrap().text_written_at_ms,
         Some(42)

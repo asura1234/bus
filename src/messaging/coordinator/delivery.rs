@@ -652,7 +652,7 @@ fn native_response_timestamps(
 ) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
     match response {
         Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
-        Err(error) => error.timestamps,
+        Err(error) => *error.timestamps,
         _ => Default::default(),
     }
 }
