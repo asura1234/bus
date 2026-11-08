@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(wire.as_object().unwrap().len(), 5);
         assert_eq!(
             wire["id"],
-            bus_io::digest(&serde_json::to_vec(&("launch", &payload)).unwrap())
+            bus_io::digest(&serde_json::to_vec(&("launch", &payload, false)).unwrap())
         );
         assert!(wire["at_ms"].as_u64().is_some());
         std::fs::remove_dir_all(dir).unwrap();
