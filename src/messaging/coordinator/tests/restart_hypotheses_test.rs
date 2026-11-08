@@ -216,7 +216,7 @@ fn hypothesis_info(
 }
 
 #[test]
-fn restart_hypothesis_legacy_deferred_across_known_generation_advance() {
+fn restart_hypothesis_legacy_closes_on_witness_generation_advance() {
     let (mut f, old) = legacy_awaiting_start();
     let queued = f.send("queued after interrupted legacy input", true);
     let mut state = f.worker.state.clone();
@@ -289,15 +289,32 @@ fn restart_hypothesis_legacy_deferred_across_known_generation_advance() {
         "witness-pane",
         "witness-session",
     );
-    // The server transition is known before this agent's native info returns.
-    // Its old execution must not become current merely because polling repeats.
+    // A witness-only advance stamps this epoch-less request with the previous
+    // serving generation and closes it on that same tick. The successor stays
+    // queued until this agent's own info returns.
     f.worker.transport = Box::new(HypothesisNative {
         calls: f.native.clone(),
         infos: vec![witness_g2.clone()],
     });
     f.worker.tick().unwrap();
     assert_eq!(f.worker.serving_generation, 2);
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    assert_eq!(
+        f.request(old).delivery_epoch.as_ref().unwrap().generation,
+        1,
+        "the witness advance closes the previous serving generation"
+    );
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        None,
+        "closing the legacy request frees the agent before its own info returns"
+    );
     assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert!(f.request(queued).delivery_epoch.is_none());
     assert_eq!(
         f.typed().len(),
         1,
@@ -317,7 +334,23 @@ fn restart_hypothesis_legacy_deferred_across_known_generation_advance() {
         f.request(old).failure_reason.as_deref(),
         Some("reply_not_captured")
     );
+    assert_eq!(
+        f.request(old).delivery_epoch.as_ref().unwrap().generation,
+        1
+    );
     assert_eq!(f.request(queued).phase, RequestPhase::Active);
+    assert_eq!(
+        f.request(queued)
+            .delivery_epoch
+            .as_ref()
+            .unwrap()
+            .generation,
+        2
+    );
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(queued)
+    );
     assert_eq!(
         f.typed().len(),
         2,

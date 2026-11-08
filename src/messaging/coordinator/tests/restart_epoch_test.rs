@@ -52,6 +52,29 @@ fn observe_epoch(fixture: &mut Fixture, generation: u64) {
     fixture.worker.tick().unwrap();
 }
 
+fn delivery_generation(fixture: &Fixture, id: RequestId) -> u64 {
+    fixture
+        .request(id)
+        .delivery_epoch
+        .as_ref()
+        .unwrap()
+        .generation
+}
+
+fn copies_of(fixture: &Fixture, text: &str) -> usize {
+    fixture
+        .worker
+        .state
+        .requests()
+        .filter(|request| {
+            request.prompt.text.contains(text)
+                || request
+                    .reply()
+                    .is_some_and(|reply| reply.text.contains(text))
+        })
+        .count()
+}
+
 fn hold_transient_error(fixture: &mut Fixture, request: RequestId) {
     let mut document = serde_json::to_value(&fixture.worker.state).unwrap();
     document["agents"][fixture.agent.0.to_string()]["provider_retry"] = json!({
@@ -120,9 +143,39 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     }
                 }
                 let queued = (!queue_after).then(|| f.send("queued before resume", true));
+                if current && !transient_hold {
+                    let request = f.request(old.unwrap());
+                    assert_eq!(f.worker.serving_generation, 1, "{provider:?}/{mode:?}");
+                    assert_eq!(request.phase, RequestPhase::Active, "{provider:?}/{mode:?}");
+                    assert_eq!(
+                        request.delivery_epoch.as_ref().unwrap().generation,
+                        1,
+                        "{provider:?}/{mode:?}"
+                    );
+                }
                 match mode {
-                    EpochMode::Server => f.worker.transport = epoch_transport(&f, false, 2),
-                    EpochMode::Full | EpochMode::Manual => epoch_reopen(&mut f, true, 2),
+                    EpochMode::Server => {
+                        f.worker.transport = epoch_transport(&f, false, 2);
+                        assert_eq!(
+                            f.worker.serving_generation, 1,
+                            "{mode:?} keeps the open worker"
+                        );
+                    }
+                    EpochMode::Full => {
+                        epoch_reopen(&mut f, true, 2);
+                        assert_eq!(
+                            f.worker.serving_generation, 0,
+                            "{mode:?} opens a new worker"
+                        );
+                    }
+                    // Manual reopens the process in the same terminal. Full also rebinds.
+                    EpochMode::Manual => {
+                        epoch_reopen(&mut f, false, 2);
+                        assert_eq!(
+                            f.worker.serving_generation, 0,
+                            "{mode:?} opens a new worker in the same terminal"
+                        );
+                    }
                 }
                 if matches!(receipt, Receipt::Early) {
                     restart_lifecycle_receipt(&f, "restarted");
@@ -139,6 +192,21 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     .clone();
                 let held_queue = f.worker.state.queued_requests(f.agent).to_vec();
                 f.worker.tick().unwrap();
+                assert_eq!(f.worker.serving_generation, 2, "{provider:?}/{mode:?}");
+                assert_eq!(
+                    f.worker
+                        .state
+                        .agent(f.agent)
+                        .unwrap()
+                        .runtime_identity
+                        .terminal_id
+                        .as_deref(),
+                    match mode {
+                        EpochMode::Full => Some("restored-terminal"),
+                        EpochMode::Server | EpochMode::Manual => Some("terminal"),
+                    },
+                    "{provider:?}/{mode:?}"
+                );
                 if matches!(receipt, Receipt::Late | Receipt::Replay) {
                     restart_lifecycle_receipt(&f, "restarted");
                     f.worker.tick().unwrap();
@@ -165,6 +233,13 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                         "{provider:?}/{mode:?}"
                     );
                     assert_eq!(request.phase == RequestPhase::Queued, !current);
+                    if current {
+                        assert_eq!(
+                            request.delivery_epoch.as_ref().unwrap().generation,
+                            1,
+                            "{provider:?}/{mode:?} hold must stay on its delivery generation"
+                        );
+                    }
                     assert_eq!(
                         f.worker.state.agent(f.agent).unwrap().provider_retry,
                         held,
@@ -178,6 +253,11 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                 } else if current {
                     let request = f.request(old.unwrap());
                     assert_eq!(request.phase, RequestPhase::Abandoned);
+                    assert_eq!(
+                        request.delivery_epoch.as_ref().unwrap().generation,
+                        1,
+                        "{provider:?}/{mode:?} must close the generation-1 delivery"
+                    );
                     assert_eq!(
                         request.failure_reason.as_deref(),
                         Some("reply_not_captured")
@@ -355,15 +435,27 @@ fn restart_epoch_c40_mixed_group_filters_each_delivery_generation() {
     f.worker
         .save(serde_json::from_value(document).unwrap())
         .unwrap();
+    assert_eq!(f.worker.serving_generation, 1);
+    assert_ne!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_ne!(f.request(newer).phase, RequestPhase::Abandoned);
+    assert_eq!(delivery_generation(&f, old), 1);
+    assert_eq!(delivery_generation(&f, newer), 2);
     f.worker.transport = epoch_transport(&f, false, 2);
     f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
     assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(delivery_generation(&f, old), 1);
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
     assert_eq!(
         f.request(newer).phase,
         RequestPhase::Active,
         "{:?}",
         f.request(newer)
     );
+    assert_eq!(delivery_generation(&f, newer), 2);
     assert_eq!(
         f.worker.state.agent(f.agent).unwrap().current_request,
         Some(newer),
@@ -410,15 +502,20 @@ fn restart_epoch_c45_retry_hold_keeps_all_submitted_group_members() {
     f.deliver();
     assert_eq!(f.request(member).group, Some(lead));
     hold_transient_error(&mut f, lead);
+    assert_eq!(delivery_generation(&f, lead), 1);
+    assert_eq!(delivery_generation(&f, member), 1);
     f.worker.transport = epoch_transport(&f, false, 2);
     f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
     assert_ne!(f.request(lead).phase, RequestPhase::Abandoned);
     assert_ne!(f.request(member).phase, RequestPhase::Abandoned);
+    assert_eq!(delivery_generation(&f, lead), 1);
+    assert_eq!(delivery_generation(&f, member), 1);
     assert_eq!(f.request(member).group, Some(lead));
 }
 
 #[test]
-fn restart_epoch_c40_distinct_member_final_recovers_without_any_stop_hook() {
+fn restart_epoch_c52_distinct_member_final_recovers_without_any_stop_hook() {
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 1);
     let rollout = f.dir.join("rollout-distinct-members.jsonl");
@@ -460,7 +557,7 @@ fn restart_epoch_c40_distinct_member_final_recovers_without_any_stop_hook() {
 }
 
 #[test]
-fn restart_epoch_c38_other_agents_final_is_read_before_interruption_fallback() {
+fn restart_epoch_c51_other_agents_final_is_read_before_interruption_fallback() {
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 1);
     let first = running(&mut f, "first interrupted agent", "turn-1");
@@ -507,9 +604,18 @@ fn restart_epoch_c38_other_agents_final_is_read_before_interruption_fallback() {
     );
     f.worker.codex_rollouts.insert(other, rollout);
     f.agent = f.request(first).agent_id;
+    assert_eq!(f.worker.serving_generation, 1);
+    assert_eq!(f.request(first).phase, RequestPhase::Active);
+    assert_eq!(delivery_generation(&f, first), 1);
     f.worker.transport = epoch_transport(&f, false, 2);
     f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
     assert_eq!(f.request(first).phase, RequestPhase::Abandoned);
+    assert_eq!(delivery_generation(&f, first), 1);
+    assert_eq!(
+        f.request(first).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
     assert_eq!(f.reply(completed).as_deref(), Some("other final"));
     assert_eq!(f.request(completed).phase, RequestPhase::Completed);
 }
@@ -540,17 +646,45 @@ fn restart_epoch_c42_refusal_does_not_advance_or_close_live_work() {
 }
 
 #[test]
-fn restart_epoch_c43_rollback_reconciles_the_interrupted_execution() {
+fn restart_epoch_c43_rollback_receipt_leaves_generation_one_active() {
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 1);
     let old = f.send("rollback interrupted request", false);
     f.deliver();
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
+    assert_eq!(delivery_generation(&f, old), 1);
     f.worker.transport = epoch_transport(&f, false, 1);
     f.worker.tick().unwrap();
-    f.worker.transport = epoch_transport(&f, false, 2);
+    assert_eq!(f.worker.serving_generation, 1);
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
+    assert_eq!(delivery_generation(&f, old), 1);
+    // rolled_back is a diagnostic receipt. It must not settle this request.
+    let path = crate::utils::restart_record::outcome_path(&f.dir);
     restart_lifecycle_receipt(&f, "rolled_back");
+    assert!(path.exists());
     f.worker.tick().unwrap();
+    assert!(
+        !path.exists(),
+        "rolled_back receipt must be consumed without a notice"
+    );
+    assert_eq!(f.worker.serving_generation, 1);
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
+    assert_eq!(delivery_generation(&f, old), 1);
+    assert!(f.request(old).failure_reason.is_none());
+    assert!(f
+        .worker
+        .state
+        .requests()
+        .all(|request| !request.prompt.text.starts_with("Restarted ")));
+    f.worker.transport = epoch_transport(&f, false, 2);
+    f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
     assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(delivery_generation(&f, old), 1);
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
 }
 
 #[test]
@@ -561,13 +695,22 @@ fn restart_epoch_c44_later_server_interruption_has_its_own_generation() {
     f.deliver();
     epoch_reopen(&mut f, true, 1);
     f.worker.tick().unwrap();
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
+    assert_eq!(f.worker.serving_generation, 1);
+    assert_eq!(delivery_generation(&f, old), 1);
     f.worker.transport = epoch_transport(&f, false, 2);
     f.worker.tick().unwrap();
     assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(f.worker.serving_generation, 2);
+    assert_eq!(delivery_generation(&f, old), 1);
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
 }
 
 #[test]
-fn restart_epoch_c45_retry_hold_keeps_identity_and_uses_new_generation() {
+fn restart_epoch_c53_retry_hold_keeps_identity_and_uses_new_generation() {
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 1);
     let old = running(&mut f, "retry after transient failure", "turn-1");
@@ -611,13 +754,26 @@ fn restart_epoch_c46_explicit_final_is_not_replayed_by_receipts() {
     let old = running(&mut f, "finish explicitly", "turn-1");
     f.stopped("turn-1", "one answer only");
     f.consume();
+    let phase = f.request(old).phase;
+    let epoch = f.request(old).delivery_epoch.clone();
+    let typed = f.typed().len();
+    assert_eq!(phase, RequestPhase::Completed);
+    assert_eq!(f.reply(old).as_deref(), Some("one answer only"));
+    assert_eq!(copies_of(&f, "one answer only"), 1);
+    let path = crate::utils::restart_record::outcome_path(&f.dir);
     restart_lifecycle_receipt(&f, "restarted");
+    assert!(path.exists());
     f.worker.tick().unwrap();
+    assert!(!path.exists(), "restarted receipt must be consumed");
+    assert_eq!(f.request(old).phase, phase);
+    assert_eq!(f.request(old).delivery_epoch, epoch);
+    assert_eq!(f.typed().len(), typed);
+    assert_eq!(copies_of(&f, "one answer only"), 1);
     assert_eq!(f.reply(old).as_deref(), Some("one answer only"));
 }
 
 #[test]
-fn restart_epoch_c47_save_failure_blocks_new_input_until_reconciled() {
+fn restart_epoch_c54_save_failure_blocks_new_input_until_reconciled() {
     use crate::messaging::storage::state_store::SaveStage;
     for stage in [
         SaveStage::TempCreate,
@@ -633,15 +789,27 @@ fn restart_epoch_c47_save_failure_blocks_new_input_until_reconciled() {
             f.deliver();
             let queued = f.send("queued behind durable restart", true);
             let before = f.typed().len();
+            assert_eq!(f.worker.serving_generation, 1);
+            assert_eq!(f.request(old).phase, RequestPhase::Active);
+            assert_eq!(delivery_generation(&f, old), 1);
             f.worker.transport = epoch_transport(&f, false, 2);
             f.worker.store.fail_once_at(stage);
             assert!(f.worker.tick().is_err(), "{stage:?}");
             assert_eq!(f.typed().len(), before, "{stage:?}");
+            assert_eq!(f.request(old).phase, RequestPhase::Active, "{stage:?}");
+            assert_eq!(delivery_generation(&f, old), 1, "{stage:?}");
             if reopen {
                 epoch_reopen(&mut f, false, 2);
             }
             f.worker.tick().unwrap();
+            assert_eq!(f.worker.serving_generation, 2, "{stage:?}");
             assert_eq!(f.request(old).phase, RequestPhase::Abandoned, "{stage:?}");
+            assert_eq!(delivery_generation(&f, old), 1, "{stage:?}");
+            assert_eq!(
+                f.request(old).failure_reason.as_deref(),
+                Some("reply_not_captured"),
+                "{stage:?}"
+            );
             assert_eq!(f.typed().len(), before + 1, "{stage:?}/reopen={reopen}");
             assert_eq!(
                 f.request(queued)
@@ -670,9 +838,18 @@ fn restart_epoch_c48_legacy_unknown_metadata_reconciles_at_native_change() {
         .save(serde_json::from_value(document).unwrap())
         .unwrap();
     assert!(f.request(old).delivery_epoch.is_none());
+    assert_eq!(f.request(old).phase, RequestPhase::Active);
     epoch_reopen(&mut f, true, 2);
     f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
     assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    // A new process has no previous serving generation. The rebound terminal
+    // does not match, so migration stamps generation 0 and serving 2 closes it.
+    assert_eq!(delivery_generation(&f, old), 0);
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
 }
 
 #[test]
@@ -719,11 +896,29 @@ fn restart_epoch_c50_reordered_receipt_cannot_capture_new_epoch_work() {
     let queued = f.send("new epoch successor", true);
     epoch_reopen(&mut f, true, 2);
     f.worker.tick().unwrap();
+    assert_eq!(f.worker.serving_generation, 2);
     assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(delivery_generation(&f, old), 0);
+    assert_eq!(
+        f.request(old).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
     assert_eq!(f.request(queued).phase, RequestPhase::Active);
+    assert_eq!(delivery_generation(&f, queued), 2);
+    let typed = f.typed().len();
+    let queued_epoch = f.request(queued).delivery_epoch.clone();
+    let old_epoch = f.request(old).delivery_epoch.clone();
+    let path = crate::utils::restart_record::outcome_path(&f.dir);
     restart_lifecycle_receipt(&f, "restarted");
+    assert!(path.exists());
     f.worker.tick().unwrap();
+    assert!(!path.exists(), "restarted receipt must be consumed");
+    assert_eq!(f.worker.serving_generation, 2);
+    assert_eq!(f.request(old).phase, RequestPhase::Abandoned);
+    assert_eq!(f.request(old).delivery_epoch, old_epoch);
     assert_eq!(f.request(queued).phase, RequestPhase::Active);
+    assert_eq!(f.request(queued).delivery_epoch, queued_epoch);
+    assert_eq!(f.typed().len(), typed);
 }
 
 #[test]
