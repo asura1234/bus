@@ -389,6 +389,10 @@ struct ParsedShortOption {
     optional_next: bool,
 }
 
+/// Kimi 2.4.1 sets one yolo bit from `--yolo` or the hidden `--yes` and
+/// `--auto-approve` flags. An equals form is a different token, not this bit.
+const YOLO_LONG_OPTIONS: &[&str] = &["--yolo", "--yes", "--auto-approve"];
+
 fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
     if name.len() < 2 || !name.starts_with('-') || name.starts_with("--") {
         return None;
@@ -398,14 +402,24 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
     let mut takes_next_value = false;
     let mut optional_next = false;
     for (index, flag) in name.char_indices().skip(1) {
-        let value = SHORT_OPTIONS
-            .iter()
-            .find_map(|(candidate, value)| (*candidate == flag).then_some(*value))?;
         if flag == 'y' {
             yolo = true;
-        } else {
-            normalized.push(flag);
+            continue;
         }
+        let Some(value) = SHORT_OPTIONS
+            .iter()
+            .find_map(|(candidate, value)| (*candidate == flag).then_some(*value))
+        else {
+            // A `y` already seen is still Kimi's yolo bit. Keep the later
+            // letters (`-yr` → `-r`). An unmapped letter before `y` (`-ry`)
+            // is not that bit, so the whole cluster stays unrecognized.
+            if !yolo {
+                return None;
+            }
+            normalized.push(flag);
+            continue;
+        };
+        normalized.push(flag);
         if !matches!(value, ShortValue::Flag) {
             let value_start = index + flag.len_utf8();
             normalized.push_str(&name[value_start..]);
@@ -425,7 +439,7 @@ fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
 }
 
 pub(crate) fn normalize_yolo_option(name: &str) -> Option<Option<String>> {
-    if name == "--yolo" {
+    if YOLO_LONG_OPTIONS.contains(&name) {
         return Some(None);
     }
     parse_short_option(name).and_then(|option| option.yolo.then_some(option.normalized))
@@ -442,7 +456,7 @@ pub(crate) fn session_value_is_optional(name: &str) -> bool {
 }
 
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
-    if name == "--yolo" {
+    if YOLO_LONG_OPTIONS.contains(&name) {
         return Some(0);
     }
     if let Some(option) = parse_short_option(name) {

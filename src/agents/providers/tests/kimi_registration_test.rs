@@ -373,6 +373,56 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
     }
 }
 
+#[test]
+fn kimi_yolo_normalization_replaces_hidden_yolo_aliases() {
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    struct Restore(Option<std::ffi::OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("BUS_YOLO", value),
+                None => std::env::remove_var("BUS_YOLO"),
+            }
+        }
+    }
+    let _restore = Restore(std::env::var_os("BUS_YOLO"));
+    std::env::set_var("BUS_YOLO", "1");
+    let mut failures = Vec::new();
+    for alias in ["--yes", "--auto-approve"] {
+        let mut effective = vec![alias.to_string()];
+        launch::apply_run_permissions(ProviderKind::Kimi, &mut effective);
+        if effective != ["--auto".to_string()] {
+            failures.push(format!(
+                "Bus yolo left Kimi yolo alias {alias} beside --auto: {effective:?}"
+            ));
+        }
+        for mixed in [
+            vec!["--auto".to_string(), alias.to_string()],
+            vec![alias.to_string(), "--auto".to_string()],
+        ] {
+            if super::kimi::launch::validate_run_permissions(&mixed).is_ok() {
+                failures.push(format!("guard saved a normal-resume rejection: {mixed:?}"));
+            }
+        }
+    }
+    let mut clustered = vec!["-yr".to_string()];
+    launch::apply_run_permissions(ProviderKind::Kimi, &mut clustered);
+    if clustered != ["--auto".to_string(), "-r".to_string()] {
+        failures.push(format!(
+            "Bus yolo left a yolo bit inside an unrecognized short cluster: {clustered:?}"
+        ));
+    }
+    for mixed in [
+        vec!["--auto".to_string(), "-yr".to_string()],
+        vec!["-yr".to_string(), "--auto".to_string()],
+    ] {
+        if super::kimi::launch::validate_run_permissions(&mixed).is_ok() {
+            failures.push(format!("guard saved a normal-resume rejection: {mixed:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
 fn assert_native_kimi_stays_alive(
     binary: &str,
     args: &[String],
