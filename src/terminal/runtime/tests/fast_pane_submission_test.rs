@@ -396,3 +396,56 @@ async fn occupied_editor_with_a_preserved_draft_does_not_send_editor_keys() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn pending_payload_with_a_preserved_draft_still_submits_once() {
+    let root = crate::utils::test_temp::unique_temp_path("pending-preserved-submit");
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("native-editor.txt");
+    let directory = root.join("exchange");
+    std::fs::write(&file, "original draft").unwrap();
+    {
+        let exchange = crate::platform::draft_editor::Exchange::begin_preserving(
+            directory.clone(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        exchange.request_swap("attempt").unwrap();
+        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+    }
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    render(&runtime, "BUS_PAYLOAD");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(PAYLOAD),
+            Bytes::from_static(b"\r"),
+            vec![],
+            Duration::ZERO,
+            None,
+            Box::new(Editor {
+                directory: directory.clone(),
+            }),
+        )
+        .unwrap();
+    let mut completion_task =
+        tokio::task::spawn_blocking(move || completion.recv_timeout(Duration::from_secs(5)));
+    let mut enters = 0;
+    let outcome = loop {
+        tokio::select! {
+            key = writes.recv() => {
+                match key.as_deref() {
+                    Some(b"\r") => enters += 1,
+                    Some(other) => panic!("pending payload must submit, got {other:?}"),
+                    None => panic!("input channel closed before the submit finished"),
+                }
+            }
+            outcome = &mut completion_task => break outcome.unwrap().unwrap(),
+        }
+    };
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(
+        enters, 1,
+        "the preserved attempt is already on screen and must submit once"
+    );
+    assert!(outcome.is_ok(), "{outcome:?}");
+}

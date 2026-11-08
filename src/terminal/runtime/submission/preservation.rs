@@ -57,11 +57,20 @@ impl ObservedSubmission {
                 .editor_submission()
                 .filter(|editor| Exchange::has_preserved_draft(&editor.directory))
             {
-                // The live composer still holds what the developer typed after
-                // the interrupted swap. Opening the editor would replace it.
-                if self.observe("preserved_draft") != InputObservation::Empty {
-                    lease.restored();
-                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                match self.observe("preserved_draft") {
+                    // The Bus payload is already on screen. One Enter submits
+                    // that attempt; opening the editor would replace it.
+                    InputObservation::Pending => {
+                        let submitted = self.swap_key(self.enter.clone(), true);
+                        lease.restored();
+                        return submitted;
+                    }
+                    InputObservation::Empty => {}
+                    // Developer text after the interrupted swap stays put.
+                    _ => {
+                        lease.restored();
+                        return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                    }
                 }
                 let exchange = Exchange::begin_restoration(
                     editor.directory.clone(),
