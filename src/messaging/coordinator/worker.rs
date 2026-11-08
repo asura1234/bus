@@ -47,6 +47,10 @@ pub(super) struct Worker {
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     pub(super) delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    /// Replies committed in state.json whose delivery journal did not land.
+    /// Their completed_reply stays off durable_state until a later save
+    /// journals the stamp. Recovery treats that one-field gap as this set.
+    pub(super) unstamped_replies: BTreeSet<RequestId>,
     /// Author waiters renew these leases without acknowledging any reply.
     /// A dead waiter cannot hold routing across restart or lease expiry.
     pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
@@ -165,6 +169,7 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            unstamped_replies: BTreeSet::new(),
             reply_waiters: BTreeMap::new(),
             #[cfg(test)]
             test_reply_waiter_now: None,

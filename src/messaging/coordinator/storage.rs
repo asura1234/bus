@@ -170,7 +170,9 @@ impl Worker {
             return Err(self.storage_notice().into());
         }
         // Reply stamps are journaled after state.json. durable_state stays the
-        // full commit so a retry can tell a torn write from that journal.
+        // full commit so a retry can tell a torn write from that journal,
+        // except a reply whose journal failed: that completed_reply stays off
+        // durable_state until a later save journals the stamp.
         let mut live = state.clone();
         if stamp_new_replies {
             let at_ms = io::now_ms();
@@ -206,6 +208,12 @@ impl Worker {
                     .is_ok()
                 {
                     live = delivered;
+                    self.unstamped_replies.remove(&id);
+                } else {
+                    // The state.json commit already holds completed_reply.
+                    // Leave it off durable_state so the next save journals
+                    // the stamp. Disk still matches except for this field.
+                    self.unstamped_replies.insert(id);
                 }
             }
         }
@@ -224,8 +232,17 @@ impl Worker {
             }
         }
         self.durable_state = state;
+        self.durable_state
+            .hide_completed_replies(&self.unstamped_replies);
         self.state = live;
         Ok(())
+    }
+
+    /// Disk may still hold a reply whose delivery journal failed. That gap
+    /// is `unstamped_replies`, not a torn state.json.
+    fn committed_state_matches(&self, mut committed: BusState) -> bool {
+        committed.hide_completed_replies(&self.unstamped_replies);
+        committed == self.durable_state
     }
 
     /// Commits a composer draft edit or send through the store's journal:
@@ -299,8 +316,15 @@ impl Worker {
         {
             // Compare with the exact last commit: status-only polls and journal
             // entries may have advanced the in-memory state since that write.
-            Ok(Some(durable)) if durable == self.durable_state => {}
-            Ok(_) => {
+            // A pattern guard cannot move `durable`, so the hide-and-compare
+            // runs in the arm.
+            Ok(Some(durable)) => {
+                if !self.committed_state_matches(durable) {
+                    self.require_storage_repair("divergent_or_missing");
+                    return;
+                }
+            }
+            Ok(None) => {
                 self.require_storage_repair("divergent_or_missing");
                 return;
             }
@@ -326,6 +350,8 @@ impl Worker {
         }
         diagnostics::recoveries(&self.durable_state, &self.state);
         self.durable_state = self.state.clone();
+        self.durable_state
+            .hide_completed_replies(&self.unstamped_replies);
         self.storage_pause = None;
         self.error = None;
         self.revision += 1;

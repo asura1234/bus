@@ -157,8 +157,9 @@ pub(crate) struct JsonStore {
     history: std::sync::Mutex<Arc<History>>,
     /// The file holds lines the last load dropped; `compact_history` rewrites it.
     history_stale: std::sync::atomic::AtomicBool,
+    /// `(stage, hits to ignore)`. Zero skips fails the next matching stage.
     #[cfg(test)]
-    fail_stage: std::sync::Mutex<Option<SaveStage>>,
+    fail_stage: std::sync::Mutex<Option<(SaveStage, u32)>>,
     /// Completed `state.json` writes, so tests can count saves.
     #[cfg(test)]
     writes: std::sync::atomic::AtomicU64,
@@ -367,16 +368,35 @@ impl JsonStore {
 
     #[cfg(test)]
     pub(crate) fn fail_once_at(&self, stage: SaveStage) {
-        *self.fail_stage.lock().unwrap() = Some(stage);
+        self.arm_save_failure(stage, 0);
+    }
+
+    /// Fail `stage` after `skips` earlier hits of that same stage.
+    /// A reply save checkpoints `state.json` and then the delivery journal,
+    /// so one skipped `TempSync` fails only the journal.
+    #[cfg(test)]
+    pub(crate) fn fail_once_at_after(&self, stage: SaveStage, skips: u32) {
+        self.arm_save_failure(stage, skips);
+    }
+
+    #[cfg(test)]
+    fn arm_save_failure(&self, stage: SaveStage, skips: u32) {
+        *self.fail_stage.lock().unwrap() = Some((stage, skips));
     }
 
     fn injected_failure(&self, stage: SaveStage) -> std::io::Result<()> {
         #[cfg(test)]
         {
             let mut fail_stage = self.fail_stage.lock().unwrap();
-            if *fail_stage == Some(stage) {
-                *fail_stage = None;
-                return Err(std::io::Error::from_raw_os_error(28));
+            if let Some((armed, skips)) = *fail_stage {
+                if armed == stage {
+                    if skips > 0 {
+                        *fail_stage = Some((armed, skips - 1));
+                        return Ok(());
+                    }
+                    *fail_stage = None;
+                    return Err(std::io::Error::from_raw_os_error(28));
+                }
             }
         }
         let _ = stage;
