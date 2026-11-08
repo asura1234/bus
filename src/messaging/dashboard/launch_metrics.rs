@@ -146,7 +146,7 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
                     "herdr-client.log: bus.agent.launch_outcome attempt_id={}",
                     attempt.id
                 ),
-                record_reference: format!("state.json#/launch_attempts/{}", attempt.id),
+                record_reference: format!("state.json#/state/launch_attempts/{}", attempt.id),
                 inspect_command: "bus --paths",
             });
         }

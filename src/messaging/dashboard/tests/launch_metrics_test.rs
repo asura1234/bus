@@ -135,3 +135,46 @@ fn launch_metrics_hourly_counts_use_local_attempt_starts_instead_of_settlement_t
         );
     }
 }
+
+#[test]
+fn launch_dashboard_record_reference_resolves_in_saved_state_json() {
+    let root = crate::utils::test_temp::unique_temp_path("launch-dashboard-pointer");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    let id = state.begin_launch_attempt(
+        "missing",
+        crate::messaging::model::Provider::Kimi,
+        room,
+        crate::messaging::model::LaunchKind::Create,
+        1_700_000_000_000,
+    );
+    assert!(state.settle_launch_attempt(
+        id,
+        &crate::messaging::model::AgentRuntimeIdentity::default(),
+        crate::messaging::model::LaunchOutcome::Failed,
+        Some("missing_executable"),
+        1_700_000_000_100,
+    ));
+    JsonStore::new(root.join("state.json"))
+        .save(&state)
+        .unwrap();
+    let response = response_for(&root, "GET", "/data");
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    let file: Value =
+        serde_json::from_slice(&std::fs::read(root.join("state.json")).unwrap()).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(response.status, "200 OK");
+    let reference = body["launches"]["failures"][0]["record_reference"]
+        .as_str()
+        .unwrap();
+    let pointer = reference
+        .strip_prefix("state.json#")
+        .expect("record reference should be a state.json JSON pointer");
+    assert!(
+        file.pointer(pointer).is_some_and(|record| {
+            record["id"].as_u64() == Some(id) && record["cause"] == "missing_executable"
+        }),
+        "record reference {reference} did not resolve to the failed attempt in state.json"
+    );
+}
