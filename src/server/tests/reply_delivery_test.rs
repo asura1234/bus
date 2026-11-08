@@ -1872,3 +1872,50 @@ async fn legacy_agent_request_does_not_enter_claude_autonomous_turn() {
         f.state().request(queued).unwrap()
     );
 }
+
+#[tokio::test]
+async fn agent_orchestrator_question_still_batches_its_bus_routing_envelope() {
+    let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+    let sender = f.agents[0];
+    let orch = f.add_orchestrator();
+    f.status(orch, AgentState::Working);
+    f.tick();
+    let lead = f.send(orch, f.work, "AUTHORED_QUESTION", false, Some(sender));
+    let hidden = f.send(
+        orch,
+        f.work,
+        "HIDDEN_ROUTING_ENVELOPE",
+        false,
+        Some(sender),
+    );
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let envelope = saved["state"]["requests"]
+        .as_object_mut()
+        .unwrap()
+        .get_mut(&hidden.0.to_string())
+        .unwrap()
+        .as_object_mut()
+        .unwrap();
+    envelope.insert("bus_generated".into(), json!(true));
+    envelope.remove("queue_only");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    f.reopen();
+    f.status(orch, AgentState::Idle);
+    f.tick();
+    let typed = f.typed(orch);
+    assert!(
+        typed.iter().any(|payload| {
+            payload.contains("AUTHORED_QUESTION") && payload.contains("HIDDEN_ROUTING_ENVELOPE")
+        }),
+        "bus routing envelope was not batched into the authored question: {typed:?}; lead={:?}; envelope={:?}",
+        f.state().request(lead),
+        f.state().request(hidden)
+    );
+    assert_eq!(
+        f.state().request(hidden).unwrap().group,
+        Some(lead),
+        "routing envelope must share the authored question's reply"
+    );
+}
