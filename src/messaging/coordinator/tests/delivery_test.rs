@@ -2269,6 +2269,27 @@ fn grok_superseded_failure_does_not_poison_rebound_session() {
 
 #[test]
 fn delivery_latency_excludes_idle_dialog_wait() {
+    let (mut ready, ready_agent, ready_room, ready_dir, _) = fixture(Provider::Codex, vec![]);
+    let ready_response = ready
+        .control_send(&json!({
+            "room": ready_room.0.to_string(),
+            "to": [ready_agent.0.to_string()],
+            "text": "the agent can take this now"
+        }))
+        .unwrap();
+    let ready_request = RequestId(ready_response["request_ids"][0].as_u64().unwrap());
+    assert!(
+        ready
+            .state
+            .request(ready_request)
+            .unwrap()
+            .latency
+            .ready_at_enqueue,
+        "an idle agent with no dialog is ready at enqueue"
+    );
+    drop(ready);
+    std::fs::remove_dir_all(ready_dir).unwrap();
+
     let (mut worker, agent, room, dir, calls) =
         fixture(Provider::Codex, vec![composer_available()]);
     worker
@@ -2309,8 +2330,12 @@ fn delivery_latency_excludes_idle_dialog_wait() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
     assert!(
-        !latency.ready_at_enqueue || latency.agent_waited,
-        "a visible dialog held this request queued; ready latency must exclude that agent wait: {latency:?}"
+        !latency.ready_at_enqueue,
+        "a visible dialog is not ready at enqueue: {latency:?}"
+    );
+    assert!(
+        latency.agent_waited,
+        "the delivery that waited out the dialog records that wait: {latency:?}"
     );
 }
 
