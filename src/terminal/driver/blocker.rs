@@ -63,9 +63,6 @@ pub(crate) fn has_blocking_input_controls(screen: &str, working: bool) -> bool {
 /// The same prompt/border/footer boundaries used by the composer reader.
 /// Editable rows cannot introduce controls or change a control fingerprint.
 pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> {
-    let start = rows
-        .iter()
-        .rposition(|row| plain(row).starts_with(['❯', '›', '>', '→']))?;
     let border = |row: &str| row.starts_with(['─', '╭', '╰', '┌', '└', '▀']);
     let footer = |row: &str| {
         row.starts_with("GPT-")
@@ -73,10 +70,47 @@ pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> 
             || row.starts_with("? for")
             || row.starts_with("/ commands")
     };
-    let end = (start + 1..rows.len())
-        .find(|&index| border(plain(&rows[index])) || footer(plain(&rows[index])))?;
-    let framed = start > 0 && border(plain(&rows[start - 1])) && border(plain(&rows[end]));
-    (framed || footer(plain(&rows[end]))).then_some(start..end)
+    // A numbered choice can itself start with a prompt marker. Only a marker
+    // with a real frame counts: a border on the previous row and a border
+    // after it, or a footer that actually closes the composer. A draft row
+    // that merely shares a footer prefix is not that closer.
+    let chrome_after = |start: usize| -> Option<usize> {
+        (start + 1..rows.len()).find(|&index| {
+            let row = plain(&rows[index]);
+            if border(row) {
+                return true;
+            }
+            if !footer(row) {
+                return false;
+            }
+            let later_border = (index + 1..rows.len()).find(|&later| border(plain(&rows[later])));
+            if let Some(border_at) = later_border {
+                let only_chrome = (index + 1..border_at).all(|later| {
+                    let later = plain(&rows[later]);
+                    later.is_empty() || footer(later)
+                });
+                if only_chrome {
+                    return false;
+                }
+            }
+            (index + 1..rows.len()).all(|later| {
+                let later = plain(&rows[later]);
+                later.is_empty() || border(later) || footer(later)
+            })
+        })
+    };
+    let start = (0..rows.len()).rev().find(|&start| {
+        if !plain(&rows[start]).starts_with(['❯', '›', '>', '→']) {
+            return false;
+        }
+        let Some(end) = chrome_after(start) else {
+            return false;
+        };
+        let framed = start > 0 && border(plain(&rows[start - 1])) && border(plain(&rows[end]));
+        framed || footer(plain(&rows[end]))
+    })?;
+    let end = chrome_after(start)?;
+    Some(start..end.saturating_add(1))
 }
 
 fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
@@ -88,6 +122,8 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         {
             rows[region.start].truncate(column + marker.len_utf8());
         }
+        // Blank the draft and the closing chrome. An interior row that looks
+        // like a model footer must not stay visible to the control scan.
         for row in &mut rows[region.start + 1..region.end] {
             row.clear();
         }

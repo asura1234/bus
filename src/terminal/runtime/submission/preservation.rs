@@ -57,6 +57,12 @@ impl ObservedSubmission {
                 .editor_submission()
                 .filter(|editor| Exchange::has_preserved_draft(&editor.directory))
             {
+                // The live composer still holds what the developer typed after
+                // the interrupted swap. Opening the editor would replace it.
+                if self.observe("preserved_draft") != InputObservation::Empty {
+                    lease.restored();
+                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                }
                 let exchange = Exchange::begin_restoration(
                     editor.directory.clone(),
                     self.clock.remaining(self.hard_deadline),
@@ -679,7 +685,12 @@ impl ObservedSubmission {
             Ok(()) => lease.restored(),
             Err(error) => {
                 self.recovery_log(&exchange, &error);
-                return Err(error);
+                // Enter already cleared the composer. Reporting the later
+                // restore failure would invite a second submit; the recovery
+                // file stays for a later empty-composer restoration.
+                if result.is_err() {
+                    return Err(error);
+                }
             }
         }
         result

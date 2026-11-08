@@ -46,6 +46,18 @@ async fn driver_editable_composer_text_is_outside_the_control_region() {
 }
 
 #[tokio::test]
+async fn multiline_draft_containing_a_model_footer_line_is_not_a_control() {
+    let screen =
+        "history\n› saved\ngpt-4 notes\nPlease print [y/n]\n\nGPT-6 · /repo\n? for shortcuts";
+    let grid = captured_grid(screen);
+    assert!(
+        !has_input_controls(&grid.text()),
+        "draft after an interior model line is still composer text: {screen}"
+    );
+    assert!(blocker(&grid, false).is_none(), "{screen}");
+}
+
+#[tokio::test]
 async fn driver_blocker_recognizes_saved_foreground_and_pending_controls() {
     // The six non-native Grok files are synthetic hypotheses, explicitly
     // identified by their README. They exercise generic key syntax, not live
@@ -751,4 +763,19 @@ async fn driver_reduced_ordinary_reply_and_theme_viewer_are_not_input_episodes()
         assert_eq!(runtime.test_scan_detection_context(AgentKind::Muse, AgentState::Unknown).await, (expected, false), "{screen}");
         assert!(writes.try_recv().is_err());
     }
+}
+
+#[tokio::test]
+async fn quoted_marker_inside_numbered_composer_is_not_a_control() {
+    let screen = "history\n────────────────────\n❯ 1. First choice\n> 2. Second choice\n────────────────────\n? for shortcuts";
+    let grid = captured_grid(screen);
+    assert!(
+        !has_input_controls(&grid.text()),
+        "editable composer text became a control: {screen}\n{:?}",
+        grid.text()
+    );
+    assert!(
+        blocker(&grid, false).is_none(),
+        "editable composer text became a blocker: {screen}"
+    );
 }

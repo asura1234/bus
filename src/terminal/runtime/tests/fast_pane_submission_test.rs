@@ -246,3 +246,153 @@ async fn fast_editor_swap_captures_before_replacement_and_restores_exact_drafts(
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[tokio::test]
+async fn consumed_editor_submit_stays_ok_when_restoration_does_not_finish() {
+    struct FastEditor {
+        directory: PathBuf,
+    }
+    impl SubmissionInspector for FastEditor {
+        fn observe(&self, screen: &str) -> InputObservation {
+            if screen.contains("EMPTY") {
+                InputObservation::Empty
+            } else if screen.contains("BUS_PAYLOAD") {
+                InputObservation::Pending
+            } else {
+                InputObservation::Other
+            }
+        }
+        fn draft_preservation(&self, _: &str) -> Option<DraftPreservation> {
+            Some(DraftPreservation::Editor {
+                key: Bytes::from_static(b"\x07"),
+                backspace: Bytes::from_static(b"\x7f"),
+                directory: self.directory.clone(),
+            })
+        }
+        fn editor_submission(&self) -> Option<EditorSubmission> {
+            Some(EditorSubmission {
+                text: String::from_utf8(PAYLOAD.to_vec()).unwrap(),
+                directory: self.directory.clone(),
+                key: Bytes::from_static(b"\x07"),
+                backspace: Bytes::from_static(b"\x7f"),
+                verification_error: None,
+            })
+        }
+        fn editor_frame_readable(&self, _: &str) -> bool {
+            true
+        }
+        fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
+            screen.contains(marker)
+        }
+        fn preservation_budget(&self) -> Duration {
+            Duration::from_secs(3)
+        }
+    }
+
+    let root = crate::utils::test_temp::unique_temp_path("consumed-submit-restore-stall");
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("native-editor.txt");
+    let directory = root.join("exchange");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    let mut draft = String::from("saved developer draft");
+    render(&runtime, "DRAFT");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(PAYLOAD),
+            Bytes::from_static(b"\r"),
+            vec![],
+            Duration::ZERO,
+            None,
+            Box::new(FastEditor {
+                directory: directory.clone(),
+            }),
+        )
+        .unwrap();
+    let mut enters = 0;
+    loop {
+        let key = next(&mut writes).await;
+        match key.as_ref() {
+            b"\x07" => {
+                if enters == 0 {
+                    std::fs::write(&file, &draft).unwrap();
+                    crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+                    draft = std::fs::read_to_string(&file)
+                        .unwrap()
+                        .trim_end()
+                        .to_owned();
+                    render(&runtime, if draft.is_empty() { "EMPTY" } else { &draft });
+                }
+            }
+            b"\r" => {
+                enters += 1;
+                draft.clear();
+                render(&runtime, "EMPTY");
+                break;
+            }
+            bytes if !bytes.is_empty() && bytes.iter().all(|b| *b == 0x7f) => {
+                for _ in bytes {
+                    draft.pop();
+                }
+                render(&runtime, if draft.is_empty() { "EMPTY" } else { &draft });
+            }
+            bytes => panic!("unexpected input before submit: {bytes:?}"),
+        }
+    }
+    let outcome = completion.recv_timeout(Duration::from_secs(8)).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(enters, 1);
+    assert!(
+        outcome.is_ok(),
+        "Enter was sent and the composer was empty, so a later restoration failure must not fail the submit: {outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn occupied_editor_with_a_preserved_draft_does_not_send_editor_keys() {
+    let root = crate::utils::test_temp::unique_temp_path("occupied-preserved-draft");
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("native-editor.txt");
+    let directory = root.join("exchange");
+    std::fs::write(&file, "original draft").unwrap();
+    {
+        let exchange = crate::platform::draft_editor::Exchange::begin_preserving(
+            directory.clone(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        exchange.request_swap("attempt").unwrap();
+        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+    }
+    assert!(crate::platform::draft_editor::Exchange::has_preserved_draft(&directory));
+    let before = std::fs::read_to_string(&file).unwrap();
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    render(&runtime, "NEW DRAFT");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(PAYLOAD),
+            Bytes::from_static(b"\r"),
+            vec![],
+            Duration::ZERO,
+            None,
+            Box::new(Editor {
+                directory: directory.clone(),
+            }),
+        )
+        .unwrap();
+    let outcome = tokio::select! {
+        key = writes.recv() => panic!("occupied editor must defer without an editor key, got {key:?}"),
+        outcome = async {
+            tokio::task::spawn_blocking(move || completion.recv_timeout(Duration::from_secs(5)))
+                .await
+                .unwrap()
+        } => outcome.unwrap(),
+    };
+    let after = std::fs::read_to_string(&file).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(after, before, "the live editor file must stay untouched");
+    let error = outcome.expect_err("an occupied preserved editor defers");
+    assert!(
+        crate::terminal::runtime::PromptNotShown::composer_busy(&error),
+        "{error}"
+    );
+}
