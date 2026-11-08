@@ -658,9 +658,11 @@ run-scoped bypass. This relaunch does not rescue an interrupted run.
 
 ## Gate, review and mandatory live smoke
 
-- [ ] Run `just ci` on the exact head with the current slot/disk policy and the
-  clean-first procedure above, including `llvm-cov-target`, on every rerun.
-  Record gate failures; a focused pass is not a full gate.
+- [ ] Run `just ci` (`./run test --check`: affected tests plus lint, docs, schema,
+  and affected Python) on the exact head with the current slot/disk policy and the
+  clean-first procedure above, on every rerun. Release coverage is `just release`
+  (`./run test --full`), including `llvm-cov-target`. Record gate failures; a focused
+  pass is not the pull-request gate.
 - [ ] Get two independent reviews of that exact head. The reviewers are two
   different agents, and neither authored the change. At least one reviewer
   runs on a different model from the author. When only two models are

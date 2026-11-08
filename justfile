@@ -43,8 +43,12 @@ ui-hot-path-architecture-test:
 lint:
     {{python}} skills/gate-and-fix/scripts/bus_quality.py lint
 
-# Run PR CI checks
+# Run PR checks: affected tests, lint, docs, schema, and affected Python
 ci:
+    {{python}} skills/gate-and-fix/scripts/suite_run.py --check
+
+# Release gate: every applicable test, lint, docs, and the Rust coverage floor
+release:
     {{python}} skills/gate-and-fix/scripts/suite_run.py --full
 
 # Run Windows target lint from Unix/macOS to catch cfg(windows) compile and clippy failures before CI
@@ -53,7 +57,7 @@ windows-lint:
     rustup target add x86_64-pc-windows-msvc
     {{python}} skills/gate-and-fix/scripts/bus_quality.py windows-lint
 
-# Check formatting + run unit tests + Windows target lint + documentation contract tests
+# Pull-request checks plus Windows target lint
 [unix]
 check: ci windows-lint
 

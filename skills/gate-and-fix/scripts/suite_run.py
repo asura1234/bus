@@ -1,4 +1,4 @@
-"""Run conservative affected tests or the complete parallel Bus quality gate."""
+"""Run affected tests, the pull-request check, or the release gate."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +24,9 @@ from suite_parallelism import MAX_TEST_WORKERS, TEST_WORKER_RESOURCE, rust_worke
 COMMON = ("--no-fail-fast", "--status-level", "fail", "--final-status-level", "fail",
           "--failure-output", "final", "--success-output", "never")
 SCRIPT = str(Path(__file__).with_name("bus_quality.py"))
+# The broad unit lane already includes this test. A narrowed Rust batch must
+# name it, or a pull request can skip the generated API schema golden file.
+SCHEMA_TEST = "test(generated_protocol_schema_artifact_is_current)"
 
 
 def needs_profiles(selection: Selection) -> bool:
@@ -47,7 +50,15 @@ def nextest(*targets: str, coverage: bool = False, expression: str | None = None
             "--no-tests=fail", *(("-E", expression) if expression else ()))
 
 
-def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
+def affected_rust_expression(selection: Selection, checks: bool) -> str:
+    """Keep the schema golden test on a narrowed Rust batch."""
+    expression = selection.rust_filter or "none()"
+    if checks and expression != "none()":
+        return f"({expression}) | {SCHEMA_TEST}"
+    return expression
+
+
+def commands(selection: Selection, *, checks: bool = False) -> tuple[list[Gate], list[Gate]]:
     build, tests = [], []
     instrumented = needs_profiles(selection)
     rust = selection.rust_filter != "none()"
@@ -57,7 +68,9 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
         # children must stay in that group, following the existing quality runner contract.
         env[EXTERNAL_RUN] = os.environ[PROFILE_DIR]
     target = quality.llvm_cov_target(env) if instrumented else quality.ROOT / env.get("CARGO_TARGET_DIR", "target")
-    if selection.full:
+    # --full and an affected fallback both set selection.full. --check must run
+    # lint and docs even when the test selection stays narrow.
+    if selection.full or checks:
         build.append(Gate("lint", (sys.executable, SCRIPT, "lint", *(("--skip-clippy",) if not rust else ())), env=env))
         tests.append(Gate("docs", (sys.executable, "-m", "pytest", "-q", "-n", "0", "scripts/skill_migration_contract_test.py"), env=env))
     if rust:
@@ -78,7 +91,7 @@ def commands(selection: Selection) -> tuple[list[Gate], list[Gate]]:
             ])
         else:
             tests.append(Gate("affected-rust", nextest("--all-targets", coverage=instrumented,
-                              expression=selection.rust_filter), env=quality.child_env(
+                              expression=affected_rust_expression(selection, checks)), env=quality.child_env(
                                   LLVM_PROFILE_FILE_NAME=quality.profile_file_name("affected")) if instrumented else env))
     elif selection.binary:
         argv = (("cargo", "llvm-cov", "run", "--locked", "--no-report", "--no-rustc-wrapper", "--bin", "bus", "--", "--help")
@@ -146,7 +159,7 @@ def batch(gates: list[Gate], *, nested: bool = False) -> list[GateResult]:
     return results
 
 
-def execute(selection: Selection, *, nested: bool = False, base: str = "origin/master") -> int:
+def execute(selection: Selection, *, nested: bool = False, base: str = "origin/master", checks: bool = False) -> int:
     started = time.monotonic()
     lanes = lane_plan(selection, base)
     for name, lane in lanes.items():
@@ -155,7 +168,7 @@ def execute(selection: Selection, *, nested: bool = False, base: str = "origin/m
     if selection.coverage_floor:
         for name in ("state.json", "rust.lcov", "summary.json"):
             (quality.OUTPUT / name).unlink(missing_ok=True)
-    build, tests = commands(selection)
+    build, tests = commands(selection, checks=checks)
     results = batch(build, nested=nested)
     failed_build = any(not result.passed and result.name not in {"lint", "docs"} for result in results)
     # A failed instrumented build must not let Python use yesterday's binary.
@@ -215,7 +228,9 @@ def main(argv: list[str] | None = None) -> int:
         "Python runs single-file selections serially; "
         "set PYTEST_WORKERS=0 for serial diagnosis, "
         f"or a positive integer capped at {MAX_TEST_WORKERS} to set the worker count.")
-    parser.add_argument("--full", action="store_true", help="all applicable tests, lint, docs and fresh Rust coverage floor")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--full", action="store_true", help="release gate: all applicable tests, lint, docs and fresh Rust coverage floor")
+    mode.add_argument("--check", action="store_true", help="PR gate: affected tests plus lint, docs, generated schema and affected Python")
     parser.add_argument("--base", default="origin/master", help="affected merge-base (default: origin/master)")
     parser.add_argument("--plan", action="store_true", help="print selection without building or running tests")
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -225,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         selection = select(paths, full=args.full, root=quality.ROOT)
         if args.plan:
             print(json.dumps({**asdict(selection), "head": quality.head(), "paths": paths,
-                              "base": args.base, "lanes": lane_plan(selection, args.base),
+                              "base": args.base, "checks": args.check, "lanes": lane_plan(selection, args.base),
                               "direct_test_worker_limit": MAX_TEST_WORKERS}, indent=2))
             return 0
         with interrupt_signals():
@@ -234,10 +249,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("install cargo-nextest to run Rust tests")
             if needs_profiles(selection) and not shutil.which("cargo-llvm-cov"):
                 raise ValueError("install cargo-llvm-cov and llvm-tools-preview for full mode")
-            # Only --full can publish a coverage floor verdict.
+            # Only --full sets coverage_floor. --check never publishes that verdict.
             coverage = Run(quality.ROOT, quality.OUTPUT, "ci") if needs_profiles(selection) else nullcontext()
             with coverage as profiles:
-                return execute(selection, nested=bool(profiles and profiles.external), base=args.base)
+                return execute(selection, nested=bool(profiles and profiles.external), base=args.base, checks=args.check)
     except Interrupted as error:
         print("Test run interrupted; children stopped and run profiles removed", file=sys.stderr)
         return 128 + error.signum

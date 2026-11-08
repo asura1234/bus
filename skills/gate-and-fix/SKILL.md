@@ -30,13 +30,16 @@ IF git status --porcelain --untracked-files=all is nonempty
 IF git diff --name-only <base>...HEAD is empty
   STOP "There are no committed changes against the base."
 
-Day-to-day iteration uses `./run test` with no mode flag. Affected selection
+Iteration and pull-request checks use `./run test --check`. Affected selection
 narrows each changed production source file to the owning component's unit
 tests, every test target that references it transitively, and every integration
 target that includes it. Uncertain graphs, cross-owner or shared inputs, and
 edits the graph cannot see (serde/data shapes, CLI surface, TUI strings) still
-select every applicable suite. The loop below is the merge authority and still
-runs the runner with `--full`. A later round repeats that full gate.
+select every applicable suite. `--check` always adds lint, the documentation
+contract, the generated API schema test on a narrowed Rust batch, and the
+affected Python lanes. It does not publish the coverage floor. The loop below
+is that pull-request gate. Release verification uses `./run test --full`.
+A later round repeats `--check`, not a hand-picked test list.
 
 branch_slug = branch with every character outside [A-Za-z0-9_-] replaced by `-`
 artifact_root = <absolute Git common directory>/bus/gate-and-fix/<branch_slug>
@@ -103,8 +106,8 @@ LOOP:
     STOP with the artifact and blocker; do not retry an identical tree.
 
   Invoke `commit-and-push` once. It owns the only Git mutation of this round. Increment round and
-  repeat the runner's complete applicable gate plus the diff gate on the clean committed tree. For the Bus adapter, never run the live
-  end-to-end check here. Never run only a selected subset in a later round.
+  repeat `--check` (affected tests plus lint, docs, schema, and affected Python) plus the diff gate on the clean committed tree. For the Bus adapter, never run the live
+  end-to-end check here. Never run only a selected subset in a later round. Release verification, outside this loop, is `./run test --full`.
 
 RETURN the final PASS artifact, its base/head, selected gate command, and all round commits.
 A missing gate is a reported configuration blocker, never successful verification.

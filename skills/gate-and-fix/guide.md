@@ -39,10 +39,14 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
   the cost plainly: problems that only those layers expose are no longer caught by this local round;
   when they did not run, report that truthfully, and never stretch this round's PASS into a claim
   that those layers passed.
-- Every round runs the complete applicable gate plus `git diff --check <base>...HEAD`.
+- Every round repeats the pull-request gate plus `git diff --check <base>...HEAD`.
   The runner owns language eligibility and cross-language dependencies; use its plan and
-  explicit SKIPPED reasons as evidence. Full mode controls breadth within eligible lanes.
+  explicit SKIPPED reasons as evidence. `--check` controls affected breadth and always
+  keeps the static lanes. `--full` is release verification and controls the coverage floor.
   See [the test entrypoint](references/testing.md) for the classifier and report contracts.
+  The lint, unit, integration, and coverage bullets below describe `--full`. A pull request
+  runs `--check`: the same lint and documentation contract, the affected test selection,
+  affected Python, and the generated schema test inside any narrowed Rust batch.
   - **Lint**: Cargo fmt, all-target Clippy with warnings denied (for the default build and again
     for the `dev-tools` variant that `./run dev` builds), Ruff `E9,F` over all first-party
     Python, and the static hot-path architecture contract. The lint lane runs the hot-path and
@@ -81,10 +85,12 @@ including for `policy.require_exact_head_gate=true`; false never authorizes stal
     coverage-only tests. Below-floor, missing/empty
     reports, unsuccessful preceding tests, or a different HEAD all fail. Unit starts a new profile
     set, so an old report cannot make a new round pass.
-- The runner invokes the same `suite_run.py --full --base <baseline>` implementation as
-  `./run test --full` and `just ci`, recorded as `test-full` alongside `diff-check`.
-  It passes its immutable baseline to the planner and cannot narrow the final gate through
-  affected selection. Complete task logs and timings
+- The runner invokes `suite_run.py --check --base <baseline>`, the same mode as
+  `./run test --check` and `just ci`, recorded as `test-check` alongside `diff-check`.
+  `--check` passes the immutable baseline to affected selection and adds lint, docs,
+  the generated schema test, and affected Python. It does not publish the coverage floor.
+  Release verification is `./run test --full` or `just release`. A later round repeats
+  `--check`, not a hand-picked test list. Complete task logs and timings
   are retained under `temp/run-test/`; failures also appear in the gate artifact.
   See [the test entrypoint](references/testing.md) for modes and scheduling.
 - Coverage reports live in ignored `temp/gate-and-fix/coverage/`. Only the bounded raw-profile
@@ -168,8 +174,9 @@ time. Fresh gates reclaim validated run directories left by dead owners, includi
 foreign or malformed owners are preserved. The instrumented Cargo build cache is persistent. Only
 raw profiles and the merged index are run-owned; report lookup links are removed after export and
 reclaimed with a dead run. Ownership markers are checked before recursive cleanup; malformed or
-foreign metadata is rejected without deleting the referenced files. `just ci` owns the full
-sequence in one invocation. Do not run two rounds in the same checkout concurrently.
+foreign metadata is rejected without deleting the referenced files. `just ci` owns the
+pull-request sequence in one invocation. `just release` owns the coverage floor.
+Do not run two rounds in the same checkout concurrently.
 
 ## Coverage-failure remediation
 
@@ -200,8 +207,8 @@ reported gap leaves the gate failed.
   no intended remediation delta is a STOP. Do not mask it with a retry in the next round, a guessed
   owner, or edits to unrelated dirty files.
 - Only after every owner is collected and the main agent has verified the combined delta does it
-  run `commit-and-push` once. After every commit, rerun the complete applicable gate set; never
-  rerun only the subset covering the fixed files.
+  run `commit-and-push` once. After every commit, rerun `--check` plus the diff check; never
+  rerun only the subset covering the fixed files. Release verification is `./run test --full`.
 
 ## Non-goals
 

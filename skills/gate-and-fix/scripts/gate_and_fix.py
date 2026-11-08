@@ -8,14 +8,12 @@ import subprocess
 import sys
 import time
 import uuid
-from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
-from coverage_run import Run
 from gate_process import Children, Interrupted, interrupt_signals, scrubbed_env
 from repo_gate import artifact_root, command_argv, gate_policy
 
@@ -58,9 +56,9 @@ def select_gates(
     available_tools: frozenset[str] | None = None,
     python: str = sys.executable,
 ) -> list[Gate]:
-    """Every committed diff gets the shared full entrypoint, never affected mode."""
+    """Every committed diff gets affected tests plus static lanes, not the release coverage floor."""
     _validate_paths(changed_files)
-    gates = [Gate("test-full", (python, TEST_SCRIPT, "--full", "--base", base))]
+    gates = [Gate("test-check", (python, TEST_SCRIPT, "--check", "--base", base))]
     gates.append(Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")))
     return gates
 
@@ -282,13 +280,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 Gate("repository-gate", command_argv(command), requires_exclusive_execution=True, scrub_session_env=True),
                 Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD"), scrub_session_env=True),
             ]
-        if is_bus:
-            from suite_selection import select
-            rust_coverage = select(changed_files, full=True, root=repo).coverage_floor
-        else:
-            rust_coverage = False
-        coverage = Run(repo, repo / "temp/gate-and-fix/coverage", "gate") if rust_coverage else nullcontext()
-        with interrupt_signals(), coverage:
+        # The pull-request adapter runs --check. The coverage floor stays inside
+        # ./run test --full, which owns its own profile run.
+        with interrupt_signals():
             results = run_gates(gates, cwd=repo)
         if (
             _git_output(repo, "rev-parse", "HEAD") != head

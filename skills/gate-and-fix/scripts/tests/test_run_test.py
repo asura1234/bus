@@ -31,6 +31,47 @@ def test_full_build_phases_keep_normal_and_instrumented_builds_independent():
     assert "--features" in next(g.argv for g in tests if g.name == "dev-tools")
 
 
+def test_check_adds_static_lanes_and_schema_without_a_coverage_floor(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "sample_test.py").write_text("def test_ok():\n    pass\n")
+    plan = Selection(False, "(binary(bus) & test(/^messaging::/))", ("tools",), False, "narrow")
+    assert not plan.coverage_floor
+    assert not runner.needs_profiles(plan)
+    with patch.object(runner.quality, "ROOT", tmp_path):
+        build, tests = runner.commands(plan, checks=True)
+        plain_build, plain_tests = runner.commands(plan)
+    names = {gate.name for gate in [*build, *tests]}
+    assert {"lint", "docs", "affected-rust", "python"} <= names
+    assert not {"unit", "integration", "cli-smoke"} & names
+    lint = next(gate for gate in build if gate.name == "lint")
+    assert "--skip-clippy" not in lint.argv
+    rust = next(gate for gate in tests if gate.name == "affected-rust")
+    expression = rust.argv[rust.argv.index("-E") + 1]
+    assert "test(/^messaging::/)" in expression
+    assert "test(generated_protocol_schema_artifact_is_current)" in expression
+    assert "llvm-cov" not in rust.argv
+    assert any(arg.endswith("tools/sample_test.py") for arg in next(gate.argv for gate in tests if gate.name == "python"))
+    assert "lint" not in {gate.name for gate in plain_build}
+    assert "generated_protocol_schema_artifact_is_current" not in " ".join(
+        arg for gate in plain_tests for arg in gate.argv)
+
+
+def test_check_on_an_empty_selection_still_runs_lint_and_docs():
+    plan = Selection(False, "none()", (), False, "empty")
+    build, tests = runner.commands(plan, checks=True)
+    assert [gate.name for gate in build] == ["lint"]
+    assert "--skip-clippy" in build[0].argv
+    assert [gate.name for gate in tests] == ["docs"]
+    assert not any(arg == "cargo" or arg.startswith("cargo") for gate in [*build, *tests] for arg in gate.argv)
+
+
+def test_check_and_full_cannot_be_combined():
+    with pytest.raises(SystemExit) as caught:
+        runner.main(["--check", "--full", "--plan"])
+    assert caught.value.code == 2
+
+
 def test_python_only_selection_does_not_start_cargo():
     build, tests = runner.commands(Selection(False, "none()", ("skills/best-of-n",), False, "pure tooling"))
     assert not build
@@ -178,7 +219,7 @@ def test_interrupt_parallel_entrypoint_stops_child_before_deleting_profiles(tmp_
         f"r.quality.ROOT=Path({str(tmp_path)!r});r.quality.OUTPUT=r.quality.ROOT/'reports';"
         "r.changed_paths=lambda *_:['run'];"
         "r.bootstrap=lambda *a,**kw:None;"
-        f"r.commands=lambda _s:([r.Gate('build',(sys.executable,'-c',{child!r}),env=dict(os.environ))],[]);"
+        f"r.commands=lambda _s, **_k:([r.Gate('build',(sys.executable,'-c',{child!r}),env=dict(os.environ))],[]);"
         "sys.exit(r.main(['--full']))"
     )
     env = {key: value for key, value in os.environ.items() if not key.startswith(("BUS_", "HERDR_"))}
