@@ -72,6 +72,15 @@ impl DeliveryLatency {
     pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
+
+    /// Drops one native attempt. Admission, pick, and room delivery stay,
+    /// and the next attempt's first write still wins inside that attempt.
+    pub(crate) fn clear_attempt(&mut self) {
+        self.native_requested_at_ms = None;
+        self.native = NativeSubmissionTimestamps::default();
+        self.provider_started_at_ms = None;
+        self.reply_captured_at_ms = None;
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

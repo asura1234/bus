@@ -124,12 +124,14 @@ impl BusState {
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
                 request_state.submitted_payload = None;
+                request_state.latency.clear_attempt();
                 // Coalesced members go back behind their lead, in order.
                 let members = self.group_members(request);
                 for member in &members {
                     if let Some(member) = self.requests.get_mut(member) {
                         member.phase = RequestPhase::Queued;
                         member.group = None;
+                        member.latency.clear_attempt();
                     }
                 }
                 let queue = self.queues.entry(agent_id).or_default();

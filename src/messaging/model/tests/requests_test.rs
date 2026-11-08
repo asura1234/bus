@@ -890,3 +890,238 @@ fn coalesced_recipients_share_native_and_provider_delivery_timestamps() {
         assert_eq!(request.latency.reply_captured_at_ms, Some(60));
     }
 }
+
+fn record_delivery_attempt(
+    state: &mut BusState,
+    lead: RequestId,
+    requested_at_ms: u64,
+    native: crate::messaging::model::NativeSubmissionTimestamps,
+    provider_started_at_ms: u64,
+    reply_captured_at_ms: u64,
+) {
+    state
+        .record_native_requested(lead, requested_at_ms)
+        .unwrap();
+    state.record_native_timestamps(lead, native).unwrap();
+    state.record_provider_started(lead, provider_started_at_ms);
+    state.record_reply_captured(lead, reply_captured_at_ms);
+}
+
+fn assert_shared_attempt(
+    state: &BusState,
+    ids: [RequestId; 2],
+    requested_at_ms: u64,
+    server_accepted_at_ms: u64,
+    writer_queued_at_ms: u64,
+    text_written_at_ms: u64,
+    provider_started_at_ms: u64,
+    reply_captured_at_ms: u64,
+) {
+    for id in ids {
+        let request = state.request(id).unwrap();
+        assert_eq!(
+            request.latency.native_requested_at_ms,
+            Some(requested_at_ms),
+            "{id:?} native request"
+        );
+        assert_eq!(
+            request.latency.native.server_accepted_at_ms,
+            Some(server_accepted_at_ms),
+            "{id:?} server acceptance"
+        );
+        assert_eq!(
+            request.latency.native.writer_queued_at_ms,
+            Some(writer_queued_at_ms),
+            "{id:?} writer queue"
+        );
+        assert_eq!(
+            request.latency.native.text_written_at_ms,
+            Some(text_written_at_ms),
+            "{id:?} text written"
+        );
+        assert_eq!(
+            request.latency.native.paste_started_at_ms, None,
+            "{id:?} failed paste must not survive into the next attempt"
+        );
+        assert_eq!(
+            request.latency.provider_started_at_ms,
+            Some(provider_started_at_ms),
+            "{id:?} provider start"
+        );
+        assert_eq!(
+            request.latency.reply_captured_at_ms,
+            Some(reply_captured_at_ms),
+            "{id:?} reply capture"
+        );
+    }
+}
+
+#[test]
+fn requeued_delivery_records_the_later_attempt_for_every_coalesced_recipient() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state.coalesce_queue(first).expect("share one submission");
+    let accepted = state.request(first).unwrap().latency.accepted_at_ms;
+    state.record_queued(first, 1_005).unwrap();
+    state.record_picked(first, 1_010, true).unwrap();
+    state.record_reply_delivered(first, 1_080);
+    record_delivery_attempt(
+        &mut state,
+        first,
+        1_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(1_030),
+            writer_queued_at_ms: Some(1_040),
+            paste_started_at_ms: Some(1_045),
+            text_written_at_ms: Some(1_050),
+            ..Default::default()
+        },
+        1_060,
+        1_070,
+    );
+
+    state
+        .begin_submission(first, "launch-codex", 1_100)
+        .unwrap();
+    state
+        .record_submission(first, SubmissionOutcome::ComposerBusy)
+        .unwrap();
+    state.record_queued(first, 900).unwrap();
+    state.coalesce_queue(first).expect("share the retry");
+    record_delivery_attempt(
+        &mut state,
+        first,
+        2_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(2_030),
+            writer_queued_at_ms: Some(2_040),
+            text_written_at_ms: Some(2_050),
+            ..Default::default()
+        },
+        2_060,
+        2_070,
+    );
+    state.record_provider_started(first, 2_050);
+    state.record_reply_captured(first, 1_070);
+    state
+        .record_native_timestamps(
+            first,
+            crate::messaging::model::NativeSubmissionTimestamps {
+                text_written_at_ms: Some(1_050),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_shared_attempt(
+        &state,
+        [first, second],
+        2_020,
+        2_030,
+        2_040,
+        2_050,
+        2_060,
+        2_070,
+    );
+    let lead = state.request(first).unwrap();
+    assert_eq!(lead.latency.accepted_at_ms, accepted);
+    assert_eq!(
+        lead.latency.queued_at_ms,
+        Some(1_005),
+        "a backward clock cannot replace queue admission"
+    );
+    assert_eq!(lead.latency.picked_at_ms, Some(1_010));
+    assert!(lead.latency.agent_waited);
+    assert_eq!(lead.latency.reply_delivered_at_ms, Some(1_080));
+    let member = state.request(second).unwrap();
+    assert_eq!(member.latency.picked_at_ms, Some(1_010));
+    assert!(member.latency.agent_waited);
+}
+
+#[test]
+fn provider_retry_records_the_later_attempt_for_every_coalesced_recipient() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .agents
+        .get_mut(&agent)
+        .unwrap()
+        .runtime_identity
+        .session_id = Some("provider-session".into());
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state.coalesce_queue(first).expect("share one submission");
+    let accepted = state.request(first).unwrap().latency.accepted_at_ms;
+    state.record_picked(first, 1_010, true).unwrap();
+    record_delivery_attempt(
+        &mut state,
+        first,
+        1_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(1_030),
+            writer_queued_at_ms: Some(1_040),
+            paste_started_at_ms: Some(1_045),
+            text_written_at_ms: Some(1_050),
+            ..Default::default()
+        },
+        1_060,
+        1_070,
+    );
+    {
+        let request = state.requests.get_mut(&first).unwrap();
+        request.trusted_start_bound = true;
+        request.expected_launch_id = Some("launch-codex".into());
+        request.provider_session_id = Some("provider-session".into());
+        request.provider_turn_id = Some("turn-1".into());
+    }
+    assert!(
+        state.hold_provider_error(first, "Model at capacity (server_overloaded)", 1_100),
+        "capacity failure holds the turn"
+    );
+    assert!(
+        state.retry_provider_requests(1_000_000),
+        "due retry returns the group to the queue"
+    );
+    state
+        .coalesce_queue(first)
+        .expect("share the retried submission");
+    record_delivery_attempt(
+        &mut state,
+        first,
+        2_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(2_030),
+            writer_queued_at_ms: Some(2_040),
+            text_written_at_ms: Some(2_050),
+            ..Default::default()
+        },
+        2_060,
+        2_070,
+    );
+
+    assert_shared_attempt(
+        &state,
+        [first, second],
+        2_020,
+        2_030,
+        2_040,
+        2_050,
+        2_060,
+        2_070,
+    );
+    assert_eq!(
+        state.request(first).unwrap().latency.accepted_at_ms,
+        accepted
+    );
+    assert_eq!(
+        state.request(first).unwrap().latency.picked_at_ms,
+        Some(1_010)
+    );
+    assert!(state.request(second).unwrap().latency.agent_waited);
+}
