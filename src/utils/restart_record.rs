@@ -313,6 +313,8 @@ pub(crate) struct BuildStamp {
     pub(crate) binary: Option<String>,
     /// Process that wrote this record. Missing or invalid means incomplete.
     pub(crate) pid: Option<u32>,
+    /// OS start stamp of `pid`. Missing means this record cannot be tied to one process.
+    pub(crate) birth: Option<u64>,
 }
 
 pub(crate) fn read_build_sha(path: &Path) -> Option<String> {
@@ -340,7 +342,13 @@ pub(crate) fn read_build_stamp(path: &Path) -> Option<BuildStamp> {
         .and_then(|item| item.as_u64())
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid > 0);
-    Some(BuildStamp { sha, binary, pid })
+    let birth = value.get("birth").and_then(|item| item.as_u64());
+    Some(BuildStamp {
+        sha,
+        binary,
+        pid,
+        birth,
+    })
 }
 
 /// Records the binary and process that are serving this data directory.
@@ -356,10 +364,12 @@ pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
         .map(|exe| exe.display().to_string())
         .unwrap_or_default();
     let launch = current_launch_flags();
+    let birth = crate::platform::process_instance(std::process::id()).map(|live| live.birth);
     let body = serde_json::json!({
         "sha": sha,
         "binary": binary,
         "pid": std::process::id(),
+        "birth": birth,
         "dev": launch.dev,
         "yolo": launch.yolo,
         "explicit_data_dir": launch.explicit_data_dir,
@@ -729,8 +739,10 @@ mod tests {
         let sha = "ab".repeat(20);
         write_build_sha(Some(&root), &sha);
         let stamp = read_build_stamp(&build_path(&root)).unwrap();
+        let live = crate::platform::process_instance(std::process::id()).unwrap();
         assert_eq!(stamp.sha, sha);
-        assert_eq!(stamp.pid, Some(std::process::id()));
+        assert_eq!(stamp.pid, Some(live.pid));
+        assert_eq!(stamp.birth, Some(live.birth));
         assert!(stamp.binary.is_some());
         write_json(
             &build_path(&root),
@@ -739,6 +751,7 @@ mod tests {
         .unwrap();
         let legacy = read_build_stamp(&build_path(&root)).unwrap();
         assert_eq!(legacy.pid, None);
+        assert_eq!(legacy.birth, None);
         assert_eq!(legacy.binary.as_deref(), Some("/tmp/bus"));
         std::fs::remove_dir_all(&root).unwrap();
     }

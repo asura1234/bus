@@ -711,12 +711,14 @@ fn state_reports_distinct_client_and_server_build_identities() {
     let (mut worker, _room, _agent, dir) = fixture();
     let server_binary = dir.join("server-build-b");
     let server_sha = "b".repeat(40);
+    let live = crate::platform::process_instance(std::process::id()).unwrap();
     crate::utils::restart_record::write_json(
         &crate::utils::restart_record::build_path(&dir),
         &json!({
             "binary": server_binary,
             "sha": server_sha,
-            "pid": std::process::id(),
+            "pid": live.pid,
+            "birth": live.birth,
         }),
     )
     .unwrap();
@@ -770,7 +772,7 @@ fn state_reports_missing_corrupt_and_stale_server_identities_as_unknown() {
 
     crate::utils::restart_record::write_json(
         &path,
-        &json!({"binary": "/tmp/server-b", "sha": "b".repeat(40), "pid": u32::MAX}),
+        &json!({"binary": "/tmp/server-b", "sha": "b".repeat(40), "pid": u32::MAX, "birth": 1}),
     )
     .unwrap();
     let state = call(&mut worker, "state-stale-server", "state", json!({}));
@@ -778,6 +780,75 @@ fn state_reports_missing_corrupt_and_stale_server_identities_as_unknown() {
     assert!(state.result["build"]["server"].is_null());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn state_reports_server_identity_as_unknown_when_its_recorded_pid_belongs_to_another_process() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    // After a server exits, the OS may reuse its pid for an unrelated live
+    // process. That process is not the server incarnation the record names.
+    #[cfg(windows)]
+    let mut other = std::process::Command::new("cmd")
+        .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+        .spawn()
+        .expect("spawn a live unrelated process");
+    #[cfg(not(windows))]
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn a live unrelated process");
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&dir),
+        &json!({"binary": "/tmp/previous-server", "sha": "b".repeat(40), "pid": other.id()}),
+    )
+    .unwrap();
+    let state = call(&mut worker, "state-reused-pid", "state", json!({}));
+    let _ = other.kill();
+    let _ = other.wait();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        state.result["build"]["server"].is_null(),
+        "a stale record whose pid belongs to another process must not be reported as the server: {}",
+        state.result["build"]
+    );
+}
+
+#[test]
+fn state_reports_server_identity_as_unknown_when_recorded_birth_does_not_match() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    #[cfg(windows)]
+    let mut other = std::process::Command::new("cmd")
+        .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+        .spawn()
+        .expect("spawn a live unrelated process");
+    #[cfg(not(windows))]
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn a live unrelated process");
+    let live =
+        crate::platform::process_instance(other.id()).expect("unrelated process has a birth");
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&dir),
+        &json!({
+            "binary": "/tmp/previous-server",
+            "sha": "b".repeat(40),
+            "pid": live.pid,
+            "birth": live.birth.wrapping_add(1),
+        }),
+    )
+    .unwrap();
+    let state = call(&mut worker, "state-mismatched-birth", "state", json!({}));
+    let _ = other.kill();
+    let _ = other.wait();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        state.result["build"]["server"].is_null(),
+        "a live pid with a different birth is not the recorded server: {}",
+        state.result["build"]
+    );
 }
 
 #[test]

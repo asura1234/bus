@@ -291,12 +291,17 @@ fn server_build_json(root: &std::path::Path) -> Value {
     let Some(binary) = stamp.binary.filter(|binary| !binary.is_empty()) else {
         return Value::Null;
     };
-    let Some(pid) = stamp
-        .pid
-        .filter(|pid| crate::platform::process_instance(*pid).is_some())
-    else {
+    // A pid can be reused. Birth is the only check that the live process is
+    // the one that wrote this record; without it the record is unknown.
+    let Some(pid) = stamp.pid else {
         return Value::Null;
     };
+    let Some(birth) = stamp.birth else {
+        return Value::Null;
+    };
+    if !crate::platform::process_still_live(pid, birth) {
+        return Value::Null;
+    }
     if !crate::utils::restart_record::valid_build_sha(&stamp.sha) {
         return Value::Null;
     }
