@@ -105,7 +105,7 @@ struct Series {
 #[derive(Default, Serialize)]
 struct Rates {
     delivery: Metric,
-    /// Delivered ÷ attempted. Pending stays in the denominator, so it cannot hide inside 100%.
+    /// Same rate as `delivery`: delivered ÷ (delivered + Bus-caused delivery failures).
     delivery_share: Metric,
     reply_capture: Metric,
     bus_reliability: Metric,
@@ -132,22 +132,30 @@ fn percent_label(percent: f64) -> String {
         format!("{}.{}%", tenths.div_euclid(10), tenths.rem_euclid(10))
     }
 }
-fn delivery_share(counts: &Counts) -> Metric {
-    let percent = rate(counts.delivered, counts.attempts);
+fn count_label(count: u64, singular: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {singular}s")
+    }
+}
+fn delivery_rate(counts: &Counts) -> Metric {
+    let numerator = counts.delivered;
+    let denominator = counts.delivered + counts.delivery_bus;
+    let percent = rate(numerator, denominator);
+    let bus = count_label(counts.delivery_bus, "Bus failure");
+    let external = count_label(counts.delivery_external, "external failure");
     let caption = match percent {
         Some(value) => format!(
-            "{} of {}/{} delivered · {} pending · {} failed",
-            percent_label(value),
-            counts.delivered,
-            counts.attempts,
-            counts.open,
-            counts.failed,
+            "{} of {numerator}/{denominator} delivered, {bus}, {external}",
+            percent_label(value)
         ),
-        None => "—".to_string(),
+        None if counts.attempts == 0 => "—".to_string(),
+        None => format!("— · {bus}, {external}"),
     };
     Metric {
-        numerator: counts.delivered,
-        denominator: counts.attempts,
+        numerator,
+        denominator,
         percent,
         caption,
     }
@@ -176,7 +184,7 @@ fn attempt_identity(counts: &Counts) -> String {
         pending = counts.open,
         bus = counts.delivery_bus,
         external = counts.delivery_external,
-        share = delivery_share(counts).caption,
+        share = delivery_rate(counts).caption,
     )
 }
 fn conclusive_metric(numerator: u64, denominator: u64, excluded: &[(&str, u64)]) -> Metric {
@@ -213,12 +221,8 @@ impl Metric {
 impl From<&Counts> for Rates {
     fn from(counts: &Counts) -> Self {
         Self {
-            delivery: conclusive_metric(
-                counts.delivered,
-                counts.delivered + counts.failed,
-                &[("still open", counts.open)],
-            ),
-            delivery_share: delivery_share(counts),
+            delivery: delivery_rate(counts),
+            delivery_share: delivery_rate(counts),
             reply_capture: conclusive_metric(
                 counts.replied,
                 counts.replied + counts.reply_not_captured,
