@@ -191,7 +191,7 @@ impl BusState {
                         ready_at_enqueue: self
                             .agents
                             .get(&agent_id)
-                            .is_some_and(|agent| agent.wait_reason().is_none()),
+                            .is_some_and(|agent| !agent.dialog && agent.wait_reason().is_none()),
                         ..Default::default()
                     },
                     queue_only: queue_only || independent,

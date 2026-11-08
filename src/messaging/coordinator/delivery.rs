@@ -102,7 +102,12 @@ impl Worker {
             }
             let waited = self.delivery_waits.contains_key(&agent.id);
             if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
-                if let Some(reason) = diagnostics::wait_reason(&agent) {
+                // Dialog blocks the send below without entering wait_reason.
+                // That function keeps its precedence, including the Codex
+                // first-session exception, so the hold is recorded here.
+                let reason =
+                    diagnostics::wait_reason(&agent).or(agent.dialog.then_some("agent_dialog"));
+                if let Some(reason) = reason {
                     if self.delivery_waits.insert(agent.id, (request, reason))
                         != Some((request, reason))
                     {
