@@ -19,6 +19,7 @@ mod provider_failure;
 mod provider_retry;
 mod request_map;
 use provider_retry::ProviderRetry;
+mod recipients;
 mod recovery;
 mod replies;
 mod reply_routing;
