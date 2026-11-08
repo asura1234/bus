@@ -1881,13 +1881,7 @@ async fn agent_orchestrator_question_still_batches_its_bus_routing_envelope() {
     f.status(orch, AgentState::Working);
     f.tick();
     let lead = f.send(orch, f.work, "AUTHORED_QUESTION", false, Some(sender));
-    let hidden = f.send(
-        orch,
-        f.work,
-        "HIDDEN_ROUTING_ENVELOPE",
-        false,
-        Some(sender),
-    );
+    let hidden = f.send(orch, f.work, "HIDDEN_ROUTING_ENVELOPE", false, Some(sender));
     let path = f.dir.join("state.json");
     let mut saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
