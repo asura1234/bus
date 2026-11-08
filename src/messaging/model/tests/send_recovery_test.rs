@@ -194,7 +194,11 @@ fn a_rejected_steering_write_preserves_the_original_turn_end_evidence() {
         state.settle_ended_request(agent, 13 + TURN_SETTLE_MS, |_| None),
         Some(lead)
     );
-    assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Abandoned);
+    let settled = state.request(lead).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert_eq!(settled.delivery_stage(), "ended");
+    assert!(settled.failure_reason.is_none());
     assert_eq!(state.next_queued_request(agent), Some(correction));
 }
 

@@ -700,10 +700,8 @@ fn a_steered_group_survives_a_restart() {
     fixture.stopped("turn-1", "streaming parser");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(
-        fixture.reply(correction).as_deref(),
-        Some("streaming parser")
-    );
+    assert!(fixture.reply(correction).is_none());
+    assert_eq!(fixture.request(correction).delivery_stage(), "ended");
 }
 
 #[test]

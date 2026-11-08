@@ -308,14 +308,17 @@ fn cleared_codex_answers_a_message_sent_into_its_fresh_session() {
         .state
         .observe_status(agent, RuntimeStatus::Idle, 100)
         .unwrap();
-    assert_eq!(
-        worker.state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
-    assert_eq!(
-        worker.state.room(room).unwrap().latest_replies[&agent].text,
-        "FRESH"
-    );
+    let settled = worker.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert_eq!(settled.delivery_stage(), "ended");
+    assert!(worker
+        .state
+        .room(room)
+        .unwrap()
+        .latest_replies
+        .get(&agent)
+        .is_none());
     assert_eq!(
         agent_of(&worker, agent)
             .runtime_identity
