@@ -1342,3 +1342,38 @@ fn bus_generated_submission_records_its_queue_phase() {
     assert_eq!(control_request.latency.accepted_at_ms, Some(now));
     assert_eq!(control_request.latency.queued_at_ms, None);
 }
+
+#[test]
+fn backward_completion_keeps_the_start_and_equality_stays_eligible() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "clock step");
+    state.record_queued(request, 1_005).unwrap();
+    state.record_native_requested(request, 1_005).unwrap();
+    state.finish_queued(request, 1_005, 1_000).unwrap();
+    state
+        .finish_native_requested(request, 1_005, 1_000)
+        .unwrap();
+    let latency = &state.request(request).unwrap().latency;
+    assert_eq!(latency.queued_at_ms, Some(1_005));
+    assert_eq!(latency.native_requested_at_ms, Some(1_005));
+
+    state.finish_queued(request, 1_005, 1_005).unwrap();
+    state
+        .finish_native_requested(request, 1_005, 1_005)
+        .unwrap();
+    state.finish_queued(request, 1_005, 1_010).unwrap();
+    state
+        .finish_native_requested(request, 1_005, 1_010)
+        .unwrap();
+    let latency = &state.request(request).unwrap().latency;
+    assert_eq!(latency.queued_at_ms, Some(1_010));
+    assert_eq!(latency.native_requested_at_ms, Some(1_010));
+
+    state.finish_queued(request, 1_010, 1_000).unwrap();
+    state
+        .finish_native_requested(request, 1_010, 1_000)
+        .unwrap();
+    let latency = &state.request(request).unwrap().latency;
+    assert_eq!(latency.queued_at_ms, Some(1_010));
+    assert_eq!(latency.native_requested_at_ms, Some(1_010));
+}

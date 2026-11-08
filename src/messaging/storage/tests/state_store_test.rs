@@ -743,6 +743,11 @@ fn serialized_zero_completion_retains_the_documented_scalar_alias() {
     bounded_completion_replay(&[(1_005, 1_005), (1_005, 1_010)], 1_010);
 }
 
+#[test]
+fn serialized_backward_completion_keeps_the_start() {
+    bounded_completion_replay(&[(1_005, 1_000)], 1_005);
+}
+
 fn bounded_completion_replay(completions: &[(u64, u64)], expected: u64) {
     for phase in ["queued", "native_requested"] {
         let mut state = BusState::new();

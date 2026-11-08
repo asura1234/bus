@@ -24,7 +24,7 @@ impl BusState {
             .requests
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
-        if request.latency.queued_at_ms == Some(started_at_ms) {
+        if request.latency.queued_at_ms == Some(started_at_ms) && completed_at_ms >= started_at_ms {
             request.latency.queued_at_ms = Some(completed_at_ms);
         }
         Ok(())
@@ -81,7 +81,9 @@ impl BusState {
     ) -> Result<(), ModelError> {
         for id in self.delivery_targets(request)? {
             if let Some(request) = self.requests.get_mut(&id) {
-                if request.latency.native_requested_at_ms == Some(started_at_ms) {
+                if request.latency.native_requested_at_ms == Some(started_at_ms)
+                    && completed_at_ms >= started_at_ms
+                {
                     request.latency.native_requested_at_ms = Some(completed_at_ms);
                 }
             }
