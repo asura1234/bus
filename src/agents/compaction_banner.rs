@@ -8,7 +8,11 @@
 /// Status lines longer than this are transcript prose, not the banner.
 const MAX_BANNER_CHARS: usize = 160;
 
-const GROK_PHRASES: &[&str] = &["Auto-compacting conversation", "Conversation compacted"];
+const GROK_PHRASES: &[&str] = &[
+    "Auto-compacting conversation",
+    "Conversation compacted",
+    "Context compacted",
+];
 
 const KIMI_PHRASES: &[&str] = &[
     "Compacting context",
@@ -51,14 +55,54 @@ fn short_banner(line: &str) -> bool {
 
 /// The phrase is the whole status line, or its prefix plus a terminator.
 /// A period ends the completion line. ` (` starts the progress suffix.
+/// `: <n>k → <n>k tokens` is the Grok 4.7 token report, with either arrow.
 /// A later sentence that merely contains the phrase does not match.
 fn status_line(line: &str, phrases: &[&str]) -> bool {
-    short_banner(line)
-        && phrases.iter().any(|phrase| {
-            let Some(rest) = line.strip_prefix(phrase) else {
-                return false;
-            };
-            rest.is_empty() || rest == "." || rest.starts_with(" (")
+    short_banner(line) && phrases.iter().any(|phrase| phrase_suffix(line, phrase))
+}
+
+fn phrase_suffix(line: &str, phrase: &str) -> bool {
+    let Some(rest) = line.strip_prefix(phrase) else {
+        return false;
+    };
+    rest.is_empty() || rest == "." || rest.starts_with(" (") || token_report(rest)
+}
+
+/// `: 205.0k → 32.0k tokens (80.0s)` or ASCII `->`. A colon sentence does not match.
+fn token_report(rest: &str) -> bool {
+    let Some(body) = rest.strip_prefix(": ") else {
+        return false;
+    };
+    let Some((head, tail)) = body.split_once(" tokens") else {
+        return false;
+    };
+    let mut parts = head.split_whitespace();
+    let (Some(before), Some(arrow), Some(after)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    token_amount(before)
+        && (arrow == "→" || arrow == "->")
+        && token_amount(after)
+        && (tail.is_empty() || tail.starts_with(" ("))
+}
+
+fn token_amount(value: &str) -> bool {
+    let Some(number) = value.strip_suffix('k') else {
+        return false;
+    };
+    let mut dot = false;
+    !number.is_empty()
+        && number.chars().all(|character| match character {
+            '0'..='9' => true,
+            '.' if !dot => {
+                dot = true;
+                true
+            }
+            _ => false,
         })
 }
 
@@ -85,6 +129,46 @@ mod tests {
     #[test]
     fn compaction_banner_grok_completed_matches() {
         assert!(visible(Some("grok"), "Conversation compacted."));
+    }
+
+    #[test]
+    fn compaction_banner_grok_observed_completion_line_matches() {
+        // Live pane text from this Bus run (grok-5 and grok-11), plus the
+        // ASCII arrow used when that line was transcribed.
+        for screen in [
+            "Context compacted: 205.0k → 32.0k tokens (80.0s)",
+            "Context compacted: 206.0k → 35.2k tokens (94.1s)",
+            "Context compacted: 209.9k -> 37.8k tokens (131.2s)",
+            "Context compacted: 204.8k -> 38.4k tokens",
+            "Context compacted: 206.7k -> 37.6k tokens (1.0s)",
+            "Context compacted: 205.8k -> 34.4k tokens (2.0s)",
+        ] {
+            assert!(
+                visible(Some("grok"), screen),
+                "a Grok completion line must count: {screen}"
+            );
+        }
+        assert!(
+            !visible(
+                Some("grok"),
+                "Context compacted, so continue from the summary."
+            ),
+            "a sentence that quotes the phrase is not the status banner"
+        );
+        assert!(
+            !visible(
+                Some("grok"),
+                "Context compacted: the summary continues from here."
+            ),
+            "a colon that starts a sentence is not the token report"
+        );
+        assert!(
+            !visible(
+                Some("grok"),
+                "Context compacted: 205.0k → 32.0k tokens, so continue."
+            ),
+            "prose after the token report is not the status banner"
+        );
     }
 
     #[test]
