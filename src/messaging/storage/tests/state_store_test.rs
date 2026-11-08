@@ -734,8 +734,8 @@ fn serialized_completion_stale_start_preserves_completed_values() {
 }
 
 #[test]
-fn serialized_completion_identical_repeat_preserves_both_phases() {
-    bounded_completion_replay(&[(1_005, 1_008), (1_005, 1_008)], 1_008);
+fn serialized_completion_repeat_keeps_the_first_completion() {
+    bounded_completion_replay(&[(1_005, 1_008), (1_005, 1_099)], 1_008);
 }
 
 #[test]
