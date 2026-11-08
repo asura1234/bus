@@ -2394,7 +2394,8 @@ struct NativeStampProbe {
 
 impl Transport for NativeStampProbe {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        let Method::AgentPromptIfIdle(_) = &method else {
+        let (Method::AgentPromptIfIdle(_) | Method::AgentPromptIfIdleAtGeneration(_)) = &method
+        else {
             panic!("unexpected call during native stamp probe: {method:?}");
         };
         let loaded = JsonStore::new(self.state_path.clone())
