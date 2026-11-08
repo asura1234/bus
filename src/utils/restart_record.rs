@@ -355,7 +355,7 @@ pub(crate) fn read_build_stamp(path: &Path) -> Option<BuildStamp> {
 /// A failure must not stop the server: the next restart refuses, because
 /// there is no complete server identity to health-check. Whole-session rollback
 /// uses the TUI startup backup, and replacement health checks this serving pid.
-pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
+pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str, birth: Option<u64>) {
     let Some(root) = root else {
         return;
     };
@@ -364,7 +364,6 @@ pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
         .map(|exe| exe.display().to_string())
         .unwrap_or_default();
     let launch = current_launch_flags();
-    let birth = crate::platform::process_instance(std::process::id()).map(|live| live.birth);
     let body = serde_json::json!({
         "sha": sha,
         "binary": binary,
@@ -737,12 +736,12 @@ mod tests {
         let root = crate::utils::test_temp::unique_temp_path("build-pid");
         std::fs::create_dir_all(&root).unwrap();
         let sha = "ab".repeat(20);
-        write_build_sha(Some(&root), &sha);
+        let birth = 7_000_000_000_001;
+        write_build_sha(Some(&root), &sha, Some(birth));
         let stamp = read_build_stamp(&build_path(&root)).unwrap();
-        let live = crate::platform::process_instance(std::process::id()).unwrap();
         assert_eq!(stamp.sha, sha);
-        assert_eq!(stamp.pid, Some(live.pid));
-        assert_eq!(stamp.birth, Some(live.birth));
+        assert_eq!(stamp.pid, Some(std::process::id()));
+        assert_eq!(stamp.birth, Some(birth));
         assert!(stamp.binary.is_some());
         write_json(
             &build_path(&root),
