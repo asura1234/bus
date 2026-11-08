@@ -368,8 +368,9 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
                 self.assertFalse(os.access(Path(directory) / "lark-cli", os.X_OK))
 
             version = run(["--version"])
-            # Current --version is a release version, not compiled-SHA evidence.
-            # Both private run_start identities below must attest this exact head.
+            # --version carries the full compiled SHA; both private run_start
+            # identities below independently attest this exact head.
+            self.assertIn(sha, version)
             paths = save("paths", control("--paths"))
             self.assertEqual(Path(paths["data"]), root / "data")
             logs = Path(paths["logs"]).resolve()
@@ -394,7 +395,10 @@ class UniversalDialogLiveAcceptance(unittest.TestCase):
             terminal = terminal_helper.Terminal([str(copied), "--dev"], root / "project", env)
             started = True
             state = wait("private Bus startup", lambda: control("state", optional=True), 45)["result"]
-            self.assertEqual(Path(state["build"]["binary"]).resolve(), copied)
+            self.assertEqual(Path(state["build"]["client"]["binary"]).resolve(), copied)
+            self.assertEqual(state["build"]["client"]["sha"], sha)
+            self.assertEqual(Path(state["build"]["server"]["binary"]).resolve(), copied)
+            self.assertEqual(state["build"]["server"]["sha"], sha)
             self.assertFalse(state["launch"]["yolo"])
             identity = []
             for role in ["client", "server"]:

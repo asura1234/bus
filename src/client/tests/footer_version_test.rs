@@ -5,6 +5,7 @@ fn report_server(driver: &mut ClientLoopDriver, sha: Option<&str>) {
     let stamp = sha.map(|sha| BuildStamp {
         sha: sha.to_owned(),
         pid: Some(22),
+        birth: None,
         binary: Some("/server/bus".into()),
     });
     driver

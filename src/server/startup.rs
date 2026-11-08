@@ -101,7 +101,7 @@ pub fn run_server(
             client_socket = %client_socket_path().display(),
             "bus server started"
         );
-        crate::utils::restart_record::write_build_sha(
+        record_serving_build(
             crate::utils::env::bus_data_dir().as_deref(),
             env!("BUS_BUILD_SHA"),
         );
@@ -162,6 +162,11 @@ fn take_startup_cwd() -> Option<PathBuf> {
     (!cwd.is_empty()).then(|| PathBuf::from(cwd))
 }
 
+fn record_serving_build(root: Option<&Path>, sha: &str) {
+    let birth = crate::platform::process_instance(std::process::id()).map(|live| live.birth);
+    crate::utils::restart_record::write_build_sha(root, sha, birth);
+}
+
 fn print_ready_message(api_socket: &Path, client_socket: &Path) {
     eprintln!("bus server running; you can use any bus CLI command in another terminal.");
     eprintln!("api socket: {}", api_socket.display());
@@ -189,3 +194,7 @@ fn init_logging(
 #[cfg(test)]
 #[path = "tests/startup_env_test.rs"]
 mod env_tests;
+
+#[cfg(test)]
+#[path = "tests/startup_build_test.rs"]
+mod build_tests;

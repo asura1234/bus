@@ -707,19 +707,44 @@ fn dev_send_as_counts_the_agent_message_as_unread_in_a_room_out_of_view() {
 }
 
 #[test]
-fn state_reports_how_the_running_bus_was_built() {
-    let (mut worker, _room, _agent, _dir) = fixture();
+fn state_reports_distinct_client_and_server_build_identities() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let server_binary = dir.join("server-build-b");
+    let server_sha = "b".repeat(40);
+    let live = crate::platform::process_instance(std::process::id()).unwrap();
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&dir),
+        &json!({
+            "binary": server_binary,
+            "sha": server_sha,
+            "pid": live.pid,
+            "birth": live.birth,
+        }),
+    )
+    .unwrap();
+
     let state = call(&mut worker, "state-build", "state", json!({}));
-    let expected = if cfg!(debug_assertions) {
+
+    let expected_profile = if cfg!(debug_assertions) {
         "debug"
     } else {
         "release"
     };
-    assert_eq!(state.result["build"]["profile"], expected);
+    assert_eq!(state.result["build"]["client"]["profile"], expected_profile);
     assert_eq!(
-        state.result["build"]["binary"],
+        state.result["build"]["client"]["binary"],
         json!(std::env::current_exe().unwrap())
     );
+    assert_eq!(
+        state.result["build"]["client"]["sha"],
+        env!("BUS_BUILD_SHA")
+    );
+    assert_eq!(
+        state.result["build"]["server"],
+        json!({"binary": server_binary, "sha": "b".repeat(40), "pid": std::process::id()})
+    );
+    assert!(state.result["build"].get("binary").is_none());
+    assert!(state.result["build"].get("profile").is_none());
     assert_eq!(
         state.result["launch"]["yolo"],
         json!(crate::utils::env::yolo_enabled())
@@ -727,6 +752,102 @@ fn state_reports_how_the_running_bus_was_built() {
     assert_eq!(
         state.result["launch"]["dev"],
         json!(std::env::var_os("BUS_DEV").is_some_and(|value| value == "1"))
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn state_reports_missing_corrupt_and_stale_server_identities_as_unknown() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let path = crate::utils::restart_record::build_path(&dir);
+    let state = call(&mut worker, "state-missing-server", "state", json!({}));
+    assert!(state.result["build"]["client"]["binary"].is_string());
+    assert!(state.result["build"]["server"].is_null());
+
+    crate::utils::restart_record::write_json(&path, &json!({"not": "a build"})).unwrap();
+    let state = call(&mut worker, "state-corrupt-server", "state", json!({}));
+    assert!(state.result["build"]["client"]["binary"].is_string());
+    assert!(state.result["build"]["server"].is_null());
+
+    crate::utils::restart_record::write_json(
+        &path,
+        &json!({"binary": "/tmp/server-b", "sha": "b".repeat(40), "pid": u32::MAX, "birth": 1}),
+    )
+    .unwrap();
+    let state = call(&mut worker, "state-stale-server", "state", json!({}));
+    assert!(state.result["build"]["client"]["binary"].is_string());
+    assert!(state.result["build"]["server"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn state_reports_server_identity_as_unknown_when_its_recorded_pid_belongs_to_another_process() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    // After a server exits, the OS may reuse its pid for an unrelated live
+    // process. That process is not the server incarnation the record names.
+    #[cfg(windows)]
+    let mut other = std::process::Command::new("cmd")
+        .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+        .spawn()
+        .expect("spawn a live unrelated process");
+    #[cfg(not(windows))]
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn a live unrelated process");
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&dir),
+        &json!({"binary": "/tmp/previous-server", "sha": "b".repeat(40), "pid": other.id()}),
+    )
+    .unwrap();
+    let state = call(&mut worker, "state-reused-pid", "state", json!({}));
+    let _ = other.kill();
+    let _ = other.wait();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        state.result["build"]["server"].is_null(),
+        "a stale record whose pid belongs to another process must not be reported as the server: {}",
+        state.result["build"]
+    );
+}
+
+#[test]
+fn state_reports_server_identity_as_unknown_when_recorded_birth_does_not_match() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    #[cfg(windows)]
+    let mut other = std::process::Command::new("cmd")
+        .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+        .spawn()
+        .expect("spawn a live unrelated process");
+    #[cfg(not(windows))]
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn a live unrelated process");
+    let live =
+        crate::platform::process_instance(other.id()).expect("unrelated process has a birth");
+    crate::utils::restart_record::write_json(
+        &crate::utils::restart_record::build_path(&dir),
+        &json!({
+            "binary": "/tmp/previous-server",
+            "sha": "b".repeat(40),
+            "pid": live.pid,
+            "birth": live.birth.wrapping_add(1),
+        }),
+    )
+    .unwrap();
+    let state = call(&mut worker, "state-mismatched-birth", "state", json!({}));
+    let _ = other.kill();
+    let _ = other.wait();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        state.result["build"]["server"].is_null(),
+        "a live pid with a different birth is not the recorded server: {}",
+        state.result["build"]
     );
 }
 

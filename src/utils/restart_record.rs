@@ -313,6 +313,8 @@ pub(crate) struct BuildStamp {
     pub(crate) binary: Option<String>,
     /// Process that wrote this record. Missing or invalid means incomplete.
     pub(crate) pid: Option<u32>,
+    /// OS start stamp of `pid`. Missing means this record cannot be tied to one process.
+    pub(crate) birth: Option<u64>,
 }
 
 pub(crate) fn read_build_sha(path: &Path) -> Option<String> {
@@ -340,14 +342,20 @@ pub(crate) fn read_build_stamp(path: &Path) -> Option<BuildStamp> {
         .and_then(|item| item.as_u64())
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid > 0);
-    Some(BuildStamp { sha, binary, pid })
+    let birth = value.get("birth").and_then(|item| item.as_u64());
+    Some(BuildStamp {
+        sha,
+        binary,
+        pid,
+        birth,
+    })
 }
 
 /// Records the binary and process that are serving this data directory.
 /// A failure must not stop the server: the next restart refuses, because
 /// there is no complete server identity to health-check. Whole-session rollback
 /// uses the TUI startup backup, and replacement health checks this serving pid.
-pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
+pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str, birth: Option<u64>) {
     let Some(root) = root else {
         return;
     };
@@ -360,6 +368,7 @@ pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str) {
         "sha": sha,
         "binary": binary,
         "pid": std::process::id(),
+        "birth": birth,
         "dev": launch.dev,
         "yolo": launch.yolo,
         "explicit_data_dir": launch.explicit_data_dir,
@@ -727,10 +736,12 @@ mod tests {
         let root = crate::utils::test_temp::unique_temp_path("build-pid");
         std::fs::create_dir_all(&root).unwrap();
         let sha = "ab".repeat(20);
-        write_build_sha(Some(&root), &sha);
+        let birth = 7_000_000_000_001;
+        write_build_sha(Some(&root), &sha, Some(birth));
         let stamp = read_build_stamp(&build_path(&root)).unwrap();
         assert_eq!(stamp.sha, sha);
         assert_eq!(stamp.pid, Some(std::process::id()));
+        assert_eq!(stamp.birth, Some(birth));
         assert!(stamp.binary.is_some());
         write_json(
             &build_path(&root),
@@ -739,6 +750,7 @@ mod tests {
         .unwrap();
         let legacy = read_build_stamp(&build_path(&root)).unwrap();
         assert_eq!(legacy.pid, None);
+        assert_eq!(legacy.birth, None);
         assert_eq!(legacy.binary.as_deref(), Some("/tmp/bus"));
         std::fs::remove_dir_all(&root).unwrap();
     }

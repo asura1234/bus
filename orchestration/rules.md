@@ -410,7 +410,7 @@ the wrapper remains held.
   Ask once for a bounded app relaunch/retry lease; preserve app data and honor
   developer intervention, lease expiry and explicit holds.
 - **On a dev build, fix Bus bugs as you meet them.** `bus state` reports
-  `build.profile`: `debug` is a dev build (`./run dev` builds one), `release` is
+  `build.client.profile`: `debug` is a dev build (`./run dev` builds one), `release` is
   not. On a dev build, when you hit a Bus bug, dispatch a worker to fix it in
   the Bus repository and land it with `commit-and-push`. If the fix needs a
   restart without existing authorization, ask the developer: you cannot restart
