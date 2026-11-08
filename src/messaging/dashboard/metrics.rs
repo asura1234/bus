@@ -73,6 +73,7 @@ struct Series {
     counts: Counts,
     hours: Vec<Hour>,
     rates: Rates,
+    identity: String,
 }
 #[derive(Default, Serialize)]
 struct Rates {
@@ -85,22 +86,77 @@ struct Metric {
     numerator: u64,
     denominator: u64,
     percent: Option<f64>,
+    /// Conclusive fraction plus the attempts that fraction leaves out.
+    caption: String,
 }
-impl Metric {
-    fn new(numerator: u64, denominator: u64) -> Self {
-        Self {
-            numerator,
-            denominator,
-            percent: rate(numerator, denominator),
-        }
+fn attempt_identity(counts: &Counts) -> String {
+    format!(
+        "{attempts} attempts = {delivered} delivered + {failed} failed + {open} still open. Bus reliability partition: {attempts} attempts = {replied} replied + {bus} Bus-caused failures + {external} external + {open} still open + {pending} reply pending.",
+        attempts = counts.attempts,
+        delivered = counts.delivered,
+        failed = counts.failed,
+        open = counts.open,
+        replied = counts.replied,
+        bus = counts.bus_failures,
+        external = counts.external,
+        pending = counts.reply_pending,
+    )
+}
+fn conclusive_metric(
+    numerator: u64,
+    denominator: u64,
+    basis: &str,
+    excluded: &[(&str, u64)],
+) -> Metric {
+    let percent = rate(numerator, denominator);
+    let shown = match percent {
+        Some(value) => format!("{value:.1}%"),
+        None => "—".to_owned(),
+    };
+    let total = excluded.iter().map(|(_, count)| *count).sum::<u64>();
+    let listed = excluded
+        .iter()
+        .map(|(name, count)| format!("{count} {name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Metric {
+        numerator,
+        denominator,
+        percent,
+        caption: format!(
+            "{shown} ({numerator}/{denominator} conclusive: {basis}). Excluded {total}: {listed}."
+        ),
     }
 }
 impl From<&Counts> for Rates {
-    fn from(c: &Counts) -> Self {
+    fn from(counts: &Counts) -> Self {
         Self {
-            delivery: Metric::new(c.delivered, c.delivered + c.failed),
-            reply_capture: Metric::new(c.replied, c.replied + c.reply_not_captured),
-            bus_reliability: Metric::new(c.replied, c.replied + c.bus_failures),
+            delivery: conclusive_metric(
+                counts.delivered,
+                counts.delivered + counts.failed,
+                "delivered / delivered + failed",
+                &[("still open", counts.open)],
+            ),
+            reply_capture: conclusive_metric(
+                counts.replied,
+                counts.replied + counts.reply_not_captured,
+                "replied / replied + reply not captured",
+                &[
+                    ("reply pending", counts.reply_pending),
+                    ("still open", counts.open),
+                    ("failed before delivery", counts.failed),
+                ],
+            ),
+            bus_reliability: conclusive_metric(
+                counts.replied,
+                counts.replied + counts.bus_failures,
+                "replied / replied + Bus-caused failures",
+                &[
+                    ("external", counts.external),
+                    ("still open", counts.open),
+                    ("reply pending", counts.reply_pending),
+                ],
+            ),
         }
     }
 }
@@ -110,12 +166,12 @@ struct Hour {
     start_ms: i64,
     counts: Counts,
     rates: Rates,
+    identity: String,
 }
 #[derive(Default, Serialize)]
 pub(super) struct Dashboard {
     all: Series,
     providers: BTreeMap<String, Series>,
-    recipients: BTreeMap<String, Group>,
     rooms: BTreeMap<String, Group>,
     failures: Vec<Failure>,
 }
@@ -251,19 +307,23 @@ impl SeriesBuilder {
     }
     fn finish(self) -> Series {
         let rates = Rates::from(&self.counts);
+        let identity = attempt_identity(&self.counts);
         Series {
             counts: self.counts,
             rates,
+            identity,
             hours: self
                 .hours
                 .into_iter()
                 .map(|(start_ms, (hour, counts))| {
                     let rates = Rates::from(&counts);
+                    let identity = attempt_identity(&counts);
                     Hour {
                         hour,
                         start_ms,
                         counts,
                         rates,
+                        identity,
                     }
                 })
                 .collect(),
@@ -276,7 +336,6 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
         .into_iter()
         .map(|p| (p.to_owned(), SeriesBuilder::default()))
         .collect();
-    let mut recipients: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut failures = Vec::new();
     for request in state.requests() {
@@ -296,15 +355,6 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
             .history_room_name(request.room_id)
             .map(str::to_owned)
             .unwrap_or_else(|| format!("Room {} [deleted]", request.room_id.0));
-        recipients
-            .entry(request.agent_id.0.to_string())
-            .or_insert_with(|| GroupBuilder {
-                name: name.clone(),
-                provider: Some(provider.into()),
-                ..Default::default()
-            })
-            .series
-            .add(&hour, request, &outcome);
         rooms
             .entry(request.room_id.0.to_string())
             .or_insert_with(|| GroupBuilder {
@@ -339,10 +389,6 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
     }
     Dashboard {
         all: all.finish(),
-        recipients: recipients
-            .into_iter()
-            .map(|(id, group)| (id, group.finish()))
-            .collect(),
         rooms: rooms
             .into_iter()
             .map(|(id, group)| (id, group.finish()))

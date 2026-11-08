@@ -84,17 +84,18 @@ URL, serves one page with inline assets, and refreshes every thirty seconds.
 without recording a resume. It reads persisted state, journal and archived
 requests; it never sends control commands or saves session state. Stop with Ctrl+C.
 The page shows local send-hour delivery and reply capture rates, denominators,
-open requests, provider groups, and failure reasons. Bus reliability counts replied
-versus Bus-caused terminal failures, excluding deliberate interrupts, deleted
-agents/rooms, provider errors and pending requests. The full classification is
-printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
+open requests, provider and room groups, and failure reasons. Bus reliability
+counts replied versus Bus-caused terminal failures, excluding deliberate
+interrupts, deleted agents/rooms, provider errors and pending requests. Each
+percentage states that conclusive denominator and the attempts it excluded.
+The full classification is printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.
 
 Settings > Developer > Open delivery dashboard opens the attached session's
 page in the default browser. Repeated clicks and the dev CLI reuse one service
 per session (OS-released lock and verified loopback endpoint in
 `dashboard-runtime/`, separate from persisted message/request records).
-The whole-session headline is followed by an hourly graph with attempt counts
-and a selectable recipient breakdown; provider and room grouping are available.
+The whole-session headline is followed by an hourly graph with attempt counts,
+then provider and room tables. There is no per-recipient breakdown.
 Every failure count or cause opens request metadata and a copyable
 `bus message status MESSAGE_ID` command, with causes ordered by count.

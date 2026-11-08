@@ -98,6 +98,104 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
     assert_eq!(report.providers["cursor"].counts.attempts, 0);
 }
 
+// A conclusive 100% next to a smaller delivered/attempts figure must name the
+// attempts left out of that rate. Definitions stay replied / (replied + bus failures).
+#[test]
+fn complete_bus_reliability_names_every_excluded_attempt() {
+    let mut records: Vec<_> = cases()
+        .into_iter()
+        .take(4)
+        .map(|case| case.record)
+        .collect();
+    records[0].phase = RequestPhase::Completed;
+    records[0].failure_reason = None;
+    records[1].phase = RequestPhase::Abandoned;
+    records[1].failure_reason = Some("interrupted".into());
+    records[1].trusted_start_bound = false;
+    let report = snapshot(&fixture_state(records), singapore_hour);
+    let counts = &report.all.counts;
+    assert_eq!(
+        counts.attempts,
+        counts.delivered + counts.failed + counts.open
+    );
+    assert_eq!(
+        counts.attempts,
+        counts.replied + counts.bus_failures + counts.external + counts.open + counts.reply_pending
+    );
+    assert!(counts.external > 0 && counts.open > 0 && counts.reply_pending > 0);
+    assert_eq!(report.all.rates.bus_reliability.percent, Some(100.0));
+    let value = serde_json::to_value(&report).unwrap();
+    let caption = value["all"]["rates"]["bus_reliability"]["caption"]
+        .as_str()
+        .expect("reliability caption");
+    assert!(caption.contains("100.0%"), "{caption}");
+    assert!(caption.contains("conclusive"), "{caption}");
+    assert!(
+        caption.contains(&format!("{} external", counts.external)),
+        "{caption}"
+    );
+    assert!(
+        caption.contains(&format!("{} still open", counts.open)),
+        "{caption}"
+    );
+    assert!(
+        caption.contains(&format!("{} reply pending", counts.reply_pending)),
+        "{caption}"
+    );
+    assert_ne!(caption, "100.0%");
+    assert_ne!(caption, "100.0% (1/1)");
+    for rate in ["delivery", "reply_capture", "bus_reliability"] {
+        let text = value["all"]["rates"][rate]["caption"]
+            .as_str()
+            .unwrap_or("");
+        if text.contains('%') {
+            assert!(
+                text.contains("Excluded") && text.contains("conclusive"),
+                "{rate}: {text}"
+            );
+        }
+    }
+    let identity = value["all"]["identity"].as_str().expect("attempt identity");
+    assert!(
+        identity.contains(&format!(
+            "{} attempts = {} delivered + {} failed + {} still open",
+            counts.attempts, counts.delivered, counts.failed, counts.open
+        )),
+        "{identity}"
+    );
+    assert!(
+        identity.contains(&format!(
+            "{} attempts = {} replied + {} Bus-caused failures + {} external + {} still open + {} reply pending",
+            counts.attempts,
+            counts.replied,
+            counts.bus_failures,
+            counts.external,
+            counts.open,
+            counts.reply_pending
+        )),
+        "{identity}"
+    );
+}
+
+#[test]
+fn payload_has_providers_and_rooms_and_no_recipient_breakdown() {
+    let report = serde_json::to_value(snapshot(
+        &fixture_state(cases().into_iter().take(1).map(|case| case.record)),
+        singapore_hour,
+    ))
+    .unwrap();
+    assert!(report.get("recipients").is_none(), "{report}");
+    assert!(report.get("providers").is_some());
+    assert!(report.get("rooms").is_some());
+    assert!(
+        report["providers"]["claude"]["counts"]["attempts"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(report["rooms"]["1"]["name"], "dashboard");
+}
+
 fn singapore_hour(ms: u64) -> HourKey {
     hour_with_offset(ms, 8 * 3600).unwrap()
 }
@@ -164,10 +262,10 @@ fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
     assert!(state.request(RequestId(100)).is_some());
 }
 
-// Catches aggregating only providers, losing deleted recipients, attributing
+// Catches dropping a deleted agent's attempts from the provider total, attributing
 // cross-room requests to the agent's home room, and a drill-down with no IDs.
 #[test]
-fn recipient_room_and_failure_views_preserve_auditable_request_metadata() {
+fn provider_room_and_failure_views_preserve_auditable_request_metadata() {
     let cases = cases();
     let records = [
         cases[0].record.clone(),
@@ -177,8 +275,8 @@ fn recipient_room_and_failure_views_preserve_auditable_request_metadata() {
     let mut state = fixture_state(records);
     state.delete_agent(AgentId(2), 1).unwrap();
     let report = serde_json::to_value(snapshot(&state, singapore_hour)).unwrap();
-    assert_eq!(report["recipients"]["2"]["name"], "claude [deleted]");
-    assert_eq!(report["recipients"]["2"]["series"]["counts"]["attempts"], 3);
+    assert!(report.get("recipients").is_none(), "{report}");
+    assert_eq!(report["providers"]["claude"]["counts"]["attempts"], 3);
     assert_eq!(report["rooms"]["1"]["name"], "dashboard");
     assert_eq!(report["rooms"]["1"]["series"]["counts"]["attempts"], 3);
     let failures = report["failures"].as_array().unwrap();
