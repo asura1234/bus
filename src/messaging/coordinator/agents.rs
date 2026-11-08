@@ -146,6 +146,26 @@ impl Worker {
                 allow_busy_shell: false,
             },
         ));
+        self.settle_guarded_terminal_close(
+            id,
+            left_open,
+            kind,
+            &managed_name,
+            expected_session,
+            result,
+        )
+    }
+
+    /// Settle a guarded pane close: confirmed, unconfirmed, or identity-changed.
+    fn settle_guarded_terminal_close(
+        &mut self,
+        id: AgentId,
+        left_open: LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        expected_session: Option<String>,
+        result: Result<ResponseResult, crate::messaging::native::TransportError>,
+    ) -> Result<Option<LeftOpenTerminal>, String> {
         match result {
             Ok(ResponseResult::Ok {}) => Ok(None),
             Ok(other) => {
