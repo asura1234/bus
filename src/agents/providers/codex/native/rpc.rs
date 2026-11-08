@@ -98,23 +98,28 @@ impl Rpc {
     fn call(&mut self, method: &str, params: Value) -> io::Result<Value> {
         self.next_id += 1;
         let id = self.next_id;
-        self.timeout()
-            .map_err(|error| lost_response(method, error))?;
-        // From here a transport error must never cause fallback or replay.
-        self.socket
-            .send(tungstenite::Message::Text(
-                json!({"id":id,"method":method,"params":params})
-                    .to_string()
-                    .into(),
-            ))
-            .map_err(|error| lost_response(method, io::Error::other(error)))?;
+        let mut sent = false;
         loop {
-            self.timeout()
-                .map_err(|error| lost_response(method, error))?;
-            let frame = self
-                .socket
-                .read()
-                .map_err(|error| lost_response(method, io::Error::other(error)))?;
+            // timeout() returns before read once the deadline is exhausted.
+            // A result or Close already in tungstenite's buffer must still win.
+            let frame = if let Some(frame) = self.frame_after_deadline(method)? {
+                frame
+            } else if !sent {
+                // From here a transport error must never cause fallback or replay.
+                self.socket
+                    .send(tungstenite::Message::Text(
+                        json!({"id":id,"method":method,"params":params})
+                            .to_string()
+                            .into(),
+                    ))
+                    .map_err(|error| lost_response(method, io::Error::other(error)))?;
+                sent = true;
+                continue;
+            } else {
+                self.socket
+                    .read()
+                    .map_err(|error| lost_response(method, io::Error::other(error)))?
+            };
             let tungstenite::Message::Text(text) = frame else {
                 if frame.is_close() {
                     return Err(lost_response(
@@ -155,6 +160,39 @@ impl Rpc {
                 .get("result")
                 .cloned()
                 .ok_or_else(|| io::Error::other("Invalid Codex native response"));
+        }
+    }
+
+    /// `Ok(None)` means the deadline still has time and the caller should send
+    /// or block in `read`. `Ok(Some)` is a complete message that was already
+    /// buffered when the deadline elapsed.
+    fn frame_after_deadline(&mut self, method: &str) -> io::Result<Option<tungstenite::Message>> {
+        match self.timeout() {
+            Ok(()) => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                match self.read_without_waiting() {
+                    Ok(Some(frame)) => Ok(Some(frame)),
+                    Ok(None) => Err(lost_response(method, error)),
+                    Err(read_error) => Err(lost_response(method, read_error)),
+                }
+            }
+            Err(error) => Err(lost_response(method, error)),
+        }
+    }
+
+    fn read_without_waiting(&mut self) -> io::Result<Option<tungstenite::Message>> {
+        self.socket.get_mut().set_nonblocking(true)?;
+        let read = self.socket.read();
+        self.socket.get_mut().set_nonblocking(false)?;
+        match read {
+            Ok(message) => Ok(Some(message)),
+            Err(tungstenite::Error::Io(error))
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(io::Error::other(error)),
         }
     }
 
@@ -432,7 +470,7 @@ impl Rpc {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::{os::unix::net::UnixListener, time::Duration};
+    use std::{io::Write, os::unix::net::UnixListener, time::Duration};
 
     // Native external dependency is a wire fixture, not a fake Bus component.
     // Removing expectedTurnId, changing text bytes, or resuming a second writer
@@ -642,6 +680,98 @@ pub(crate) mod tests {
         assert!(
             source.contains("thread/read"),
             "preflight source must name the call: {source}"
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    enum TrailingFrame {
+        Result,
+        Close,
+        None,
+    }
+
+    /// One unmasked server frame. Payload must stay under 126 bytes.
+    fn server_text_frame(payload: &str) -> Vec<u8> {
+        let payload = payload.as_bytes();
+        assert!(payload.len() < 126);
+        let mut frame = Vec::with_capacity(payload.len() + 2);
+        frame.push(0x81);
+        frame.push(u8::try_from(payload.len()).unwrap());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    fn server_close_frame() -> Vec<u8> {
+        vec![0x88, 0x00]
+    }
+
+    /// `connect` consumes the initialize result. Any later bytes from that same
+    /// read stay in tungstenite's buffer, which is the deadline race.
+    fn deadline_with_trailing_frame(trailing: TrailingFrame) -> io::Result<Value> {
+        let dir = crate::utils::test_temp::unique_temp_path("codex-buffered-deadline");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s");
+        let listener = UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let request: Value =
+                serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], "initialize");
+            assert_eq!(request["id"], 1);
+            let initialize = r#"{"id":1,"result":{"userAgent":"fixture"}}"#;
+            if let TrailingFrame::None = trailing {
+                socket
+                    .send(tungstenite::Message::Text(initialize.to_string().into()))
+                    .unwrap();
+            } else {
+                let mut bytes = server_text_frame(initialize);
+                bytes.extend(server_text_frame(r#"{"method":"tick","params":{}}"#));
+                match trailing {
+                    TrailingFrame::Result => {
+                        bytes.extend(server_text_frame(r#"{"id":2,"result":{"kept":true}}"#))
+                    }
+                    TrailingFrame::Close => bytes.extend(server_close_frame()),
+                    TrailingFrame::None => {}
+                }
+                let wrote = socket.get_mut().write(&bytes).unwrap();
+                assert_eq!(wrote, bytes.len(), "trailing frames must share one write");
+                socket.get_mut().flush().unwrap();
+            }
+            let _ = socket.read();
+            std::fs::remove_dir_all(dir).unwrap();
+        });
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        rpc.set_deadline(Instant::now());
+        let result = rpc.call("fixture/buffered", json!({}));
+        drop(rpc);
+        handle.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn codex_native_expired_deadline_returns_a_buffered_frame() {
+        let result = deadline_with_trailing_frame(TrailingFrame::Result);
+        let closed = deadline_with_trailing_frame(TrailingFrame::Close);
+        let expired = deadline_with_trailing_frame(TrailingFrame::None);
+        let result_kept = result.as_ref().ok() == Some(&json!({"kept": true}));
+        let close_kept = closed.as_ref().is_err_and(|error| {
+            error.kind() == io::ErrorKind::BrokenPipe
+                && error.to_string().contains("fixture/buffered")
+                && error.to_string().contains("disconnected")
+                && !error.to_string().contains("deadline elapsed")
+        });
+        let empty_expired = expired.as_ref().is_err_and(|error| {
+            error.kind() == io::ErrorKind::TimedOut
+                && error.to_string().contains("fixture/buffered")
+                && error.to_string().contains("deadline elapsed")
+        });
+        assert!(
+            result_kept && close_kept && empty_expired,
+            "result={result:?} close={closed:?} empty={expired:?}"
         );
     }
 
