@@ -1,5 +1,7 @@
 """The restart scenario must distinguish control readiness from client seeding."""
 from pathlib import Path
+import shutil
+import socket
 import tempfile
 import unittest
 from unittest import mock
@@ -50,18 +52,35 @@ class NativeRestartFixtureTests(unittest.TestCase):
                 mock.patch.object(acceptance.subprocess, "Popen") as native_process:
             binary = Path(directory) / "bus"
             binary.write_bytes(b"")
-            bus.data = Path(directory) / "data"
+            # AF_UNIX paths are limited to 104 bytes. The default temp
+            # directory is too long for herdr-client.sock.
+            bus.data = Path(tempfile.mkdtemp(prefix="bus-nrf-", dir="/tmp"))
+            listeners = []
+
             def start_native(*args, **kwargs):
-                socket = bus.data / "herdr-config/sessions/bus/herdr.sock"
-                socket.parent.mkdir(parents=True)
-                socket.touch()
+                api_socket = bus.data / "herdr-config/sessions/bus/herdr.sock"
+                api_socket.parent.mkdir(parents=True)
+                api_socket.touch()
+                # The scenario connects to herdr-client.sock the way the TUI
+                # does. A socket file alone is not acceptance.
+                client_socket = api_socket.with_name("herdr-client.sock")
+                listener = socket.socket(socket.AF_UNIX)
+                listener.bind(str(client_socket))
+                listener.listen(1)
+                listeners.append(listener)
                 stamp = bus.data / "restarts/build.json"
                 stamp.parent.mkdir()
                 stamp.write_text('{"sha":"' + "a" * 40 + '"}')
                 return mock.Mock(poll=mock.Mock(return_value=None))
+
             native_process.side_effect = start_native
-            with self.assertRaises(AgentSetupReached):
-                acceptance.scenario(binary, Path(directory) / "run")
+            try:
+                with self.assertRaises(AgentSetupReached):
+                    acceptance.scenario(binary, Path(directory) / "run")
+            finally:
+                for listener in listeners:
+                    listener.close()
+                shutil.rmtree(bus.data, ignore_errors=True)
         self.assertEqual(starts, 2)
         bus.wait_native_ready.assert_not_called()
 
