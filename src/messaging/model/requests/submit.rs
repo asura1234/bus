@@ -188,6 +188,10 @@ impl BusState {
                     completed_at_ms: None,
                     latency: DeliveryLatency {
                         accepted_at_ms: Some(now_ms),
+                        // Developer and control sends fill this later in
+                        // note_requests_queued. A bus-generated submit has no
+                        // second writer, so queue admission is this instant.
+                        queued_at_ms: bus_generated.then_some(now_ms),
                         ready_at_enqueue: self
                             .agents
                             .get(&agent_id)

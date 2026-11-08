@@ -1219,3 +1219,126 @@ fn rejected_steering_records_the_later_attempt() {
         "rejecting a steer leaves the lead's turn in place"
     );
 }
+
+fn assert_queue_admission(state: &BusState, id: RequestId, now: u64) {
+    let request = state.request(id).unwrap();
+    assert!(
+        request.bus_generated,
+        "{id:?} is a bus-generated submission"
+    );
+    assert_eq!(
+        request.latency.accepted_at_ms,
+        Some(now),
+        "{id:?} acceptance keeps its own clock"
+    );
+    assert_eq!(
+        request.latency.queued_at_ms,
+        Some(now),
+        "{id:?} queue phase is the instant the request entered the queue"
+    );
+}
+
+#[test]
+fn bus_generated_submission_records_its_queue_phase() {
+    let (mut state, room, agent, other) = state_with_room_and_agents();
+    let now = 2_030;
+
+    // agents.rs and control/agents.rs: the first message is bus-generated
+    // even though its visible author is the developer.
+    let first_message = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "system prompt".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            now,
+            true,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, first_message, now);
+
+    // worker_notifications.rs
+    let notification = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "reply landed".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Agent(agent),
+            now,
+            false,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, notification, now);
+
+    // dialogs.rs
+    let dialog = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "blocked".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Bus,
+            now,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, dialog, now);
+
+    // error_pipe.rs
+    let error_pipe = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "error notice".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Bus,
+            now,
+            true,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, error_pipe, now);
+
+    let developer = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "from the developer".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            now,
+        )
+        .unwrap()[0];
+    let developer_request = state.request(developer).unwrap();
+    assert!(!developer_request.bus_generated);
+    assert_eq!(developer_request.latency.accepted_at_ms, Some(now));
+    assert_eq!(developer_request.latency.queued_at_ms, None);
+
+    let control = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "from an agent".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Agent(agent),
+            now,
+            false,
+        )
+        .unwrap()[0];
+    let control_request = state.request(control).unwrap();
+    assert!(!control_request.bus_generated);
+    assert_eq!(control_request.latency.accepted_at_ms, Some(now));
+    assert_eq!(control_request.latency.queued_at_ms, None);
+}
