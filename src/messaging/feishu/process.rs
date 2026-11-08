@@ -3,6 +3,8 @@ use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use tokio::sync::Notify;
 
 const MAX_OUTPUT: u64 = 64 * 1024;
 
@@ -25,6 +27,9 @@ pub(super) struct Process {
     timeout: Duration,
     #[cfg(test)]
     pub(super) path: Option<OsString>,
+    /// Tests set this so the deadline starts after a grandchild is known to be running.
+    #[cfg(test)]
+    arm_timeout: Option<Arc<Notify>>,
 }
 
 impl Default for Process {
@@ -40,6 +45,8 @@ impl Default for Process {
             timeout: Duration::from_secs(10),
             #[cfg(test)]
             path: None,
+            #[cfg(test)]
+            arm_timeout: None,
         }
     }
 }
@@ -103,6 +110,18 @@ impl Process {
         let mut stdin = child.stdin.take().expect("lark-cli stdin was piped");
         let stdout = child.stdout.take().expect("lark-cli stdout was piped");
         let stderr = child.stderr.take().expect("lark-cli stderr was piped");
+        #[cfg(test)]
+        if let Some(arm) = &self.arm_timeout {
+            // The child is already spawned. Notify keeps a permit if the test
+            // published readiness before this await, so the signal is not lost.
+            if tokio::time::timeout(Duration::from_secs(90), arm.notified())
+                .await
+                .is_err()
+            {
+                terminate_tree(&mut child, process_id).await;
+                return Err("lark-cli readiness was not observed".into());
+            }
+        }
         let finished = {
             let work = async {
                 tokio::try_join!(
@@ -155,6 +174,7 @@ impl Process {
             program: program.into(),
             timeout,
             path: None,
+            arm_timeout: None,
         }
     }
 }
