@@ -228,6 +228,9 @@ impl TerminalRuntime {
         let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
         let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
+        // Acceptance is the caller's sample from before this queue, and the
+        // writer stamp is the sample from after it returns. Filling both here
+        // collapses that interval before the caller can record it.
         let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             io: self.io.clone(),
@@ -243,7 +246,7 @@ impl TerminalRuntime {
             hard_deadline,
             withdraw_grace,
             clock,
-            diagnostics: diagnostics::Diagnostics::default(),
+            diagnostics: diagnostics::Diagnostics::with_timestamps(scope.timestamps()),
             startup_suggestion_open: self.startup_suggestion_open.clone(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -388,7 +391,7 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown::NotSubmitted))?;
         self.diagnostics
             .paste(bytes.len(), delay.as_millis() as u64, self.clock.now());
-        let completion = self.io.queue_input_write_scoped(
+        let completion = self.io.queue_payload_input_write_scoped(
             bytes,
             Bytes::new(),
             delay,

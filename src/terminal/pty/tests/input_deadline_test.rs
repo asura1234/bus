@@ -154,6 +154,8 @@ fn cancelling_partial_text_preserves_protocol_writes_and_resets_the_offset() {
         delay: Duration::ZERO,
         permit,
         reply,
+        timestamps: Default::default(),
+        record_text_write: true,
     });
     runner.enqueue_write(Bytes::from_static(b"response"));
     assert_eq!(runner.flush_pending_writes_once().unwrap(), None);

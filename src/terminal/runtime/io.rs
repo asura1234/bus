@@ -112,7 +112,14 @@ impl PaneRuntimeIo {
         delay: std::time::Duration,
         deadline: Option<std::time::Instant>,
     ) -> std::io::Result<InputCompletion> {
-        self.queue_input_write_scoped(text, enter, delay, deadline, &InputScope::default())
+        self.queue_input_write_scoped_impl(
+            text,
+            enter,
+            delay,
+            deadline,
+            &InputScope::default(),
+            true,
+        )
     }
 
     pub(super) fn queue_input_write_scoped(
@@ -123,41 +130,82 @@ impl PaneRuntimeIo {
         deadline: Option<std::time::Instant>,
         scope: &InputScope,
     ) -> std::io::Result<InputCompletion> {
+        self.queue_input_write_scoped_impl(text, enter, delay, deadline, scope, false)
+    }
+
+    pub(super) fn queue_payload_input_write_scoped(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        deadline: Option<std::time::Instant>,
+        scope: &InputScope,
+    ) -> std::io::Result<InputCompletion> {
+        self.queue_input_write_scoped_impl(text, enter, delay, deadline, scope, true)
+    }
+
+    fn queue_input_write_scoped_impl(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        deadline: Option<std::time::Instant>,
+        scope: &InputScope,
+        record_text_write: bool,
+    ) -> std::io::Result<InputCompletion> {
         let allowance = if !text.is_empty() && !enter.is_empty() {
             delay
         } else {
             std::time::Duration::ZERO
         };
         match self {
-            PaneRuntimeIo::Actor(actor) => {
-                #[cfg(windows)]
-                {
-                    let _ = scope;
-                    actor
-                        .queue_user_input_submission(text, enter, delay, deadline)
-                        .map(InputCompletion::from)
-                }
-                #[cfg(unix)]
-                actor.queue_user_input_submission_scoped(text, enter, delay, deadline, scope)
-            }
+            PaneRuntimeIo::Actor(actor) => actor.queue_user_input_submission_scoped(
+                text,
+                enter,
+                delay,
+                deadline,
+                scope,
+                record_text_write,
+            ),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, clock, .. } => {
                 let failure = clock.take_write_failure();
-                let _ = (deadline, scope);
+                let _ = deadline;
                 let sender = sender.clone();
+                let timestamps = scope.timestamps();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let result = (if text.is_empty() {
                         Ok(())
                     } else {
-                        sender.try_send(text).map_err(std::io::Error::other)
+                        sender
+                            .try_send(text)
+                            .map_err(std::io::Error::other)
+                            .map(|()| {
+                                if record_text_write {
+                                    timestamps
+                                        .lock()
+                                        .unwrap_or_else(|error| error.into_inner())
+                                        .text_written_at_ms
+                                        .get_or_insert(crate::utils::time::now_ms());
+                                }
+                            })
                     })
                     .and_then(|()| {
                         std::thread::sleep(delay);
                         if enter.is_empty() {
                             Ok(())
                         } else {
-                            sender.try_send(enter).map_err(std::io::Error::other)
+                            sender
+                                .try_send(enter)
+                                .map_err(std::io::Error::other)
+                                .map(|()| {
+                                    timestamps
+                                        .lock()
+                                        .unwrap_or_else(|error| error.into_inner())
+                                        .enter_written_at_ms
+                                        .get_or_insert(crate::utils::time::now_ms());
+                                })
                         }
                     });
                     let result = match failure {
@@ -169,7 +217,11 @@ impl PaneRuntimeIo {
                 Ok(InputCompletion::from(reply_rx))
             }
         }
-        .map(|completion| completion.with_enter_delay_allowance(allowance))
+        .map(|completion| {
+            completion
+                .with_enter_delay_allowance(allowance)
+                .with_timestamps(scope.timestamps())
+        })
     }
 }
 

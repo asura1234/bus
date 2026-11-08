@@ -6,6 +6,7 @@ use super::{
     DELIVERED_STALL_MS, QUEUED_STALL_MS,
 };
 
+mod latency;
 mod policy;
 mod queue_order;
 mod rejection;
@@ -123,12 +124,14 @@ impl BusState {
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
                 request_state.submitted_payload = None;
+                request_state.latency.clear_attempt();
                 // Coalesced members go back behind their lead, in order.
                 let members = self.group_members(request);
                 for member in &members {
                     if let Some(member) = self.requests.get_mut(member) {
                         member.phase = RequestPhase::Queued;
                         member.group = None;
+                        member.latency.clear_attempt();
                     }
                 }
                 let queue = self.queues.entry(agent_id).or_default();
@@ -597,6 +600,7 @@ impl BusState {
                 request_state.expected_launch_id = None;
                 request_state.group = None;
                 request_state.steered = false;
+                request_state.latency.clear_attempt();
                 let agent_id = request_state.agent_id;
                 self.queues.entry(agent_id).or_default().insert(0, request);
                 if let Some(lead) = lead.and_then(|lead| self.requests.get_mut(&lead)) {

@@ -30,6 +30,8 @@ impl PtyIoActorRunner {
                 delay,
                 mut permit,
                 reply,
+                timestamps,
+                record_text_write,
             } => {
                 if self.state == ActorState::Running {
                     let committed_deadline = if !text.is_empty() && !enter.is_empty() {
@@ -56,6 +58,8 @@ impl PtyIoActorRunner {
                         delay,
                         phase,
                         reply,
+                        timestamps,
+                        record_text_write,
                     });
                 } else {
                     let _ = reply.send(Err(std::io::Error::new(
@@ -87,6 +91,15 @@ impl PtyIoActorRunner {
                     return;
                 };
                 debug_assert!(matches!(submission.phase, SubmissionPhase::WritingText));
+                if submission.record_text_write {
+                    submission
+                        .timestamps
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .text_written_at_ms
+                        .get_or_insert(crate::utils::time::now_ms());
+                    tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.text_flushed", pane_id = self.pane_id);
+                }
                 submission.phase = SubmissionPhase::WaitingUntil(Instant::now() + submission.delay);
             }
             SubmissionBoundary::Enter => {
@@ -94,6 +107,12 @@ impl PtyIoActorRunner {
                     return;
                 };
                 debug_assert!(matches!(submission.phase, SubmissionPhase::WritingEnter));
+                submission
+                    .timestamps
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .enter_written_at_ms
+                    .get_or_insert(crate::utils::time::now_ms());
                 let _ = submission.reply.send(Ok(()));
             }
         }

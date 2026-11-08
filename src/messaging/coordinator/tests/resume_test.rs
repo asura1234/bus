@@ -345,6 +345,7 @@ fn missing_pane_after_restart_is_cleared_but_transport_failure_is_not_evidence()
                     Ok(ResponseResult::AgentList { agents: vec![] })
                 }
                 Method::PaneGet(_) => Err(TransportError {
+                    timestamps: Default::default(),
                     code: Some(self.code.into()),
                     message: self.code.into(),
                     definitely_rejected: self.rejected,

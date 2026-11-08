@@ -49,6 +49,8 @@ fn run_recorded_submission(
             delay,
             deadline,
             reply: reply_tx,
+            timestamps: Default::default(),
+            record_text_write: true,
         })
         .unwrap();
     data_tx
@@ -63,7 +65,7 @@ fn run_recorded_submission(
     let input_write_tx = write_tx.clone();
     let input_accepting = Arc::clone(&accepting);
     let input_thread = std::thread::spawn(move || {
-        run_input_forwarder(&mut data_rx, input_write_tx, input_accepting)
+        run_input_forwarder(&mut data_rx, input_write_tx, input_accepting, 1)
     });
     flushed_rx.recv().expect("prompt was flushed");
     during_delay(&write_tx, &accepting);
@@ -138,6 +140,8 @@ fn expired_queued_submission_is_not_written() {
             delay: Duration::from_millis(30),
             deadline: None,
             reply: first_reply_tx,
+            timestamps: Default::default(),
+            record_text_write: true,
         })
         .unwrap();
     data_tx
@@ -147,6 +151,8 @@ fn expired_queued_submission_is_not_written() {
             delay: Duration::ZERO,
             deadline: Some(Instant::now() + Duration::from_millis(10)),
             reply: expired_reply_tx,
+            timestamps: Default::default(),
+            record_text_write: true,
         })
         .unwrap();
 
@@ -156,7 +162,7 @@ fn expired_queued_submission_is_not_written() {
     });
     let input_write_tx = write_tx.clone();
     let input_thread =
-        std::thread::spawn(move || run_input_forwarder(&mut data_rx, input_write_tx, accepting));
+        std::thread::spawn(move || run_input_forwarder(&mut data_rx, input_write_tx, accepting, 1));
     first_reply_rx.recv().unwrap().unwrap();
     let err = expired_reply_rx.recv().unwrap().unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
@@ -197,7 +203,7 @@ fn shutdown_returns_while_submission_enter_is_backpressured() {
         )
         .expect("submission queues");
     let input_thread = std::thread::spawn(move || {
-        run_input_forwarder(&mut data_rx, write_tx, accepting);
+        run_input_forwarder(&mut data_rx, write_tx, accepting, 1);
     });
 
     let PtyIoWriteCommand::SubmissionPart { bytes, reply, .. } = write_rx
@@ -233,4 +239,62 @@ fn shutdown_returns_while_submission_enter_is_backpressured() {
     shutdown_thread.join().expect("shutdown thread joins");
     input_thread.join().expect("input thread joins");
     shutdown_result.expect("shutdown must return before a blocked Enter write completes");
+}
+
+#[test]
+fn delivery_latency_payload_only_submission_does_not_record_an_enter_write() {
+    let (flushed, _flushed_rx) = std_mpsc::channel();
+    let mut writer = RecordingWriter {
+        writes: Vec::new(),
+        flushes: Vec::new(),
+        fail_after: None,
+        flushed,
+    };
+    let (data_tx, mut data_rx) = mpsc::channel(1);
+    let (control_tx, _control_rx) = std_mpsc::channel();
+    let (write_tx, write_rx) = std_mpsc::channel();
+    let accepting = Arc::new(Mutex::new(true));
+    let handle = PtyIoActorHandle {
+        data_tx,
+        control_tx,
+        write_tx: write_tx.clone(),
+        response_order: Arc::new(Mutex::new(())),
+        accepting: Arc::clone(&accepting),
+    };
+    let scope = InputScope::default();
+    let completion = handle
+        .queue_user_input_submission_scoped(
+            Bytes::from_static(b"prompt"),
+            Bytes::new(),
+            Duration::ZERO,
+            None,
+            &scope,
+            true,
+        )
+        .expect("payload paste queues");
+    let writer_thread = std::thread::spawn(move || {
+        run_writer(&mut writer, write_rx);
+        writer
+    });
+    let input_thread = std::thread::spawn(move || {
+        run_input_forwarder(&mut data_rx, write_tx, accepting, 1);
+    });
+    let result = completion.recv_timeout(Duration::from_secs(2));
+    let timestamps = completion.submission_timestamps();
+    drop(handle);
+    input_thread.join().expect("input forwarder joins");
+    let writer = writer_thread.join().expect("writer joins");
+
+    result.expect("payload completion arrives").expect("payload writes");
+    assert_eq!(
+        writer.writes.iter().map(|write| write.0.as_slice()).collect::<Vec<_>>(),
+        vec![b"prompt".as_slice()],
+        "observed paste writes the payload before composer ownership, without Enter"
+    );
+    assert!(timestamps.text_written_at_ms.is_some());
+    assert_eq!(
+        timestamps.enter_written_at_ms,
+        None,
+        "payload-only paste must leave Enter timing absent until a real Enter is written"
+    );
 }

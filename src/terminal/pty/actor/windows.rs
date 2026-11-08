@@ -7,6 +7,8 @@ use portable_pty::{MasterPty, PtySize};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+use super::{InputCompletion, InputScope, SharedSubmissionTimestamps};
+
 pub(crate) struct PtyReadResult {
     pub terminal_responses: Vec<Bytes>,
 }
@@ -41,6 +43,8 @@ enum PtyIoDataCommand {
         delay: Duration,
         deadline: Option<Instant>,
         reply: std_mpsc::Sender<std::io::Result<()>>,
+        timestamps: SharedSubmissionTimestamps,
+        record_text_write: bool,
     },
 }
 
@@ -97,13 +101,33 @@ impl PtyIoActorHandle {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_user_input_submission(
         &self,
         text: Bytes,
         enter: Bytes,
         delay: Duration,
         deadline: Option<Instant>,
-    ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+    ) -> std::io::Result<InputCompletion> {
+        self.queue_user_input_submission_scoped(
+            text,
+            enter,
+            delay,
+            deadline,
+            &InputScope::default(),
+            true,
+        )
+    }
+
+    pub(crate) fn queue_user_input_submission_scoped(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+        deadline: Option<Instant>,
+        scope: &InputScope,
+        record_text_write: bool,
+    ) -> std::io::Result<InputCompletion> {
         let accepting = self
             .accepting
             .lock()
@@ -122,6 +146,8 @@ impl PtyIoActorHandle {
                 delay,
                 deadline,
                 reply: reply_tx,
+                timestamps: scope.timestamps(),
+                record_text_write,
             })
             .map_err(|err| match err {
                 mpsc::error::TrySendError::Full(_) => {
@@ -131,7 +157,7 @@ impl PtyIoActorHandle {
                     std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed")
                 }
             })?;
-        Ok(reply_rx)
+        Ok(InputCompletion::from(reply_rx).with_timestamps(scope.timestamps()))
     }
 
     pub(crate) fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
@@ -205,7 +231,7 @@ impl PtyIoActor {
             let write_tx = write_tx.clone();
             let accepting = Arc::clone(&accepting);
             std::thread::spawn(move || {
-                run_input_forwarder(&mut data_rx, write_tx, accepting);
+                run_input_forwarder(&mut data_rx, write_tx, accepting, pane_id);
                 debug!(pane_id, "windows pty input thread exiting");
             });
         }
@@ -313,6 +339,7 @@ fn run_input_forwarder(
     data_rx: &mut mpsc::Receiver<PtyIoDataCommand>,
     write_tx: std_mpsc::Sender<PtyIoWriteCommand>,
     accepting: Arc<Mutex<bool>>,
+    pane_id: u32,
 ) {
     while let Some(command) = data_rx.blocking_recv() {
         match command {
@@ -327,6 +354,8 @@ fn run_input_forwarder(
                 delay,
                 deadline,
                 reply,
+                timestamps,
+                record_text_write,
             } => {
                 let result = if deadline.is_some_and(|deadline| {
                     deadline.saturating_duration_since(Instant::now()) <= delay
@@ -335,11 +364,20 @@ fn run_input_forwarder(
                 } else {
                     let text_deadline = deadline.and_then(|deadline| deadline.checked_sub(delay));
                     write_submission_part(&write_tx, text, text_deadline).and_then(|()| {
+                        if record_text_write {
+                            timestamps
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .text_written_at_ms
+                                .get_or_insert(crate::utils::time::now_ms());
+                            tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.text_flushed", pane_id);
+                        }
                         // A started text write is committed. Finish Enter even if the caller
                         // stops waiting so a timeout cannot leave a partial prompt.
                         std::thread::sleep(delay);
                         // Enqueue under the gate so shutdown stays ordered against Enter, but
                         // wait outside it: shutdown must not block behind a backpressured write.
+                        let record_enter_write = !enter.is_empty();
                         let completion = {
                             let accepting = accepting
                                 .lock()
@@ -349,7 +387,15 @@ fn run_input_forwarder(
                             }
                             send_submission_part(&write_tx, enter, None)?
                         };
-                        wait_submission_part(completion)
+                        wait_submission_part(completion).map(|()| {
+                            if record_enter_write {
+                                timestamps
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .enter_written_at_ms
+                                    .get_or_insert(crate::utils::time::now_ms());
+                            }
+                        })
                     })
                 };
                 let failed = result

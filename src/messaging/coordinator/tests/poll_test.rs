@@ -59,6 +59,7 @@ fn exit_evidence_updates_lifecycle_without_developer_chat() {
     for listing in [
         Ok(ResponseResult::AgentList { agents: vec![] }),
         Err(TransportError {
+            timestamps: Default::default(),
             message: "offline".into(),
             code: None,
             definitely_rejected: false,
@@ -399,6 +400,7 @@ mod status_tests {
                 // native snapshot. This status-only fixture cannot supply one;
                 // keep that read from consuming the following agent.list reply.
                 Err(TransportError {
+                    timestamps: Default::default(),
                     code: Some("dialog_observation_unavailable".into()),
                     message: "status-only fixture has no screen snapshot".into(),
                     definitely_rejected: true,
@@ -473,6 +475,7 @@ mod status_tests {
 
     fn composer_busy() -> Result<ResponseResult, TransportError> {
         Err(TransportError {
+            timestamps: Default::default(),
             message: "Waiting for the developer's composer".into(),
             code: Some(crate::protocol::api::AGENT_COMPOSER_BUSY.into()),
             definitely_rejected: true,

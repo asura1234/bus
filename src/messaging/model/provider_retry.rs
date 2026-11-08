@@ -218,6 +218,7 @@ impl BusState {
         request.progress_at_ms = Some(now_ms);
         request.turn_ended_at_ms = None;
         request.awaiting_background = false;
+        request.latency.clear_attempt();
         let payload = self.render_request_payload(id).expect("retained prompt");
         self.requests.get_mut(&id).expect("held member").submitted_payload = Some(format!(
             "Continue the existing task after a transient provider failure; check completed effects before repeating actions.\n\n{payload}"

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::agents::AgentInfo;
+use super::agents::{AgentInfo, NativeSubmissionTimestamps};
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
 use super::panes::{
@@ -28,6 +28,8 @@ pub struct ErrorResponse {
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamps: Option<Box<NativeSubmissionTimestamps>>,
 }
 
 // Built once per API response and serialized immediately; variant size does not matter.
@@ -77,6 +79,8 @@ pub enum ResponseResult {
     },
     AgentPrompted {
         agent: AgentInfo,
+        #[serde(default, skip_serializing_if = "NativeSubmissionTimestamps::is_empty")]
+        timestamps: NativeSubmissionTimestamps,
     },
     AgentList {
         agents: Vec<AgentInfo>,

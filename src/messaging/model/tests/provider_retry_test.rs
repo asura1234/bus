@@ -925,3 +925,39 @@ fn kimi_native_connection_failure_keeps_the_delivery_open() {
     );
     assert!(state.agent(agent).unwrap().provider_retry.is_some());
 }
+
+#[test]
+fn accept_callback_stamps_provider_start_on_the_rebound_member() {
+    let (mut state, agent, lead, member, _) = steering_failure(false, false);
+    let lead_started = state.request(lead).unwrap().latency.provider_started_at_ms;
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "native-queued-start".into(),
+            sequence: 24,
+            occurred_at_ms: 200,
+            agent_id: agent,
+            launch_id: "launch-codex".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("native-next-turn".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some("second task".into()),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedSteering
+    );
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(member));
+    assert_eq!(
+        state
+            .request(member)
+            .unwrap()
+            .latency
+            .provider_started_at_ms,
+        Some(200),
+        "the steered member owns the start that rebound it"
+    );
+    assert_eq!(
+        state.request(lead).unwrap().latency.provider_started_at_ms,
+        lead_started,
+        "rebinding must not give the previous lead the member's provider start"
+    );
+}

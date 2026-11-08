@@ -1,5 +1,5 @@
 mod input_completion;
-pub(crate) use input_completion::{InputCompletion, InputScope};
+pub(crate) use input_completion::{InputCompletion, InputScope, SharedSubmissionTimestamps};
 
 /// Bytes read from all PTYs; a burst of agent output shows up here.
 pub(crate) static PTY_BYTES: crate::utils::perf::Counter =

@@ -7,7 +7,6 @@ use super::{
 };
 use crate::agents::providers::spool;
 use crate::messaging::perf;
-use crate::messaging::storage::state_store::JournalOp;
 use std::path::Path;
 
 mod callback_spool;
@@ -48,6 +47,10 @@ pub(super) struct Worker {
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     pub(super) delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    /// Replies committed in state.json whose delivery journal did not land.
+    /// Their completed_reply stays off durable_state until a later save
+    /// journals the stamp. Recovery treats that one-field gap as this set.
+    pub(super) unstamped_replies: BTreeSet<RequestId>,
     /// Author waiters renew these leases without acknowledging any reply.
     /// A dead waiter cannot hold routing across restart or lease expiry.
     pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
@@ -80,7 +83,7 @@ pub(super) struct Worker {
     /// Folders listed for system sounds; None reads the operating system's.
     pub(super) sound_dirs: Option<Vec<PathBuf>>,
     /// Saves deferred to one write, while a tick applies spooled callbacks.
-    batch: Option<SaveBatch>,
+    pub(super) batch: Option<SaveBatch>,
     /// When the last archive pass ran; it runs at most once per [`ARCHIVE_EVERY`].
     archived_at: Option<std::time::Instant>,
     #[cfg(test)]
@@ -90,10 +93,10 @@ pub(super) struct Worker {
 /// State changes waiting for one `state.json` write, and the spool files
 /// that may be deleted only once that write is durable.
 #[derive(Default)]
-struct SaveBatch {
+pub(super) struct SaveBatch {
     /// The in-memory state before the first deferred change; restored when
     /// the write fails, as a failed immediate save leaves the state unchanged.
-    before: Option<(BusState, u64)>,
+    pub(super) before: Option<(BusState, u64)>,
     acknowledgements: Vec<(PathBuf, Vec<PathBuf>)>,
     rejections: Vec<(AgentId, PathBuf, PathBuf)>,
 }
@@ -166,6 +169,7 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            unstamped_replies: BTreeSet::new(),
             reply_waiters: BTreeMap::new(),
             #[cfg(test)]
             test_reply_waiter_now: None,
@@ -222,63 +226,6 @@ impl Worker {
         if delay > 0 {
             std::thread::sleep(Duration::from_millis(delay));
         }
-    }
-
-    /// Commits `state` and makes it durable. A state that differs from the
-    /// last write only in status-only observations writes nothing: those are
-    /// never persisted on their own (see `apply_poll`), so rewriting the same
-    /// durable content is pure cost. Inside a batch the write waits for
-    /// [`Self::finish_batch`].
-    pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
-        if !self.store.has_unfolded_journal()
-            && !state.durable_poll_change_from(&self.durable_state)
-        {
-            if state != self.state {
-                self.state = state;
-                self.revision += 1;
-            }
-            return Ok(());
-        }
-        if let Some(batch) = self.batch.as_mut() {
-            if batch.before.is_none() {
-                batch.before = Some((self.state.clone(), self.revision));
-            }
-            self.state = state;
-            self.revision += 1;
-            return Ok(());
-        }
-        self.write(state)?;
-        self.revision += 1;
-        Ok(())
-    }
-
-    fn write(&mut self, state: BusState) -> Result<(), String> {
-        if let Err(error) = self.store.save(&state) {
-            if crate::utils::error_pipe::is_suppressed() {
-                tracing::error!(event = "bus.error_pipe.save_failed", %error, "Error notice could not be persisted");
-                return Err(error.to_string());
-            }
-            self.pause_storage(&error);
-            return Err(self.storage_notice().into());
-        }
-        diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
-        diagnostics::recoveries(&self.durable_state, &state);
-        diagnostics::provider_resets(&self.durable_state, &state);
-        super::launch_metrics::log_outcomes(&self.durable_state, &state);
-        for agent in state.agents() {
-            if self
-                .durable_state
-                .agent(agent.id)
-                .is_some_and(|old| old.status != agent.status)
-            {
-                tracing::debug!(event = "bus.agent.status", agent_id = agent.id.0,
-                    room_id = agent.room_id.0, request_id = ?agent.current_request.map(|id| id.0),
-                    status = ?agent.status, "Bus status changed");
-            }
-        }
-        self.durable_state = state.clone();
-        self.state = state;
-        Ok(())
     }
 
     /// Runs the archive pass at most once per [`ARCHIVE_EVERY`].
@@ -347,18 +294,6 @@ impl Worker {
             spool::retain_rejected(&dir, &path, spool::RoutingKey(id.0))
                 .map_err(|e| e.to_string())?;
         }
-        Ok(())
-    }
-
-    /// Commits a composer draft edit or send through the store's journal:
-    /// durable before it is acknowledged, without a full `state.json` save.
-    pub(super) fn journal(&mut self, state: BusState, op: JournalOp) -> Result<(), String> {
-        if let Err(error) = self.store.journal(op) {
-            self.pause_storage(&error);
-            return Err(self.storage_notice().into());
-        }
-        self.state = state;
-        self.revision += 1;
         Ok(())
     }
 

@@ -57,7 +57,7 @@ impl Worker {
                         }
                         _ => error.to_string(),
                     })?;
-                self.save(state)?;
+                self.save_without_reply_timestamps(state)?;
                 crate::messaging::diagnostics::request(
                     &self.state,
                     request,
@@ -191,6 +191,7 @@ impl Worker {
             .prompt
             .id;
         self.save(state)?;
+        self.note_requests_queued(&ids);
         for id in &ids {
             crate::messaging::diagnostics::request(
                 &self.state,

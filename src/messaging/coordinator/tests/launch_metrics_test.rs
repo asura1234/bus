@@ -129,6 +129,7 @@ fn launch_metrics_failed_native_observations_do_not_fabricate_failure() {
     let replies = (0..3)
         .map(|_| {
             Err(TransportError {
+                timestamps: Default::default(),
                 code: None,
                 message: "lost list response".into(),
                 definitely_rejected: false,

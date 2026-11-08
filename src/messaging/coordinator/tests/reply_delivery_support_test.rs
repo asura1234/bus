@@ -244,6 +244,7 @@ impl NativeServer {
         crate::protocol::api::client::parse_response_value(response)
             .map(|r| r.result)
             .map_err(|error| TransportError {
+                timestamps: Default::default(),
                 code: match &error {
                     crate::protocol::api::client::ApiClientError::ErrorResponse(r) => {
                         Some(r.error.code.clone())

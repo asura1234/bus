@@ -4,6 +4,7 @@ use super::{
     callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
     RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
+use crate::messaging::native::TransportError;
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
@@ -99,20 +100,7 @@ impl Worker {
             }) {
                 continue;
             }
-            let waited = self.delivery_waits.contains_key(&agent.id);
-            if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
-                if let Some(reason) = diagnostics::wait_reason(&agent) {
-                    if self.delivery_waits.insert(agent.id, (request, reason))
-                        != Some((request, reason))
-                    {
-                        diagnostics::request(&self.state, request, "bus.delivery.wait", reason);
-                    }
-                } else {
-                    self.delivery_waits.remove(&agent.id);
-                }
-            } else {
-                self.delivery_waits.remove(&agent.id);
-            }
+            let waited = self.note_queued_delivery_wait(&agent);
             if self.withdrawn_at.contains_key(&agent.id) {
                 continue;
             }
@@ -174,6 +162,36 @@ impl Worker {
             self.deliver_queued_request(&agent, waited, steer_unbound)?;
         }
         Ok(())
+    }
+
+    /// Whether the queued head already waited for this agent.
+    ///
+    /// The flag belongs to the request about to be sent. A stale map entry for
+    /// an older head must not mark this one. Dialog blocks the send without
+    /// entering `wait_reason`; that function keeps its precedence, including
+    /// the Codex first-session exception, so the hold is recorded here.
+    fn note_queued_delivery_wait(&mut self, agent: &RoomAgent) -> bool {
+        let head = self.state.queued_requests(agent.id).first().copied();
+        let waited = head.is_some_and(|request| {
+            self.delivery_waits
+                .get(&agent.id)
+                .is_some_and(|(waited_for, _)| *waited_for == request)
+        });
+        if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
+            let reason = diagnostics::wait_reason(agent).or(agent.dialog.then_some("agent_dialog"));
+            if let Some(reason) = reason {
+                if self.delivery_waits.insert(agent.id, (request, reason))
+                    != Some((request, reason))
+                {
+                    diagnostics::request(&self.state, request, "bus.delivery.wait", reason);
+                }
+            } else {
+                self.delivery_waits.remove(&agent.id);
+            }
+        } else {
+            self.delivery_waits.remove(&agent.id);
+        }
+        waited
     }
 
     fn prepare_provider_retries(&self, state: &mut super::BusState, now_ms: u64) -> bool {
@@ -463,6 +481,9 @@ impl Worker {
         state
             .begin_submission(request, launch, boundary)
             .map_err(|e| e.to_string())?;
+        state
+            .record_picked(request, io::now_ms(), waited)
+            .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
@@ -481,35 +502,10 @@ impl Worker {
             "Bus payload metadata"
         );
         let method = submission_method(agent, text, terminal, pane, steer);
-        let outcome = match self.transport.request(method) {
-            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
-                provider_session_id: identity.session_id.clone(),
-                provider_turn_id: None,
-            },
-            Ok(other) => SubmissionOutcome::Uncertain {
-                message: format!("Unexpected submit response; no automatic retry: {other:?}"),
-            },
-            Err(error)
-                if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) =>
-            {
-                SubmissionOutcome::ComposerBusy
-            }
-            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
-                message: error.message,
-            },
-            Err(error) => SubmissionOutcome::Uncertain {
-                message: format!(
-                    "Submit outcome unknown; no automatic retry: {}",
-                    error.message
-                ),
-            },
-        };
-        let outcome_name = match &outcome {
-            SubmissionOutcome::ComposerBusy => "composer_wait",
-            SubmissionOutcome::Confirmed { .. } => "confirmed",
-            SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
-            SubmissionOutcome::Uncertain { .. } => "uncertain",
-        };
+        let response = self.transport.request(method);
+        self.note_native_requested(request, io::now_ms());
+        let native_timestamps = native_response_timestamps(&response);
+        let (outcome, outcome_name) = native_submit_outcome(response, &identity.session_id);
         tracing::info!(
             event = "bus.delivery.result",
             request_id = request.0,
@@ -518,6 +514,7 @@ impl Worker {
             "Native submit result; uncertain outcomes are never retried"
         );
         let mut state = self.state.clone();
+        record_native_timestamps(&mut state, request, native_timestamps)?;
         state
             .record_submission(request, outcome.clone())
             .map_err(|e| e.to_string())?;
@@ -576,21 +573,27 @@ impl Worker {
         state
             .begin_steering(request, lead)
             .map_err(|e| e.to_string())?;
+        state
+            .record_picked(request, io::now_ms(), true)
+            .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
         let started = std::time::Instant::now();
-        let outcome = match self.transport.request(Method::AgentPromptIfIdle(
-            schema::AgentPromptIfIdleParams {
-                target: pane.clone(),
-                text,
-                expected_terminal_id: terminal.clone(),
-                expected_pane_id: pane.clone(),
-                expected_agent: launch::provider_kind(agent.provider).into(),
-                expected_session_id: session.clone(),
-                steer: true,
-            },
-        )) {
+        let response =
+            self.transport
+                .request(Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
+                    target: pane.clone(),
+                    text,
+                    expected_terminal_id: terminal.clone(),
+                    expected_pane_id: pane.clone(),
+                    expected_agent: launch::provider_kind(agent.provider).into(),
+                    expected_session_id: session.clone(),
+                    steer: true,
+                }));
+        self.note_native_requested(request, io::now_ms());
+        let native_timestamps = native_response_timestamps(&response);
+        let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: Some(session.clone()),
                 provider_turn_id: None,
@@ -614,6 +617,7 @@ impl Worker {
             mode = "steer", outcome = ?outcome,
             elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
         let mut state = self.state.clone();
+        record_native_timestamps(&mut state, request, native_timestamps)?;
         state
             .record_steering(request, outcome.clone())
             .map_err(|e| e.to_string())?;
@@ -621,6 +625,60 @@ impl Worker {
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }
+}
+
+fn native_submit_outcome(
+    response: Result<ResponseResult, TransportError>,
+    provider_session_id: &Option<String>,
+) -> (SubmissionOutcome, &'static str) {
+    let outcome = match response {
+        Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
+            provider_session_id: provider_session_id.clone(),
+            provider_turn_id: None,
+        },
+        Ok(other) => SubmissionOutcome::Uncertain {
+            message: format!("Unexpected submit response; no automatic retry: {other:?}"),
+        },
+        Err(error) if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) => {
+            SubmissionOutcome::ComposerBusy
+        }
+        Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
+            message: error.message,
+        },
+        Err(error) => SubmissionOutcome::Uncertain {
+            message: format!(
+                "Submit outcome unknown; no automatic retry: {}",
+                error.message
+            ),
+        },
+    };
+    let outcome_name = match &outcome {
+        SubmissionOutcome::ComposerBusy => "composer_wait",
+        SubmissionOutcome::Confirmed { .. } => "confirmed",
+        SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
+        SubmissionOutcome::Uncertain { .. } => "uncertain",
+    };
+    (outcome, outcome_name)
+}
+
+fn native_response_timestamps(
+    response: &Result<ResponseResult, TransportError>,
+) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
+    match response {
+        Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
+        Err(error) => *error.timestamps,
+        _ => Default::default(),
+    }
+}
+
+fn record_native_timestamps(
+    state: &mut crate::messaging::model::BusState,
+    request: RequestId,
+    timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
+) -> Result<(), String> {
+    state
+        .record_native_timestamps(request, timestamps.into())
+        .map_err(|error| error.to_string())
 }
 
 fn submission_method(

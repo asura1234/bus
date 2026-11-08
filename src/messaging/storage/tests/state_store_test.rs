@@ -291,6 +291,59 @@ fn room_with_recipient(state: &mut BusState) -> crate::messaging::model::RoomId 
 }
 
 #[test]
+fn captured_draft_and_latency_metadata_replay_together_without_resubmitting() {
+    let dir = temp_dir("draft-latency-replay");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    state.set_draft_text(room, "newer unsent draft").unwrap();
+    store.save(&state).unwrap();
+    let baseline = fs::read(&path).unwrap();
+    let mut captured = state.room(room).unwrap().draft.clone();
+    captured.text = "captured submission".into();
+    let request = state
+        .submit_draft_exact(room, captured.clone(), 1_000, true)
+        .unwrap()[0];
+    store
+        .journal(JournalOp::SubmitDraft {
+            room,
+            draft: captured,
+            queued: true,
+            now_ms: 1_000,
+        })
+        .unwrap();
+    store
+        .journal(JournalOp::DeliveryTimestamps {
+            room,
+            request_id: request,
+            queued_at_ms: Some(1_005),
+            native_requested_at_ms: Some(1_015),
+            reply_delivered_at_ms: None,
+        })
+        .unwrap();
+    store
+        .journal(JournalOp::DraftText {
+            room,
+            text: "later typing".into(),
+        })
+        .unwrap();
+
+    for _ in 0..2 {
+        let reloaded = JsonStore::new(path.clone()).load().unwrap().unwrap();
+        assert_eq!(reloaded.requests().count(), 1);
+        let delivered = reloaded.request(request).unwrap();
+        assert_eq!(delivered.prompt.text, "captured submission");
+        assert_eq!(delivered.latency.accepted_at_ms, Some(1_000));
+        assert_eq!(delivered.latency.queued_at_ms, Some(1_005));
+        assert_eq!(delivered.latency.native_requested_at_ms, Some(1_015));
+        assert_eq!(reloaded.room(room).unwrap().draft.text, "later typing");
+        assert_eq!(fs::read(&path).unwrap(), baseline);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn journaled_drafts_and_sends_survive_reload_without_rewriting_state() {
     let dir = temp_dir("journal");
     let path = dir.join("state.json");
@@ -663,4 +716,62 @@ fn save_publishes_each_durable_phase_and_serialized_bytes() {
     }
     assert!(perf::STORE_BYTES.take().unwrap() >= fs::metadata(path).unwrap().len());
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn serialized_completion_matching_start_advances_both_phases() {
+    bounded_completion_replay(&[(1_005, 1_008)], 1_008);
+}
+
+#[test]
+fn serialized_completion_mismatched_start_preserves_both_phases() {
+    bounded_completion_replay(&[(999, 1_008)], 1_005);
+}
+
+#[test]
+fn serialized_completion_stale_start_preserves_completed_values() {
+    bounded_completion_replay(&[(1_005, 1_008), (1_005, 1_015)], 1_008);
+}
+
+#[test]
+fn serialized_completion_repeat_keeps_the_first_completion() {
+    bounded_completion_replay(&[(1_005, 1_008), (1_005, 1_099)], 1_008);
+}
+
+#[test]
+fn serialized_zero_completion_retains_the_documented_scalar_alias() {
+    bounded_completion_replay(&[(1_005, 1_005), (1_005, 1_010)], 1_010);
+}
+
+#[test]
+fn serialized_backward_completion_keeps_the_start() {
+    bounded_completion_replay(&[(1_005, 1_000)], 1_005);
+}
+
+fn bounded_completion_replay(completions: &[(u64, u64)], expected: u64) {
+    for phase in ["queued", "native_requested"] {
+        let mut state = BusState::new();
+        let room = room_with_recipient(&mut state);
+        state.set_draft_text(room, "serialized completion").unwrap();
+        let request = state.submit_draft(room, 1_000).unwrap()[0];
+        state.record_queued(request, 1_005).unwrap();
+        state.record_native_requested(request, 1_005).unwrap();
+        for (start, end) in completions {
+            let op: JournalOp = serde_json::from_value(serde_json::json!({
+                "op": "delivery_timestamp_completion", "room": room, "request_id": request,
+                "phase": phase, "started_at_ms": start, "completed_at_ms": end
+            }))
+            .unwrap();
+            op.apply(&mut state).unwrap();
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        }
+        let latency = &state.request(request).unwrap().latency;
+        let (selected, other) = if phase == "queued" {
+            (latency.queued_at_ms, latency.native_requested_at_ms)
+        } else {
+            (latency.native_requested_at_ms, latency.queued_at_ms)
+        };
+        assert_eq!(selected, Some(expected), "{phase}: {completions:?}");
+        assert_eq!(other, Some(1_005), "completion changed another phase");
+    }
 }

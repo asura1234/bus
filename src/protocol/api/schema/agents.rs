@@ -4,6 +4,37 @@ use serde::{Deserialize, Serialize};
 
 use super::common::{AgentStatus, ReadFormat, ReadSource};
 
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(default)]
+pub struct NativeSubmissionTimestamps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_accepted_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writer_queued_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paste_started_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_written_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paste_completed_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composer_owned_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enter_sent_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enter_written_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_confirmed_at_ms: Option<u64>,
+}
+
+impl NativeSubmissionTimestamps {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentReadParams {
     pub target: String,

@@ -827,3 +827,553 @@ fn orchestrator_independent_policy_covers_legacy_queued_records_without_the_flag
         assert_eq!(restored.queued_requests(target), queued.as_slice());
     }
 }
+
+#[test]
+fn delivery_timestamps_round_trip_and_legacy_requests_default_to_empty() {
+    let (mut state, _, request) = idle_with_queued(1_000, "timed");
+    let accepted = state.request(request).unwrap().prompt.submitted_at_ms;
+    assert_eq!(
+        state.request(request).unwrap().latency.accepted_at_ms,
+        Some(accepted)
+    );
+    state.record_queued(request, 1_005).unwrap();
+    state.record_queued(request, 900).unwrap();
+    assert_eq!(
+        state.request(request).unwrap().latency.queued_at_ms,
+        Some(1_005),
+        "a retry or backward wall clock cannot replace the first timestamp"
+    );
+    let expected = state.request(request).unwrap().latency.clone();
+    let populated: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    assert_eq!(populated.request(request).unwrap().latency, expected);
+
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][request.0.to_string()]
+        .as_object_mut()
+        .unwrap()
+        .remove("latency");
+    let restored: BusState = serde_json::from_value(document).unwrap();
+    assert!(restored.request(request).unwrap().latency.is_empty());
+    let round_trip: BusState =
+        serde_json::from_value(serde_json::to_value(&restored).unwrap()).unwrap();
+    assert_eq!(round_trip, restored);
+}
+
+#[test]
+fn coalesced_recipients_share_native_and_provider_delivery_timestamps() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state
+        .coalesce_queue(first)
+        .expect("coalesce queued messages");
+    state.record_picked(first, 20, false).unwrap();
+    state.record_native_requested(first, 30).unwrap();
+    state
+        .record_native_timestamps(
+            first,
+            crate::messaging::model::NativeSubmissionTimestamps {
+                text_written_at_ms: Some(40),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.record_provider_started(first, 50);
+    state.record_reply_captured(first, 60);
+    for id in [first, second] {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.latency.picked_at_ms, Some(20));
+        assert_eq!(request.latency.native_requested_at_ms, Some(30));
+        assert_eq!(request.latency.native.text_written_at_ms, Some(40));
+        assert_eq!(request.latency.provider_started_at_ms, Some(50));
+        assert_eq!(request.latency.reply_captured_at_ms, Some(60));
+    }
+}
+
+fn record_delivery_attempt(
+    state: &mut BusState,
+    lead: RequestId,
+    requested_at_ms: u64,
+    native: crate::messaging::model::NativeSubmissionTimestamps,
+    provider_started_at_ms: u64,
+    reply_captured_at_ms: u64,
+) {
+    state
+        .record_native_requested(lead, requested_at_ms)
+        .unwrap();
+    state.record_native_timestamps(lead, native).unwrap();
+    state.record_provider_started(lead, provider_started_at_ms);
+    state.record_reply_captured(lead, reply_captured_at_ms);
+}
+
+fn assert_shared_attempt(
+    state: &BusState,
+    ids: [RequestId; 2],
+    requested_at_ms: u64,
+    server_accepted_at_ms: u64,
+    writer_queued_at_ms: u64,
+    text_written_at_ms: u64,
+    enter_written_at_ms: u64,
+    native_confirmed_at_ms: u64,
+    provider_started_at_ms: u64,
+    reply_captured_at_ms: u64,
+) {
+    for id in ids {
+        let request = state.request(id).unwrap();
+        assert_eq!(
+            request.latency.native_requested_at_ms,
+            Some(requested_at_ms),
+            "{id:?} native request"
+        );
+        assert_eq!(
+            request.latency.native.server_accepted_at_ms,
+            Some(server_accepted_at_ms),
+            "{id:?} server acceptance"
+        );
+        assert_eq!(
+            request.latency.native.writer_queued_at_ms,
+            Some(writer_queued_at_ms),
+            "{id:?} writer queue"
+        );
+        assert_eq!(
+            request.latency.native.text_written_at_ms,
+            Some(text_written_at_ms),
+            "{id:?} text written"
+        );
+        assert_eq!(
+            request.latency.native.enter_written_at_ms,
+            Some(enter_written_at_ms),
+            "{id:?} enter"
+        );
+        assert_eq!(
+            request.latency.native.native_confirmed_at_ms,
+            Some(native_confirmed_at_ms),
+            "{id:?} native confirmation"
+        );
+        assert_eq!(
+            request.latency.native.paste_started_at_ms, None,
+            "{id:?} failed paste must not survive into the next attempt"
+        );
+        assert_eq!(
+            request.latency.provider_started_at_ms,
+            Some(provider_started_at_ms),
+            "{id:?} provider start"
+        );
+        assert_eq!(
+            request.latency.reply_captured_at_ms,
+            Some(reply_captured_at_ms),
+            "{id:?} reply capture"
+        );
+    }
+}
+
+#[test]
+fn requeued_delivery_records_the_later_attempt_for_every_coalesced_recipient() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state.coalesce_queue(first).expect("share one submission");
+    let accepted = state.request(first).unwrap().latency.accepted_at_ms;
+    state.record_queued(first, 1_005).unwrap();
+    state.record_picked(first, 1_010, true).unwrap();
+    state.record_reply_delivered(first, 1_080);
+    record_delivery_attempt(
+        &mut state,
+        first,
+        1_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(1_030),
+            writer_queued_at_ms: Some(1_040),
+            paste_started_at_ms: Some(1_045),
+            text_written_at_ms: Some(1_050),
+            enter_written_at_ms: Some(1_055),
+            native_confirmed_at_ms: Some(1_058),
+            ..Default::default()
+        },
+        1_060,
+        1_070,
+    );
+
+    state
+        .begin_submission(first, "launch-codex", 1_100)
+        .unwrap();
+    state
+        .record_submission(first, SubmissionOutcome::ComposerBusy)
+        .unwrap();
+    state.record_queued(first, 900).unwrap();
+    state.coalesce_queue(first).expect("share the retry");
+    record_delivery_attempt(
+        &mut state,
+        first,
+        2_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(2_030),
+            writer_queued_at_ms: Some(2_040),
+            text_written_at_ms: Some(2_050),
+            enter_written_at_ms: Some(2_055),
+            native_confirmed_at_ms: Some(2_058),
+            ..Default::default()
+        },
+        2_060,
+        2_070,
+    );
+    state.record_provider_started(first, 2_050);
+    state.record_reply_captured(first, 1_070);
+    state
+        .record_native_timestamps(
+            first,
+            crate::messaging::model::NativeSubmissionTimestamps {
+                text_written_at_ms: Some(1_050),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_shared_attempt(
+        &state,
+        [first, second],
+        2_020,
+        2_030,
+        2_040,
+        2_050,
+        2_055,
+        2_058,
+        2_060,
+        2_070,
+    );
+    let lead = state.request(first).unwrap();
+    assert_eq!(lead.latency.accepted_at_ms, accepted);
+    assert_eq!(
+        lead.latency.queued_at_ms,
+        Some(1_005),
+        "a backward clock cannot replace queue admission"
+    );
+    assert_eq!(lead.latency.picked_at_ms, Some(1_010));
+    assert!(lead.latency.agent_waited);
+    assert_eq!(lead.latency.reply_delivered_at_ms, Some(1_080));
+    let member = state.request(second).unwrap();
+    assert_eq!(member.latency.picked_at_ms, Some(1_010));
+    assert!(member.latency.agent_waited);
+}
+
+#[test]
+fn provider_retry_records_the_later_attempt_for_every_coalesced_recipient() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .agents
+        .get_mut(&agent)
+        .unwrap()
+        .runtime_identity
+        .session_id = Some("provider-session".into());
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    let first = submit_text(&mut state, room, agent, "first");
+    let second = submit_text(&mut state, room, agent, "second");
+    state.coalesce_queue(first).expect("share one submission");
+    let accepted = state.request(first).unwrap().latency.accepted_at_ms;
+    state.record_picked(first, 1_010, true).unwrap();
+    record_delivery_attempt(
+        &mut state,
+        first,
+        1_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(1_030),
+            writer_queued_at_ms: Some(1_040),
+            paste_started_at_ms: Some(1_045),
+            text_written_at_ms: Some(1_050),
+            enter_written_at_ms: Some(1_055),
+            native_confirmed_at_ms: Some(1_058),
+            ..Default::default()
+        },
+        1_060,
+        1_070,
+    );
+    {
+        let request = state.requests.get_mut(&first).unwrap();
+        request.trusted_start_bound = true;
+        request.expected_launch_id = Some("launch-codex".into());
+        request.provider_session_id = Some("provider-session".into());
+        request.provider_turn_id = Some("turn-1".into());
+    }
+    assert!(
+        state.hold_provider_error(first, "Model at capacity (server_overloaded)", 1_100),
+        "capacity failure holds the turn"
+    );
+    assert!(
+        state.retry_provider_requests(1_000_000),
+        "due retry returns the group to the queue"
+    );
+    state
+        .coalesce_queue(first)
+        .expect("share the retried submission");
+    record_delivery_attempt(
+        &mut state,
+        first,
+        2_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(2_030),
+            writer_queued_at_ms: Some(2_040),
+            text_written_at_ms: Some(2_050),
+            enter_written_at_ms: Some(2_055),
+            native_confirmed_at_ms: Some(2_058),
+            ..Default::default()
+        },
+        2_060,
+        2_070,
+    );
+
+    assert_shared_attempt(
+        &state,
+        [first, second],
+        2_020,
+        2_030,
+        2_040,
+        2_050,
+        2_055,
+        2_058,
+        2_060,
+        2_070,
+    );
+    assert_eq!(
+        state.request(first).unwrap().latency.accepted_at_ms,
+        accepted
+    );
+    assert_eq!(
+        state.request(first).unwrap().latency.picked_at_ms,
+        Some(1_010)
+    );
+    assert!(state.request(second).unwrap().latency.agent_waited);
+}
+
+#[test]
+fn rejected_steering_records_the_later_attempt() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "original task");
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    let correction = submit_text(&mut state, room, agent, "correction");
+    let accepted = state.request(correction).unwrap().latency.accepted_at_ms;
+    state.record_queued(correction, 1_005).unwrap();
+    state.record_picked(correction, 1_010, true).unwrap();
+    state.begin_steering(correction, lead).unwrap();
+    record_delivery_attempt(
+        &mut state,
+        correction,
+        1_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(1_030),
+            writer_queued_at_ms: Some(1_040),
+            paste_started_at_ms: Some(1_045),
+            text_written_at_ms: Some(1_050),
+            enter_written_at_ms: Some(1_055),
+            native_confirmed_at_ms: Some(1_058),
+            ..Default::default()
+        },
+        1_060,
+        1_070,
+    );
+    state
+        .record_steering(correction, SubmissionOutcome::ComposerBusy)
+        .unwrap();
+    state.record_queued(correction, 900).unwrap();
+    record_delivery_attempt(
+        &mut state,
+        correction,
+        2_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(2_030),
+            writer_queued_at_ms: Some(2_040),
+            text_written_at_ms: Some(2_050),
+            enter_written_at_ms: Some(2_055),
+            native_confirmed_at_ms: Some(2_058),
+            ..Default::default()
+        },
+        2_060,
+        2_070,
+    );
+
+    let request = state.request(correction).unwrap();
+    assert_eq!(request.latency.native_requested_at_ms, Some(2_020));
+    assert_eq!(request.latency.native.server_accepted_at_ms, Some(2_030));
+    assert_eq!(request.latency.native.writer_queued_at_ms, Some(2_040));
+    assert_eq!(request.latency.native.text_written_at_ms, Some(2_050));
+    assert_eq!(request.latency.native.enter_written_at_ms, Some(2_055));
+    assert_eq!(request.latency.native.native_confirmed_at_ms, Some(2_058));
+    assert_eq!(request.latency.native.paste_started_at_ms, None);
+    assert_eq!(request.latency.provider_started_at_ms, Some(2_060));
+    assert_eq!(request.latency.reply_captured_at_ms, Some(2_070));
+    assert_eq!(request.latency.accepted_at_ms, accepted);
+    assert_eq!(request.latency.queued_at_ms, Some(1_005));
+    assert_eq!(request.latency.picked_at_ms, Some(1_010));
+    assert!(request.latency.agent_waited);
+    assert_eq!(
+        state.request(lead).unwrap().phase,
+        RequestPhase::Active,
+        "rejecting a steer leaves the lead's turn in place"
+    );
+}
+
+fn assert_queue_admission(state: &BusState, id: RequestId, now: u64) {
+    let request = state.request(id).unwrap();
+    assert!(
+        request.bus_generated,
+        "{id:?} is a bus-generated submission"
+    );
+    assert_eq!(
+        request.latency.accepted_at_ms,
+        Some(now),
+        "{id:?} acceptance keeps its own clock"
+    );
+    assert_eq!(
+        request.latency.queued_at_ms,
+        Some(now),
+        "{id:?} queue phase is the instant the request entered the queue"
+    );
+}
+
+#[test]
+fn bus_generated_submission_records_its_queue_phase() {
+    let (mut state, room, agent, other) = state_with_room_and_agents();
+    let now = 2_030;
+
+    // agents.rs and control/agents.rs: the first message is bus-generated
+    // even though its visible author is the developer.
+    let first_message = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "system prompt".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            now,
+            true,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, first_message, now);
+
+    // worker_notifications.rs
+    let notification = state
+        .submit_bus_message_with(
+            room,
+            Draft {
+                text: "reply landed".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Agent(agent),
+            now,
+            false,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, notification, now);
+
+    // dialogs.rs
+    let dialog = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "blocked".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Bus,
+            now,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, dialog, now);
+
+    // error_pipe.rs
+    let error_pipe = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "error notice".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Bus,
+            now,
+            true,
+        )
+        .unwrap()[0];
+    assert_queue_admission(&state, error_pipe, now);
+
+    let developer = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "from the developer".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            now,
+        )
+        .unwrap()[0];
+    let developer_request = state.request(developer).unwrap();
+    assert!(!developer_request.bus_generated);
+    assert_eq!(developer_request.latency.accepted_at_ms, Some(now));
+    assert_eq!(developer_request.latency.queued_at_ms, None);
+
+    let control = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "from an agent".into(),
+                files: vec![],
+                recipient_ids: [other].into(),
+            },
+            Author::Agent(agent),
+            now,
+            false,
+        )
+        .unwrap()[0];
+    let control_request = state.request(control).unwrap();
+    assert!(!control_request.bus_generated);
+    assert_eq!(control_request.latency.accepted_at_ms, Some(now));
+    assert_eq!(control_request.latency.queued_at_ms, None);
+}
+
+#[test]
+fn backward_completion_keeps_the_start_and_equality_stays_eligible() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "clock step");
+    state.record_queued(request, 1_005).unwrap();
+    state.record_native_requested(request, 1_005).unwrap();
+    state.finish_queued(request, 1_005, 1_000).unwrap();
+    state
+        .finish_native_requested(request, 1_005, 1_000)
+        .unwrap();
+    let latency = &state.request(request).unwrap().latency;
+    assert_eq!(latency.queued_at_ms, Some(1_005));
+    assert_eq!(latency.native_requested_at_ms, Some(1_005));
+
+    state.finish_queued(request, 1_005, 1_005).unwrap();
+    state
+        .finish_native_requested(request, 1_005, 1_005)
+        .unwrap();
+    state.finish_queued(request, 1_005, 1_010).unwrap();
+    state
+        .finish_native_requested(request, 1_005, 1_010)
+        .unwrap();
+    let latency = &state.request(request).unwrap().latency;
+    assert_eq!(latency.queued_at_ms, Some(1_010));
+    assert_eq!(latency.native_requested_at_ms, Some(1_010));
+
+    state.finish_queued(request, 1_010, 1_000).unwrap();
+    state
+        .finish_native_requested(request, 1_010, 1_000)
+        .unwrap();
+    let latency = &state.request(request).unwrap().latency;
+    assert_eq!(latency.queued_at_ms, Some(1_010));
+    assert_eq!(latency.native_requested_at_ms, Some(1_010));
+}

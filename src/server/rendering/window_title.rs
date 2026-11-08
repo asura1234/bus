@@ -208,6 +208,7 @@ impl HeadlessServer {
                     return serde_json::to_string(&api::schema::ErrorResponse {
                         id,
                         error: api::schema::ErrorBody {
+                            timestamps: None,
                             code: "invalid_params".into(),
                             message: "window title is empty".into(),
                         },

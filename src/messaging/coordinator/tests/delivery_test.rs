@@ -2,6 +2,7 @@ use super::*;
 
 fn composer_busy() -> Result<ResponseResult, TransportError> {
     Err(TransportError {
+        timestamps: Default::default(),
         message: "Waiting for the developer's composer".into(),
         code: Some(crate::protocol::api::AGENT_COMPOSER_BUSY.into()),
         definitely_rejected: true,
@@ -11,6 +12,7 @@ fn composer_busy() -> Result<ResponseResult, TransportError> {
 fn composer_available() -> Result<ResponseResult, TransportError> {
     Ok(ResponseResult::AgentPrompted {
         agent: native_info("pane", "codex", "session"),
+        timestamps: Default::default(),
     })
 }
 
@@ -23,6 +25,7 @@ impl Transport for LaunchPromptTransport {
                 self.0.lock().unwrap().push(params.text);
                 Ok(ResponseResult::AgentPrompted {
                     agent: native_info("pane", "provider", "session"),
+                    timestamps: Default::default(),
                 })
             }
             other => panic!("unexpected launch-prompt call: {other:?}"),
@@ -187,6 +190,7 @@ fn launch_prompt_submission_failure_is_visible_without_room_history() {
         worker.transport = Box::new(LaunchPromptOutcomeTransport {
             prompts: Arc::clone(&prompts),
             outcomes: vec![Err(TransportError {
+                timestamps: Default::default(),
                 message: "lost launch-prompt response".into(),
                 code: Some("timeout".into()),
                 definitely_rejected: false,
@@ -282,12 +286,14 @@ fn rejected_launch_prompt_is_visible_and_retries_once_after_recovery() {
                 prompts: Arc::clone(&prompts),
                 outcomes: vec![
                     Err(TransportError {
+                        timestamps: Default::default(),
                         message: format!("{code} while typing launch prompt"),
                         code: Some(code.into()),
                         definitely_rejected: true,
                     }),
                     Ok(ResponseResult::AgentPrompted {
                         agent: native_info("pane", "provider", "session"),
+                        timestamps: Default::default(),
                     }),
                 ]
                 .into(),
@@ -860,6 +866,7 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
         Provider::ClaudeCode,
         vec![
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "Provider did not accept prompt before submission deadline".into(),
                 code: Some("timeout".into()),
                 definitely_rejected: false,
@@ -871,6 +878,7 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
                     "focused":false, "revision":1
                 }))
                 .unwrap(),
+                timestamps: Default::default(),
             }),
         ],
     );
@@ -903,6 +911,7 @@ fn operational_notice_unconfirmed_write_retains_unknown_outcome_without_chat() {
     let (mut worker, agent, room, dir, _calls) = fixture(
         Provider::ClaudeCode,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "Provider did not accept prompt before submission deadline".into(),
             code: Some("timeout".into()),
             definitely_rejected: false,
@@ -953,6 +962,7 @@ fn uncertain_submission_survives_restart_and_never_retries() {
     let (mut worker, agent, room, dir, calls) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "lost response".into(),
             code: None,
             definitely_rejected: false,
@@ -993,6 +1003,7 @@ fn uncertain_submission_rejects_wrong_session_start_binding() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "lost response".into(),
             code: None,
             definitely_rejected: false,
@@ -1069,6 +1080,7 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Cursor,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "unknown".into(),
             code: None,
             definitely_rejected: false,
@@ -1751,6 +1763,7 @@ fn cursor_background_task_notice_is_not_the_room_reply() {
 fn a_paste_the_provider_never_showed_is_requeued_and_retried_after_a_pause() {
     let not_shown = || {
         Err(TransportError {
+            timestamps: Default::default(),
             // Exactly what the API client reports: the server's message, no code.
             message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
             code: Some("agent_prompt_not_shown".into()),
@@ -1888,6 +1901,7 @@ fn unconfirmed_submission_survives_failed_native_poll() {
     let request = aged_unconfirmed_submission(&mut worker, room, agent);
     worker.transport = Box::new(FakeTransport {
         replies: vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "native poll failed".into(),
             code: Some("timeout".into()),
             definitely_rejected: false,
@@ -1949,6 +1963,7 @@ fn message_status_retains_native_withdrawal_detail_after_uncertain_settlement() 
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::ClaudeCode,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: detail.into(),
             code: Some("timeout".into()),
             definitely_rejected: false,
@@ -2250,6 +2265,204 @@ fn grok_superseded_failure_does_not_poison_rebound_session() {
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delivery_latency_excludes_idle_dialog_wait() {
+    let (mut ready, ready_agent, ready_room, ready_dir, _) = fixture(Provider::Codex, vec![]);
+    let ready_response = ready
+        .control_send(&json!({
+            "room": ready_room.0.to_string(),
+            "to": [ready_agent.0.to_string()],
+            "text": "the agent can take this now"
+        }))
+        .unwrap();
+    let ready_request = RequestId(ready_response["request_ids"][0].as_u64().unwrap());
+    assert!(
+        ready
+            .state
+            .request(ready_request)
+            .unwrap()
+            .latency
+            .ready_at_enqueue,
+        "an idle agent with no dialog is ready at enqueue"
+    );
+    drop(ready);
+    std::fs::remove_dir_all(ready_dir).unwrap();
+
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::Codex, vec![composer_available()]);
+    worker
+        .state
+        .observe_dialog(agent, true, io::now_ms())
+        .unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().shown_status(),
+        RuntimeStatus::Blocked
+    );
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "measure only Bus overhead"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+
+    worker.submit_ready().unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker
+        .state
+        .observe_dialog(agent, false, io::now_ms())
+        .unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert_eq!(calls.lock().unwrap().len(), 1);
+
+    let latency = worker.state.request(request).unwrap().latency.clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !latency.ready_at_enqueue,
+        "a visible dialog is not ready at enqueue: {latency:?}"
+    );
+    assert!(
+        latency.agent_waited,
+        "the delivery that waited out the dialog records that wait: {latency:?}"
+    );
+}
+
+#[test]
+fn stale_delivery_wait_does_not_mark_the_request_that_is_sent() {
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::Codex, vec![composer_available()]);
+    worker
+        .state
+        .observe_dialog(agent, true, io::now_ms())
+        .unwrap();
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "this request never waited"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+    worker.submit_ready().unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    worker
+        .delivery_waits
+        .insert(agent, (RequestId(request.0 + 100), "agent_dialog"));
+    worker
+        .state
+        .observe_dialog(agent, false, io::now_ms())
+        .unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert!(
+        !worker.state.request(request).unwrap().latency.agent_waited,
+        "a stale wait for another request must not mark the one that was sent"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+struct NativeStampProbe {
+    state_path: PathBuf,
+    during_request: Arc<Mutex<Option<u64>>>,
+    reject: bool,
+}
+
+impl Transport for NativeStampProbe {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let Method::AgentPromptIfIdle(_) = &method else {
+            panic!("unexpected call during native stamp probe: {method:?}");
+        };
+        let loaded = JsonStore::new(self.state_path.clone())
+            .load()
+            .unwrap()
+            .unwrap();
+        *self.during_request.lock().unwrap() = loaded
+            .requests()
+            .find_map(|request| request.latency.native_requested_at_ms);
+        if self.reject {
+            return Err(TransportError {
+                timestamps: Default::default(),
+                message: "prompt was not shown".into(),
+                code: Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN.into()),
+                definitely_rejected: true,
+            });
+        }
+        Ok(ResponseResult::AgentPrompted {
+            agent: native_info("pane", "codex", "session"),
+            timestamps: Default::default(),
+        })
+    }
+}
+
+fn deliver_with_stamp_probe(reject: bool) -> (Option<u64>, RequestPhase, Option<u64>) {
+    let during = Arc::new(Mutex::new(None));
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.transport = Box::new(NativeStampProbe {
+        state_path: dir.join("state.json"),
+        during_request: Arc::clone(&during),
+        reject,
+    });
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "stamp after the transport returns"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+    worker.submit_ready().unwrap();
+    let phase = worker.state.request(request).unwrap().phase;
+    let after = worker
+        .state
+        .request(request)
+        .unwrap()
+        .latency
+        .native_requested_at_ms;
+    let during = *during.lock().unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    (during, phase, after)
+}
+
+#[test]
+fn native_requested_is_journaled_after_the_transport_returns() {
+    let (during, phase, after) = deliver_with_stamp_probe(false);
+    assert_eq!(phase, RequestPhase::Active);
+    assert_eq!(
+        during, None,
+        "the native request stamp is not durable until the transport returns"
+    );
+    assert!(
+        after.is_some(),
+        "a completed transport still records native_requested"
+    );
+}
+
+#[test]
+fn rejected_native_attempt_does_not_keep_the_request_stamp() {
+    let (during, phase, after) = deliver_with_stamp_probe(true);
+    assert_eq!(phase, RequestPhase::Queued);
+    assert_eq!(during, None);
+    assert_eq!(
+        after, None,
+        "a rejected attempt clears native_requested before the outcome save"
+    );
 }
 
 #[test]

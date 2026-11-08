@@ -70,6 +70,7 @@ impl Transport for Native {
                     },
                 }))
                 .unwrap(),
+                timestamps: Default::default(),
             },
             Method::AgentObserve(params) => open_native_question(&params.target),
             Method::AgentGet(params) => open_native_info(&params.target),
@@ -409,6 +410,10 @@ fn a_message_sent_while_working_is_typed_into_the_turn_and_shares_its_reply() {
                 fixture.reply(id).as_deref(),
                 Some("parser written with the streaming API"),
                 "{provider:?}"
+            );
+            assert!(
+                fixture.request(id).latency.provider_started_at_ms.is_some(),
+                "{provider:?} request {id:?} is missing its provider start"
             );
         }
         assert_eq!(fixture.error(), None, "{provider:?}");

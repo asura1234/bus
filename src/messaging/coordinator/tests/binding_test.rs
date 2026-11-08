@@ -11,6 +11,7 @@ fn deletion_of_an_unstarted_launch_requires_authoritative_native_absence() {
                     agents: vec![info.clone()],
                 }),
                 None => Err(TransportError {
+                    timestamps: Default::default(),
                     code: None,
                     message: "native lookup unavailable".into(),
                     definitely_rejected: false,

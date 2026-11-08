@@ -54,6 +54,7 @@ fn delete_room_partial_close_preserves_retryable_state_and_other_rooms() {
         vec![
             Ok(ResponseResult::Ok {}),
             Err(TransportError {
+                timestamps: Default::default(),
                 message: "stop failed".into(),
                 code: Some("terminal_stop_failed".into()),
                 definitely_rejected: false,
@@ -417,6 +418,7 @@ fn recovered_storage_does_not_resubmit_uncertain_delivery() {
     let (mut worker, agent, room, dir, calls) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
+            timestamps: Default::default(),
             message: "submit outcome unknown".into(),
             code: None,
             definitely_rejected: false,
@@ -657,4 +659,88 @@ fn upgrade_does_not_require_docs_writes_or_enqueue_new_work() {
         drop(repaired);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn failed_reply_journal_keeps_the_reply_unstamped_until_a_later_save() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "answer me");
+    let mut submitting = worker.state.clone();
+    submitting.begin_submission(request, "launch", 0).unwrap();
+    worker.save(submitting).unwrap();
+    let message = worker.state.request(request).unwrap().prompt.id;
+    let mut answered = worker.state.clone();
+    answered
+        .answer_message(message, agent, "done".into(), 50)
+        .unwrap();
+    worker.store.fail_once_at_after(SaveStage::TempSync, 1);
+    worker.save(answered).unwrap();
+
+    assert!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .latency
+            .reply_delivered_at_ms
+            .is_none(),
+        "a failed delivery journal must not stamp the reply"
+    );
+    assert!(
+        worker
+            .durable_state
+            .request(request)
+            .unwrap()
+            .completed_reply
+            .is_none(),
+        "the failed journal must not mark that reply durable"
+    );
+    let disk = worker.store.load_base().unwrap().unwrap();
+    assert!(disk.request(request).unwrap().completed_reply.is_some());
+    assert!(matches!(
+        worker.storage_pause,
+        Some(StoragePause::Retrying { .. })
+    ));
+
+    let (events, received) = mpsc::channel();
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    assert!(
+        matches!(received.try_recv(), Ok(BusEvent::StorageRecovered)),
+        "recovery must accept the unstamped reply instead of requiring repair"
+    );
+    assert!(worker.storage_pause.is_none());
+    assert!(worker
+        .state
+        .request(request)
+        .unwrap()
+        .latency
+        .reply_delivered_at_ms
+        .is_none());
+    assert!(worker
+        .durable_state
+        .request(request)
+        .unwrap()
+        .completed_reply
+        .is_none());
+
+    worker.save(worker.state.clone()).unwrap();
+    assert!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .latency
+            .reply_delivered_at_ms
+            .is_some(),
+        "the next save journals the delivery stamp"
+    );
+    let loaded = worker.store.load().unwrap().unwrap();
+    assert!(loaded
+        .request(request)
+        .unwrap()
+        .latency
+        .reply_delivered_at_ms
+        .is_some());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }

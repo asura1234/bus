@@ -127,6 +127,16 @@ impl BusState {
     /// A poll can refresh observation clocks and causal revisions in memory
     /// without rewriting the durable state. Any status edge, settlement, or
     /// other model change still needs an atomic save before delivery resumes.
+    /// Drops completed replies that are on disk but whose delivery journal
+    /// has not committed, so the next save still treats them as new.
+    pub(crate) fn hide_completed_replies(&mut self, ids: &BTreeSet<RequestId>) {
+        for id in ids {
+            if let Some(request) = self.requests.get_mut(id) {
+                request.completed_reply = None;
+            }
+        }
+    }
+
     pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
         if self.next_id != previous.next_id
             || self.launch_attempts != previous.launch_attempts

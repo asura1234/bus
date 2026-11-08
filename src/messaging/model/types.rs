@@ -1,6 +1,6 @@
 //! Persisted DTOs, identities and payload representation.
-use super::payload::payload_matches;
 pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
+use super::{payload::payload_matches, DeliveryLatency, DialogNoticeDelivery, QueuedRejection};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -567,22 +567,6 @@ pub(crate) struct CompletedReply {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) enum DialogNoticeDelivery {
-    /// Saved before native I/O; a restart may lose its outcome entirely.
-    Unconfirmed {
-        since_ms: u64,
-    },
-    Confirmed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct QueuedRejection {
-    /// The first definite refusal, not renewed by retries or unrelated turns.
-    pub(crate) at_ms: u64,
-    pub(crate) reason: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -624,6 +608,8 @@ pub(crate) struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) completed_reply: Option<CompletedReply>,
     pub(crate) completed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "DeliveryLatency::is_empty")]
+    pub(crate) latency: DeliveryLatency,
     /// Independent turn: explicit `--queue` or an ordinary agent-authored
     /// orchestrator request. Waits for idle and never coalesces.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

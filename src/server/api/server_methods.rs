@@ -99,6 +99,7 @@ impl HeadlessServer {
             let response = serde_json::to_string(&schema::ErrorResponse {
                 id: msg.request.id,
                 error: schema::ErrorBody {
+                timestamps: None,
                     code: "server_unavailable".into(),
                     message: "server is shutting down".into(),
                 },
@@ -397,6 +398,7 @@ impl HeadlessServer {
                 serde_json::to_string(&schema::ErrorResponse {
                     id: String::new(),
                     error: schema::ErrorBody {
+                        timestamps: None,
                         code: "serialization_error".into(),
                         message: err.to_string(),
                     },

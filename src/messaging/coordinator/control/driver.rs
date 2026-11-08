@@ -135,6 +135,7 @@ fn focus_identity(observation: &schema::TerminalObservation) -> Result<(String, 
 
 fn driver_error(message: &str) -> TransportError {
     TransportError {
+        timestamps: Default::default(),
         code: None,
         message: message.into(),
         definitely_rejected: false,
@@ -682,6 +683,7 @@ mod tests {
         let mut script = VecDeque::from([
             Ok(pressed(0, true, "down")),
             Err(TransportError {
+                timestamps: Default::default(),
                 code: Some("terminal_observation_unavailable".into()),
                 message: "Terminal is redrawing".into(),
                 definitely_rejected: false,

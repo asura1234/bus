@@ -68,7 +68,7 @@ impl Transport for FailedLaunchNative {
                     *args.lock().unwrap() = params.args.clone();
                 }
                 if let Some(code) = self.shell_wait_code {
-                    return Err(TransportError { code: Some(code.into()), message: SHELL_PROMPT_WAIT_ERROR.into(), definitely_rejected: true });
+                    return Err(TransportError { code: Some(code.into()), message: SHELL_PROMPT_WAIT_ERROR.into(), definitely_rejected: true, timestamps: Default::default() });
                 }
                 let mut info = native_info("pane", "codex", "unused");
                 info.name = Some(params.name);
@@ -92,7 +92,7 @@ impl Transport for FailedLaunchNative {
                 if self.screen_terminal.is_some() {
                     return Err(TransportError { code: Some("agent_identity_changed".into()),
                         message: "Launch terminal is no longer available at its recorded pane".into(),
-                        definitely_rejected: true });
+                        definitely_rejected: true, timestamps: Default::default() });
                 }
                 Ok(ResponseResult::AgentStartupSnapshot { snapshot: serde_json::from_value(json!({
                     "pane_id": params.pane_id, "terminal_id": params.expected_terminal_id,
@@ -119,6 +119,7 @@ impl Transport for FailedLaunchNative {
                 if self.close_failures > 0 {
                     self.close_failures -= 1;
                     return Err(TransportError {
+                timestamps: Default::default(),
                         code: Some("terminal_stop_failed".into()), message: "cannot stop".into(),
                         definitely_rejected: true,
                     });
@@ -1274,6 +1275,7 @@ impl Transport for ShellRetryNative {
                 self.starts.lock().unwrap().push(params.start.clone());
                 if self.uncertain {
                     return Err(TransportError {
+                        timestamps: Default::default(),
                         code: None,
                         message: "lost launch response".into(),
                         definitely_rejected: false,
@@ -1986,6 +1988,7 @@ fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
                 Method::AgentStartIfIdentity(_) => Err(TransportError {
+                    timestamps: Default::default(),
                     code: Some("agent_shell_integration_unavailable".into()),
                     message: "no shell editor".into(),
                     definitely_rejected: true,

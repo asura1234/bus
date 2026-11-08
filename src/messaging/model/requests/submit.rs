@@ -1,6 +1,7 @@
 use super::{
     Author, BusState, Draft, ModelError, Prompt, PromptId, Request, RequestId, RequestPhase, RoomId,
 };
+use crate::messaging::model::DeliveryLatency;
 
 impl BusState {
     /// Queue an automation prompt without changing the room's developer-owned draft.
@@ -185,6 +186,18 @@ impl BusState {
                     pending_final: None,
                     completed_reply: None,
                     completed_at_ms: None,
+                    latency: DeliveryLatency {
+                        accepted_at_ms: Some(now_ms),
+                        // Developer and control sends fill this later in
+                        // note_requests_queued. A bus-generated submit has no
+                        // second writer, so queue admission is this instant.
+                        queued_at_ms: bus_generated.then_some(now_ms),
+                        ready_at_enqueue: self
+                            .agents
+                            .get(&agent_id)
+                            .is_some_and(|agent| !agent.dialog && agent.wait_reason().is_none()),
+                        ..Default::default()
+                    },
                     queue_only: queue_only || independent,
                     bus_generated,
                     group: None,
