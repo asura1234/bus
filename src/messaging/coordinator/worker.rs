@@ -264,6 +264,7 @@ impl Worker {
         diagnostics::replies(&self.durable_state, &state, "bus.reply.persisted");
         diagnostics::recoveries(&self.durable_state, &state);
         diagnostics::provider_resets(&self.durable_state, &state);
+        super::launch_metrics::log_outcomes(&self.durable_state, &state);
         for agent in state.agents() {
             if self
                 .durable_state

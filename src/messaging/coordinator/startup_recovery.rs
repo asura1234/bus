@@ -19,39 +19,53 @@ impl Worker {
         else {
             return Err("Saved launch terminal identity is incomplete; no retry was sent".into());
         };
-        let (executable, grok_home, kimi_home) =
-            if matches!(agent.provider, Provider::Grok | Provider::Kimi) {
-                let launch_id = agent
-                    .runtime_identity
-                    .launch_id
-                    .as_deref()
-                    .ok_or("Saved provider launch identity is missing; no retry was sent")?;
-                let hooks = crate::agents::providers::hook_json::HookContext {
-                    binary: std::env::current_exe().map_err(|e| e.to_string())?,
-                    spool: self.data_dir.join("callbacks").join(launch_id),
-                    launch_id: launch_id.into(),
-                };
-                let env = if agent.provider == Provider::Grok {
-                    crate::agents::providers::grok::launch::environment(&hooks)?
-                } else {
-                    crate::agents::providers::kimi::launch::environment(&hooks)?
-                };
-                let executable = crate::agents::providers::launch::selected_executable(
-                    identity::provider_kind(agent.provider),
-                    &env,
-                )?
-                .ok_or("Saved provider executable is missing; no retry was sent")?;
-                let grok_home = env.get("GROK_HOME").cloned();
-                let kimi_home = env.get("KIMI_CODE_HOME").cloned();
-                if agent.provider == Provider::Grok && grok_home.is_none()
-                    || agent.provider == Provider::Kimi && kimi_home.is_none()
-                {
-                    return Err("Saved provider home is missing; no retry was sent".into());
-                }
-                (Some(executable), grok_home, kimi_home)
-            } else {
-                (None, None, None)
+        let prepared = (|| -> Result<(Option<String>, Option<String>, Option<String>), String> {
+            if !matches!(agent.provider, Provider::Grok | Provider::Kimi) {
+                return Ok((None, None, None));
+            }
+            let launch_id = agent
+                .runtime_identity
+                .launch_id
+                .as_deref()
+                .ok_or("Saved provider launch identity is missing; no retry was sent")?;
+            let hooks = crate::agents::providers::hook_json::HookContext {
+                binary: std::env::current_exe().map_err(|e| e.to_string())?,
+                spool: self.data_dir.join("callbacks").join(launch_id),
+                launch_id: launch_id.into(),
             };
+            let env = if agent.provider == Provider::Grok {
+                crate::agents::providers::grok::launch::environment(&hooks)?
+            } else {
+                crate::agents::providers::kimi::launch::environment(&hooks)?
+            };
+            let executable = crate::agents::providers::launch::selected_executable(
+                identity::provider_kind(agent.provider),
+                &env,
+            )?
+            .ok_or("Saved provider executable is missing; no retry was sent")?;
+            let grok_home = env.get("GROK_HOME").cloned();
+            let kimi_home = env.get("KIMI_CODE_HOME").cloned();
+            if agent.provider == Provider::Grok && grok_home.is_none()
+                || agent.provider == Provider::Kimi && kimi_home.is_none()
+            {
+                return Err("Saved provider home is missing; no retry was sent".into());
+            }
+            Ok((Some(executable), grok_home, kimi_home))
+        })();
+        // A rejected preparation is an audit record only. begin_agent_launch would
+        // cancel the live pending attempt and replace launch_attempt_id.
+        let attempt = if prepared.is_err() {
+            self.begin_tracked_launch(
+                &agent.name,
+                agent.provider,
+                agent.room_id,
+                crate::messaging::model::LaunchKind::Recovery,
+            )?
+        } else {
+            self.begin_agent_launch(agent, crate::messaging::model::LaunchKind::Recovery)?
+        };
+        let (executable, grok_home, kimi_home) =
+            self.track_launch_result(attempt, "resume_preparation_failed", prepared)?;
         let mut state = self.state.clone();
         let mut startup = state
             .agent(agent.id)
@@ -71,6 +85,13 @@ impl Worker {
         state
             .observe_status(agent.id, RuntimeStatus::Launching, io::now_ms())
             .map_err(|e| e.to_string())?;
+        super::launch_metrics::bind_current(&mut state, agent.id);
+        let started_at_ms = state
+            .agent(agent.id)
+            .and_then(|a| a.startup.as_ref())
+            .ok_or("Saved startup disappeared")?
+            .started_at_ms;
+        state.watch_launch_command(agent.id, started_at_ms);
         self.save(state)?;
         self.missing_binary_checked.remove(&agent.id);
         let name = identity::managed_name(agent.room_id, agent.id);
