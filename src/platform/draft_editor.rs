@@ -614,23 +614,16 @@ fn recovery_candidates(dir: &Path) -> io::Result<Vec<PathBuf>> {
         .collect()
 }
 
-fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
-    let bytes = read_regular(file, MAX_BYTES + marker(&request.token).len() as u64)?;
-    if matches!(request.operation, Operation::Swap | Operation::Capture)
-        && bytes.len() as u64 > MAX_BYTES
-    {
-        return Err(io::Error::other("Draft exceeds 2 MiB"));
-    }
-    let preserved = preserved_recovery(dir, &request.token);
-    let saved = if request.operation == Operation::Swap || preserved.exists() {
-        preserved
-    } else {
-        recovery(dir, &request.token)
-    };
-    let mut recovered = None;
-    let replacement = match request.operation {
+fn exchange_replacement(
+    dir: &Path,
+    request: &Request,
+    bytes: &[u8],
+    saved: &Path,
+    recovered: &mut Option<PathBuf>,
+) -> io::Result<Vec<u8>> {
+    match request.operation {
         Operation::Recover => {
-            recovered = recovery_candidates(dir)?
+            *recovered = recovery_candidates(dir)?
                 .into_iter()
                 .find(|path| fs::read(path).is_ok_and(|saved| !saved.is_empty() && saved == bytes));
             if recovered.is_none() {
@@ -638,10 +631,10 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
                     "Composer differs from the saved Bus draft; preserved",
                 ));
             }
-            marker(&request.token).into_bytes()
+            Ok(marker(&request.token).into_bytes())
         }
         Operation::Capture => {
-            let text = std::str::from_utf8(&bytes)
+            let text = std::str::from_utf8(bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             if ["[Image #", "[Pasted text #", "[Pasted Content "]
                 .iter()
@@ -655,11 +648,11 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
                     "Draft recovery already exists",
                 ));
             }
-            crate::platform::atomic_write(&saved, &bytes)?;
-            Vec::new()
+            crate::platform::atomic_write(saved, bytes)?;
+            Ok(Vec::new())
         }
         Operation::Swap => {
-            let text = std::str::from_utf8(&bytes)
+            let text = std::str::from_utf8(bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             if ["[Image #", "[Pasted text #", "[Pasted Content "]
                 .iter()
@@ -674,7 +667,7 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
             if attempt.len() as u64 > MAX_BYTES || saved.exists() || dir.join(PRESERVED).exists() {
                 return Err(io::Error::other("Draft swap is unavailable"));
             }
-            crate::platform::atomic_write(&saved, &bytes)?;
+            crate::platform::atomic_write(saved, bytes)?;
             write_json(
                 &dir.join(PRESERVED),
                 &PreservedDraft {
@@ -684,12 +677,12 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
             )?;
             let mut replacement = attempt.as_bytes().to_vec();
             replacement.extend_from_slice(marker(&request.token).as_bytes());
-            replacement
+            Ok(replacement)
         }
         Operation::Restore | Operation::Verify => {
             let mut original = match &request.verify_text {
                 Some(text) if request.operation == Operation::Verify => text.as_bytes().to_vec(),
-                _ => read_regular(&saved, MAX_BYTES)?,
+                _ => read_regular(saved, MAX_BYTES)?,
             };
             let matches = if request.operation == Operation::Restore {
                 bytes.is_empty()
@@ -709,12 +702,29 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
                 ));
             }
             original.extend_from_slice(marker(&request.token).as_bytes());
-            original
+            Ok(original)
         }
         Operation::Idle | Operation::Cancelled => {
-            return Err(io::Error::other("No draft operation requested"))
+            Err(io::Error::other("No draft operation requested"))
         }
+    }
+}
+
+fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
+    let bytes = read_regular(file, MAX_BYTES + marker(&request.token).len() as u64)?;
+    if matches!(request.operation, Operation::Swap | Operation::Capture)
+        && bytes.len() as u64 > MAX_BYTES
+    {
+        return Err(io::Error::other("Draft exceeds 2 MiB"));
+    }
+    let preserved = preserved_recovery(dir, &request.token);
+    let saved = if request.operation == Operation::Swap || preserved.exists() {
+        preserved
+    } else {
+        recovery(dir, &request.token)
     };
+    let mut recovered = None;
+    let replacement = exchange_replacement(dir, request, &bytes, &saved, &mut recovered)?;
     // Cancellation shares our lock. Recheck expiry and the actual file before
     // each mutation, including after the recovery copy has reached disk.
     check_expiry(request)?;
