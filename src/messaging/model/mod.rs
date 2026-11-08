@@ -27,6 +27,7 @@ mod restart;
 mod rooms;
 mod settlement;
 mod staffing;
+mod stall;
 mod state;
 mod status;
 mod types;
