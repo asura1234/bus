@@ -1,5 +1,8 @@
 use super::launch_metrics_tests::{ledger, seed_launch};
 use super::*;
+use crate::messaging::model::LaunchOutcome;
+use crate::messaging::storage::state_store::SaveStage;
+use std::time::Instant;
 
 #[test]
 fn launch_metrics_definite_start_rejection_keeps_its_exact_cause() {
@@ -188,4 +191,35 @@ fn launch_metrics_unsubmitted_recovery_preparation_failure_settles_a_failed_atte
     assert_eq!(saved["1"]["cause"], "resume_preparation_failed");
     assert_eq!(current.launch_attempt_id, Some(1));
     assert!(current.startup.is_none());
+}
+
+#[test]
+fn launch_metrics_storage_recovery_logs_the_persisted_outcome() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, u64::MAX);
+    let mut state = worker.state.clone();
+    super::super::launch_metrics::settle_current(
+        &mut state,
+        agent,
+        LaunchOutcome::Failed,
+        Some("command_failed"),
+        2,
+    );
+    worker.store.fail_once_at(SaveStage::TempSync);
+    assert!(worker.save(state.clone()).is_err());
+    // Production save drops this state when the write fails. The assignment
+    // only reconstructs the memory shape the recovery log is supposed to see.
+    worker.state = state;
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let (events, _) = mpsc::channel();
+    capture.run(|| {
+        worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    });
+    let text = capture.text();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        text.contains("bus.agent.launch_outcome") && text.contains("attempt_id=1"),
+        "{text}"
+    );
 }
