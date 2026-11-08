@@ -81,7 +81,12 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
         (1, 1, 1)
     );
     assert_eq!((c.bus_failures, c.external), (2, 1));
-    assert_eq!(report.all.rates.delivery.percent, Some(60.0));
+    assert_eq!((c.delivery_bus, c.delivery_external), (1, 1));
+    assert_eq!(report.all.rates.delivery.percent, Some(75.0));
+    assert_eq!(
+        report.all.rates.delivery.denominator,
+        c.delivered + c.delivery_bus
+    );
     assert_eq!(report.all.rates.reply_capture.percent, Some(50.0));
     assert!((report.all.rates.bus_reliability.percent.unwrap() - 100.0 / 3.0).abs() < 0.001);
     assert_eq!(c.failure_reasons["submission_unconfirmed"], 1);
@@ -140,7 +145,6 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     assert_ne!(caption.as_str(), "100%");
     assert!(!caption.ends_with('%'), "{caption}");
     for rate in [
-        &report.all.rates.delivery,
         &report.all.rates.reply_capture,
         &report.all.rates.bus_reliability,
     ] {
@@ -714,8 +718,7 @@ fn dashboard_wording_absent_rate_for_empty_all_pending_and_all_external() {
 }
 
 // One completed delivery plus one bound reply_not_captured must not call the
-// reply miss "1 delivered + 1 failed" while the delivery card says 2 delivered
-// and 0 failed.
+// reply miss a delivery failure. The card stays 2/2 delivered with 0 Bus failures.
 #[test]
 fn dashboard_wording_identity_matches_delivery_counters() {
     let report = snapshot(
@@ -733,7 +736,7 @@ fn dashboard_wording_identity_matches_delivery_counters() {
     assert_eq!(counts.bus_failures, 1);
     let card = &report.all.rates.delivery_share.caption;
     assert!(card.contains("2/2"), "{card}");
-    assert!(card.contains("0 failed"), "{card}");
+    assert!(card.contains("0 Bus failures"), "{card}");
     let identity = &report.all.identity;
     assert!(
         identity.contains(card),
@@ -744,7 +747,7 @@ fn dashboard_wording_identity_matches_delivery_counters() {
         "sentence and delivery card disagree: {identity} vs {card}"
     );
     assert!(
-        identity.contains("0 failed"),
+        identity.contains("0 Bus failures"),
         "sentence uses a different failed counter than the card ({card}): {identity}"
     );
     assert!(!identity.contains("1 delivered + 1 failed"), "{identity}");
@@ -815,4 +818,113 @@ fn dashboard_wording_unanswered_delivery_is_success() {
         report.all.identity
     );
     assert_absent_bus_rate(&report.all, "delivered without a reply");
+}
+
+// Delivery is delivered / (delivered + Bus-caused delivery failures).
+// An external failure stays on the card and out of the denominator.
+// Pending stays out of the denominator too.
+#[test]
+fn delivery_rate_excludes_external_failures_and_pending() {
+    let external_only = snapshot(
+        &fixture_state([
+            named_case("completed-without-text"),
+            named_case("interrupted-before-start"),
+        ]),
+        singapore_hour,
+    );
+    let counts = &external_only.all.counts;
+    assert_eq!(counts.delivered, 1);
+    assert_eq!(counts.delivery_bus, 0);
+    assert_eq!(counts.delivery_external, 1);
+    assert_eq!(counts.open, 0);
+    assert_eq!(counts.failed, 1);
+    for rate in [
+        &external_only.all.rates.delivery,
+        &external_only.all.rates.delivery_share,
+    ] {
+        assert_eq!(rate.percent, Some(100.0), "{}", rate.caption);
+        assert_eq!(rate.numerator, 1, "{}", rate.caption);
+        assert_eq!(rate.denominator, 1, "{}", rate.caption);
+        assert!(rate.caption.contains("1/1 delivered"), "{}", rate.caption);
+        assert!(rate.caption.contains("0 Bus failures"), "{}", rate.caption);
+        assert!(
+            rate.caption.contains("1 external failure"),
+            "{}",
+            rate.caption
+        );
+        assert!(
+            !rate.caption.contains("1/2"),
+            "external failure entered the fraction: {}",
+            rate.caption
+        );
+    }
+    assert!(
+        external_only
+            .all
+            .identity
+            .contains(&external_only.all.rates.delivery_share.caption),
+        "{}",
+        external_only.all.identity
+    );
+
+    let bus_failure = snapshot(
+        &fixture_state([
+            named_case("completed-without-text"),
+            named_case("submission_unconfirmed"),
+        ]),
+        singapore_hour,
+    );
+    let counts = &bus_failure.all.counts;
+    assert_eq!(counts.delivered, 1);
+    assert_eq!(counts.delivery_bus, 1);
+    assert_eq!(counts.delivery_external, 0);
+    assert_eq!(counts.open, 0);
+    for rate in [
+        &bus_failure.all.rates.delivery,
+        &bus_failure.all.rates.delivery_share,
+    ] {
+        assert_eq!(rate.percent, Some(50.0), "{}", rate.caption);
+        assert_eq!(rate.numerator, 1, "{}", rate.caption);
+        assert_eq!(
+            rate.denominator,
+            counts.delivered + counts.delivery_bus,
+            "{}",
+            rate.caption
+        );
+        assert_eq!(rate.denominator, 2, "{}", rate.caption);
+        assert!(rate.caption.contains("1/2 delivered"), "{}", rate.caption);
+        assert!(rate.caption.contains("1 Bus failure"), "{}", rate.caption);
+        assert!(
+            rate.caption.contains("0 external failures"),
+            "{}",
+            rate.caption
+        );
+    }
+
+    let pending = snapshot(
+        &fixture_state([
+            named_case("completed-without-text"),
+            named_case("awaiting-start"),
+        ]),
+        singapore_hour,
+    );
+    let counts = &pending.all.counts;
+    assert_eq!(counts.delivered, 1);
+    assert!(counts.open >= 1, "pending stays visible");
+    assert_eq!(counts.delivery_bus, 0);
+    assert_eq!(counts.failed, 0);
+    for rate in [
+        &pending.all.rates.delivery,
+        &pending.all.rates.delivery_share,
+    ] {
+        assert_eq!(rate.percent, Some(100.0), "{}", rate.caption);
+        assert_eq!(rate.denominator, 1, "{}", rate.caption);
+        assert_ne!(
+            rate.denominator, counts.attempts,
+            "pending entered the denominator: {}",
+            rate.caption
+        );
+        assert!(rate.caption.contains("1/1 delivered"), "{}", rate.caption);
+        assert!(rate.caption.contains("0 Bus failures"), "{}", rate.caption);
+    }
 }
