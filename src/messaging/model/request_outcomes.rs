@@ -1,4 +1,39 @@
-use super::{Request, RequestPhase};
+use super::{BusState, Request, RequestPhase};
+
+pub(crate) fn request_pre_start_failure(request: &Request) -> bool {
+    matches!(
+        request
+            .failure_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or("missing_reason"),
+        "submission_unconfirmed"
+            | "prompt_not_shown"
+            | "delivery_error"
+            | "prior_request_active"
+            | "not_submitted"
+            | "session_hook_missing"
+    )
+}
+
+pub(crate) fn request_start_bound(state: &BusState, request: &Request) -> bool {
+    request.trusted_start_bound
+        || (!request.uncertain_outcome
+            && (request.phase == RequestPhase::Active
+                || request.phase == RequestPhase::Abandoned && !request.steered)
+            && request
+                .group
+                .and_then(|id| state.request(id))
+                .is_some_and(|lead| {
+                    lead.agent_id == request.agent_id
+                        && !request_pre_start_failure(lead)
+                        && (lead.trusted_start_bound
+                            || lead.reply().is_some()
+                            || lead.phase == RequestPhase::Completed)
+                }))
+}
+
 // Shared responsibility for durable request closure reasons.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RequestFailureClass {

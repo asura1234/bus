@@ -27,6 +27,7 @@ mod restart;
 mod rooms;
 mod settlement;
 mod staffing;
+mod stall;
 mod state;
 mod status;
 mod types;
@@ -45,13 +46,13 @@ pub(crate) use history::{ARCHIVE_AFTER_MS, HISTORY_RETENTION_MS};
 #[cfg(test)]
 pub(crate) use idle_agents::MIN_IDLE_FOR_ALERT_MS;
 pub(crate) use interrupts::INTERRUPTED;
-pub(crate) use launch_attempts::{
-    request_pre_start_failure, request_start_bound, LaunchAttempt, LaunchKind, LaunchOutcome,
-};
+pub(crate) use launch_attempts::{LaunchAttempt, LaunchKind, LaunchOutcome};
 #[cfg(test)]
 use payload::payload_matches;
 pub(crate) use recovery::ManualRecovery;
-pub(crate) use request_outcomes::{classify_request_failure, RequestFailureClass};
+pub(crate) use request_outcomes::{
+    classify_request_failure, request_pre_start_failure, request_start_bound, RequestFailureClass,
+};
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::BusState;
 pub(crate) use {

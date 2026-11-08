@@ -396,3 +396,43 @@ fn launch_metrics_legacy_reattach_does_not_invent_a_launch() {
     std::fs::remove_dir_all(dir).unwrap();
     assert!(saved.as_object().unwrap().is_empty());
 }
+
+#[test]
+fn launch_metrics_unsubmitted_recovery_preparation_failure_is_durable() {
+    let (mut worker, agent, _, dir, calls) = fixture(Provider::Kimi, vec![]);
+    prepare_resume(
+        &mut worker,
+        agent,
+        Some(StartupRecovery::Unsubmitted { args: vec![] }),
+    );
+    assert_eq!(
+        worker.state.agent(agent).unwrap().launch_attempt_id,
+        Some(1),
+        "the unsubmitted agent must still own its pending launch"
+    );
+    assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
+    let agent = worker.state.agent(agent).unwrap().clone();
+    let result = worker.retry_unsubmitted_agent_start(&agent, vec![]);
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("Bus resume capture configuration is missing")),
+        "probe must reach saved executable preparation: {result:?}"
+    );
+    let current = worker.state.agent(agent.id).unwrap().launch_attempt_id;
+    let saved = ledger(&worker);
+    let sent = calls.lock().unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        sent.is_empty(),
+        "preparation failure must not send a native retry: {sent:?}"
+    );
+    assert_eq!(saved.as_object().unwrap().len(), 2, "{saved}");
+    assert_eq!(saved["1"]["outcome"], "pending", "{saved}");
+    assert!(saved["1"]["cause"].is_null(), "{saved}");
+    assert_eq!(current, Some(1), "{saved}");
+    assert_eq!(saved["2"]["kind"], "recovery");
+    assert_eq!(saved["2"]["outcome"], "failed");
+    assert!(saved["2"]["agent_id"].is_null(), "{saved}");
+}

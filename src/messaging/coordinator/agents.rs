@@ -146,6 +146,26 @@ impl Worker {
                 allow_busy_shell: false,
             },
         ));
+        self.settle_guarded_terminal_close(
+            id,
+            left_open,
+            kind,
+            &managed_name,
+            expected_session,
+            result,
+        )
+    }
+
+    /// Settle a guarded pane close: confirmed, unconfirmed, or identity-changed.
+    fn settle_guarded_terminal_close(
+        &mut self,
+        id: AgentId,
+        left_open: LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        expected_session: Option<String>,
+        result: Result<ResponseResult, crate::messaging::native::TransportError>,
+    ) -> Result<Option<LeftOpenTerminal>, String> {
         match result {
             Ok(ResponseResult::Ok {}) => Ok(None),
             Ok(other) => {
@@ -166,7 +186,7 @@ impl Worker {
                         // same native guard; a different/rebound session still fails.
                         return self.stop_agent_terminal(id);
                     }
-                    if self.native_ownership_released(&managed_name) {
+                    if self.native_ownership_released(managed_name) {
                         // The native server cleared this launch's managed name, e.g.
                         // after the provider exited and the pane fell back to its
                         // shell. That idle shell in Bus's own terminal is closed;
@@ -175,12 +195,12 @@ impl Worker {
                         return Ok(self.close_exited_shell(
                             left_open,
                             kind,
-                            &managed_name,
+                            managed_name,
                             expected_session,
                         ));
                     }
                     if expected_session.as_deref().is_some_and(|expected| {
-                        self.owned_terminal_session_moved(&left_open, kind, &managed_name, expected)
+                        self.owned_terminal_session_moved(&left_open, kind, managed_name, expected)
                     }) {
                         // The provider session in this agent's own terminal
                         // moved on, as after an agent clear the server did not
@@ -196,7 +216,7 @@ impl Worker {
                         self.restored_terminal_session_moved(
                             &left_open,
                             kind,
-                            &managed_name,
+                            managed_name,
                             expected,
                         )
                     }) {
