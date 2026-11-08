@@ -3,6 +3,23 @@ use serde_json::{json, Value};
 use std::{io, os::unix::net::UnixStream, path::Path, time::Instant};
 use tungstenite::WebSocket;
 
+/// Bus quotes an attachment as one double-quoted token and only unescapes
+/// `\\` and `\"`. JSON string decoding treats `\b` and the other JSON escapes
+/// as different characters, so it must not parse this line.
+fn pasted_image_path(line: &str) -> io::Result<String> {
+    let tokens = crate::agents::providers::launch::parse_path_tokens(line).map_err(|error| {
+        io::Error::other(format!(
+            "Codex native image path is not a quoted token: {error}"
+        ))
+    })?;
+    match tokens.as_slice() {
+        [path] => Ok(path.clone()),
+        _ => Err(io::Error::other(
+            "Codex native image path is not one quoted token",
+        )),
+    }
+}
+
 pub(super) struct Rpc {
     socket: WebSocket<UnixStream>,
     next_id: u64,
@@ -210,10 +227,10 @@ impl Rpc {
             ));
         }
         let (images, text) = super::super::hooks::image_paste_parts(text);
-        let mut input: Vec<Value> = images
-            .into_iter()
-            .map(|image| json!({"type":"localImage","path":serde_json::from_str::<String>(image).unwrap_or_else(|_|image.to_owned())}))
-            .collect();
+        let mut input = Vec::with_capacity(images.len() + usize::from(!text.is_empty()));
+        for image in images {
+            input.push(json!({"type":"localImage","path":pasted_image_path(image)?}));
+        }
         if !text.is_empty() {
             input.push(json!({"type":"text","text":text}));
         }
@@ -500,6 +517,29 @@ pub(crate) mod tests {
             json!([{"type":"text","text":"保留\n  two\n\tthree  "}])
         );
         assert_eq!(prompt["params"]["clientUserMessageId"], "bus-msg-7");
+    }
+
+    #[test]
+    fn codex_native_quoted_image_path_keeps_a_literal_backslash() {
+        let (path, handle) = server(false, false);
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        // Bus double quotes keep a backslash that is not `\\` or `\"`.
+        rpc.prompt(
+            "owned-thread",
+            "\"/tmp/plain.png\"\n\"/tmp/foo\\bar.png\"",
+            false,
+            "image-backslash",
+            None,
+        )
+        .unwrap();
+        let calls = handle.join().unwrap();
+        let input = &calls
+            .iter()
+            .find(|call| call["method"] == "thread/queue/add")
+            .unwrap()["params"]["input"];
+        assert_eq!(input[0]["path"], "/tmp/plain.png");
+        assert_eq!(input[1]["path"], "/tmp/foo\\bar.png");
+        assert_eq!(input.as_array().unwrap().len(), 2);
     }
 
     #[test]
