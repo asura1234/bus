@@ -486,6 +486,9 @@ impl App {
             .lookup_runtime_sender(ws_idx, pane_id)
             .and_then(|runtime| crate::terminal::driver::observe(runtime).ok());
         let screen_detection_skipped = observed.is_none();
+        let compaction_banner = observed.as_ref().is_some_and(|(grid, _)| {
+            crate::agents::compaction_banner::visible(pane.agent.as_deref(), &grid.text())
+        });
         let provider_quota = observed.as_ref().and_then(|(grid, _)| {
             (pane.agent.as_deref() == Some("cursor")
                 && crate::agents::providers::cursor::usage::is_restored_monthly_usage_limit(
@@ -531,6 +534,7 @@ impl App {
             display_agent: pane.display_agent,
             agent_status: pane.agent_status,
             screen_detection_skipped,
+            compaction_banner,
             dialog_id: dialog,
             update_error: None,
             provider_error: provider_quota.map(|(error, _)| error.to_owned()),

@@ -77,6 +77,24 @@ impl Worker {
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;
+            // Grok and Kimi print a compaction banner instead of Claude's
+            // compact hook. A skipped screen read is not "banner gone".
+            if matches!(
+                agent.provider,
+                super::Provider::Grok | super::Provider::Kimi
+            ) {
+                if let Some(info) = info {
+                    if !info.screen_detection_skipped {
+                        state
+                            .observe_compaction_banner(
+                                agent.id,
+                                info.compaction_banner,
+                                observed_at_ms,
+                            )
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+            }
             let dialog_id = info.and_then(|info| info.dialog_id.clone());
             state
                 .observe_dialog(agent.id, dialog_id.is_some(), observed_at_ms)

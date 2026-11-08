@@ -545,3 +545,48 @@ async fn cursor_quota_metadata_survives_the_provider_word_wrapped_warning() {
         "quota observation must not modify the restored draft"
     );
 }
+
+#[tokio::test]
+async fn compaction_banner_server_sets_the_flag_from_the_pane() {
+    use crate::agents::{AgentKind, AgentState};
+
+    fn flag(screen: &str, kind: AgentKind) -> (Option<String>, bool) {
+        let (mut app, _, _) = shell(screen.as_bytes());
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let id = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        app.state
+            .terminals
+            .get_mut(&id)
+            .unwrap()
+            .set_detected_state(Some(kind), AgentState::Idle);
+        let info = app.agent_info(0, pane).unwrap();
+        (info.agent, info.compaction_banner)
+    }
+
+    let (agent, banner) = flag(
+        "Auto-compacting conversation (82% full)...\r\n",
+        AgentKind::Grok,
+    );
+    assert_eq!(agent.as_deref(), Some("grok"));
+    assert!(banner, "grok in-progress banner");
+
+    let (_, banner) = flag(
+        "Auto-compacting\r\nconversation (82% full)...\r\n",
+        AgentKind::Grok,
+    );
+    assert!(banner, "wrapped grok banner still counts as visible");
+
+    let (_, banner) = flag("Conversation compacted.\r\n", AgentKind::Grok);
+    assert!(banner, "grok completion banner");
+
+    let (_, banner) = flag("ready\r\n", AgentKind::Grok);
+    assert!(!banner, "idle grok pane");
+
+    let (agent, banner) = flag("Context auto-compacted\r\n", AgentKind::Kimi);
+    assert_eq!(agent.as_deref(), Some("kimi"));
+    assert!(banner, "kimi banner");
+
+    let (agent, banner) = flag("Auto-compacting conversation\r\n", AgentKind::Claude);
+    assert_eq!(agent.as_deref(), Some("claude"));
+    assert!(!banner, "claude keeps the hook path");
+}

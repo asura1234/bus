@@ -449,6 +449,11 @@ pub(crate) struct RoomAgent {
     /// replays it; identical hooks reuse one callback id, so the sequence is the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_compaction_callback: Option<(String, u64)>,
+    /// True while a Grok or Kimi compaction banner is on the pane. Repeat
+    /// polls and a resize that keeps the banner visible do not count again.
+    /// A skipped screen read leaves this unchanged. Session reset clears it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) compaction_banner_open: bool,
     /// `agent clear` reset the provider context: the next callback that names a
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -534,8 +539,13 @@ impl ExitSnapshot {
     }
 }
 
-/// Context compactions reported by the provider's SessionStart hook
-/// (`source: "compact"`). Cursor sends no such hook, so it stays at zero.
+/// Context compactions for one agent.
+///
+/// Claude counts each SessionStart hook with `source: "compact"` once
+/// (`last_compaction_callback` dedupes a replayed envelope). Grok and Kimi
+/// do not emit that hook; one visible episode of their compaction banner
+/// counts once, and a later poll or resize of the same banner does not.
+/// Cursor reports neither signal, so it stays at zero.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Compactions {
     pub(crate) count: u32,
