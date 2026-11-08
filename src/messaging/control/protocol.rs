@@ -92,6 +92,10 @@ pub(crate) struct ControlCall {
     pub(crate) deadline: Option<Instant>,
     /// Held through coordinator completion, even after the caller times out.
     pub(crate) _poll_permit: Option<Arc<()>>,
+    /// Generation at accept for room.focus and agent.focus. Other methods leave
+    /// this empty. Reading the live generation at execution closes a form the
+    /// user opened while the call waited behind another command.
+    pub(crate) form_generation: Option<u64>,
 }
 
 impl ControlCall {

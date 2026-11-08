@@ -3,7 +3,7 @@ use crate::messaging::control::server::ControlCall;
 use std::time::Instant;
 
 impl Worker {
-    pub(super) fn serve_control_without_refresh(
+    pub(in crate::messaging::coordinator) fn serve_control_without_refresh(
         &mut self,
         call: ControlCall,
         events: &mpsc::Sender<BusEvent>,

@@ -133,7 +133,7 @@ impl BusUi {
         {
             local.text = Editor::default();
             self.text_changed(room);
-            self.form = Some(Form::Help { scroll: 0 });
+            self.set_form(Form::Help { scroll: 0 });
             self.recipient_menu = false;
             self.detail_path = None;
             self.suggestions.entries.clear();

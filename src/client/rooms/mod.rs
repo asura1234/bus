@@ -4,6 +4,7 @@ mod deletion;
 mod drafts;
 #[path = "widgets/editor.rs"]
 mod editor;
+mod events;
 #[path = "dialogs/forms.rs"]
 mod forms;
 mod help;

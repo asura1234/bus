@@ -47,6 +47,7 @@ fn request(id: &str, method: &str, params: Value) -> ControlRequest {
 #[test]
 fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     let (mut worker, room, agent, dir) = fixture();
+    crate::messaging::coordinator::publish_form_generation(u64::MAX);
     let (events, receiver) = mpsc::channel();
     let call = request(
         "agent-focus",
@@ -61,7 +62,7 @@ fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     );
     assert!(
         matches!(receiver.try_recv().unwrap(), BusEvent::DevFocusRequested {
-        room: selected, agent: Some(target)
+        room: selected, agent: Some(target), form_generation: Some(u64::MAX)
     } if selected == room && target == agent)
     );
     assert_eq!(
@@ -82,9 +83,54 @@ fn dev_focus_queues_real_ui_event_without_typing_and_deduplicates() {
     assert_eq!(response.result, json!({"stage":"queued", "room_id":room}));
     assert!(
         matches!(receiver.try_recv().unwrap(), BusEvent::DevFocusRequested {
-        room: selected, agent: None
+        room: selected, agent: None, form_generation: Some(u64::MAX)
     } if selected == room)
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_focus_uses_the_generation_from_when_the_request_was_accepted() {
+    let (mut worker, room, _agent, dir) = fixture();
+    crate::messaging::coordinator::publish_form_generation(4);
+    let (events, receiver) = mpsc::channel();
+    let (reply, _response) = mpsc::sync_channel(1);
+    let snapshots = std::sync::Arc::new(std::sync::Mutex::new(std::sync::Arc::new(
+        worker.snapshot(),
+    )));
+    let call = crate::messaging::control::server::ControlCall {
+        request: request("queued-focus", "room.focus", json!({"room": "review"})),
+        reply,
+        deadline: None,
+        _poll_permit: None,
+        form_generation: Some(4),
+    };
+    crate::messaging::coordinator::publish_form_generation(9);
+    let skipped = worker.serve_control_without_refresh(
+        call,
+        &events,
+        &snapshots,
+        std::time::Instant::now() + std::time::Duration::from_secs(30),
+    );
+    assert!(!skipped, "a focus mutation still publishes a snapshot");
+    match receiver.try_recv().unwrap() {
+        BusEvent::DevFocusRequested {
+            room: selected,
+            agent: None,
+            form_generation,
+        } => {
+            assert_eq!(selected, room);
+            assert_eq!(
+                form_generation,
+                Some(4),
+                "focus sampled the form opened while the request waited"
+            );
+        }
+        other => panic!("unexpected event {other:?}"),
+    }
+    assert!(worker.queued_focus_generation.is_none());
+    crate::messaging::coordinator::publish_form_generation(0);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

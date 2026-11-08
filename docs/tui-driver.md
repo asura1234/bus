@@ -272,6 +272,13 @@ example `bus state`, `bus room create review` or `bus agent add --room
 review --name a1 --provider claude --pwd /tmp/bus-tui/s1/work`. Use it to
 set up state; drive the behaviour under test with real input.
 
+For deterministic asynchronous acknowledgement ordering, `bus ui hold-acks` holds
+`RoomCreated`, `AgentAdded`, and `DevFocusRequested` before UI dispatch, and
+`bus ui release-acks` releases them on a later UI tick. Read `bus ui hits` for
+`holding_acknowledgements` and `held_acknowledgements`; wait until the held count
+proves the acknowledgement arrived before typing newer input. No sleep is needed.
+These controls exist only in the dev variant and are for scratch ordering tests.
+
 ### snapshot
 `snapshot [--rows A-B] [--plain]`
 

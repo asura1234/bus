@@ -28,6 +28,7 @@ fn dev_focus_cross_room_updates_visible_target_and_keeps_old_focus_guard() {
     ui.receive_event(BusEvent::DevFocusRequested {
         room: second,
         agent: Some(b),
+        form_generation: None,
     });
     assert_eq!(ui.room, Some(second));
     assert_eq!(ui.terminal, Some(b));
@@ -61,6 +62,7 @@ fn dev_room_focus_returns_to_room_without_replacing_drafts_or_persistent_state()
     ui.receive_event(BusEvent::DevFocusRequested {
         room: first,
         agent: None,
+        form_generation: None,
     });
     assert_eq!(ui.room, Some(first));
     assert!(ui.terminal.is_none() && ui.target_pane.is_none());
@@ -69,6 +71,100 @@ fn dev_room_focus_returns_to_room_without_replacing_drafts_or_persistent_state()
     );
     assert_eq!(ui.locals[&first].text.text, "unsaved local draft");
     assert_eq!(serde_json::to_value(&ui.snapshot.state).unwrap(), before);
+}
+
+#[test]
+fn dev_focus_ack_preserves_a_form_opened_after_the_request() {
+    let (mut ui, first, second, _a, b) = fixture();
+    ui.form = Some(Form::Files(Editor::default()));
+    let Some(Form::Files(editor)) = &mut ui.form else {
+        panic!("file form was not opened");
+    };
+    editor.text = "typed-after-focus-request.txt".into();
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+        form_generation: None,
+    });
+
+    assert_eq!(ui.room, Some(first));
+    assert!(ui.terminal.is_none());
+    let Some(Form::Files(editor)) = &ui.form else {
+        panic!("newer file form was discarded");
+    };
+    assert_eq!(editor.text, "typed-after-focus-request.txt");
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::FocusTerminal(id) if id == b)));
+}
+
+#[test]
+fn dev_focus_ack_completes_when_form_predates_request() {
+    let (mut ui, _first, second, _a, b) = fixture();
+    ui.form = Some(Form::Files(Editor::new("preexisting-input.txt".into())));
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+        form_generation: Some(0),
+    });
+
+    assert_eq!(ui.room, Some(second));
+    assert_eq!(ui.terminal, Some(b));
+    assert!(ui.form.is_none());
+}
+
+#[test]
+fn dev_focus_ack_preserves_a_rename_opened_after_the_request() {
+    use crate::client::rooms::forms::RenameTarget;
+
+    let (mut ui, first, second, _a, b) = fixture();
+    // Stamp the request before the rename opens. The production opener must
+    // advance form generation, or this acknowledgement still owns the rename.
+    let requested_generation = ui.form_generation;
+    ui.start_rename(RenameTarget::Room(first));
+    let Some(rename) = &mut ui.rename else {
+        panic!("rename did not open");
+    };
+    rename.editor.text = "typed-after-focus-request".into();
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+        form_generation: Some(requested_generation),
+    });
+
+    assert_eq!(ui.room, Some(first), "stale focus moved the room context");
+    assert!(ui.terminal.is_none());
+    let Some(rename) = &ui.rename else {
+        panic!("rename opened after the focus request was discarded");
+    };
+    assert_eq!(rename.editor.text, "typed-after-focus-request");
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::FocusTerminal(id) if id == b)));
+}
+
+#[test]
+fn dev_focus_ack_completes_a_rename_that_predates_the_request() {
+    use crate::client::rooms::forms::RenameTarget;
+
+    let (mut ui, first, second, _a, b) = fixture();
+    ui.start_rename(RenameTarget::Room(first));
+    let requested_generation = ui.form_generation;
+
+    ui.receive_event(BusEvent::DevFocusRequested {
+        room: second,
+        agent: Some(b),
+        form_generation: Some(requested_generation),
+    });
+
+    assert_eq!(ui.room, Some(second));
+    assert_eq!(ui.terminal, Some(b));
+    assert!(ui.rename.is_none());
 }
 
 #[test]

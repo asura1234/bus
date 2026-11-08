@@ -46,7 +46,7 @@ fn create_room(worker: &mut Worker, name: &str) -> RoomId {
     receiver
         .try_iter()
         .find_map(|event| match event {
-            BusEvent::RoomCreated(id) => Some(id),
+            BusEvent::RoomCreated { room: id, .. } => Some(id),
             _ => None,
         })
         .unwrap()

@@ -142,7 +142,10 @@ pub(super) fn command(path: &str) -> String {
             "Read internal session diagnostics. Result: {version,dev,storage_failed,\nstorage_repair_required,coordinator_error,data_dir,logs,callback_logs,\nagents:[{agent_id,name,status,reason,detail,identity,current_request}]}.\nErrors: common errors below; inspect storage/coordinator errors before mutations."
         }
         "ui hits" => {
-            "Read named TUI click targets for the dev driver.\nResult: {size:[COLS,ROWS],hits:[{name,row,col,width,height},...]}; coordinates are\nterminal cells. See bus --dev tui --help for the driver contract.\nErrors: command_failed when the UI snapshot is unavailable; common errors below."
+            "Read named TUI click targets for the dev driver.\nResult: {size:[COLS,ROWS],hits:[{name,row,col,width,height},...],\nholding_acknowledgements,held_acknowledgements}; coordinates are terminal cells.\nSee bus --dev tui --help for the driver contract.\nErrors: command_failed when the UI snapshot is unavailable; common errors below."
+        }
+        "ui hold-acks" | "ui release-acks" => {
+            "Hold or release RoomCreated, AgentAdded and DevFocusRequested before UI dispatch.\nFor deterministic scratch-TUI ordering tests only. `ui hits` reports the held count.\nResult: {holding:BOOL,held:NUMBER}. Errors: common errors below."
         }
         _ => "Missing command documentation",
     };

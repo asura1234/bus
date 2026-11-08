@@ -26,7 +26,14 @@ impl Worker {
                 // focus command path; this receipt only attests enqueueing.
                 events
                     .ok_or("Bus UI event channel unavailable")?
-                    .send(BusEvent::DevFocusRequested { room, agent })
+                    .send(BusEvent::DevFocusRequested {
+                        room,
+                        agent,
+                        form_generation: Some(
+                            self.queued_focus_generation
+                                .unwrap_or_else(super::super::current_form_generation),
+                        ),
+                    })
                     .map_err(|_| "Bus UI event channel disconnected")?;
                 let mut result = json!({"stage":"queued", "room_id":room});
                 if let Some(agent) = agent {

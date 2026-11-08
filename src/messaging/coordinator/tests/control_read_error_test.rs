@@ -55,6 +55,7 @@ fn an_error_setting_status_read_requires_a_snapshot_refresh() {
         reply,
         deadline: None,
         _poll_permit: None,
+        form_generation: None,
     };
     let skipped = worker.serve_control_without_refresh(
         call,
@@ -93,6 +94,7 @@ fn unchanged_reads_only_defer_refresh_until_the_delivery_poll_is_due() {
             reply,
             deadline: None,
             _poll_permit: None,
+            form_generation: None,
         };
         let now = Instant::now();
         let next_poll = if due {

@@ -51,7 +51,7 @@ impl BusUi {
         self.refill_orchestrator_prompt();
     }
 
-    pub(super) fn start_rename(&mut self, target: RenameTarget) {
+    pub(in crate::client::rooms) fn start_rename(&mut self, target: RenameTarget) {
         if let RenameTarget::Room(id) = &target {
             if self.is_master_room(*id) {
                 let error = ModelError::MasterRoomFixed.to_string();
@@ -69,6 +69,9 @@ impl BusUi {
             RenameTarget::Agent(id) => self.snapshot.state.agent(id).map(|a| a.name.clone()),
         };
         if let Some(name) = name {
+            // Same contract as set_form: a focus stamped earlier no longer matches.
+            self.form_generation = self.form_generation.wrapping_add(1);
+            crate::messaging::coordinator::publish_form_generation(self.form_generation);
             self.rename = Some(Rename {
                 target,
                 editor: Editor::new(name),
@@ -76,9 +79,23 @@ impl BusUi {
         }
     }
 
+    pub(in crate::client::rooms) fn set_form(&mut self, form: Form) {
+        self.form_generation = self.form_generation.wrapping_add(1);
+        crate::messaging::coordinator::publish_form_generation(self.form_generation);
+        self.form = Some(form);
+    }
+
+    pub(in crate::client::rooms) fn clear_form(&mut self) {
+        if self.form.is_some() {
+            self.form_generation = self.form_generation.wrapping_add(1);
+            crate::messaging::coordinator::publish_form_generation(self.form_generation);
+        }
+        self.form = None;
+    }
+
     pub(super) fn open_form(&mut self, form: Form) {
         self.clear_selection();
-        self.form = Some(form);
+        self.set_form(form);
         self.terminal = None;
         self.recipient_menu = false;
         self.queue(BusCommand::LeaveRoom, Effect::None);
@@ -481,7 +498,7 @@ impl BusUi {
                     BusCommand::SetFeishuRecipient(editor.text.trim().to_owned())
                 };
                 self.queue(command, Effect::None);
-                self.form = Some(Form::Settings);
+                self.set_form(Form::Settings);
             }
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);

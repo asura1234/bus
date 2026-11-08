@@ -36,6 +36,10 @@ pub(super) struct Worker {
     pub(super) transport: Box<dyn Transport>,
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
+    /// UI command ids start at 1. Control commands set this to 0.
+    pub(super) active_command_id: u64,
+    /// Form generation captured when the focus call now being served was accepted.
+    pub(super) queued_focus_generation: Option<u64>,
     pub(super) error: Option<String>,
     pub(super) poll_failures: u32,
     pub(super) missing_binary_checked: BTreeMap<AgentId, Option<String>>,
@@ -153,6 +157,8 @@ impl Worker {
             transport,
             revision: 0,
             last_command_id: 0,
+            active_command_id: 0,
+            queued_focus_generation: None,
             error: None,
             poll_failures: 0,
             missing_binary_checked: BTreeMap::new(),
@@ -396,7 +402,9 @@ impl Worker {
             return;
         }
         let started = std::time::Instant::now();
+        self.queued_focus_generation = call.form_generation;
         let response = self.control_response_with_events(&call.request, Some(events));
+        self.queued_focus_generation = None;
         perf::CONTROL.record_op(
             started.elapsed(),
             perf::control_method_label(&call.request.method),
@@ -462,6 +470,7 @@ impl Worker {
                     }
                 }
                 Ok((id, command)) => {
+                    self.active_command_id = id;
                     let submitting = matches!(
                         command,
                         BusCommand::Submit(..) | BusCommand::SubmitQueued(..)

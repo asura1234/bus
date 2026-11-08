@@ -103,6 +103,8 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "sounds" => ("List installed notification sounds", "Example: bus --dev sounds"),
         "ui" => ("Inspect the developer UI", "Example: bus --dev ui hits"),
         "ui hits" => ("Read TUI hit regions", "Example: bus --dev ui hits"),
+        "ui hold-acks" => ("Hold asynchronous UI acknowledgements", "Example: bus --dev ui hold-acks"),
+        "ui release-acks" => ("Release held UI acknowledgements", "Example: bus --dev ui release-acks"),
         "room" => ("Create and manage rooms", "Example: bus room create feature-work"),
         "room create" => ("Create a work room", "Example: bus room create feature-work\n         bus room create release-check --request-id release-check-room-v1"),
         "room focus" => ("Focus a room in the UI", "Example: bus --dev room focus feature-work"),

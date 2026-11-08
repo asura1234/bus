@@ -55,6 +55,7 @@ impl Transport for FreshLaunchNative {
                             reply,
                             deadline: None,
                             _poll_permit: None,
+                            form_generation: None,
                         }),
                     ))
                     .unwrap();
@@ -167,6 +168,7 @@ impl Transport for PollingNative {
                         reply,
                         deadline: None,
                         _poll_permit: None,
+                        form_generation: None,
                     })
                 };
                 self.commands.send((1, command)).unwrap();

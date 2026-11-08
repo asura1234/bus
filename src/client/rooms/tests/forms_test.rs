@@ -5,7 +5,10 @@ fn creation_events_survive_snapshots_from_before_the_created_target() {
     let room = created.state.create_room("new room").unwrap();
     let mut intermediate = (*ui.snapshot).clone();
     intermediate.revision += 1;
-    ui.receive_event(BusEvent::RoomCreated(room));
+    ui.receive_event(BusEvent::RoomCreated {
+        room,
+        command_id: 0,
+    });
     ui.receive_snapshot(Arc::new(intermediate));
     assert_eq!(ui.room, Some(room), "intermediate snapshot is not deletion");
     assert!(ui
@@ -23,7 +26,10 @@ fn creation_events_survive_snapshots_from_before_the_created_target() {
         .create_agent(room, "new agent", Provider::Codex, "/project".into(), None)
         .unwrap();
     created.revision += 1;
-    ui.receive_event(BusEvent::AgentAdded(agent));
+    ui.receive_event(BusEvent::AgentAdded {
+        agent,
+        command_id: 0,
+    });
     ui.receive_snapshot(Arc::new(created));
     assert_eq!(ui.terminal, Some(agent));
     assert!(ui
@@ -33,6 +39,386 @@ fn creation_events_survive_snapshots_from_before_the_created_target() {
     added.revision += 2;
     ui.receive_snapshot(Arc::new(added));
     assert_eq!(ui.terminal, Some(agent));
+}
+
+fn submit_room_form(ui: &mut BusUi, name: &str) {
+    ui.action(render::Action::NewRoom);
+    for c in name.chars() {
+        key(ui, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+    key(ui, KeyCode::Enter, KeyModifiers::NONE);
+}
+
+fn submit_agent_form(ui: &mut BusUi) {
+    ui.action(render::Action::NewAgent);
+    let Some(forms::Form::Agent {
+        name,
+        provider,
+        cwd,
+        ..
+    }) = &mut ui.form
+    else {
+        panic!("agent form was not opened");
+    };
+    name.text = "first-agent".into();
+    *provider = Some(Provider::ClaudeCode);
+    cwd.text = "/projects/first".into();
+    key(ui, KeyCode::Enter, KeyModifiers::NONE);
+}
+
+fn open_edited_file_form(ui: &mut BusUi) {
+    ui.action(render::Action::Files);
+    let Some(forms::Form::Files(editor)) = &mut ui.form else {
+        panic!("file form was not opened");
+    };
+    editor.text = "newer-input.txt".into();
+}
+
+fn assert_edited_file_form_survives(ui: &BusUi, room: RoomId) {
+    assert_eq!(ui.room, Some(room));
+    assert!(ui.terminal.is_none());
+    let Some(forms::Form::Files(editor)) = &ui.form else {
+        panic!("newer file form was discarded");
+    };
+    assert_eq!(editor.text, "newer-input.txt");
+}
+
+fn settle_creation_command(ui: &mut BusUi) {
+    let ids: Vec<_> = ui.pending.iter().map(|pending| pending.id).collect();
+    assert!(ids.iter().any(|id| {
+        ui.pending.iter().any(|pending| {
+            pending.id == *id
+                && matches!(
+                    pending.command,
+                    BusCommand::CreateRoom(_)
+                        | BusCommand::AddAgent(_)
+                        | BusCommand::AddOrchestrator(..)
+                )
+        })
+    }));
+    for id in &ids {
+        if let Some(pending) = ui.pending.iter_mut().find(|pending| pending.id == *id) {
+            pending.enqueued = true;
+        }
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: *id,
+            result: Ok(()),
+        });
+    }
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = *ids.last().expect("commands are pending");
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        pending.command,
+        BusCommand::CreateRoom(_) | BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+    )));
+}
+
+#[test]
+fn room_created_ack_after_settlement_completes_its_origin_form() {
+    let (mut ui, _, _) = fixture();
+    submit_room_form(&mut ui, "created-room");
+    settle_creation_command(&mut ui);
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id,
+    });
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(created));
+}
+
+#[test]
+fn room_created_ack_after_dismiss_stays_in_the_selected_room() {
+    let (mut ui, first, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let selected = snapshot.state.create_room("selected").unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    submit_room_form(&mut ui, "created-room");
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    settle_creation_command(&mut ui);
+    ui.action(render::Action::Room(selected));
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(selected));
+    assert_ne!(ui.room, Some(first));
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id,
+    });
+
+    assert_eq!(
+        ui.room,
+        Some(selected),
+        "a stale acknowledgement left the room selected before it arrived"
+    );
+    assert!(
+        !ui.pending.iter().any(|pending| matches!(
+            pending.command,
+            BusCommand::SelectRoom(id) if id == created
+        )),
+        "a stale acknowledgement selected the created room"
+    );
+}
+
+#[test]
+fn agent_added_ack_after_esc_does_not_open_the_created_terminal() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    settle_creation_command(&mut ui);
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(room));
+    assert!(ui.terminal.is_none());
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+    ui.receive_event(BusEvent::AgentAdded {
+        agent: added,
+        command_id,
+    });
+
+    assert_eq!(ui.room, Some(room));
+    assert!(
+        ui.terminal.is_none(),
+        "a stale acknowledgement opened the created terminal after Esc"
+    );
+    assert!(
+        !ui.pending.iter().any(|pending| matches!(
+            pending.command,
+            BusCommand::FocusTerminal(id) if id == added
+        )),
+        "a stale acknowledgement focused the created terminal"
+    );
+}
+
+#[test]
+fn agent_added_ack_after_settlement_completes_its_origin_form() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    settle_creation_command(&mut ui);
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+
+    ui.receive_event(BusEvent::AgentAdded {
+        agent: added,
+        command_id,
+    });
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.terminal, Some(added));
+}
+
+#[test]
+fn room_created_ack_preserves_a_newer_non_dev_form_and_its_room_context() {
+    let (mut ui, room, _) = fixture();
+    submit_room_form(&mut ui, "created-room");
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::CreateRoom(_))));
+    ui.action(render::Action::Cancel);
+    open_edited_file_form(&mut ui);
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id,
+    });
+
+    assert_edited_file_form_survives(&ui, room);
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        pending.command,
+        BusCommand::SelectRoom(id) if id == created
+    )));
+}
+
+#[test]
+fn room_created_ack_completes_its_still_current_form() {
+    let (mut ui, _, _) = fixture();
+    submit_room_form(&mut ui, "created-room");
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id,
+    });
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(created));
+}
+
+#[test]
+fn agent_added_ack_preserves_a_newer_non_dev_form_and_its_room_context() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::AddAgent(_))));
+    ui.action(render::Action::Cancel);
+    open_edited_file_form(&mut ui);
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+    ui.receive_event(BusEvent::AgentAdded {
+        agent: added,
+        command_id,
+    });
+
+    assert_edited_file_form_survives(&ui, room);
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        pending.command,
+        BusCommand::FocusTerminal(id) if id == added
+    )));
+}
+
+#[test]
+fn agent_added_ack_completes_its_still_current_form() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+
+    ui.receive_event(BusEvent::AgentAdded {
+        agent: added,
+        command_id,
+    });
+
+    assert!(ui.form.is_none());
+    assert_eq!(ui.terminal, Some(added));
+}
+
+#[test]
+fn external_creation_ack_preserves_a_newer_form_and_rename() {
+    let (mut ui, room, _) = fixture();
+    open_edited_file_form(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("external-room").unwrap();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "external-agent",
+            Provider::ClaudeCode,
+            "/projects/external".into(),
+            None,
+        )
+        .unwrap();
+
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id: 0,
+    });
+    ui.receive_event(BusEvent::AgentAdded {
+        agent: added,
+        command_id: 0,
+    });
+
+    assert_edited_file_form_survives(&ui, room);
+
+    let (mut ui, room, _) = fixture();
+    ui.rename = Some(forms::Rename {
+        target: forms::RenameTarget::Room(room),
+        editor: editor::Editor::new("newer-room-name".into()),
+    });
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id: 0,
+    });
+    assert_eq!(ui.room, Some(room));
+    assert_eq!(
+        ui.rename.as_ref().map(|rename| rename.editor.text.as_str()),
+        Some("newer-room-name")
+    );
+}
+
+#[test]
+fn older_room_created_ack_preserves_a_newer_room_form_awaiting_its_own_ack() {
+    let (mut ui, room, _) = fixture();
+    submit_room_form(&mut ui, "first-created");
+    let first_command_id = ui.creation_origins.back().expect("first origin").id;
+    settle_creation_command(&mut ui);
+    let mut snapshot = (*ui.snapshot).clone();
+    let first_created = snapshot.state.create_room("first-created").unwrap();
+
+    // The first command has settled but its RoomCreated acknowledgement is still
+    // outstanding (the dev acknowledgement hold produces exactly this order).
+    ui.action(render::Action::Cancel);
+    submit_room_form(&mut ui, "second-created");
+    assert!(matches!(ui.form, Some(forms::Form::Room(_))));
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::CreateRoom(_))));
+
+    ui.receive_event(BusEvent::RoomCreated {
+        room: first_created,
+        command_id: first_command_id,
+    });
+
+    assert!(
+        matches!(ui.form, Some(forms::Form::Room(_))),
+        "the first command's acknowledgement closed the newer room form"
+    );
+    assert_eq!(
+        ui.room,
+        Some(room),
+        "the first command's acknowledgement moved the visible room"
+    );
 }
 
 #[test]
@@ -1026,4 +1412,58 @@ fn suggestion_failure_is_logged_without_a_form_error_dialog() {
         capture.text()
     );
     assert!(!room_screen(&mut ui, 100, 30).contains("OK (Enter)"));
+}
+
+#[test]
+fn external_room_ack_preserves_the_form_of_a_rejected_creation() {
+    let (mut ui, room, _) = fixture();
+    submit_room_form(&mut ui, "rejected-room");
+    let id = ui
+        .pending
+        .iter()
+        .find(|pending| matches!(pending.command, BusCommand::CreateRoom(_)))
+        .expect("room creation is pending")
+        .id;
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: id,
+        result: Err("room already exists".into()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = id;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(
+        matches!(ui.form, Some(forms::Form::Room(_))),
+        "the rejected form must stay open for correction"
+    );
+
+    assert!(
+        ui.creation_origins.iter().all(|origin| origin.id != id),
+        "rejected creation origin was not retired"
+    );
+    let mut snapshot = (*ui.snapshot).clone();
+    let external = snapshot.state.create_room("external-room").unwrap();
+    ui.receive_event(BusEvent::RoomCreated {
+        room: external,
+        command_id: id,
+    });
+    assert!(
+        matches!(ui.form, Some(forms::Form::Room(_))),
+        "a replay of the rejected command closed its form"
+    );
+    ui.receive_event(BusEvent::RoomCreated {
+        room: external,
+        command_id: 0,
+    });
+
+    assert!(
+        matches!(ui.form, Some(forms::Form::Room(_))),
+        "an external acknowledgement closed the rejected creation's form"
+    );
+    assert_eq!(
+        ui.room,
+        Some(room),
+        "an external acknowledgement moved the visible room"
+    );
 }

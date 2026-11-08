@@ -217,6 +217,7 @@ fn status_call(id: usize, message: PromptId) -> BusCommand {
         reply,
         deadline: None,
         _poll_permit: None,
+        form_generation: None,
     })
 }
 
@@ -281,6 +282,7 @@ fn a_ui_command_never_overtakes_a_control_mutation() {
         reply,
         deadline: None,
         _poll_permit: None,
+        form_generation: None,
     });
     let queued = vec![
         status_call(0, message),
