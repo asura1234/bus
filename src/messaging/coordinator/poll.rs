@@ -79,6 +79,7 @@ impl Worker {
             state
                 .observe_status(agent.id, status, observed_at_ms)
                 .map_err(|e| e.to_string())?;
+            Self::observe_grok_banner(&mut state, agent, info, observed_at_ms)?;
             let dialog_id = info.and_then(|info| info.dialog_id.clone());
             state
                 .observe_dialog(agent.id, dialog_id.is_some(), observed_at_ms)
@@ -110,6 +111,28 @@ impl Worker {
         }
         self.notify_dialogs(waits)?;
         Ok(Some(infos))
+    }
+
+    fn observe_grok_banner(
+        state: &mut BusState,
+        agent: &RoomAgent,
+        info: Option<&schema::AgentInfo>,
+        observed_at_ms: u64,
+    ) -> Result<(), String> {
+        // Grok prints a compaction banner instead of Claude's compact hook.
+        // A skipped screen read is not "banner gone".
+        if agent.provider != super::Provider::Grok {
+            return Ok(());
+        }
+        let Some(info) = info else {
+            return Ok(());
+        };
+        if info.screen_detection_skipped {
+            return Ok(());
+        }
+        state
+            .observe_compaction_banner(agent.id, info.compaction_banner, observed_at_ms)
+            .map_err(|error| error.to_string())
     }
 
     fn observe_cursor_info(

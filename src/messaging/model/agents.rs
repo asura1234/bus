@@ -74,6 +74,7 @@ impl BusState {
                 unavailable_orchestration_target: None,
                 compactions: Compactions::default(),
                 last_compaction_callback: None,
+                compaction_banner_open: false,
                 session_reset_pending: false,
                 superseded_session_id: None,
                 interrupt_pending: false,
@@ -116,6 +117,35 @@ impl BusState {
             return Ok(());
         }
         agent.last_compaction_callback = Some(key);
+        self.record_compaction(id, at_ms)
+    }
+
+    /// Counts one Grok compaction per banner episode.
+    ///
+    /// The banner staying visible, including a resize that redraws it, does
+    /// not count again. The caller skips this when the screen was not read,
+    /// so a skipped frame cannot close the latch and count the same episode
+    /// twice. Closing the latch does not itself count.
+    pub(crate) fn observe_compaction_banner(
+        &mut self,
+        id: AgentId,
+        visible: bool,
+        at_ms: u64,
+    ) -> Result<(), ModelError> {
+        {
+            let agent = self
+                .agents
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownAgent(id))?;
+            if !visible {
+                agent.compaction_banner_open = false;
+                return Ok(());
+            }
+            if agent.compaction_banner_open {
+                return Ok(());
+            }
+            agent.compaction_banner_open = true;
+        }
         self.record_compaction(id, at_ms)
     }
 
@@ -323,6 +353,7 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(id))?;
         agent.session_reset_pending = true;
         agent.compactions = Compactions::default();
+        agent.compaction_banner_open = false;
         Ok(())
     }
 
@@ -344,6 +375,7 @@ impl BusState {
         agent.superseded_session_id = previous.clone();
         agent.session_reset_pending = false;
         agent.compactions = Compactions::default();
+        agent.compaction_banner_open = false;
         // A message already sent into the fresh context was recorded under the
         // old session; its callbacks now carry the new one.
         if let Some(request) = agent

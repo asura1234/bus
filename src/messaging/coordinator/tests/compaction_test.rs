@@ -1,4 +1,5 @@
 use super::*;
+use crate::messaging::model::BusState;
 
 struct NoAgents;
 
@@ -337,4 +338,292 @@ fn rearmed_notice_stays_rearmed_across_a_restart() {
     compact(&mut reopened, agent, 2);
     assert_eq!(notices(&reopened, room).len(), 2);
     cleanup(reopened, dir);
+}
+
+fn banner_listing(
+    agent: &str,
+    banner: bool,
+    skipped: bool,
+) -> Result<ResponseResult, TransportError> {
+    let info = serde_json::from_value(json!({
+        "terminal_id": "terminal",
+        "pane_id": "pane",
+        "agent": agent,
+        "agent_status": "idle",
+        "agent_session": {
+            "source": format!("herdr:{agent}"),
+            "agent": agent,
+            "kind": "id",
+            "value": "session"
+        },
+        "workspace_id": "w1",
+        "tab_id": "t1",
+        "focused": false,
+        "interactive_ready": true,
+        "revision": 1,
+        "compaction_banner": banner,
+        "screen_detection_skipped": skipped
+    }))
+    .unwrap();
+    Ok(ResponseResult::AgentList { agents: vec![info] })
+}
+
+fn poll_banner(worker: &mut Worker, at_ms: u64) {
+    worker.test_now_ms = Some(at_ms);
+    worker.poll().unwrap();
+}
+
+/// Five open/idle polls of a pane flag that the real matcher already decided.
+/// Returns the saved count and the limit-notice texts.
+#[cfg(feature = "dev-tools")]
+pub(crate) fn poll_observed_grok_banner(open: bool, idle: bool) -> (u32, Vec<String>) {
+    let mut replies = Vec::new();
+    for _ in 0..5 {
+        replies.push(banner_listing("grok", open, false));
+        replies.push(banner_listing("grok", idle, false));
+    }
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, replies);
+    let mut state = worker.state.clone();
+    state.rename_agent(agent, "g1").unwrap();
+    worker.save(state).unwrap();
+    for episode in 0..5 {
+        poll_banner(&mut worker, 10_000 + episode * 2);
+        worker.refresh_setting_notices().unwrap();
+        poll_banner(&mut worker, 10_001 + episode * 2);
+        worker.refresh_setting_notices().unwrap();
+    }
+    let count = worker.state.agent(agent).unwrap().compactions.count;
+    let posted = notices(&worker, room)
+        .into_iter()
+        .map(|prompt| prompt.text)
+        .collect();
+    cleanup(worker, dir);
+    (count, posted)
+}
+
+#[test]
+fn compaction_banner_grok_counts_once_and_sets_last_at_ms() {
+    let (mut worker, agent, _, dir, _) =
+        fixture(Provider::Grok, vec![banner_listing("grok", true, false)]);
+    poll_banner(&mut worker, 1_700_000_000_000);
+    let compactions = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(compactions.count, 1);
+    assert_eq!(compactions.last_at_ms, Some(1_700_000_000_000));
+    assert!(worker.state.agent(agent).unwrap().compaction_banner_open);
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_narrow_wrap_between_full_lines_counts_once() {
+    let full = "Context compacted: 209.9k -> 37.8k tokens (131.2s)";
+    let wrapped = "Context compacted: 209.9k -> 37.8k tok\nens (131.2s)";
+    let flags = [full, wrapped, full]
+        .map(|screen| crate::agents::compaction_banner::visible(Some("grok"), screen));
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        flags
+            .into_iter()
+            .map(|banner| banner_listing("grok", banner, false))
+            .collect(),
+    );
+    poll_banner(&mut worker, 1_000);
+    poll_banner(&mut worker, 2_000);
+    poll_banner(&mut worker, 3_000);
+    assert_eq!(
+        worker.state.agent(agent).unwrap().compactions.count,
+        1,
+        "a wrapped frame of the same banner must not close the latch: {flags:?}"
+    );
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_grok_repeat_poll_does_not_increment() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        vec![
+            banner_listing("grok", true, false),
+            banner_listing("grok", true, false),
+            banner_listing("grok", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 1_000);
+    poll_banner(&mut worker, 2_000);
+    // A resize re-render keeps the same banner flag. It is not a new episode.
+    poll_banner(&mut worker, 3_000);
+    let compactions = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(compactions.count, 1);
+    assert_eq!(compactions.last_at_ms, Some(1_000));
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_grok_second_episode_counts() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        vec![
+            banner_listing("grok", true, false),
+            banner_listing("grok", false, false),
+            banner_listing("grok", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 1_000);
+    poll_banner(&mut worker, 2_000);
+    assert_eq!(worker.state.agent(agent).unwrap().compactions.count, 1);
+    assert!(!worker.state.agent(agent).unwrap().compaction_banner_open);
+    poll_banner(&mut worker, 3_000);
+    let compactions = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(compactions.count, 2);
+    assert_eq!(compactions.last_at_ms, Some(3_000));
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_grok_limit_notice_posts_once() {
+    let mut replies = Vec::new();
+    for _ in 0..6 {
+        replies.push(banner_listing("grok", true, false));
+        replies.push(banner_listing("grok", false, false));
+    }
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Grok, replies);
+    let mut state = worker.state.clone();
+    state.rename_agent(agent, "impl").unwrap();
+    worker.save(state).unwrap();
+    for episode in 0..6 {
+        poll_banner(&mut worker, 10_000 + episode * 2);
+        worker.refresh_setting_notices().unwrap();
+        poll_banner(&mut worker, 10_001 + episode * 2);
+        worker.refresh_setting_notices().unwrap();
+        let posted = notices(&worker, room);
+        if episode < 4 {
+            assert!(posted.is_empty(), "episode {episode}");
+        } else {
+            assert_eq!(posted.len(), 1, "episode {episode}");
+            assert_eq!(
+                posted[0].text,
+                "impl reached 5 compactions; get a handover note and replace it."
+            );
+        }
+    }
+    assert_eq!(worker.state.agent(agent).unwrap().compactions.count, 6);
+    assert_eq!(notices(&worker, room).len(), 1);
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_skipped_frame_does_not_reopen_the_latch() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        vec![
+            banner_listing("grok", true, false),
+            banner_listing("grok", false, true),
+            banner_listing("grok", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 1_000);
+    poll_banner(&mut worker, 2_000);
+    poll_banner(&mut worker, 3_000);
+    let agent = worker.state.agent(agent).unwrap();
+    assert_eq!(agent.compactions.count, 1);
+    assert_eq!(agent.compactions.last_at_ms, Some(1_000));
+    assert!(agent.compaction_banner_open);
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_latch_roundtrip_does_not_recount() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        vec![
+            banner_listing("grok", true, false),
+            banner_listing("grok", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 1_000);
+    let saved = serde_json::to_string(&worker.state).unwrap();
+    let restored: BusState = serde_json::from_str(&saved).unwrap();
+    assert!(restored.agent(agent).unwrap().compaction_banner_open);
+    assert_eq!(restored.agent(agent).unwrap().compactions.count, 1);
+    worker.state = restored;
+    poll_banner(&mut worker, 4_000);
+    let agent = worker.state.agent(agent).unwrap();
+    assert_eq!(agent.compactions.count, 1);
+    assert_eq!(agent.compactions.last_at_ms, Some(1_000));
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_session_reset_closes_the_latch() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Grok,
+        vec![
+            banner_listing("grok", true, false),
+            banner_listing("grok", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 1_000);
+    let mut state = worker.state.clone();
+    state.begin_session_reset(agent).unwrap();
+    worker.save(state).unwrap();
+    let reset = worker.state.agent(agent).unwrap();
+    assert_eq!(reset.compactions.count, 0);
+    assert!(reset.compactions.last_at_ms.is_none());
+    assert!(!reset.compaction_banner_open);
+    poll_banner(&mut worker, 5_000);
+    let again = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(again.count, 1);
+    assert_eq!(again.last_at_ms, Some(5_000));
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_kimi_does_not_count() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::Kimi,
+        vec![
+            banner_listing("kimi", true, false),
+            banner_listing("kimi", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 8_000);
+    poll_banner(&mut worker, 9_000);
+    let compactions = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(compactions.count, 0);
+    assert!(compactions.last_at_ms.is_none());
+    cleanup(worker, dir);
+}
+
+#[test]
+fn compaction_banner_claude_hook_counts_once_ignoring_the_pane() {
+    let (mut worker, agent, _, dir, _) = fixture(
+        Provider::ClaudeCode,
+        vec![
+            banner_listing("claude", true, false),
+            banner_listing("claude", true, false),
+        ],
+    );
+    poll_banner(&mut worker, 1_000);
+    assert_eq!(worker.state.agent(agent).unwrap().compactions.count, 0);
+    let spool = dir.join("callbacks/launch");
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"SessionStart","session_id":"session","source":"compact"}),
+    );
+    let records = callbacks::records(&spool).unwrap();
+    assert_eq!(records.len(), 1);
+    let original = std::fs::read(&records[0].0).unwrap();
+    worker.consume_callbacks(agent, &spool).unwrap();
+    let counted = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(counted.count, 1);
+    assert!(counted.last_at_ms.is_some());
+    // The same envelope replayed after the count was saved is not a second compaction.
+    std::fs::write(&records[0].0, original).unwrap();
+    worker.consume_callbacks(agent, &spool).unwrap();
+    poll_banner(&mut worker, 2_000);
+    let after = worker.state.agent(agent).unwrap();
+    assert_eq!(after.compactions.count, 1);
+    assert_eq!(after.compactions.last_at_ms, counted.last_at_ms);
+    assert!(!after.compaction_banner_open);
+    cleanup(worker, dir);
 }

@@ -59,6 +59,20 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+/// A draft that does not fit the 1.0.5 frame uses Grok's paste chip. The
+/// label matches the composer contract: multiline text at or below 10000
+/// bytes is `N lines`, and a longer paste is truncating decimal kilobytes.
+fn framed_draft(draft: &str) -> String {
+    let shown = if draft.len() > 10_000 {
+        format!("[Pasted: {} KB]", draft.len() / 1000)
+    } else if draft.contains('\n') {
+        format!("[Pasted: {} lines]", draft.split('\n').count())
+    } else {
+        draft.to_owned()
+    };
+    shown.replace('\n', " │\r\n│   ")
+}
+
 fn resume_session(args: &[String]) -> io::Result<Option<String>> {
     let mut found = None;
     let mut args = args.iter();
@@ -622,11 +636,14 @@ impl Grok {
             return screen;
         } else if self.active.is_some() {
             screen.push_str("⠋ Working… [stop]\r\n");
+            // Completion line observed in this Bus run. It stays for this turn
+            // so one poll counts the episode, then the idle screen drops it.
+            screen.push_str("Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n");
         }
         screen.push_str(&format!(
             "╭{}╮\r\n│ ❯ {} │\r\n╰{}╯\r\n{}Shift+Tab:mode │ Ctrl+x:shortcuts\r\n",
             "─".repeat(58),
-            self.draft.replace('\n', " │\r\n│   "),
+            framed_draft(&self.draft),
             "─".repeat(58),
             if self.active.is_some() {
                 "Esc:cancel │ "

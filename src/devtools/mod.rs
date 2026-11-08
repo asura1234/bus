@@ -6,3 +6,6 @@ pub(crate) mod tui;
 #[cfg(all(test, unix))]
 #[path = "tests/disk_space_test.rs"]
 mod disk_space_tests;
+#[cfg(test)]
+#[path = "tests/grok_compaction_notice_test.rs"]
+mod grok_compaction_notice_tests;

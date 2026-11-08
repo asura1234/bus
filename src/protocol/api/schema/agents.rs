@@ -220,6 +220,10 @@ pub struct AgentInfo {
     pub agent_status: AgentStatus,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub screen_detection_skipped: bool,
+    /// Grok is showing a compaction banner on this pane. False when the
+    /// screen was not read. Claude counts compactions from its hook.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub compaction_banner: bool,
     /// Identity of a blocked screen observed by the terminal driver, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialog_id: Option<String>,

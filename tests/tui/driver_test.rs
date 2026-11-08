@@ -740,6 +740,139 @@ fn a_fake_cursor_agent_gets_room_prompts_and_replies() {
     room_prompts_reach_a_fake("cursor", ".cursor/hooks.json");
 }
 
+/// A fake Grok turn prints the captured completion line. Server detection, the
+/// poll, and the room notice all run; the count is not a scripted boolean.
+#[test]
+fn fake_grok_compaction_banner_reaches_the_room_notice() {
+    let session = Session::start("gcompact");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let settings = session_dir(&session.0).join("data/settings.json");
+    std::fs::write(&settings, r#"{"max_compactions_per_agent":5}"#).unwrap();
+    let work = session_dir(&session.0).join("work");
+    let added = scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "g1",
+            "--provider",
+            "grok",
+            "--pwd",
+            work.to_str().unwrap(),
+            "--consent-hooks",
+        ],
+    );
+    assert!(added.status.success(), "{added:?}");
+    assert!(work.join(".grok/hooks/bus.json").is_file());
+    session.ok(&["wait", "--state", "agents.*.name == g1", "--timeout", "30s"]);
+    // The launch prompt is typed into the pane and is not a room message.
+    // The fake prints its reply on the visible screen once that turn ends.
+    let bootstrap = std::time::Instant::now() + std::time::Duration::from_secs(25);
+    let mut pane = String::new();
+    while std::time::Instant::now() < bootstrap {
+        let read = scratch_bus(&session, &["agent", "read", "g1", "--source", "visible"]);
+        pane = String::from_utf8_lossy(&read.stdout).into_owned();
+        if pane.contains("fake reply: Bus:") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(
+        pane.contains("fake reply: Bus:"),
+        "the fake grok must accept the launch prompt before compaction prompts: {pane}"
+    );
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    // A short bootstrap turn can still flash the banner. Let one poll close
+    // the latch before the prompts that must each count.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+
+    for n in 1..=5 {
+        let sent = scratch_bus(
+            &session,
+            &[
+                "send",
+                "--room",
+                "bus",
+                "--to",
+                "g1",
+                "--text",
+                &format!("fake:work 2 compact {n}"),
+            ],
+        );
+        let receipt = String::from_utf8_lossy(&sent.stdout).to_string();
+        assert!(sent.status.success(), "{receipt}");
+        // The working pane's shortcut row is a dialog to `wait --message`.
+        // The fake still finishes the turn; its reply replaces the launch text.
+        let reply = format!("fake reply: fake:work 2 compact {n}");
+        let reply_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut pane = String::new();
+        while std::time::Instant::now() < reply_deadline {
+            let read = scratch_bus(&session, &["agent", "read", "g1", "--source", "visible"]);
+            pane = String::from_utf8_lossy(&read.stdout).into_owned();
+            if pane.contains(&reply) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(
+            pane.contains(&reply),
+            "the fake grok should finish the prompt: {pane}"
+        );
+        let count = wait_grok_compactions(&session, n);
+        assert!(
+            count >= n,
+            "prompt {n} must open one compaction episode, count was {count}"
+        );
+        session.ok(&[
+            "wait",
+            "--state",
+            "agents.*.status == idle",
+            "--timeout",
+            "20s",
+        ]);
+        // The idle screen no longer shows the banner. One poll closes the latch
+        // so the next prompt is a new episode.
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    }
+
+    let (code, history) = parse(scratch_bus(
+        &session,
+        &["history", "--room", "bus", "--limit", "50"],
+    ));
+    assert_eq!(code, 0, "{history}");
+    let notice = "g1 reached 5 compactions; get a handover note and replace it.";
+    let mentions = history.to_string().matches(notice).count();
+    assert_eq!(mentions, 1, "the limit notice posts once: {history}");
+}
+
+fn wait_grok_compactions(session: &Session, want: u64) -> u64 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut count = 0;
+    while std::time::Instant::now() < deadline {
+        let (code, state) = parse(scratch_bus(session, &["state"]));
+        assert_eq!(code, 0, "{state}");
+        count = state["result"]["agents"]
+            .as_array()
+            .and_then(|agents| agents.iter().find(|agent| agent["name"] == "g1"))
+            .and_then(|agent| agent["compactions"]["count"].as_u64())
+            .unwrap_or(0);
+        if count >= want {
+            return count;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    count
+}
+
 /// Adds a fake `provider` worker and sends it room messages: each must be
 /// typed into its composer and settle with its reply.
 fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {

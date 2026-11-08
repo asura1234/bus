@@ -453,6 +453,8 @@ pub(crate) struct RoomAgent {
     /// replays it; identical hooks reuse one callback id, so the sequence is the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_compaction_callback: Option<(String, u64)>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) compaction_banner_open: bool,
     /// `agent clear` reset the provider context: the next callback that names a
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -538,8 +540,6 @@ impl ExitSnapshot {
     }
 }
 
-/// Context compactions reported by the provider's SessionStart hook
-/// (`source: "compact"`). Cursor sends no such hook, so it stays at zero.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Compactions {
     pub(crate) count: u32,
