@@ -935,6 +935,7 @@ fn restart_published_sessionless_unknown_submit_settles_on_new_generation_even_w
                 code: None,
                 message: "connection lost after input".into(),
                 definitely_rejected: false,
+                timestamps: Default::default(),
             })
         }
     }
