@@ -62,6 +62,9 @@ def commands(selection: Selection, *, checks: bool = False) -> tuple[list[Gate],
     build, tests = [], []
     instrumented = needs_profiles(selection)
     rust = selection.rust_filter != "none()"
+    # A dev-tools-only diff leaves the filter empty. --check still has to run
+    # Clippy; the default and dev-tools builds are where the denials live.
+    clippy = rust or (checks and selection.dev_tools)
     env = quality.child_env()
     if selection.full and os.environ.get(PROFILE_DIR):
         # The scheduler already owns the lint worker's process group. Its cargo
@@ -71,7 +74,7 @@ def commands(selection: Selection, *, checks: bool = False) -> tuple[list[Gate],
     # --full and an affected fallback both set selection.full. --check must run
     # lint and docs even when the test selection stays narrow.
     if selection.full or checks:
-        build.append(Gate("lint", (sys.executable, SCRIPT, "lint", *(("--skip-clippy",) if not rust else ())), env=env))
+        build.append(Gate("lint", (sys.executable, SCRIPT, "lint", *(("--skip-clippy",) if not clippy else ())), env=env))
         tests.append(Gate("docs", (sys.executable, "-m", "pytest", "-q", "-n", "0", "scripts/skill_migration_contract_test.py"), env=env))
     if rust:
         # Explicit empty preflight compiles every default artifact once, including the
@@ -117,9 +120,14 @@ def commands(selection: Selection, *, checks: bool = False) -> tuple[list[Gate],
             doc_env["LLVM_PROFILE_FILE"] = str(target / quality.profile_file_name("cli"))
         tests.append(Gate("doc-consumers", quality.python_test_command(list(selection.doc_tests)), env=doc_env))
     if selection.dev_tools:
+        expression = "binary(cli) | binary(tui-driver) | test(/^devtools::/)"
+        # The nonempty-filter path already names the schema test on affected-rust.
+        # This empty-filter plan has no other Rust gate, so name it here once.
+        if checks and not selection.full and selection.rust_filter == "none()":
+            expression = f"{expression} | {SCHEMA_TEST}"
         tests.append(Gate("dev-tools", nextest("--features", "dev-tools", "--bin", "bus",
                           "--test", "cli", "--test", "tui-driver",
-                          expression="binary(cli) | binary(tui-driver) | test(/^devtools::/)"), env=env))
+                          expression=expression), env=env))
     if selection.full and rust:
         tests.insert(0, Gate("cli-smoke", (str(target / "debug" / ("bus.exe" if os.name == "nt" else "bus")), "--help"),
                           env=quality.child_env(LLVM_PROFILE_FILE=str(target / quality.profile_file_name("cli")))))
