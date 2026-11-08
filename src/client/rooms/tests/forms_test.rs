@@ -733,7 +733,7 @@ fn enter_submits_the_agent_form_from_each_unambiguous_field() {
         let mut ui = agent_form_with_open_pwd_suggestions(master);
         if let Some(forms::Form::Agent { field, args, .. }) = &mut ui.form {
             *field = 3;
-            *args = Box::new(editor::Editor::new("--verbose".into()));
+            **args = editor::Editor::new("--verbose".into());
         }
         room_screen(&mut ui, 120, 40);
         key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
