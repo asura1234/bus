@@ -4,13 +4,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
     },
     time::Duration,
 };
+
+mod manual;
 
 const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
@@ -141,6 +142,7 @@ impl Exchange {
         Self::begin_inner(dir, timeout, true)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn begin_preserving(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
         let mut exchange = Self::begin(dir, timeout)?;
         exchange.recovery = preserved_recovery(
@@ -159,6 +161,7 @@ impl Exchange {
     }
 
     /// Resume a durable developer backup, never a Bus-paste withdrawal proof.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn begin_restoration(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
         private_dir(&dir)?;
         let _lock = lock(&dir)?;
@@ -288,12 +291,14 @@ impl Exchange {
     pub(crate) fn request_capture(&self) -> io::Result<()> {
         self.request(Operation::Capture)
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn request_swap(&self, text: &str) -> io::Result<()> {
         if text.len() as u64 > MAX_BYTES {
             return Err(io::Error::other("Prompt exceeds 2 MiB"));
         }
         self.request_with_text(Operation::Swap, Some(text.to_owned()))
     }
+    #[allow(dead_code)]
     pub(crate) fn request_restore_after_attempt(&self, text: &str) -> io::Result<()> {
         self.request_with_text(Operation::Restore, Some(text.to_owned()))
     }
@@ -554,15 +559,15 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
 
 fn run_at(dir: Option<&Path>, file: &Path, fallback: &str) -> io::Result<()> {
     let Some(dir) = dir else {
-        return manual_editor(file, fallback);
+        return manual::manual_editor(file, fallback);
     };
     if !dir.exists() {
-        return manual_editor(file, fallback);
+        return manual::manual_editor(file, fallback);
     }
     let guard = lock(dir)?;
     let Some(request) = read_request(dir)? else {
         drop(guard);
-        return manual_editor(file, fallback);
+        return manual::manual_editor(file, fallback);
     };
     if request.operation == Operation::Cancelled {
         fs::remove_file(dir.join(REQUEST))?;
@@ -749,64 +754,6 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
         crate::platform::sync_parent_directory(dir)?;
     }
     Ok(())
-}
-
-#[cfg(not(windows))]
-fn manual_editor(file: &Path, editor: &str) -> io::Result<()> {
-    if wrapper(editor) {
-        return Err(io::Error::other("Recursive Bus editor configuration"));
-    }
-    let status = Command::new("/bin/sh")
-        .args(["-c", &format!("exec {editor} \"$@\""), "bus-draft-editor"])
-        .arg(file)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other("The developer's editor failed"))
-    }
-}
-
-#[cfg(windows)]
-fn manual_editor(file: &Path, editor: &str) -> io::Result<()> {
-    use windows_sys::Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW};
-    if wrapper(editor) {
-        return Err(io::Error::other("Recursive Bus editor configuration"));
-    }
-    let command: Vec<_> = editor.encode_utf16().chain(Some(0)).collect();
-    let mut count = 0;
-    let argv = unsafe { CommandLineToArgvW(command.as_ptr(), &mut count) };
-    if argv.is_null() || count <= 0 {
-        return Err(io::Error::other("Invalid editor command"));
-    }
-    let mut words = Vec::new();
-    for &word in unsafe { std::slice::from_raw_parts(argv, count as usize) } {
-        let mut length = 0;
-        unsafe {
-            while *word.add(length) != 0 {
-                length += 1;
-            }
-        }
-        words.push(String::from_utf16_lossy(unsafe {
-            std::slice::from_raw_parts(word, length)
-        }));
-    }
-    unsafe {
-        LocalFree(argv.cast());
-    }
-    let (program, args) = words
-        .split_first()
-        .ok_or_else(|| io::Error::other("Empty editor command"))?;
-    if Command::new(program)
-        .args(args)
-        .arg(file)
-        .status()?
-        .success()
-    {
-        Ok(())
-    } else {
-        Err(io::Error::other("The developer's editor failed"))
-    }
 }
 
 #[cfg(test)]

@@ -349,8 +349,8 @@ fn manual_editor_uses_original_command_arguments_and_treats_filename_as_data() {
     let editor = format!("/bin/sh '{}'", script.display());
     run_at(Some(&root.join("not-created")), &file, &editor).unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), "manually edited");
-    assert!(manual_editor(&file, "false").is_err());
-    assert!(manual_editor(&file, "bus --bus-callback draft-editor").is_err());
+    assert!(super::manual::manual_editor(&file, "false").is_err());
+    assert!(super::manual::manual_editor(&file, "bus --bus-callback draft-editor").is_err());
     fs::remove_dir_all(root).unwrap();
 }
 
