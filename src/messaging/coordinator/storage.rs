@@ -158,7 +158,7 @@ impl Worker {
 
     fn write_with_reply_timestamps(
         &mut self,
-        mut state: BusState,
+        state: BusState,
         stamp_new_replies: bool,
     ) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
@@ -169,6 +169,9 @@ impl Worker {
             self.pause_storage(&error);
             return Err(self.storage_notice().into());
         }
+        // Reply stamps are journaled after state.json. durable_state stays the
+        // full commit so a retry can tell a torn write from that journal.
+        let mut live = state.clone();
         if stamp_new_replies {
             let at_ms = io::now_ms();
             let new_replies: Vec<RequestId> = state
@@ -184,7 +187,7 @@ impl Worker {
                 .map(|request| request.id)
                 .collect();
             for id in new_replies {
-                let mut delivered = state.clone();
+                let mut delivered = live.clone();
                 delivered.record_reply_delivered(id, at_ms);
                 let Some(room) = delivered.request(id).map(|request| request.room_id) else {
                     continue;
@@ -202,7 +205,7 @@ impl Worker {
                     )
                     .is_ok()
                 {
-                    state = delivered;
+                    live = delivered;
                 }
             }
         }
@@ -220,8 +223,8 @@ impl Worker {
                     status = ?agent.status, "Bus status changed");
             }
         }
-        self.durable_state = state.clone();
-        self.state = state;
+        self.durable_state = state;
+        self.state = live;
         Ok(())
     }
 
