@@ -511,7 +511,8 @@ fn orchestrator_independent_kimi_requests_wait_for_separate_committed_turns() {
         f.status(RuntimeStatus::Idle);
         stop(&f);
         f.consume();
-        assert_eq!(f.reply(lead).as_deref(), Some("old answer"));
+        assert!(f.reply(lead).is_none());
+        assert_eq!(f.request(lead).delivery_stage(), "ended");
         assert_eq!(f.reply(queued), None);
         assert_eq!(f.request(queued).group, None);
         f.deliver();
@@ -528,8 +529,10 @@ fn orchestrator_independent_kimi_requests_wait_for_separate_committed_turns() {
         stop(&f);
         f.status(RuntimeStatus::Idle);
         f.consume();
-        assert_eq!(f.reply(queued).as_deref(), Some("worker answer"));
-        assert_eq!(f.reply(lead).as_deref(), Some("old answer"));
+        assert!(f.reply(queued).is_none());
+        assert_eq!(f.request(queued).delivery_stage(), "ended");
+        assert!(f.reply(lead).is_none());
+        assert_eq!(f.request(lead).delivery_stage(), "ended");
         assert_eq!(f.request(queued).provider_turn_id.as_deref(), Some("2"));
     }
 }

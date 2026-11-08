@@ -20,10 +20,8 @@ fn claude_messages_reach_an_unbound_busy_turn_without_waiting_for_idle() {
         fixture.stopped("own-turn", "correction applied");
         fixture.consume();
         fixture.status(RuntimeStatus::Idle);
-        assert_eq!(
-            fixture.reply(request).as_deref(),
-            Some("correction applied")
-        );
+        assert!(fixture.reply(request).is_none());
+        assert_eq!(fixture.request(request).delivery_stage(), "ended");
     }
 }
 
@@ -104,8 +102,8 @@ fn claude_coalesced_paste_with_adjacent_input_completes_every_joined_message() {
     for id in [first, second, third] {
         let message = fixture.request(id).prompt.id;
         let status = fixture.worker.control_message(message).unwrap();
-        assert_eq!(status["requests"][0]["stage"], "replied", "{status}");
-        assert_eq!(status["requests"][0]["reply"]["text"], "all three answered");
+        assert_eq!(status["requests"][0]["stage"], "ended", "{status}");
+        assert!(status["requests"][0]["reply"].is_null(), "{status}");
     }
 }
 
@@ -185,28 +183,23 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     fixture.stopped("worker-turn", "dialog answered");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    for ((room, request, reply), unread) in [
-        (work, lead, "dialog answered"),
-        (master, member, "follow-up answered"),
-    ]
-    .into_iter()
-    .zip(unread)
-    {
-        assert_eq!(fixture.reply(request).as_deref(), Some(reply));
-        let room = fixture.worker.state.room(room).unwrap();
-        assert_eq!(
-            room.latest_replies
-                .get(&orchestrator)
-                .map(|reply| reply.text.as_str()),
-            Some(reply)
+    for ((room, request), unread) in [(work, lead), (master, member)].into_iter().zip(unread) {
+        assert!(fixture.reply(request).is_none(), "{request:?}");
+        assert_eq!(fixture.request(request).delivery_stage(), "ended");
+        let room_state = fixture.worker.state.room(room).unwrap();
+        assert!(
+            room_state.latest_replies.get(&orchestrator).is_none(),
+            "{:?}",
+            room_state.latest_replies
         );
         assert_eq!(
-            room.unread_count,
-            unread + 1 + u64::from(room.id == master),
-            "one source reply, plus the worker-woken decision in MASTER"
+            room_state.unread_count, unread,
+            "a turn final is not a source reply"
         );
     }
     let reports: Vec<_> = fixture.worker.state.notices(master).collect();
-    assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].text, "dialog answered");
+    assert!(
+        reports.is_empty(),
+        "an accepted turn final is not posted: {reports:?}"
+    );
 }

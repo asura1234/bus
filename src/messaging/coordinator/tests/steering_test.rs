@@ -484,11 +484,10 @@ fn typed_input_answered_in_its_own_turn_keeps_both_answers() {
     fixture.stopped("turn-2", "parser and tests written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
-    assert_eq!(
-        fixture.reply(correction).as_deref(),
-        Some("parser and tests written")
-    );
+    assert!(fixture.reply(lead).is_none());
+    assert_eq!(fixture.request(lead).delivery_stage(), "ended");
+    assert!(fixture.reply(correction).is_none());
+    assert_eq!(fixture.request(correction).delivery_stage(), "ended");
     assert_eq!(fixture.request(correction).group, None);
     assert_eq!(fixture.error(), None);
 }
@@ -620,7 +619,8 @@ fn blocked_agents_dialogs_and_queue_only_messages_are_never_typed_into_a_turn() 
     fixture.stopped("turn-1", "parser written");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
+    assert!(fixture.reply(lead).is_none());
+    assert_eq!(fixture.request(lead).delivery_stage(), "ended");
     fixture.deliver();
     assert_eq!(
         fixture.typed_content()[1],
@@ -660,8 +660,10 @@ fn messages_that_waited_for_an_unavailable_agent_are_coalesced_into_one_prompt()
     fixture.consume();
     assert_eq!(fixture.error(), None);
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(fixture.reply(first).as_deref(), Some("both done"));
-    assert_eq!(fixture.reply(second).as_deref(), Some("both done"));
+    assert!(fixture.reply(first).is_none());
+    assert_eq!(fixture.request(first).delivery_stage(), "ended");
+    assert!(fixture.reply(second).is_none());
+    assert_eq!(fixture.request(second).delivery_stage(), "ended");
     // Messages queued while the agent was ready go one turn each, as before.
     fixture.deliver();
     assert_eq!(fixture.typed_content()[1], ("own turn".to_owned(), false));
@@ -940,9 +942,10 @@ fn identical_typed_messages_answered_in_separate_turns_keep_their_own_replies() 
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
-    assert_eq!(fixture.reply(first).as_deref(), Some("first yes done"));
-    assert_eq!(fixture.reply(second).as_deref(), Some("second yes done"));
+    for id in [lead, first, second] {
+        assert!(fixture.reply(id).is_none(), "{id:?}");
+        assert_eq!(fixture.request(id).delivery_stage(), "ended");
+    }
 }
 
 /// While shells hold the replies, a message folded into a later turn shares
@@ -981,14 +984,10 @@ fn shell_held_turns_keep_their_replies_and_folded_messages_share_them() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("Waiting on the build.")
-    );
-    for id in [second, folded] {
-        assert_eq!(fixture.reply(id).as_deref(), Some("Not yet; docs pending."));
+    for id in [lead, second, folded, third] {
+        assert!(fixture.reply(id).is_none(), "{id:?}");
+        assert_eq!(fixture.request(id).delivery_stage(), "ended");
     }
-    assert_eq!(fixture.reply(third).as_deref(), Some("pong"));
     assert_eq!(fixture.error(), None);
 }
 

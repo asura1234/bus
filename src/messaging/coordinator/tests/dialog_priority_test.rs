@@ -113,8 +113,10 @@ fn blocked_dialog_notice_bypasses_cross_room_head_during_active_or_background_tu
         f.status(RuntimeStatus::Idle);
         f.now += 5_000 + 1;
         f.consume();
-        assert_eq!(f.reply(notice).as_deref(), Some("notice handled"));
-        assert_eq!(f.reply(lead).as_deref(), Some("notice handled"));
+        assert!(f.reply(notice).is_none());
+        assert_eq!(f.request(notice).delivery_stage(), "ended");
+        assert!(f.reply(lead).is_none());
+        assert_eq!(f.request(lead).delivery_stage(), "ended");
         assert_eq!(f.request(head).phase, RequestPhase::Queued);
     }
 }

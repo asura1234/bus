@@ -30,7 +30,8 @@ fn kimi_error_queue_preserves_a_busy_turns_followup_across_idle_and_restart() {
     )
     .unwrap();
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("first answer"));
+    assert!(f.reply(lead).is_none());
+    assert_eq!(f.request(lead).delivery_stage(), "ended");
     f.deliver();
     assert_eq!(
         f.typed_content(),
@@ -47,7 +48,8 @@ fn kimi_error_queue_preserves_a_busy_turns_followup_across_idle_and_restart() {
     std::fs::write(&wire, finished).unwrap();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(next).as_deref(), Some("second answer"));
+    assert!(f.reply(next).is_none());
+    assert_eq!(f.request(next).delivery_stage(), "ended");
     assert!(f
         .worker
         .state
