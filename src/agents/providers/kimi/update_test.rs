@@ -159,6 +159,30 @@ fn kimi_update_switch_is_not_saved_as_a_user_launch_option() {
 }
 
 #[test]
+fn kimi_yolo_refuses_auto_combined_with_legacy_yolo_before_saving() {
+    let fixture = Fixture::new();
+    std::env::set_var("BUS_YOLO", "1");
+    let prepared = prepare(
+        &LaunchSpec {
+            provider: ProviderKind::Kimi,
+            cwd: fixture.root.to_string_lossy().into_owned(),
+            extra_args: "--auto --yolo".into(),
+            consent_project_hooks: false,
+            hooks: fixture.hooks.clone(),
+        },
+        |_| Ok(()),
+    );
+    assert!(
+        prepared.is_err(),
+        "Bus yolo saved --auto --yolo, which a normal resume rejects"
+    );
+    assert!(
+        !fixture.hooks.spool.join("launch-options.json").exists(),
+        "rejected combination was written to launch options"
+    );
+}
+
+#[test]
 fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
     for (input, yolo, normal) in [
         ("", vec!["--auto"], vec![]),
@@ -182,7 +206,6 @@ fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
             vec!["--auto", "--model", "synthetic", "--output-format", "text"],
             vec!["--model", "synthetic", "--yolo", "--output-format", "text"],
         ),
-        ("--auto --yolo", vec!["--auto"], vec!["--auto", "--yolo"]),
     ] {
         let original = common::parse_path_tokens(input).unwrap();
         for (enabled, expected) in [(true, yolo), (false, normal)] {
@@ -190,24 +213,7 @@ fn kimi_yolo_normalizes_fresh_launch_without_persisting_generated_auto() {
             if enabled {
                 std::env::set_var("BUS_YOLO", "1");
             }
-            let prepared = if enabled && input == "--auto --yolo" {
-                fixture.prepare_args(input)
-            } else if input == "--auto --yolo" {
-                assert!(prepare(
-                    &LaunchSpec {
-                        provider: ProviderKind::Kimi,
-                        cwd: fixture.root.to_string_lossy().into_owned(),
-                        extra_args: input.into(),
-                        consent_project_hooks: false,
-                        hooks: fixture.hooks.clone(),
-                    },
-                    |_| Ok(()),
-                )
-                .is_err());
-                continue;
-            } else {
-                fixture.prepare_args(input)
-            };
+            let prepared = fixture.prepare_args(input);
             assert_eq!(prepared.args, expected, "input={input:?}, yolo={enabled}");
             assert_eq!(
                 common::saved_options(ProviderKind::Kimi, &fixture.hooks.spool).unwrap(),

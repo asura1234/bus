@@ -649,6 +649,9 @@ pub(crate) fn prepare(
     let cwd = common::canonical_directory(&spec.cwd)?;
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
     let adopted_session = validate_owned_launch(&options)?;
+    // Normal resume replays these tokens without yolo normalization. Reject a
+    // combination that replay cannot accept before it is saved.
+    validate_run_permissions(&options)?;
     let saved_options = options.clone();
     common::apply_run_permissions(ProviderKind::Kimi, &mut options);
     validate_run_permissions(&options)?;

@@ -56,6 +56,9 @@ During a yolo run, Bus omits Codex's mutually exclusive `-a` /
 effective argv so Codex can start with bypass enabled. For Kimi, Bus replaces
 legacy `--yolo` / `-y` options with `--auto` and does not duplicate an explicit
 `--auto`. These original tokens remain saved and replay on a later normal run.
+Bus rejects `--auto` combined with a legacy `--yolo` or `-y` alias before
+saving, including while Bus `--yolo` is on, because a normal resume would
+reject that saved record.
 Compatible options such as Codex `--sandbox` remain in place. The private run
 marker is not exported into panes.
 Attaching to a running daemon with a different `--yolo` setting is refused;
@@ -129,7 +132,7 @@ command/option position:
 | Claude | `--bare`, `--safe-mode` | These explicitly disable hooks required for session ownership and request completion. |
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
 | Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, or positional input | These replace Bus's interactive prompt, agent file, session, or version/help ownership. |
-| Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this native permission combination. During Bus `--yolo`, normalization removes legacy `--yolo` / `-y` before this check, including on resume. |
+| Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this native permission combination. Bus rejects that raw combination before saving, including while Bus `--yolo` is on. During a yolo run, normalization still removes legacy `--yolo` / `-y` from effective argv before this check, including on resume of an already saved alias. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`
