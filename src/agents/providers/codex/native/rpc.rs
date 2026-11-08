@@ -20,6 +20,32 @@ fn pasted_image_path(line: &str) -> io::Result<String> {
     }
 }
 
+#[derive(Debug)]
+struct PreflightRefusal {
+    source: io::Error,
+}
+
+impl std::fmt::Display for PreflightRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Codex native preflight refused before input")
+    }
+}
+
+impl std::error::Error for PreflightRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn preflight_refusal(source: io::Error) -> io::Error {
+    tracing::info!(
+        event = "bus.codex.native_preflight",
+        error = %source,
+        "Codex native preflight refused before input"
+    );
+    io::Error::new(io::ErrorKind::WouldBlock, PreflightRefusal { source })
+}
+
 pub(super) struct Rpc {
     socket: WebSocket<UnixStream>,
     next_id: u64,
@@ -203,12 +229,7 @@ impl Rpc {
             let active = self.active_turn(&thread, false)?;
             Ok((thread, active))
         })()
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Codex native preflight refused before input",
-            )
-        })?;
+        .map_err(preflight_refusal)?;
         if steer
             && (expected_turn.is_none()
                 || active
@@ -540,6 +561,34 @@ pub(crate) mod tests {
         assert_eq!(input[0]["path"], "/tmp/plain.png");
         assert_eq!(input[1]["path"], "/tmp/foo\\bar.png");
         assert_eq!(input.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn codex_native_preflight_refusal_keeps_the_source_error() {
+        let (path, handle) = server(false, false);
+        let mut rpc = Rpc::connect(&path, Instant::now() + Duration::from_secs(3)).unwrap();
+        rpc.set_deadline(Instant::now());
+        let error = rpc
+            .prompt("owned-thread", "late", false, "preflight", None)
+            .unwrap_err();
+        drop(rpc);
+        let _ = handle.join();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            error.to_string(),
+            "Codex native preflight refused before input"
+        );
+        let source =
+            std::error::Error::source(&error).expect("preflight refusal must keep the source");
+        let source = source.to_string();
+        assert!(
+            source.contains("deadline elapsed"),
+            "deadline was collapsed: {source}"
+        );
+        assert!(
+            source.contains("thread/read"),
+            "preflight source must name the call: {source}"
+        );
     }
 
     #[test]
