@@ -46,7 +46,9 @@ pub(crate) fn hold_ack(event: BusEvent) -> Option<BusEvent> {
     if hold.holding
         && matches!(
             event,
-            BusEvent::RoomCreated(_) | BusEvent::AgentAdded(_) | BusEvent::DevFocusRequested { .. }
+            BusEvent::RoomCreated { .. }
+                | BusEvent::AgentAdded { .. }
+                | BusEvent::DevFocusRequested { .. }
         )
     {
         hold.held.push(event);

@@ -199,12 +199,16 @@ impl Worker {
 
     fn control_command(&mut self, command: BusCommand) -> Result<Value, String> {
         // Do not send navigation side effects to the developer's TUI event queue.
+        // CLI ids are 0 so a leaked event cannot match a UI origin (those start at 1).
         let (tx, rx) = mpsc::channel();
+        self.active_command_id = 0;
         self.command(command, &tx)?;
         for event in rx.try_iter() {
             match event {
-                BusEvent::RoomCreated(id) => return Ok(json!({"room_id":id})),
-                BusEvent::AgentAdded(id) => return Ok(json!({"agent_id":id,"stage":"launching"})),
+                BusEvent::RoomCreated { room: id, .. } => return Ok(json!({"room_id":id})),
+                BusEvent::AgentAdded { agent: id, .. } => {
+                    return Ok(json!({"agent_id":id,"stage":"launching"}))
+                }
                 BusEvent::SetupRequired { notice, .. } => {
                     return Err(format!(
                         "Project hook setup requires --consent-hooks: {} ({})",

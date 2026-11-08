@@ -116,7 +116,10 @@ impl Worker {
         let id = state.create_room(name).map_err(|e| e.to_string())?;
         self.apply_new_room_sound(&mut state, id);
         self.save(state)?;
-        let _ = events.send(BusEvent::RoomCreated(id));
+        let _ = events.send(BusEvent::RoomCreated {
+            room: id,
+            command_id: self.active_command_id,
+        });
         Ok(())
     }
 

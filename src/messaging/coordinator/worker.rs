@@ -36,6 +36,8 @@ pub(super) struct Worker {
     pub(super) transport: Box<dyn Transport>,
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
+    /// UI command ids start at 1. Control commands set this to 0.
+    pub(super) active_command_id: u64,
     pub(super) error: Option<String>,
     pub(super) poll_failures: u32,
     pub(super) missing_binary_checked: BTreeMap<AgentId, Option<String>>,
@@ -153,6 +155,7 @@ impl Worker {
             transport,
             revision: 0,
             last_command_id: 0,
+            active_command_id: 0,
             error: None,
             poll_failures: 0,
             missing_binary_checked: BTreeMap::new(),
@@ -462,6 +465,7 @@ impl Worker {
                     }
                 }
                 Ok((id, command)) => {
+                    self.active_command_id = id;
                     let submitting = matches!(
                         command,
                         BusCommand::Submit(..) | BusCommand::SubmitQueued(..)

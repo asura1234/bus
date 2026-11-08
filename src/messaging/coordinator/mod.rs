@@ -158,8 +158,14 @@ pub(crate) enum BusEvent {
         query_id: u64,
         result: Result<Vec<crate::agents::providers::suggest::PathSuggestion>, String>,
     },
-    AgentAdded(AgentId),
-    RoomCreated(RoomId),
+    AgentAdded {
+        agent: AgentId,
+        command_id: u64,
+    },
+    RoomCreated {
+        room: RoomId,
+        command_id: u64,
+    },
     TerminalFocused {
         agent: AgentId,
         pane_id: String,

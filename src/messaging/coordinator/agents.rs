@@ -514,7 +514,10 @@ impl Worker {
             }));
         match started {
             Ok(ResponseResult::AgentStarted { .. }) => {
-                let _ = events.send(BusEvent::AgentAdded(id));
+                let _ = events.send(BusEvent::AgentAdded {
+                    agent: id,
+                    command_id: self.active_command_id,
+                });
                 let Some(session) = identity.session_id else {
                     return Ok(());
                 };

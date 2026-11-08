@@ -45,16 +45,9 @@ pub(super) enum Effect {
     Shutdown,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CreationKind {
-    Room,
-    Agent,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct CreationOrigin {
     pub id: u64,
-    pub kind: CreationKind,
     pub form_generation: Option<u64>,
 }
 
@@ -369,15 +362,12 @@ impl BusUi {
                 "Room submit queued for coordinator"
             );
         }
-        let creation_kind = match &command {
-            BusCommand::CreateRoom(_) => Some(CreationKind::Room),
-            BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..) => Some(CreationKind::Agent),
-            _ => None,
-        };
-        if let Some(kind) = creation_kind {
+        if matches!(
+            &command,
+            BusCommand::CreateRoom(_) | BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+        ) {
             self.creation_origins.push_back(CreationOrigin {
                 id,
-                kind,
                 form_generation: self.form.is_some().then_some(self.form_generation),
             });
         }
@@ -390,20 +380,15 @@ impl BusUi {
         });
         id
     }
-    fn take_creation_origin(&mut self, kind: CreationKind) -> Option<Option<u64>> {
-        let id = self
-            .creation_origins
-            .iter()
-            .rposition(|origin| origin.kind == kind)
-            .map(|index| self.creation_origins[index].id)?;
+    fn take_creation_origin(&mut self, command_id: u64) -> Option<Option<u64>> {
         let index = self
             .creation_origins
             .iter()
-            .position(|origin| origin.id == id)?;
+            .position(|origin| origin.id == command_id)?;
         Some(self.creation_origins.remove(index)?.form_generation)
     }
-    fn completion_owns_current_form(&mut self, kind: CreationKind) -> bool {
-        let form_generation = self.take_creation_origin(kind);
+    fn completion_owns_current_form(&mut self, command_id: u64) -> bool {
+        let form_generation = self.take_creation_origin(command_id);
         if self.rename.is_some() {
             return false;
         }
@@ -428,6 +413,12 @@ impl BusUi {
                 form_generation,
             } => self.receive_dev_focus(room, agent, form_generation),
             BusEvent::CommandFinished { command_id, result } => {
+                // A failed create never emits its own RoomCreated. Drop the origin
+                // now so a later acknowledgement cannot adopt the form left open.
+                if result.is_err() {
+                    self.creation_origins
+                        .retain(|origin| origin.id != command_id);
+                }
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
                     if matches!(
                         pending.command,
@@ -449,13 +440,13 @@ impl BusUi {
                     pending.result = Some(result);
                 }
             }
-            BusEvent::RoomCreated(room) => {
-                if self.completion_owns_current_form(CreationKind::Room) {
+            BusEvent::RoomCreated { room, command_id } => {
+                if self.completion_owns_current_form(command_id) {
                     self.open_room(room);
                 }
             }
-            BusEvent::AgentAdded(agent) => {
-                if self.completion_owns_current_form(CreationKind::Agent) {
+            BusEvent::AgentAdded { agent, command_id } => {
+                if self.completion_owns_current_form(command_id) {
                     self.open_terminal(agent);
                 }
             }
