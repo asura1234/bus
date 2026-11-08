@@ -125,6 +125,10 @@ impl App {
             .terminals
             .get_mut(&terminal_id)
             .is_some_and(|terminal| {
+                // Clear only for a witnessed return: a later primary prompt for
+                // this submitted attempt and no live provider. A bare prompt or
+                // editor redraw is not that witness, so it leaves pending
+                // startup to an observed provider exit or the deadline.
                 if terminal.managed_agent_awaiting_startup() && returned_to_prompt {
                     tracing::info!(event = "bus.agent.identity_cleared", reason = "launch_returned",
                         terminal_id = %terminal_id, launch = %self.terminal_runtimes.get(&terminal_id)

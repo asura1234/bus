@@ -4,7 +4,7 @@ use crate::terminal::runtime::spawn::{PaneLaunchEnv, PaneShellConfig};
 use crate::terminal::TerminalRuntime;
 
 #[tokio::test]
-async fn launch_prompt_return_without_provider_releases_managed_launch() {
+async fn startup_launch_prompt_redraw_before_process_detection_retains_managed_launch() {
     let mut app = app_with_agent();
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let (runtime, _writes) = TerminalRuntime::test_with_channel(80, 24);
@@ -32,11 +32,19 @@ async fn launch_prompt_return_without_provider_releases_managed_launch() {
     app.terminal_runtimes
         .get(&terminal_id)
         .unwrap()
-        .test_process_pty_bytes(b"zsh: command not found: codex\r\n\x1b]133;A\x07ready> ");
+        .test_process_pty_bytes(b"\r\n\x1b]133;A\x07ready> ");
     app.handle_agent_list("poll".into());
     assert!(
-        !app.state.terminals[&terminal_id].managed_agent_launch_pending(),
-        "shell returned to its prompt but provider is still Launching"
+        app.state.terminals[&terminal_id].managed_agent_launch_pending(),
+        "an editor prompt redraw before process acquisition is not an exit"
+    );
+    assert_eq!(
+        app.state.terminals[&terminal_id].agent_name.as_deref(),
+        Some("missing")
+    );
+    assert!(
+        app.agent_info(0, pane).is_some(),
+        "the pending native identity must stay listed"
     );
 }
 
