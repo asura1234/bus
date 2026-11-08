@@ -169,10 +169,10 @@ fn agent_keys_job(
                 },
             )
         }
-        KeyCompletion::Native(Err(_)) => encode_error(
+        KeyCompletion::Native(Err(err)) => encode_error(
             id,
             "agent_interrupt_unconfirmed",
-            "Native interrupt is unconfirmed; work may still be running",
+            format!("Native interrupt is unconfirmed; work may still be running: {err}"),
         ),
     }))
 }

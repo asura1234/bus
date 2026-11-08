@@ -124,12 +124,21 @@ impl Runtime {
         let result = session
             .connection(deadline)
             .and_then(|rpc| rpc.interrupt(thread));
-        tracing::info!(
-            event = "bus.codex.native_interrupt",
-            thread_id = thread,
-            confirmed = result.is_ok(),
-            "Codex app-server interrupt completion result"
-        );
+        match &result {
+            Ok(_) => tracing::info!(
+                event = "bus.codex.native_interrupt",
+                thread_id = thread,
+                confirmed = true,
+                "Codex app-server interrupt completion result"
+            ),
+            Err(err) => tracing::info!(
+                event = "bus.codex.native_interrupt",
+                thread_id = thread,
+                confirmed = false,
+                error = %err,
+                "Codex app-server interrupt completion result"
+            ),
+        }
         session.rpc.take();
         Some(result)
     }

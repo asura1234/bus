@@ -655,7 +655,7 @@ mod interrupt_completion_fact {
                         turn_id: Some("turn-1".into()),
                     })
                 } else {
-                    Err(std::io::Error::other("unconfirmed"))
+                    Err(std::io::Error::other("turn-changed-during-interrupt"))
                 }
             })
         }
@@ -706,6 +706,12 @@ mod interrupt_completion_fact {
             } else if native_completed == Some(false) {
                 assert_eq!(
                     value["error"]["code"], "agent_interrupt_unconfirmed",
+                    "{text}"
+                );
+                assert!(
+                    value["error"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("turn-changed-during-interrupt")),
                     "{text}"
                 );
                 assert!(writes.try_recv().is_err());
