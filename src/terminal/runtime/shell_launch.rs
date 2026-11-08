@@ -1,4 +1,5 @@
 //! Every provider launch is an owned, verified interactive-shell input transaction.
+use super::launch_transaction::{LaunchPhase, LaunchTransaction};
 use super::{io::PaneRuntimeIo, TerminalRuntime};
 use crate::terminal::{emulator::PaneTerminal, pty::actor::InputScope};
 use bytes::Bytes;
@@ -42,6 +43,22 @@ impl EditorProbe {
         } else {
             Bytes::from(format!("\x1b[{}{action}~", self.token))
         }
+    }
+
+    fn attempt_command(&self, id: u64, command: &str) -> io::Result<String> {
+        if super::spawn::is_powershell_shell(&self.shell) {
+            return Ok(format!("$global:__bus_launch_attempt={id}; {command}"));
+        }
+        if self.shell == "fish" {
+            return Ok(format!("__bus_launch {id} {command}"));
+        }
+        // Keep one outer command for Bash's capture macro. The helper parses
+        // the already-quoted original line so provider aliases still expand.
+        crate::platform::interactive_shell_command(
+            &["__bus_launch".into(), id.to_string(), command.into()],
+            &self.shell,
+        )
+        .ok_or_else(|| io::Error::other("Invalid wrapped shell launch command"))
     }
 
     fn capture(&self, writer: &ShellWriter) -> io::Result<Vec<u8>> {
@@ -107,13 +124,7 @@ impl ShellWriter {
         Ok(())
     }
 
-    fn run(
-        &self,
-        probe: &EditorProbe,
-        terminal: &PaneTerminal,
-        command: &str,
-        prompt_floor: &AtomicU64,
-    ) -> io::Result<()> {
+    fn run(&self, probe: &EditorProbe, terminal: &PaneTerminal, command: &str) -> io::Result<()> {
         // A marker proves primary editor readiness; the private widget then
         // proves the actual editable buffer, rather than trusting kernel echo.
         if !probe.capture(self)?.is_empty() {
@@ -141,34 +152,90 @@ impl ShellWriter {
                 return Err(io::Error::other("Shell transformed the launch line twice; Enter was not sent. Inspect the retained pane"));
             }
         }
-        prompt_floor.store(
-            terminal.launch_shell_prompt_generation(&probe.token),
-            Ordering::Release,
-        );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct LaunchTestBarrier {
+    reached: std::sync::atomic::AtomicBool,
+    pre_enter: Option<std::sync::Arc<LaunchTestBarrier>>,
+    released: std::sync::Mutex<bool>,
+    wake: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl LaunchTestBarrier {
+    fn hold(&self) {
+        self.reached.store(true, Ordering::Release);
+        let guard = self.released.lock().unwrap();
+        drop(self.wake.wait_while(guard, |released| !*released).unwrap());
+    }
+
+    fn before_enter(&self) {
+        self.pre_enter.as_deref().unwrap_or(self).hold();
+    }
+
+    fn after_enter(&self) {
+        if self.pre_enter.is_some() {
+            self.hold();
+        }
+    }
+
+    pub(crate) fn verification_reached(&self) -> bool {
+        self.pre_enter.as_deref().unwrap_or(self).reached()
+    }
+
+    pub(crate) fn release_verification(&self) {
+        self.pre_enter.as_ref().unwrap().release();
+    }
+
+    pub(crate) fn reached(&self) -> bool {
+        self.reached.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn release(&self) {
+        if let Some(pre) = &self.pre_enter {
+            pre.release();
+        }
+        *self.released.lock().unwrap() = true;
+        self.wake.notify_all();
     }
 }
 
 impl TerminalRuntime {
     #[cfg(test)]
+    pub(crate) fn test_hold_launch_input(
+        &self,
+        after_enter: bool,
+    ) -> std::sync::Arc<LaunchTestBarrier> {
+        let barrier = std::sync::Arc::new(LaunchTestBarrier {
+            pre_enter: after_enter.then(|| std::sync::Arc::new(LaunchTestBarrier::default())),
+            ..Default::default()
+        });
+        *self.launch_test_barrier.lock().unwrap() = Some(barrier.clone());
+        barrier
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_shell_prompt_marker(&self) -> Vec<u8> {
+        let token = self.shell_integration.as_ref().unwrap().token();
+        let (cycle, attempt) = self.terminal.launch_shell_prompt_witness(token).unwrap();
+        format!("\x1b]133;A;bus={token};cycle={cycle};attempt={attempt}\x07").into_bytes()
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_launch_input_submitted(&self) -> bool {
-        self.launch_input_submitted.load(Ordering::Acquire)
+        self.launch_transaction.input_confirmed()
     }
 
     pub(crate) fn launch_input_error(&self) -> Option<String> {
-        self.launch_input_error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .map(|(error, _)| error.clone())
+        self.launch_transaction.error(false)
     }
 
     pub(crate) fn definite_launch_input_error(&self) -> Option<String> {
-        self.launch_input_error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .and_then(|(error, enter_attempted)| (!enter_attempted).then(|| error.clone()))
+        self.launch_transaction.error(true)
     }
 
     #[cfg(test)]
@@ -190,16 +257,21 @@ impl TerminalRuntime {
             return Err(io::Error::other("Invalid shell launch arguments"));
         }
         #[cfg(test)]
-        self.launch_input_submitted.store(false, Ordering::Release);
-        #[cfg(test)]
         if self.child_pid().is_none() {
+            let id = self
+                .launch_transaction
+                .begin(self.pane_id.raw(), self.shell_prompt_generation());
+            let cycle = self.shell_prompt_generation();
             let command = crate::platform::interactive_shell_command(argv, "sh")
                 .ok_or_else(|| io::Error::other("Invalid shell command"))?;
             let mut bytes = self.paste_payload(command).to_vec();
             bytes.push(b'\r');
+            self.launch_transaction
+                .transition(id, LaunchPhase::Submitting, cycle);
             let result = self.try_send_bytes(Bytes::from(bytes));
             if result.is_ok() {
-                self.launch_input_submitted.store(true, Ordering::Release);
+                self.launch_transaction
+                    .transition(id, LaunchPhase::Submitted, cycle);
             }
             return result.map_err(io::Error::other);
         }
@@ -208,57 +280,91 @@ impl TerminalRuntime {
         let probe = integration.editor_probe(self.child_pid());
         let command = crate::platform::interactive_shell_command(argv, &probe.shell)
             .ok_or_else(|| io::Error::other("Invalid shell command"))?;
-        *self
-            .launch_input_error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
-        let input_error = self.launch_input_error.clone();
+        let id = self
+            .launch_transaction
+            .begin(self.pane_id.raw(), self.shell_prompt_generation());
+        let command = probe.attempt_command(id, &command)?;
         self.invalidate_shell_prompt();
-        // The initial prompt of a cold restore is readiness, not provider exit.
-        self.launch_prompt_generation
-            .store(u64::MAX, Ordering::Release);
-        let prompt_floor = self.launch_prompt_generation.clone();
         let writer = ShellWriter {
             io: self.io.clone(),
             scope: self.io.input_scope(),
             deadline: Instant::now() + timeout,
         };
-        let terminal = self.terminal.clone();
-        let draft_input = self.draft_input.clone();
-        let pane_id = self.pane_id.raw();
-        #[cfg(test)]
-        let submitted = self.launch_input_submitted.clone();
-        std::thread::spawn(move || {
-            let mut enter_attempted = false;
-            let result = writer
-                .wait_ready(&probe, &terminal)
-                .and_then(|()| {
-                    super::draft_input::DraftInput::acquire_launch(&draft_input, &writer.io)
-                })
-                .and_then(|lease| {
-                    let result = writer
-                        .run(&probe, &terminal, &command, &prompt_floor)
-                        .and_then(|()| {
-                            enter_attempted = true;
-                            writer.write(Bytes::from_static(b"\r"))
-                        });
-                    if result.is_ok() {
-                        lease.restored();
-                    }
-                    result
-                });
+        let task = ShellLaunch {
+            writer,
+            probe,
+            command,
+            terminal: self.terminal.clone(),
+            draft_input: self.draft_input.clone(),
+            transaction: self.launch_transaction.clone(),
+            id,
             #[cfg(test)]
-            if result.is_ok() {
-                submitted.store(true, Ordering::Release);
-            }
-            if let Err(error) = result {
-                *input_error
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner()) =
-                    Some((error.to_string(), enter_attempted));
-                tracing::warn!(event="bus.agent.launch_input_failed",pane=pane_id,%error,"Launch input was not confirmed; retain the shell for inspection");
-            }
-        });
+            barrier: self.launch_test_barrier.lock().unwrap().take(),
+        };
+        std::thread::spawn(move || task.run());
         Ok(())
+    }
+}
+
+struct ShellLaunch {
+    writer: ShellWriter,
+    probe: EditorProbe,
+    command: String,
+    terminal: std::sync::Arc<PaneTerminal>,
+    draft_input: super::draft_input::SharedDraftInput,
+    transaction: LaunchTransaction,
+    id: u64,
+    #[cfg(test)]
+    barrier: Option<std::sync::Arc<LaunchTestBarrier>>,
+}
+
+impl ShellLaunch {
+    fn run(self) {
+        if let Err(error) = self.submit() {
+            self.transaction.fail(
+                self.id,
+                error.to_string(),
+                self.terminal.launch_shell_prompt_witness(&self.probe.token),
+            );
+        }
+    }
+
+    fn submit(&self) -> io::Result<()> {
+        self.writer.wait_ready(&self.probe, &self.terminal)?;
+        let cycle = self
+            .terminal
+            .launch_shell_prompt_generation(&self.probe.token);
+        self.phase(LaunchPhase::Verifying, cycle)?;
+        let lease =
+            super::draft_input::DraftInput::acquire_launch(&self.draft_input, &self.writer.io)?;
+        self.writer
+            .run(&self.probe, &self.terminal, &self.command)?;
+        let cycle = self
+            .terminal
+            .launch_shell_prompt_generation(&self.probe.token);
+        self.phase(LaunchPhase::Verifying, cycle)?;
+        #[cfg(test)]
+        if let Some(barrier) = &self.barrier {
+            barrier.before_enter();
+        }
+        self.phase(LaunchPhase::Submitting, cycle)?;
+        self.writer.write(Bytes::from_static(b"\r"))?;
+        #[cfg(test)]
+        if let Some(barrier) = &self.barrier {
+            barrier.after_enter();
+        }
+        lease.restored();
+        self.phase(LaunchPhase::Submitted, cycle)?;
+        Ok(())
+    }
+
+    fn phase(&self, phase: LaunchPhase, cycle: u64) -> io::Result<()> {
+        if self.transaction.transition(self.id, phase, cycle) {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "Shell launch attempt was replaced; no further input sent",
+            ))
+        }
     }
 }

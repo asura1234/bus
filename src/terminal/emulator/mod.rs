@@ -328,6 +328,10 @@ impl PaneTerminal {
         self.ghostty.launch_shell_prompt_generation(token)
     }
 
+    pub(crate) fn launch_shell_prompt_witness(&self, token: &str) -> Option<(u64, u64)> {
+        self.ghostty.launch_shell_prompt_witness(token)
+    }
+
     pub fn agent_osc_progress(&self) -> String {
         self.ghostty.agent_osc_progress()
     }
@@ -430,6 +434,16 @@ impl GhosttyPaneTerminal {
                     .map(|(_, generation)| *generation)
             })
             .unwrap_or_default()
+    }
+
+    fn launch_shell_prompt_witness(&self, token: &str) -> Option<(u64, u64)> {
+        self.core.lock().ok().and_then(|core| {
+            core.agent_osc_state
+                .launch_prompt_witness
+                .as_ref()
+                .filter(|(seen, _, _)| seen == token)
+                .map(|(_, cycle, attempt)| (*cycle, *attempt))
+        })
     }
 
     /// Returns the latest OSC 0/2 title retained for agent detection, or `""`

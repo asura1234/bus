@@ -194,6 +194,13 @@ impl TerminalState {
                 && observed_expected
                 && known_agent.is_none();
         if clear {
+            let reason = match (process_exited, known_agent) {
+                (true, _) => "process_exited",
+                (false, Some(_)) => "provider_replaced",
+                _ => "observed_provider_disappeared",
+            };
+            tracing::info!(event = "bus.agent.identity_cleared", %reason,
+                terminal_id = %self.id, expected = ?managed.kind, observed = ?known_agent);
             self.clear_agent_name();
             return true;
         }
