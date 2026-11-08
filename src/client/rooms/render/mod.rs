@@ -54,7 +54,6 @@ pub(super) enum Action {
     /// A message attachment; clicking opens it in its default app.
     OpenFile(std::path::PathBuf),
     Details(crate::messaging::model::AgentId),
-    Quote(crate::messaging::model::RequestId),
     Field(usize),
     Provider(Provider),
     Orchestrates,

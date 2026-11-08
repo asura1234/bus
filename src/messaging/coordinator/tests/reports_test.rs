@@ -368,7 +368,7 @@ fn worker_turns_never_post_to_master() {
         "a captured worker final is not published: {:?}",
         room.notices
     );
-    assert!(room.latest_replies.get(&builder).is_none());
+    assert!(!room.latest_replies.contains_key(&builder));
 }
 
 #[test]

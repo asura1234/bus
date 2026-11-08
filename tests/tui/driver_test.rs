@@ -99,6 +99,22 @@ fn parse(output: Output) -> (i32, Value) {
     (output.status.code().unwrap_or(-1), value)
 }
 
+/// A turn that ends without `--reply-to` stores no reply.
+fn assert_turn_ended(result: &Value) {
+    let request = &result["message"]["result"]["requests"][0];
+    assert!(request["reply"].is_null(), "{result}");
+    assert_eq!(request["stage"], "ended", "{result}");
+}
+
+fn agent_screen(session: &Session, agent: &str) -> String {
+    let (code, observed) = parse(scratch_bus(session, &["agent", "observe", agent]));
+    assert_eq!(code, 0, "{observed}");
+    observed["result"]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Stops the session even when an assertion fails mid-test.
 struct Session(String);
 
@@ -497,9 +513,10 @@ fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() 
     assert_eq!(code, 0, "{sent}");
     let message = sent["result"]["message_id"].to_string();
     let replied = session.ok(&["wait", "--message", &message, "--timeout", "30s"]);
-    assert_eq!(
-        replied["message"]["result"]["requests"][0]["reply"]["text"],
-        "fake reply: after restart"
+    assert_turn_ended(&replied);
+    assert!(
+        agent_screen(&session, "dot-orch").contains("fake reply: after restart"),
+        "the restarted agent should still answer on its terminal"
     );
     for room in bus_state(&session)["rooms"].as_array().unwrap() {
         if matches!(room["name"].as_str(), Some("unseen" | "MASTER")) {
@@ -674,7 +691,7 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let reply = session.ok(&[
         "wait",
         "--text",
-        "fake reply: hello from the driver",
+        "hello from the driver",
         "--timeout",
         "20s",
     ]);
@@ -682,15 +699,15 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let rooms = bus_state(&session)["rooms"].as_array().unwrap().len();
     assert_eq!(rooms, 3);
 
-    // A drag over the reply copies it through OSC 52 into the driver.
-    let found = session.ok(&["find", "fake reply"]);
+    // The sent message is the history row. A drag copies it through OSC 52.
+    let found = session.ok(&["find", "hello from"]);
     let row = found["matches"][0]["row"].as_u64().unwrap().to_string();
     let col = found["matches"][0]["col"].as_u64().unwrap();
     let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 9).to_string()]);
-    assert_eq!(dragged["copied"][0], "fake reply");
-    // "fake" is all base64 letters; the copy still comes back as shown.
+    assert_eq!(dragged["copied"][0], "hello from");
+    // The short prefix is all letters; the copy still comes back as shown.
     let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 3).to_string()]);
-    assert_eq!(dragged["copied"][0], "fake");
+    assert_eq!(dragged["copied"][0], "hell");
 
     // A multi-line message reaches the fake Claude as one prompt.
     let sent = scratch_bus(
@@ -710,11 +727,11 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let receipt: Value = serde_json::from_str(receipt.trim()).unwrap();
     let id = receipt["result"]["message_id"].to_string();
     let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+    assert_turn_ended(&settled);
+    let screen = agent_screen(&session, "a1");
     assert!(
-        settled
-            .to_string()
-            .contains("fake reply: line one\\nline two"),
-        "the reply should answer the whole two-line prompt: {settled}"
+        screen.contains("fake reply: line one") && screen.contains("line two"),
+        "the fake should answer the whole two-line prompt: {screen}"
     );
 
     let resized = session.ok(&["resize", "100x30"]);
@@ -920,9 +937,11 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
     for text in [format!("hello {provider}"), "hello again".into()] {
         let id = send(&text);
         let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+        assert_turn_ended(&settled);
+        let screen = agent_screen(&session, "c1");
         assert!(
-            settled.to_string().contains(&format!("fake reply: {text}")),
-            "the fake {provider} should answer {text:?}: {settled}"
+            screen.contains(&format!("fake reply: {text}")),
+            "the fake {provider} should answer {text:?}: {screen}"
         );
     }
 
@@ -939,13 +958,13 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
     let steer = send("steer in");
     for id in [&lead, &steer] {
         let settled = session.ok(&["wait", "--message", id, "--timeout", "40s"]);
-        assert!(
-            settled
-                .to_string()
-                .contains("fake reply: fake:work 6 long task\\nsteer in"),
-            "the steer should join the running turn's reply: {settled}"
-        );
+        assert_turn_ended(&settled);
     }
+    let screen = agent_screen(&session, "c1");
+    assert!(
+        screen.contains("fake reply: fake:work 6 long task") && screen.contains("steer in"),
+        "the steer should join the running turn's answer: {screen}"
+    );
 }
 
 #[test]
@@ -1809,9 +1828,11 @@ fn scriptable_fake_replies_to_a_room_message_without_provider_configuration() {
     assert_eq!(code, 0, "{sent}");
     let id = sent["result"]["message_id"].to_string();
     let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
-    let request = &result["message"]["result"]["requests"][0];
-    assert_eq!(request["stage"], "replied", "{result}");
-    assert_eq!(request["reply"]["text"], "REPLY_7", "{result}");
+    assert_turn_ended(&result);
+    assert!(
+        agent_screen(&session, "scripted-worker").contains("REPLY_7"),
+        "{result}"
+    );
     assert!(!work.join(".claude").exists());
     assert!(!work.join(".codex").exists());
     assert!(!work.join(".cursor").exists());
@@ -1958,9 +1979,11 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
         "20s",
     ]);
     let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
-    let request = &result["message"]["result"]["requests"][0];
-    assert_eq!(request["stage"], "replied", "{result}");
-    assert_eq!(request["reply"]["text"], "selected B", "{result}");
+    assert_turn_ended(&result);
+    assert!(
+        agent_screen(&session, "dialog-worker").contains("selected B"),
+        "{result}"
+    );
 }
 
 fn wait_for_scripted_screen(session: &Session, agent: &str, title: &str) -> Value {
@@ -2022,7 +2045,11 @@ fn scriptable_fake_sends_before_its_final_reply() {
     assert_eq!(code, 0, "{sent}");
     let id = sent["result"]["message_id"].to_string();
     let result = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
-    assert!(result.to_string().contains("SENT_7"), "{result}");
+    assert_turn_ended(&result);
+    assert!(
+        agent_screen(&session, "sender-worker").contains("SENT_7"),
+        "{result}"
+    );
     let (code, history) = parse(scratch_bus(
         &session,
         &["history", "--room", "bus", "--limit", "100"],
@@ -2134,7 +2161,12 @@ fn scriptable_fake_resumes_without_reusing_prior_turns() {
         let id = sent["result"]["message_id"].to_string();
         session.ok(&["wait", "--message", &id, "--timeout", "30s"])
     };
-    assert!(send("CASE_RESUME_7").to_string().contains("ONCE_7"));
+    let first = send("CASE_RESUME_7");
+    assert_turn_ended(&first);
+    assert!(
+        agent_screen(&session, "resume-worker").contains("ONCE_7"),
+        "{first}"
+    );
     let before = bus_state(&session)["agents"][0]["runtime_identity"]["session_id"].clone();
     session.ok(&["restart"]);
     session.ok(&[
@@ -2148,10 +2180,17 @@ fn scriptable_fake_resumes_without_reusing_prior_turns() {
         bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
         before
     );
-    assert!(send("after restart\nfake agent working")
-        .to_string()
-        .contains("fake reply:"));
+    let resumed = send("after restart\nfake agent working");
+    assert_turn_ended(&resumed);
+    assert!(
+        agent_screen(&session, "resume-worker").contains("fake reply: after restart"),
+        "{resumed}"
+    );
     let repeated = send("CASE_RESUME_7");
-    assert!(repeated.to_string().contains("fake reply:"), "{repeated}");
-    assert!(!repeated.to_string().contains("ONCE_7"), "{repeated}");
+    assert_turn_ended(&repeated);
+    let screen = agent_screen(&session, "resume-worker");
+    assert!(
+        screen.contains("fake reply: CASE_RESUME_7"),
+        "the scripted turn is not reused after restart: {screen}"
+    );
 }

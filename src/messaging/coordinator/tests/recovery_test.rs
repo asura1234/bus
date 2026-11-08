@@ -423,13 +423,12 @@ fn initial_recovery_tick_keeps_detached_room_reply_unread_until_selected() {
     assert_eq!(settled.phase, RequestPhase::Completed);
     assert!(settled.reply().is_none());
     assert!(settled.failure_reason.is_none());
-    assert!(recovered
+    assert!(!recovered
         .state
         .room(room_b)
         .unwrap()
         .latest_replies
-        .get(&agent)
-        .is_none());
+        .contains_key(&agent));
     // A captured final is not a reply, so a detached room does not gain unread.
     assert_eq!(recovered.state.room(room_b).unwrap().unread_count, 0);
     let (events, _) = mpsc::channel();

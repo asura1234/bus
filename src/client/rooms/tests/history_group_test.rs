@@ -1,5 +1,5 @@
 use super::*;
-use crate::messaging::model::{Draft, Provider};
+use crate::messaging::model::{Draft, Provider, RequestId};
 
 #[test]
 fn delivered_history_shows_the_message_without_a_reply_lifecycle() {
@@ -883,12 +883,6 @@ fn batch_history_assert_lines(state: &BusState, room: RoomId, visible: &[Request
     );
     assert!(!text.contains("Reply to message"), "{text}");
     assert!(lines.iter().all(|line| !line.text.contains('…')), "{text}");
-    assert!(
-        lines
-            .iter()
-            .all(|line| !matches!(line.action, Some(Action::Quote(_)))),
-        "history has no quote row"
-    );
     let mut cursor = 0;
     for id in visible {
         let request = state.request(*id).unwrap();

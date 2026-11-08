@@ -116,13 +116,15 @@ def scenario(binary, root, provider, master, retain_failure=False):
                 return None
 
         status = until(delivered)
-        assert status["requests"][0]["stage"] == "replied", status
-        assert status["requests"][0]["reply"]["text"] == "restart-proof", status
+        assert status["requests"][0]["reply"] is None, status
+        assert status["requests"][0]["stage"] == "ended", status
         history = bus.cli("history", "--room", room)
         rows = [row for row in history["messages"] if str(row["prompt"]["id"]) == message]
         assert len(rows) == 1, history
         assert len(rows[0]["delivery"]["requests"]) == 1, history
-        assert rows[0]["delivery"]["requests"][0]["reply"]["text"] == "restart-proof", history
+        delivered_request = rows[0]["delivery"]["requests"][0]
+        assert delivered_request["reply"] is None, history
+        assert delivered_request["stage"] == "ended", history
         # A history map cannot reveal duplicate publication. Unviewed room
         # counters and standalone notices are independent visible side effects.
         state = durable()

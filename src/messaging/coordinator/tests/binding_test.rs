@@ -312,13 +312,12 @@ fn cleared_codex_answers_a_message_sent_into_its_fresh_session() {
     assert_eq!(settled.phase, RequestPhase::Completed);
     assert!(settled.reply().is_none());
     assert_eq!(settled.delivery_stage(), "ended");
-    assert!(worker
+    assert!(!worker
         .state
         .room(room)
         .unwrap()
         .latest_replies
-        .get(&agent)
-        .is_none());
+        .contains_key(&agent));
     assert_eq!(
         agent_of(&worker, agent)
             .runtime_identity

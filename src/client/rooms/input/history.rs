@@ -1,37 +1,9 @@
-//! Prompt recall, quoting and history-search navigation.
+//! Prompt recall and history-search navigation.
 use super::super::{editor::Editor, BusUi, HistorySearch};
-use crate::messaging::model::{RequestId, RoomId};
+use crate::messaging::model::RoomId;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 impl BusUi {
-    pub fn quote(&mut self, request: RequestId) {
-        let Some(room) = self.room else {
-            return;
-        };
-        let Some((agent, text)) = super::super::history::reply(&self.snapshot.state, room, request)
-        else {
-            return;
-        };
-        let Some(name) = self.snapshot.state.agent(agent).map(|a| a.name.as_str()) else {
-            return;
-        };
-        let quote = format!(
-            "{name}: \"{}\"\n",
-            text.replace('\\', "\\\\").replace('"', "\\\"")
-        );
-        if let Some(local) = self.locals.get_mut(&room) {
-            // A leftover mouse selection must not be replaced by the quote.
-            local.text.anchor = None;
-            local.text.cursor = local.text.text.len();
-            if !local.text.text.is_empty() && !local.text.text.ends_with('\n') {
-                local.text.insert("\n");
-            }
-            local.text.insert(&quote);
-        }
-        self.recipient_menu = false;
-        self.text_changed(room);
-    }
-
     /// Recall entries oldest first. Local drafts (sent or archived with Esc
     /// Esc) and persisted prompts merge by time, so an archived edit of a
     /// sent prompt is newer than that prompt and comes back on the first Up.

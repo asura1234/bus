@@ -91,9 +91,14 @@ fn bounded_message_wait_recovers_a_transient_provider_error() {
     assert_eq!(code, 0, "{result}");
     assert_eq!(result["message"]["ok"], true, "{result}");
     assert_eq!(result["message"]["result"]["complete"], true, "{result}");
-    let request = &result["message"]["result"]["requests"][0];
-    assert_eq!(request["stage"], "replied", "{result}");
-    assert_eq!(request["reply"]["text"], "RECOVERED", "{result}");
+    super::assert_turn_ended(&result);
+    let screen = super::agent_screen(&session, "error-worker");
+    assert!(
+        screen
+            .lines()
+            .any(|line| line.contains("RECOVERED") && !line.contains("raw-reply")),
+        "{screen}"
+    );
 }
 
 #[test]

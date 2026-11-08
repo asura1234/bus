@@ -441,27 +441,9 @@ fn late_replies_stay_with_their_prompt_and_never_reorder_recipient_slots() {
 }
 
 #[test]
-fn quote_uses_the_clicked_historical_reply() {
+fn selecting_draft_text_copies_the_dragged_span() {
     let (mut ui, room, agent) = fixture();
-    let mut requests = Vec::new();
-    for text in ["answer-00", "answer-01", "answer-02"] {
-        requests.push(saved_exchange(&mut ui, room, agent, text, text));
-    }
-    ui.compute_view(100, 80);
-    assert!(ui
-        .view
-        .hits
-        .iter()
-        .all(|hit| !matches!(hit.action, render::Action::Quote(_))));
-    ui.quote(requests[0]);
-    assert_eq!(ui.locals[&room].text.text, "author: \"answer-00\"\n");
-    assert!(!ui.locals[&room].text.text.contains("answer-02"));
-}
-
-#[test]
-fn quote_after_selecting_draft_text_appends_without_replacing_the_selection() {
-    let (mut ui, room, agent) = fixture();
-    let request = saved_exchange(&mut ui, room, agent, "answer-00", "answer-00");
+    saved_exchange(&mut ui, room, agent, "answer-00", "answer-00");
     ui.locals
         .get_mut(&room)
         .unwrap()
@@ -472,16 +454,6 @@ fn quote_after_selecting_draft_text_appends_without_replacing_the_selection() {
     assert_eq!(
         drag_copy(&mut ui, (rect.x + 5, rect.y), (rect.x + 7, rect.y)).as_deref(),
         Some("all")
-    );
-    assert!(ui
-        .view
-        .hits
-        .iter()
-        .all(|hit| !matches!(hit.action, render::Action::Quote(_))));
-    ui.quote(request);
-    assert_eq!(
-        ui.locals[&room].text.text,
-        "keep all of this\nauthor: \"answer-00\"\n"
     );
 }
 

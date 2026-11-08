@@ -735,13 +735,12 @@ fn cold_resume_preserves_uncertain_request_and_settles_its_original_reply_once()
     assert_eq!(settled.phase, RequestPhase::Completed);
     assert!(settled.reply().is_none());
     assert!(settled.failure_reason.is_none());
-    assert!(worker
+    assert!(!worker
         .state
         .room(room)
         .unwrap()
         .latest_replies
-        .get(&agent)
-        .is_none());
+        .contains_key(&agent));
     assert_eq!(
         worker.state.request(queued).unwrap().phase,
         RequestPhase::Queued
@@ -807,13 +806,12 @@ fn interactive_ready_releases_setup_gate_but_pending_deletion_stays_closed() {
             assert_eq!(settled.phase, RequestPhase::Completed);
             assert!(settled.reply().is_none());
             assert!(settled.failure_reason.is_none());
-            assert!(worker
+            assert!(!worker
                 .state
                 .room(room)
                 .unwrap()
                 .latest_replies
-                .get(&agent)
-                .is_none());
+                .contains_key(&agent));
         } else {
             assert_eq!(restored.status, RuntimeStatus::Idle);
             assert!(restored.actionable_error.is_none());

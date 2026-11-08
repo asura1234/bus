@@ -271,24 +271,6 @@ impl BusState {
         }
     }
 
-    pub(crate) fn history_group_has_developer(&self, key: RequestId) -> bool {
-        self.request(key)
-            .is_some_and(|request| request.prompt.author == super::Author::Developer)
-            || self.requests.history_index().has_developer(key)
-            || self.history.groups.has_developer(key)
-    }
-
-    pub(crate) fn history_latest_group_member(
-        &self,
-        room: RoomId,
-        key: RequestId,
-    ) -> Option<RequestId> {
-        self.requests
-            .history_index()
-            .latest_follower(room, key)
-            .max(self.history.groups.latest_follower(room, key))
-    }
-
     /// Live obligations only; reconciliation and save diagnostics must not
     /// traverse permanent archived history to find unfinished native turns.
     pub(crate) fn unsettled_requests(&self) -> impl Iterator<Item = &Request> {

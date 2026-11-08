@@ -25,7 +25,6 @@ mod phases {
 
 use super::{render::Action, LocalSendStatus};
 use crate::messaging::model::{AgentId, PromptId, RoomId};
-pub(super) use exchange::reply;
 #[cfg(test)]
 use exchange::timestamp;
 use markdown::MarkdownBlock;

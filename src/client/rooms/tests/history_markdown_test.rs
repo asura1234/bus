@@ -290,19 +290,9 @@ fn clicking_right_of_quote_does_nothing() {
     use crossterm::event::{MouseButton::Left, MouseEventKind::*};
 
     let (mut ui, room, agent) = fixture();
-    let request = saved_exchange(&mut ui, room, agent, "prompt", "prompt");
+    saved_exchange(&mut ui, room, agent, "prompt", "prompt");
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft stays".into());
     ui.compute_view(100, 40);
-    assert!(ui
-        .view
-        .hits
-        .iter()
-        .all(|hit| hit.action != render::Action::Quote(request)));
-    assert!(ui
-        .history
-        .cached()
-        .iter()
-        .all(|line| !matches!(line.action, Some(render::Action::Quote(_)))));
     let (x, y) = locate(&ui, "prompt");
     let beside = x + 6;
     assert_eq!(ui.view.hit_at(beside, y), None);
@@ -327,11 +317,6 @@ fn quote_padding_preserves_selection_and_draft() {
     saved_exchange(&mut ui, room, agent, "prompt", "prompt");
     ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft stays".into());
     ui.compute_view(100, 40);
-    assert!(ui
-        .view
-        .hits
-        .iter()
-        .all(|hit| !matches!(hit.action, render::Action::Quote(_))));
     let (x, y) = locate(&ui, "prompt");
     let point = selection::Point { line: 0, offset: 0 };
     let selection = Some((point, point));
@@ -347,35 +332,25 @@ fn quote_padding_preserves_selection_and_draft() {
 }
 
 #[test]
-fn quote_hit_tracks_visible_label_cells_after_resize() {
+fn prompt_text_is_not_a_button_after_resize() {
     let (mut ui, room, agent) = fixture();
-    let request = saved_exchange(&mut ui, room, agent, "reply", "reply");
+    saved_exchange(&mut ui, room, agent, "reply", "reply");
     for cols in [36, 38, 80, 100] {
         ui.compute_view(cols, 40);
-        assert!(
-            ui.view
-                .hits
-                .iter()
-                .all(|hit| !matches!(hit.action, render::Action::Quote(_))),
-            "width {cols} has no quote row"
-        );
         let (x, y) = locate(&ui, "reply");
         assert_eq!(
             ui.view.hit_at(x, y),
             None,
             "the prompt text is not a button"
         );
-        ui.locals.get_mut(&room).unwrap().text = editor::Editor::default();
-        ui.quote(request);
-        assert_eq!(ui.locals[&room].text.text, "author: \"reply\"\n");
     }
 }
 
 #[test]
-fn quote_keeps_the_agent_reply_as_raw_markdown() {
+fn prompt_line_stores_raw_markdown() {
     let (mut ui, room, agent) = fixture();
     let markdown = "**bold** and [docs](https://example.com) and `code`";
-    let request = saved_exchange(&mut ui, room, agent, markdown, markdown);
+    saved_exchange(&mut ui, room, agent, markdown, markdown);
     ui.compute_view(100, 40);
     let stored = ui
         .history
@@ -387,18 +362,6 @@ fn quote_keeps_the_agent_reply_as_raw_markdown() {
         })
         .expect("prompt line stores its markdown");
     assert_eq!(stored, markdown);
-    assert!(ui
-        .view
-        .hits
-        .iter()
-        .all(|hit| hit.action != render::Action::Quote(request)));
-
-    ui.quote(request);
-
-    assert_eq!(
-        ui.locals[&room].text.text,
-        "author: \"**bold** and [docs](https://example.com) and `code`\"\n"
-    );
 }
 
 #[test]
@@ -656,11 +619,6 @@ fn quote_padding_in_a_scrolled_history_is_inert_while_neighbor_rows_still_select
     let mut selectable = 0;
     for row in text.y..text.bottom() {
         let line = ui.history.cached()[ui.main_scroll + usize::from(row - text.y)].clone();
-        assert!(
-            !matches!(line.action, Some(render::Action::Quote(_))),
-            "row {row} is not a quote button: {:?}",
-            line.text
-        );
         ui.history_selection = None;
         assert_eq!(pointer(&mut ui, Down(Left), edge, row), None);
         let selects =

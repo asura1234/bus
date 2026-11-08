@@ -512,7 +512,7 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         "a new verdict, finding, blocker, or question is still sent once",
         "`[waiting-on-you]` is for a new hard blocker",
         "Do not reply Ready merely to acknowledge that prompt.",
-        "one explicit send to the intended recipient is the delivery.",
+        "One explicit send to the intended recipient is the delivery.",
     ] {
         assert!(communication.contains(phrase), "missing {phrase}");
     }
@@ -802,7 +802,7 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
         agent.0
     )));
     assert!(text.contains("run it in the foreground"));
-    assert!(text.contains("ok:true and stage:\"replied\" before claiming delivery"));
+    assert!(text.contains("ok:true and stage:\"replied\""));
     assert!(text.contains("check the existing answer with bus message status N before resending"));
     assert!(text.contains("a final no-reply outcome, Blocked, idle, disk, compaction, restart"));
     assert!(text

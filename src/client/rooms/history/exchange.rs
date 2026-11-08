@@ -1,12 +1,12 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, wrap, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::source::{visible_request, Direction};
+use super::source::Direction;
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
 };
-use crate::messaging::model::{AgentId, Author, BusState, Prompt, RequestId, Room, RoomId};
+use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -467,19 +467,6 @@ fn signature(
             .hash(&mut hash);
     }
     hash.finish()
-}
-
-pub(in crate::client::rooms) fn reply(
-    state: &BusState,
-    room: RoomId,
-    id: RequestId,
-) -> Option<(AgentId, &str)> {
-    let request = state
-        .request(id)
-        .filter(|request| request.room_id == room && visible_request(request))?;
-    request
-        .reply()
-        .map(|reply| (request.agent_id, reply.text.as_str()))
 }
 
 pub(in crate::client::rooms) fn timestamp(at: u64, now: u64) -> String {

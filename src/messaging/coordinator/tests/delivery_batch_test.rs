@@ -188,7 +188,7 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
         assert_eq!(fixture.request(request).delivery_stage(), "ended");
         let room_state = fixture.worker.state.room(room).unwrap();
         assert!(
-            room_state.latest_replies.get(&orchestrator).is_none(),
+            !room_state.latest_replies.contains_key(&orchestrator),
             "{:?}",
             room_state.latest_replies
         );
