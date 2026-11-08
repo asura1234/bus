@@ -30,6 +30,14 @@ IF git status --porcelain --untracked-files=all is nonempty
 IF git diff --name-only <base>...HEAD is empty
   STOP "There are no committed changes against the base."
 
+Day-to-day iteration uses `./run test` with no mode flag. Affected selection
+narrows each changed production source file to the owning component's unit
+tests, every test target that references it transitively, and every integration
+target that includes it. Uncertain graphs, cross-owner or shared inputs, and
+edits the graph cannot see (serde/data shapes, CLI surface, TUI strings) still
+select every applicable suite. The loop below is the merge authority and still
+runs the runner with `--full`. A later round repeats that full gate.
+
 branch_slug = branch with every character outside [A-Za-z0-9_-] replaced by `-`
 artifact_root = <absolute Git common directory>/bus/gate-and-fix/<branch_slug>
 round = 1

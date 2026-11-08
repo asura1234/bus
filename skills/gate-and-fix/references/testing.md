@@ -57,10 +57,11 @@ Within eligible languages, affected ownership remains deliberately narrow:
 | Changed paths | Selection |
 | --- | --- |
 | Known Rust test module with only references inside its component | All binary unit tests in that component's Rust namespace |
+| Production Rust source whose graph is certain, in-owner, and not a serde/data shape, CLI surface, or TUI string | That component's binary unit tests, unit tests of transitive referrers, and integration binaries that include the file |
 | Integration source/helper | Cargo test targets reachable through source module/path references |
 | Dev-tools test source/target | Dev-tools binary tests and CLI/driver integration tests |
 | Python with only references inside its owner | That owner's actual `*_test.py` files |
-| Cross-owner references, embedded Markdown/data, build inputs, production Rust, unknown paths | Every applicable suite |
+| Cross-owner references, embedded Markdown/data, build inputs, serde/data shapes, CLI surface, TUI strings, uncertain graphs, unknown paths | Every applicable suite |
 
 The index resolves Rust modules and `#[path]` using the existing Rust syntax
 helpers, and resolves literal includes relative to the containing file. Python
@@ -76,8 +77,13 @@ to every applicable suite, covering each crate context that compiles and runs th
 The index also follows Python imports when selected tests need `BUS_TEST_BINARY`.
 Missing ownership and cross-owner references broaden eligible suites. Embedded
 skill resources include directory symlinks, with the collector's test exclusions;
-a Cargo rebuild watch alone is not a runtime consumer. Rust is one crate, so production modules do not
-receive a guessed unit-only scope. Extending narrow selection requires reference
+a Cargo rebuild watch alone is not a runtime consumer. A production source file
+narrows to its component namespace, transitive test referrers, and integration
+binaries that include it. Serde and `src/**/model/**` data shapes, `src/protocol`,
+`src/cli`, `src/main.rs`, and `src/terminal` stay on the full suite because the
+module graph cannot see those dependents. Direct cross-owner references still
+broaden, except an integration test that only includes the production file:
+that binary is selected. Extending narrow selection requires reference
 evidence and a failing regression test.
 An empty diff skips both test lanes; `--full` still runs lint and doc checks.
 
