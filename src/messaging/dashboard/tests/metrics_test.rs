@@ -98,8 +98,8 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
     assert_eq!(report.providers["cursor"].counts.attempts, 0);
 }
 
-// A conclusive 100% next to a smaller delivered/attempts figure must name the
-// attempts left out of that rate. Definitions stay replied / (replied + bus failures).
+// A conclusive 100% must name the attempts left out of that rate. The definition
+// stays replied / (replied + bus failures); pending and external stay outside it.
 #[test]
 fn complete_bus_reliability_names_every_excluded_attempt() {
     let mut records: Vec<_> = cases()
@@ -114,67 +114,151 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     records[1].trusted_start_bound = false;
     let report = snapshot(&fixture_state(records), singapore_hour);
     let counts = &report.all.counts;
+    let pending = counts.open + counts.reply_pending;
     assert_eq!(
         counts.attempts,
-        counts.delivered + counts.failed + counts.open
-    );
-    assert_eq!(
-        counts.attempts,
-        counts.replied + counts.bus_failures + counts.external + counts.open + counts.reply_pending
+        counts.replied + counts.bus_failures + counts.external + pending
     );
     assert!(counts.external > 0 && counts.open > 0 && counts.reply_pending > 0);
+    assert_eq!(counts.bus_failures, 0);
     assert_eq!(report.all.rates.bus_reliability.percent, Some(100.0));
-    let value = serde_json::to_value(&report).unwrap();
-    let caption = value["all"]["rates"]["bus_reliability"]["caption"]
-        .as_str()
-        .expect("reliability caption");
-    assert!(caption.contains("100.0%"), "{caption}");
-    assert!(caption.contains("conclusive"), "{caption}");
+    assert_eq!(report.all.rates.bus_reliability.denominator, counts.replied);
+    let caption = &report.all.rates.bus_reliability.caption;
+    assert!(caption.starts_with("100% of "), "{caption}");
+    assert!(
+        caption.contains(&format!(
+            "of {}/{} conclusive",
+            counts.replied, counts.replied
+        )),
+        "{caption}"
+    );
+    assert!(caption.contains(&format!("{pending} pending")), "{caption}");
     assert!(
         caption.contains(&format!("{} external", counts.external)),
         "{caption}"
     );
-    assert!(
-        caption.contains(&format!("{} still open", counts.open)),
-        "{caption}"
-    );
-    assert!(
-        caption.contains(&format!("{} reply pending", counts.reply_pending)),
-        "{caption}"
-    );
-    assert_ne!(caption, "100.0%");
-    assert_ne!(caption, "100.0% (1/1)");
-    for rate in ["delivery", "reply_capture", "bus_reliability"] {
-        let text = value["all"]["rates"][rate]["caption"]
-            .as_str()
-            .unwrap_or("");
-        if text.contains('%') {
+    assert_ne!(caption.as_str(), "100%");
+    assert!(!caption.ends_with('%'), "{caption}");
+    for rate in [
+        &report.all.rates.delivery,
+        &report.all.rates.reply_capture,
+        &report.all.rates.bus_reliability,
+    ] {
+        if rate.percent.is_some() {
             assert!(
-                text.contains("Excluded") && text.contains("conclusive"),
-                "{rate}: {text}"
+                rate.caption.contains("conclusive")
+                    && rate
+                        .caption
+                        .contains(&format!("of {}/{} ", rate.numerator, rate.denominator)),
+                "{}",
+                rate.caption
             );
         }
     }
-    let identity = value["all"]["identity"].as_str().expect("attempt identity");
+    let identity = &report.all.identity;
     assert!(
         identity.contains(&format!(
-            "{} attempts = {} delivered + {} failed + {} still open",
-            counts.attempts, counts.delivered, counts.failed, counts.open
+            "{} attempted = {} delivered + {} failed + {} external + {} pending",
+            counts.attempts, counts.replied, counts.bus_failures, counts.external, pending
         )),
         "{identity}"
     );
-    assert!(
-        identity.contains(&format!(
-            "{} attempts = {} replied + {} Bus-caused failures + {} external + {} still open + {} reply pending",
-            counts.attempts,
-            counts.replied,
-            counts.bus_failures,
-            counts.external,
-            counts.open,
-            counts.reply_pending
-        )),
-        "{identity}"
+}
+
+fn assert_reliability_row(series: &Series, label: &str) {
+    let counts = &series.counts;
+    let pending = counts.open + counts.reply_pending;
+    assert_eq!(
+        counts.attempts,
+        counts.replied + counts.bus_failures + counts.external + pending,
+        "{label}: attempted = delivered + failed + external + pending"
     );
+    assert_eq!(
+        series.rates.bus_reliability.numerator, counts.replied,
+        "{label}"
+    );
+    assert_eq!(
+        series.rates.bus_reliability.denominator,
+        counts.replied + counts.bus_failures,
+        "{label}"
+    );
+    let caption = &series.rates.bus_reliability.caption;
+    assert!(
+        caption.contains(&format!("{pending} pending")),
+        "{label}: {caption}"
+    );
+    assert!(
+        caption.contains(&format!("{} external", counts.external)),
+        "{label}: {caption}"
+    );
+    assert_ne!(caption.as_str(), "100%", "{label}");
+    if counts.replied + counts.bus_failures == 0 {
+        assert!(caption.starts_with('—'), "{label}: {caption}");
+        assert!(!caption.contains('%'), "{label}: {caption}");
+    } else {
+        assert!(
+            caption.contains(&format!(
+                "of {}/{} conclusive",
+                series.rates.bus_reliability.numerator, series.rates.bus_reliability.denominator
+            )),
+            "{label}: {caption}"
+        );
+    }
+}
+
+#[test]
+fn group_rows_reconcile_attempted_with_delivered_failed_external_and_pending() {
+    let mut records: Vec<_> = cases()
+        .into_iter()
+        .take(6)
+        .map(|case| case.record)
+        .collect();
+    records[0].phase = RequestPhase::Completed;
+    records[0].failure_reason = None;
+    records[0].agent_id = AgentId(2);
+    records[1].phase = RequestPhase::Completed;
+    records[1].failure_reason = None;
+    records[1].agent_id = AgentId(3);
+    records[2].phase = RequestPhase::Abandoned;
+    records[2].failure_reason = Some("submission_unconfirmed".into());
+    records[2].trusted_start_bound = false;
+    records[2].agent_id = AgentId(3);
+    records[3].phase = RequestPhase::Completed;
+    records[3].failure_reason = None;
+    records[3].agent_id = AgentId(4);
+    records[4].phase = RequestPhase::Active;
+    records[4].trusted_start_bound = true;
+    records[4].failure_reason = None;
+    records[4].agent_id = AgentId(4);
+    records[5].phase = RequestPhase::Abandoned;
+    records[5].failure_reason = Some("interrupted".into());
+    records[5].trusted_start_bound = false;
+    records[5].agent_id = AgentId(4);
+    let report = snapshot(&fixture_state(records), singapore_hour);
+
+    let clear = &report.providers["claude"];
+    assert_eq!(clear.counts.bus_failures, 0);
+    assert_eq!(clear.counts.external, 0);
+    assert_eq!(pending_attempts(&clear.counts), 0);
+    assert_eq!(clear.rates.bus_reliability.percent, Some(100.0));
+    assert_reliability_row(clear, "zero failures");
+
+    let failed = &report.providers["codex"];
+    assert!(failed.counts.bus_failures > 0, "failures");
+    assert_eq!(failed.counts.replied, 1);
+    assert_eq!(failed.counts.bus_failures, 1);
+    assert_reliability_row(failed, "failures");
+
+    let waiting = &report.providers["kimi"];
+    assert!(pending_attempts(&waiting.counts) > 0, "pending");
+    assert!(waiting.counts.external > 0, "external beside pending");
+    assert_eq!(waiting.rates.bus_reliability.percent, Some(100.0));
+    assert_ne!(waiting.counts.attempts, waiting.counts.replied);
+    assert_reliability_row(waiting, "pending");
+
+    assert_reliability_row(&report.providers["cursor"], "empty provider");
+    assert_reliability_row(&report.rooms["1"].series, "room");
+    assert_reliability_row(&report.all, "session");
 }
 
 #[test]

@@ -18,6 +18,13 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     assert!(!page.contains("value=\"recipients\""));
     assert!(!page.contains("toFixed"));
     assert!(page.contains(".caption"));
+    assert!(page.contains(
+        "Bus reliability</th><th>Delivered</th><th>Attempted</th><th>Pending</th><th>Bus failures</th><th>External</th>"
+    ));
+    assert!(page.contains("c.open+c.reply_pending"));
+    assert!(!page.contains(">Top causes<"));
+    assert!(!page.contains("Delivered / attempts"));
+    assert!(!page.contains("causeButtons"));
     assert!(page.contains("drill.mode==='providers'"));
     assert!(page.contains("drill.mode==='rooms'"));
     assert!(!page.contains("drill.mode==='recipients'"));

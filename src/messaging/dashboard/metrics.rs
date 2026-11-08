@@ -89,58 +89,63 @@ struct Metric {
     /// Conclusive fraction plus the attempts that fraction leaves out.
     caption: String,
 }
+fn pending_attempts(counts: &Counts) -> u64 {
+    counts.open + counts.reply_pending
+}
+fn percent_label(percent: f64) -> String {
+    let tenths = (percent * 10.0).round() as i64;
+    if tenths.rem_euclid(10) == 0 {
+        format!("{}%", tenths.div_euclid(10))
+    } else {
+        format!("{}.{}%", tenths.div_euclid(10), tenths.rem_euclid(10))
+    }
+}
 fn attempt_identity(counts: &Counts) -> String {
+    let pending = pending_attempts(counts);
     format!(
-        "{attempts} attempts = {delivered} delivered + {failed} failed + {open} still open. Bus reliability partition: {attempts} attempts = {replied} replied + {bus} Bus-caused failures + {external} external + {open} still open + {pending} reply pending.",
+        "{attempts} attempted = {delivered} delivered + {failed} failed + {external} external + {pending} pending. Bus reliability is {replied}/{denominator} conclusive; pending and external stay outside that percentage.",
         attempts = counts.attempts,
-        delivered = counts.delivered,
-        failed = counts.failed,
-        open = counts.open,
-        replied = counts.replied,
-        bus = counts.bus_failures,
+        delivered = counts.replied,
+        failed = counts.bus_failures,
         external = counts.external,
-        pending = counts.reply_pending,
+        pending = pending,
+        replied = counts.replied,
+        denominator = counts.replied + counts.bus_failures,
     )
 }
-fn conclusive_metric(
-    numerator: u64,
-    denominator: u64,
-    basis: &str,
-    excluded: &[(&str, u64)],
-) -> Metric {
+fn conclusive_metric(numerator: u64, denominator: u64, excluded: &[(&str, u64)]) -> Metric {
     let percent = rate(numerator, denominator);
-    let shown = match percent {
-        Some(value) => format!("{value:.1}%"),
-        None => "—".to_owned(),
-    };
-    let total = excluded.iter().map(|(_, count)| *count).sum::<u64>();
     let listed = excluded
         .iter()
         .map(|(name, count)| format!("{count} {name}"))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(" · ");
+    let caption = match percent {
+        Some(value) => format!(
+            "{} of {numerator}/{denominator} conclusive · {listed}",
+            percent_label(value)
+        ),
+        None => format!("— · {listed}"),
+    };
     Metric {
         numerator,
         denominator,
         percent,
-        caption: format!(
-            "{shown} ({numerator}/{denominator} conclusive: {basis}). Excluded {total}: {listed}."
-        ),
+        caption,
     }
 }
 impl From<&Counts> for Rates {
     fn from(counts: &Counts) -> Self {
+        let pending = pending_attempts(counts);
         Self {
             delivery: conclusive_metric(
                 counts.delivered,
                 counts.delivered + counts.failed,
-                "delivered / delivered + failed",
                 &[("still open", counts.open)],
             ),
             reply_capture: conclusive_metric(
                 counts.replied,
                 counts.replied + counts.reply_not_captured,
-                "replied / replied + reply not captured",
                 &[
                     ("reply pending", counts.reply_pending),
                     ("still open", counts.open),
@@ -150,12 +155,7 @@ impl From<&Counts> for Rates {
             bus_reliability: conclusive_metric(
                 counts.replied,
                 counts.replied + counts.bus_failures,
-                "replied / replied + Bus-caused failures",
-                &[
-                    ("external", counts.external),
-                    ("still open", counts.open),
-                    ("reply pending", counts.reply_pending),
-                ],
+                &[("pending", pending), ("external", counts.external)],
             ),
         }
     }

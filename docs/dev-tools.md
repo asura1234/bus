@@ -96,6 +96,10 @@ page in the default browser. Repeated clicks and the dev CLI reuse one service
 per session (OS-released lock and verified loopback endpoint in
 `dashboard-runtime/`, separate from persisted message/request records).
 The whole-session headline is followed by an hourly graph with attempt counts,
-then provider and room tables. There is no per-recipient breakdown.
-Every failure count or cause opens request metadata and a copyable
-`bus message status MESSAGE_ID` command, with causes ordered by count.
+then provider and room tables. Each row shows Bus reliability, Delivered,
+Attempted, Pending, Bus failures and External. Attempted = Delivered + Bus
+failures + External + Pending. Delivered on that row is conclusive replies.
+Pending is still open plus reply pending, and pending attempts stay outside
+Bus reliability. There is no per-recipient breakdown and no per-row cause list.
+Bus failure and external counts open request metadata and a copyable
+`bus message status MESSAGE_ID` command.
