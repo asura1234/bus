@@ -358,3 +358,28 @@ async fn an_unfinished_synchronized_frame_is_never_given_to_an_ownership_inspect
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Hstable draft\x1b[?2026l");
     assert_eq!(submission.observe("late_paste"), InputObservation::Pending);
 }
+
+#[tokio::test]
+async fn observed_queue_leaves_accept_and_writer_stamps_for_the_caller() {
+    let (runtime, _writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let completion = runtime
+        .queue_observed_input_submission(
+            Bytes::from_static(b"hello"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01")],
+            Duration::ZERO,
+            Some(Instant::now() + Duration::from_millis(500)),
+            |_| InputObservation::Empty,
+        )
+        .unwrap();
+    let open = completion.submission_timestamps();
+    assert_eq!(open.server_accepted_at_ms, None);
+    assert_eq!(open.writer_queued_at_ms, None);
+    completion.update_timestamps(|timestamps| {
+        timestamps.server_accepted_at_ms.get_or_insert(1_000);
+        timestamps.writer_queued_at_ms.get_or_insert(5_000);
+    });
+    let stamped = completion.submission_timestamps();
+    assert_eq!(stamped.server_accepted_at_ms, Some(1_000));
+    assert_eq!(stamped.writer_queued_at_ms, Some(5_000));
+}
