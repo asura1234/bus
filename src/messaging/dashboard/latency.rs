@@ -18,7 +18,7 @@ const PHASES: &[&str] = &[
     "enter_write",
     "post_enter_confirmation",
     "native_total",
-    "reply_delivery",
+    "end_to_end",
 ];
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -46,7 +46,14 @@ pub(super) fn percentiles(samples: &[u64]) -> Percentiles {
 }
 
 pub(super) fn elapsed(start: Option<u64>, end: Option<u64>) -> Option<u64> {
-    Some(end?.saturating_sub(start?))
+    end?.checked_sub(start?)
+}
+
+/// A native stamp counts only when it is inside the current `native_requested` attempt.
+fn attempt_stamp(anchor: Option<u64>, stamp: Option<u64>) -> Option<u64> {
+    let anchor = anchor?;
+    let stamp = stamp?;
+    (stamp >= anchor).then_some(stamp)
 }
 
 fn ready(request: &Request) -> bool {
@@ -56,28 +63,49 @@ fn ready(request: &Request) -> bool {
 fn phase(request: &Request, name: &str) -> Option<u64> {
     let latency = &request.latency;
     let native = latency.native;
+    let anchor = latency.native_requested_at_ms;
+    let native_at = |stamp| attempt_stamp(anchor, stamp);
     let pair = |start, end| elapsed(start, end);
     match name {
-        "accepted_to_box" => pair(latency.accepted_at_ms, native.text_written_at_ms),
+        "accepted_to_box" => pair(latency.accepted_at_ms, native_at(native.text_written_at_ms)),
         "enqueue" => pair(latency.accepted_at_ms, latency.queued_at_ms),
         "ready_queue" => pair(latency.queued_at_ms, latency.picked_at_ms),
-        "dispatch" => pair(latency.picked_at_ms, latency.native_requested_at_ms),
-        "native_transport" => pair(latency.native_requested_at_ms, native.server_accepted_at_ms),
-        "writer_queue" => pair(native.server_accepted_at_ms, native.writer_queued_at_ms),
-        "paste_prepare" => pair(native.writer_queued_at_ms, native.paste_started_at_ms),
-        "text_write" => pair(native.paste_started_at_ms, native.text_written_at_ms),
-        "paste_pacing" => pair(native.text_written_at_ms, native.paste_completed_at_ms),
-        "ownership_wait" => pair(native.paste_completed_at_ms, native.composer_owned_at_ms),
-        "enter_dispatch" => pair(native.composer_owned_at_ms, native.enter_sent_at_ms),
-        "enter_write" => pair(native.enter_sent_at_ms, native.enter_written_at_ms),
-        "post_enter_confirmation" => {
-            pair(native.enter_written_at_ms, native.native_confirmed_at_ms)
-        }
-        "native_total" => pair(
-            latency.native_requested_at_ms,
-            native.native_confirmed_at_ms,
+        "dispatch" => pair(latency.picked_at_ms, anchor),
+        "native_transport" => pair(anchor, native_at(native.server_accepted_at_ms)),
+        "writer_queue" => pair(
+            native_at(native.server_accepted_at_ms),
+            native_at(native.writer_queued_at_ms),
         ),
-        "reply_delivery" => pair(latency.reply_captured_at_ms, latency.reply_delivered_at_ms),
+        "paste_prepare" => pair(
+            native_at(native.writer_queued_at_ms),
+            native_at(native.paste_started_at_ms),
+        ),
+        "text_write" => pair(
+            native_at(native.paste_started_at_ms),
+            native_at(native.text_written_at_ms),
+        ),
+        "paste_pacing" => pair(
+            native_at(native.text_written_at_ms),
+            native_at(native.paste_completed_at_ms),
+        ),
+        "ownership_wait" => pair(
+            native_at(native.paste_completed_at_ms),
+            native_at(native.composer_owned_at_ms),
+        ),
+        "enter_dispatch" => pair(
+            native_at(native.composer_owned_at_ms),
+            native_at(native.enter_sent_at_ms),
+        ),
+        "enter_write" => pair(
+            native_at(native.enter_sent_at_ms),
+            native_at(native.enter_written_at_ms),
+        ),
+        "post_enter_confirmation" => pair(
+            native_at(native.enter_written_at_ms),
+            native_at(native.native_confirmed_at_ms),
+        ),
+        "native_total" => pair(anchor, native_at(native.native_confirmed_at_ms)),
+        "end_to_end" => pair(latency.accepted_at_ms, latency.reply_delivered_at_ms),
         "queue_total" => pair(latency.queued_at_ms, latency.picked_at_ms),
         _ => None,
     }

@@ -14,7 +14,8 @@ fn nearest_rank_and_backward_clocks_are_safe() {
     assert_eq!(values.p90, Some(9));
     assert_eq!(values.p99, Some(10));
     assert_eq!(values.max, Some(10));
-    assert_eq!(elapsed(Some(100), Some(90)), Some(0));
+    assert_eq!(elapsed(Some(100), Some(90)), None);
+    assert_eq!(elapsed(Some(100), Some(100)), Some(0));
     assert_eq!(elapsed(Some(100), None), None);
     assert_eq!(elapsed(None, Some(100)), None);
 }
@@ -90,6 +91,12 @@ fn snapshot_aggregates_ready_bus_phases_by_provider_recipient_and_hour() {
     );
     assert_eq!(report.all.phases["ready_queue"].p50, Some(10));
     assert_eq!(report.all.phases["native_total"].n, 3);
+    assert!(!report.all.phases.contains_key("reply_delivery"));
+    let end_to_end = &report.all.phases["end_to_end"];
+    assert_eq!(
+        (end_to_end.n, end_to_end.p50, end_to_end.p90, end_to_end.p99),
+        (3, Some(330), Some(1100), Some(1100))
+    );
     assert_eq!(
         report.providers["claude"].phases["accepted_to_box"].p50,
         Some(150)
@@ -298,4 +305,61 @@ fn delivery_latency_native_total_excludes_composer_wait_between_attempts() {
     let report = snapshot(&state, singapore_hour);
     assert_eq!(report.all.phases["native_total"].n, 1);
     assert_eq!(report.all.phases["native_total"].p50, Some(100));
+}
+
+#[test]
+fn phases_pair_inside_one_native_attempt_and_drop_reversed_samples() {
+    let mut state = BusState::new();
+    let room = state.create_room("mixed attempts").unwrap();
+    let agent = state
+        .create_agent(room, "codex", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    let accepted = 1_793_577_600_000;
+    let anchor = accepted + 10_000;
+    state.set_draft_recipients(room, [agent]).unwrap();
+    state.set_draft_text(room, "mixed attempt fixture").unwrap();
+    let id = state.submit_draft(room, accepted).unwrap()[0];
+    let latency = DeliveryLatency {
+        accepted_at_ms: Some(accepted),
+        queued_at_ms: Some(accepted + 10),
+        picked_at_ms: Some(accepted + 20),
+        native_requested_at_ms: Some(anchor),
+        native: NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(accepted + 35),
+            writer_queued_at_ms: Some(accepted + 40),
+            paste_started_at_ms: Some(anchor + 10),
+            text_written_at_ms: Some(anchor + 20),
+            paste_completed_at_ms: Some(anchor + 5),
+            composer_owned_at_ms: None,
+            enter_sent_at_ms: None,
+            enter_written_at_ms: None,
+            native_confirmed_at_ms: Some(accepted + 80),
+        },
+        provider_started_at_ms: Some(accepted + 90),
+        reply_captured_at_ms: Some(accepted + 100),
+        reply_delivered_at_ms: Some(anchor + 500),
+        ready_at_enqueue: true,
+        agent_waited: false,
+    };
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][id.0.to_string()]["latency"] = serde_json::to_value(latency).unwrap();
+    let state: BusState = serde_json::from_value(document).unwrap();
+    let report = snapshot(&state, singapore_hour);
+    assert_eq!(report.all.phases["writer_queue"].n, 0);
+    assert_eq!(report.all.phases["native_transport"].n, 0);
+    assert_eq!(report.all.phases["native_total"].n, 0);
+    assert_eq!(report.all.phases["paste_pacing"].n, 0);
+    assert_eq!(report.all.phases["text_write"].p50, Some(10));
+    assert_eq!(
+        report.all.phases["accepted_to_box"].p50,
+        Some(anchor + 20 - accepted)
+    );
+    assert_eq!(
+        report.all.phases["end_to_end"].p50,
+        Some(anchor + 500 - accepted)
+    );
+    assert!(!report.all.phases.contains_key("reply_delivery"));
+    assert!(report.slowest[0].phases.contains_key("text_write"));
+    assert!(!report.slowest[0].phases.contains_key("writer_queue"));
+    assert!(!report.slowest[0].phases.contains_key("paste_pacing"));
 }

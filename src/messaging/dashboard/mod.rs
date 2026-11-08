@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use crate::messaging::storage::state_store::JsonStore;
 
 mod clock;
-mod launch_metrics;
 mod latency;
+mod launch_metrics;
 mod metrics;
 mod service;
 

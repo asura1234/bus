@@ -13,7 +13,7 @@ summary{cursor:pointer;color:var(--accent)}section{margin-top:20px}.help{cursor:
 @media(max-width:800px){main{padding:20px 12px}.cards{grid-template-columns:1fr;gap:10px}header{flex-direction:column}.value{font-size:28px}.card{padding:16px}}
 </style>
 <main>
-<header><div><div class="eyebrow">Bus · developer tools</div><h1>Delivery latency</h1><p class="muted">Bus overhead only: exact text-write and room-delivery phases. Agent waits and model thinking are excluded.</p><span class="pill">Read only · refreshes every 30 seconds</span><div class="nav"><a href="/">Delivery reliability</a></div></div><div class="selectors"><div><label for="group-mode">Break down by</label><select id="group-mode"><option value="recipients">Recipient</option><option value="providers">Provider</option></select></div><div><label for="phase">Bus phase</label><select id="phase"></select></div></div></header>
+<header><div><div class="eyebrow">Bus · developer tools</div><h1>Delivery latency</h1><p class="muted">End-to-end delay ends at room delivery. Accepted-to-box and ready queue omit requests that waited for an agent. Model thinking is not its own phase.</p><span class="pill">Read only · refreshes every 30 seconds</span><div class="nav"><a href="/">Delivery</a></div></div><div class="selectors"><div><label for="group-mode">Break down by</label><select id="group-mode"><option value="recipients">Recipient</option><option value="providers">Provider</option></select></div><div><label for="phase">Bus phase</label><select id="phase"></select></div></div></header>
 <p id="updated" aria-live="polite">No data</p>
 <div class="cards" id="cards"></div>
 <section><h2 id="group-heading">Recipients</h2><div class="scroll"><table aria-label="Latency by recipient"><thead><tr><th>Recipient / group</th><th>p50</th><th>p90</th><th>p99</th><th>Samples (n)</th></tr></thead><tbody id="groups"></tbody></table></div><p class="legend">Select a group for its hourly distribution. Ready queue and accepted-to-box exclude requests that waited for an agent.</p></section>
@@ -24,7 +24,8 @@ summary{cursor:pointer;color:var(--accent)}section{margin-top:20px}.help{cursor:
 'use strict';
 const $=id=>document.getElementById(id);
 const phases={
- accepted_to_box:['Accepted → text write','Send accepted to the actor flushing the complete prompt text. Only requests ready at enqueue with no later agent wait.'],
+ end_to_end:['Accepted → room delivery','Send accepted until durable room delivery. This is the end-to-end delay. Reply capture is not an endpoint.'],
+ accepted_to_box:['Accepted → text write','Send accepted to the actor flushing the complete prompt text. Only requests ready at enqueue with no later agent wait. The text write must belong to the current native attempt.'],
  enqueue:['Accepted → durable queued','Coordinator acceptance to the durable queue marker.'],
  ready_queue:['Ready queue wait','Durable queue to delivery selection, only for requests ready at enqueue with no later agent wait. Busy/blocked time is excluded.'],
  dispatch:['Picked → native request','Delivery selection to the coordinator native API request.'],
@@ -37,8 +38,7 @@ const phases={
  enter_dispatch:['Ownership seen → Enter sent','Ownership confirmation to Enter being queued.'],
  enter_write:['Enter sent → Enter written','Enter queue to the actor flushing Enter.'],
  post_enter_confirmation:['Enter written → native confirmed','Enter flush to native submission confirmation; not the provider Started hook.'],
- native_total:['Whole native submission','Coordinator native request to native submission confirmation.'],
- reply_delivery:['Reply captured → durable room reply','Provider final/reply capture to the reply being durable in the room. Model thinking is excluded.']
+ native_total:['Whole native submission','Coordinator native request to native submission confirmation, within that same native attempt.']
 };
 const phaseOrder=Object.keys(phases), names={all:'Whole session',claude:'Claude',codex:'Codex',kimi:'Kimi',grok:'Grok',cursor:'Cursor',unknown:'Unknown'};
 let latest=null,selected='all';
@@ -46,7 +46,7 @@ for(const id of phaseOrder){const option=document.createElement('option');option
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
 function button(text,action){const b=node('button',text);b.type='button';b.addEventListener('click',action);return b}
 function explain(e,text){e.title=text;e.setAttribute('aria-label',`${e.textContent}. ${text}`);e.tabIndex=0;e.classList.add('help');return e}
-for(const th of document.querySelectorAll('th')){const text=th.textContent;if(text==='p50'||text==='p90'||text==='p99')explain(th,'Nearest-rank percentile of complete timestamp pairs for the selected Bus phase.');else if(text==='Samples (n)')explain(th,'Number of requests with both phase timestamps. Missing legacy timestamps are not sampled.');else if(text==='Accepted → text write')explain(th,phases.accepted_to_box[1]);else if(text==='Phase breakdown')explain(th,'All Bus phase durations in milliseconds. Backward wall-clock steps saturate at zero.')}
+for(const th of document.querySelectorAll('th')){const text=th.textContent;if(text==='p50'||text==='p90'||text==='p99')explain(th,'Nearest-rank percentile of complete timestamp pairs for the selected Bus phase.');else if(text==='Samples (n)')explain(th,'Number of requests with both phase timestamps. Missing legacy timestamps are not sampled.');else if(text==='Accepted → text write')explain(th,phases.accepted_to_box[1]);else if(text==='Phase breakdown')explain(th,'All Bus phase durations in milliseconds. A reversed timestamp pair is omitted, and native stamps from another attempt are omitted.')}
 function metric(id){return latest?.metrics?.all?.phases?.[id]||{n:0,p50:null,p90:null,p99:null}}
 function series(){if(selected==='all')return latest?.metrics?.all;const groups=latest?.metrics?.[$('group-mode').value]||{};return $('group-mode').value==='providers'?groups[selected]:groups[selected]?.series}
 function groupName(id,g){return $('group-mode').value==='providers'?(names[id]||id):`${g.name} (#${id})`}

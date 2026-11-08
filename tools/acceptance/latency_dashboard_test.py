@@ -42,7 +42,7 @@ def main():
     page = Path(__file__).resolve().parents[2] / "src/messaging/dashboard/latency_page.html"
     phases = ["accepted_to_box", "enqueue", "ready_queue", "dispatch", "native_transport",
               "writer_queue", "paste_prepare", "text_write", "paste_pacing", "ownership_wait",
-              "enter_dispatch", "enter_write", "post_enter_confirmation", "native_total", "reply_delivery"]
+              "enter_dispatch", "enter_write", "post_enter_confirmation", "native_total", "end_to_end"]
     series = {"phases": {name: {"n": 1, "p50": 12, "p90": 12, "p99": 12, "max": 12}
                          for name in phases}, "hours": []}
     slow = {"request_id": 42, "recipient": "fixture-recipient", "recipient_id": 2,
