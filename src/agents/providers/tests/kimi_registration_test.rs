@@ -261,10 +261,7 @@ fn launch_rejects_attached_session_and_prompt_short_options() {
 
 #[test]
 fn native_kimi_accepts_normalized_short_option_combinations() {
-    let Ok(binary) = std::env::var("BUS_KIMI_NATIVE_BINARY") else {
-        eprintln!("set BUS_KIMI_NATIVE_BINARY to run the native property probe");
-        return;
-    };
+    let binary = std::env::var("BUS_KIMI_NATIVE_BINARY").ok();
     struct Restore(Option<std::ffi::OsString>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -276,11 +273,14 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
     }
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _restore = Restore(std::env::var_os("BUS_YOLO"));
-    let root = crate::utils::test_temp::unique_temp_path("kimi-native-yolo-options");
-    let home = root.join("home");
-    let kimi_home = root.join("kimi-home");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&kimi_home).unwrap();
+    let scratch = binary.as_ref().map(|_| {
+        let root = crate::utils::test_temp::unique_temp_path("kimi-native-yolo-options");
+        let home = root.join("home");
+        let kimi_home = root.join("kimi-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&kimi_home).unwrap();
+        (root, home, kimi_home)
+    });
     fn random(seed: &mut u64) -> usize {
         *seed = seed
             .wrapping_mul(6364136223846793005)
@@ -354,26 +354,88 @@ fn native_kimi_accepts_normalized_short_option_combinations() {
             .any(|arg| super::kimi::launch::is_yolo_option(arg)));
         super::kimi::launch::validate_run_permissions(&fresh).unwrap();
         super::kimi::launch::validate_run_permissions(&resumed).unwrap();
-        let output = std::process::Command::new(&binary)
-            .args(&fresh)
-            .arg("--help")
-            .env_clear()
-            .envs([
-                ("HOME", home.as_os_str()),
-                ("KIMI_CODE_HOME", kimi_home.as_os_str()),
-                ("PATH", std::ffi::OsStr::new("/usr/bin:/bin")),
-                ("KIMI_CODE_NO_AUTO_UPDATE", std::ffi::OsStr::new("1")),
-                ("KIMI_DISABLE_OAUTH_LOCK", std::ffi::OsStr::new("0")),
-                ("TERM", std::ffi::OsStr::new("dumb")),
-                ("NO_COLOR", std::ffi::OsStr::new("1")),
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "native Kimi rejected case {case}: saved={saved:?}, effective={fresh:?}, stderr={}",
-            String::from_utf8_lossy(&output.stderr)
+        // Kimi 2.4.1 accepts `--output-format` only with `--prompt`, which Bus
+        // rejects. Keep the Bus asserts above and start the live process only
+        // for argv an interactive Kimi can accept.
+        let prompt_only_output = fresh
+            .iter()
+            .any(|arg| arg == "--output-format" || arg.starts_with("--output-format="));
+        if !prompt_only_output {
+            if let Some((binary, (_, home, kimi_home))) = binary.as_deref().zip(scratch.as_ref()) {
+                // `--help` is printed before option checks, so it accepts illegal argv.
+                // A real startup that exits is the parse or permission failure.
+                assert_native_kimi_stays_alive(binary, &fresh, home, kimi_home, case, &saved);
+            }
+        }
+    }
+    if let Some((root, _, _)) = scratch {
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+fn assert_native_kimi_stays_alive(
+    binary: &str,
+    args: &[String],
+    home: &std::path::Path,
+    kimi_home: &std::path::Path,
+    case: usize,
+    saved: &[String],
+) {
+    let mut child = std::process::Command::new(binary)
+        .args(args)
+        .env_clear()
+        .envs([
+            ("HOME", home.as_os_str()),
+            ("KIMI_CODE_HOME", kimi_home.as_os_str()),
+            ("PATH", std::ffi::OsStr::new("/usr/bin:/bin")),
+            ("KIMI_CODE_NO_AUTO_UPDATE", std::ffi::OsStr::new("1")),
+            ("KIMI_DISABLE_OAUTH_LOCK", std::ffi::OsStr::new("0")),
+            ("TERM", std::ffi::OsStr::new("dumb")),
+            ("NO_COLOR", std::ffi::OsStr::new("1")),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("native Kimi failed to start: {error}"));
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        let read = std::io::Read::read(&mut stdout, &mut byte).unwrap_or(0);
+        let _ = started_tx.send(read);
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stderr, &mut bytes);
+        bytes
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if let Ok(read) = started_rx.try_recv() {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if read > 0 {
+                break None;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    let stderr_bytes = stderr_thread.join().unwrap_or_default();
+    if let Some(status) = status {
+        panic!(
+            "native Kimi rejected case {case}: status={status}, saved={saved:?}, effective={args:?}, stderr={}",
+            String::from_utf8_lossy(&stderr_bytes)
         );
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
