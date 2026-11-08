@@ -122,9 +122,10 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         {
             rows[region.start].truncate(column + marker.len_utf8());
         }
-        // Blank the draft and the closing chrome. An interior row that looks
-        // like a model footer must not stay visible to the control scan.
-        for row in &mut rows[region.start + 1..region.end] {
+        // Blank interior draft rows, including a footer-prefixed line and a
+        // hint above the real closer. Leave the closing border or footer row
+        // for the control scan: a [y/n] hint can share that row.
+        for row in &mut rows[region.start + 1..region.end.saturating_sub(1)] {
             row.clear();
         }
     }

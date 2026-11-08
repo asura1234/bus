@@ -779,3 +779,22 @@ async fn quoted_marker_inside_numbered_composer_is_not_a_control() {
         "editable composer text became a blocker: {screen}"
     );
 }
+
+#[tokio::test]
+async fn a_control_sharing_the_closing_chrome_row_stays_visible() {
+    let mut missed = Vec::new();
+    for screen in [
+        "history\n────────────────\n❯ hello\n──────── [y/n]",
+        "history\n› hello\nGPT-6 [y/n]",
+        "history\n› hello\n\n? for shortcuts [y/n]",
+    ] {
+        let grid = captured_grid(screen);
+        if !has_input_controls(&grid.text()) {
+            missed.push(screen);
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "closing chrome blanked a control on that row: {missed:?}"
+    );
+}
