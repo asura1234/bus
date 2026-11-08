@@ -600,6 +600,7 @@ impl BusState {
                 request_state.expected_launch_id = None;
                 request_state.group = None;
                 request_state.steered = false;
+                request_state.latency.clear_attempt();
                 let agent_id = request_state.agent_id;
                 self.queues.entry(agent_id).or_default().insert(0, request);
                 if let Some(lead) = lead.and_then(|lead| self.requests.get_mut(&lead)) {

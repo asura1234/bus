@@ -914,6 +914,8 @@ fn assert_shared_attempt(
     server_accepted_at_ms: u64,
     writer_queued_at_ms: u64,
     text_written_at_ms: u64,
+    enter_written_at_ms: u64,
+    native_confirmed_at_ms: u64,
     provider_started_at_ms: u64,
     reply_captured_at_ms: u64,
 ) {
@@ -938,6 +940,16 @@ fn assert_shared_attempt(
             request.latency.native.text_written_at_ms,
             Some(text_written_at_ms),
             "{id:?} text written"
+        );
+        assert_eq!(
+            request.latency.native.enter_written_at_ms,
+            Some(enter_written_at_ms),
+            "{id:?} enter"
+        );
+        assert_eq!(
+            request.latency.native.native_confirmed_at_ms,
+            Some(native_confirmed_at_ms),
+            "{id:?} native confirmation"
         );
         assert_eq!(
             request.latency.native.paste_started_at_ms, None,
@@ -978,6 +990,8 @@ fn requeued_delivery_records_the_later_attempt_for_every_coalesced_recipient() {
             writer_queued_at_ms: Some(1_040),
             paste_started_at_ms: Some(1_045),
             text_written_at_ms: Some(1_050),
+            enter_written_at_ms: Some(1_055),
+            native_confirmed_at_ms: Some(1_058),
             ..Default::default()
         },
         1_060,
@@ -1000,6 +1014,8 @@ fn requeued_delivery_records_the_later_attempt_for_every_coalesced_recipient() {
             server_accepted_at_ms: Some(2_030),
             writer_queued_at_ms: Some(2_040),
             text_written_at_ms: Some(2_050),
+            enter_written_at_ms: Some(2_055),
+            native_confirmed_at_ms: Some(2_058),
             ..Default::default()
         },
         2_060,
@@ -1024,6 +1040,8 @@ fn requeued_delivery_records_the_later_attempt_for_every_coalesced_recipient() {
         2_030,
         2_040,
         2_050,
+        2_055,
+        2_058,
         2_060,
         2_070,
     );
@@ -1068,6 +1086,8 @@ fn provider_retry_records_the_later_attempt_for_every_coalesced_recipient() {
             writer_queued_at_ms: Some(1_040),
             paste_started_at_ms: Some(1_045),
             text_written_at_ms: Some(1_050),
+            enter_written_at_ms: Some(1_055),
+            native_confirmed_at_ms: Some(1_058),
             ..Default::default()
         },
         1_060,
@@ -1099,6 +1119,8 @@ fn provider_retry_records_the_later_attempt_for_every_coalesced_recipient() {
             server_accepted_at_ms: Some(2_030),
             writer_queued_at_ms: Some(2_040),
             text_written_at_ms: Some(2_050),
+            enter_written_at_ms: Some(2_055),
+            native_confirmed_at_ms: Some(2_058),
             ..Default::default()
         },
         2_060,
@@ -1112,6 +1134,8 @@ fn provider_retry_records_the_later_attempt_for_every_coalesced_recipient() {
         2_030,
         2_040,
         2_050,
+        2_055,
+        2_058,
         2_060,
         2_070,
     );
@@ -1124,4 +1148,74 @@ fn provider_retry_records_the_later_attempt_for_every_coalesced_recipient() {
         Some(1_010)
     );
     assert!(state.request(second).unwrap().latency.agent_waited);
+}
+
+#[test]
+fn rejected_steering_records_the_later_attempt() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "original task");
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    let correction = submit_text(&mut state, room, agent, "correction");
+    let accepted = state.request(correction).unwrap().latency.accepted_at_ms;
+    state.record_queued(correction, 1_005).unwrap();
+    state.record_picked(correction, 1_010, true).unwrap();
+    state.begin_steering(correction, lead).unwrap();
+    record_delivery_attempt(
+        &mut state,
+        correction,
+        1_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(1_030),
+            writer_queued_at_ms: Some(1_040),
+            paste_started_at_ms: Some(1_045),
+            text_written_at_ms: Some(1_050),
+            enter_written_at_ms: Some(1_055),
+            native_confirmed_at_ms: Some(1_058),
+            ..Default::default()
+        },
+        1_060,
+        1_070,
+    );
+    state
+        .record_steering(correction, SubmissionOutcome::ComposerBusy)
+        .unwrap();
+    state.record_queued(correction, 900).unwrap();
+    record_delivery_attempt(
+        &mut state,
+        correction,
+        2_020,
+        crate::messaging::model::NativeSubmissionTimestamps {
+            server_accepted_at_ms: Some(2_030),
+            writer_queued_at_ms: Some(2_040),
+            text_written_at_ms: Some(2_050),
+            enter_written_at_ms: Some(2_055),
+            native_confirmed_at_ms: Some(2_058),
+            ..Default::default()
+        },
+        2_060,
+        2_070,
+    );
+
+    let request = state.request(correction).unwrap();
+    assert_eq!(request.latency.native_requested_at_ms, Some(2_020));
+    assert_eq!(request.latency.native.server_accepted_at_ms, Some(2_030));
+    assert_eq!(request.latency.native.writer_queued_at_ms, Some(2_040));
+    assert_eq!(request.latency.native.text_written_at_ms, Some(2_050));
+    assert_eq!(request.latency.native.enter_written_at_ms, Some(2_055));
+    assert_eq!(request.latency.native.native_confirmed_at_ms, Some(2_058));
+    assert_eq!(request.latency.native.paste_started_at_ms, None);
+    assert_eq!(request.latency.provider_started_at_ms, Some(2_060));
+    assert_eq!(request.latency.reply_captured_at_ms, Some(2_070));
+    assert_eq!(request.latency.accepted_at_ms, accepted);
+    assert_eq!(request.latency.queued_at_ms, Some(1_005));
+    assert_eq!(request.latency.picked_at_ms, Some(1_010));
+    assert!(request.latency.agent_waited);
+    assert_eq!(
+        state.request(lead).unwrap().phase,
+        RequestPhase::Active,
+        "rejecting a steer leaves the lead's turn in place"
+    );
 }
