@@ -171,6 +171,9 @@ pub struct TerminalRuntime {
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
+    /// Pane-owned Codex runtime. Dropping it closes the helper lifetime channel.
+    #[cfg(unix)]
+    shared_codex: Mutex<Option<crate::agents::providers::codex::native::Runtime>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_transaction: launch_transaction::LaunchTransaction,
@@ -321,5 +324,41 @@ impl TerminalRuntime {
 
     pub(crate) fn content_seq(&self) -> u64 {
         self.content_seq.load(Ordering::Acquire)
+    }
+
+    /// Keep the runtime `from_environment` accepts. A later pane start is the
+    /// only caller of `launch`; this does not admit prompts or interrupts.
+    #[cfg(unix)]
+    pub(crate) fn retain_shared_codex_from_env(&self, env: &[(String, String)]) {
+        if let Some(runtime) =
+            crate::agents::providers::codex::native::Runtime::from_environment(env)
+        {
+            *self
+                .shared_codex
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(runtime);
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn launch_shared_codex(&self, argv: Vec<String>) -> std::io::Result<Vec<String>> {
+        match self
+            .shared_codex
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_mut()
+        {
+            Some(runtime) => runtime.launch(&argv),
+            None => Ok(argv),
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn shared_codex_session_open(&self) -> bool {
+        self.shared_codex
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|runtime| runtime.has_session())
     }
 }

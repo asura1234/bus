@@ -611,6 +611,8 @@ impl TerminalRuntime {
             },
             AgentDetection::Enabled,
         )?;
+        #[cfg(unix)]
+        runtime.retain_shared_codex_from_env(&launch_env.extra);
         if let Some(integration) = integration.as_mut() {
             integration.start_wait(runtime.child_pid());
         }
@@ -644,7 +646,7 @@ impl TerminalRuntime {
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env)?;
-        Self::spawn_command_builder(
+        let runtime = Self::spawn_command_builder(
             pane_id,
             rows,
             cols,
@@ -658,7 +660,10 @@ impl TerminalRuntime {
             "failed to spawn command pane",
             SpawnInitialState::default(),
             agent_detection,
-        )
+        )?;
+        #[cfg(unix)]
+        runtime.retain_shared_codex_from_env(&launch_env.extra);
+        Ok(runtime)
     }
 
     // Runtime construction needs to thread PTY size, environment, theme, render hooks, and detection policy together.
@@ -691,7 +696,7 @@ impl TerminalRuntime {
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env)?;
-        Self::spawn_command_builder(
+        let runtime = Self::spawn_command_builder(
             pane_id,
             rows,
             cols,
@@ -705,7 +710,10 @@ impl TerminalRuntime {
             "failed to spawn argv command pane",
             SpawnInitialState::default(),
             agent_detection,
-        )
+        )?;
+        #[cfg(unix)]
+        runtime.retain_shared_codex_from_env(&launch_env.extra);
+        Ok(runtime)
     }
 
     // Runtime construction needs to thread PTY size, environment, theme, render hooks, and detection policy together.
@@ -821,6 +829,8 @@ impl TerminalRuntime {
             managed_launch_pending,
             detection_context,
             kimi_code_home,
+            #[cfg(unix)]
+            shared_codex: Mutex::new(None),
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_transaction: Default::default(),
