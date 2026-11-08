@@ -181,6 +181,10 @@ pub struct TerminalRuntime {
     /// call when one is.
     #[cfg(unix)]
     shared_codex: Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>>,
+    /// Test stand-in for the admission port. Empty in production tests, so
+    /// admission still uses the pane runtime above.
+    #[cfg(all(test, unix))]
+    native_input_override: Mutex<Option<native_input::NativeInputHandle>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_transaction: launch_transaction::LaunchTransaction,
@@ -382,6 +386,26 @@ impl TerminalRuntime {
     /// still move onto a worker; an empty slot reports no session.
     #[cfg(unix)]
     pub(crate) fn native_input(&self) -> Option<native_input::NativeInputHandle> {
-        Some(Arc::new(native_input::PaneCodex::new(self.shared_codex_handle())))
+        #[cfg(test)]
+        if let Some(input) = self
+            .native_input_override
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        {
+            return Some(input);
+        }
+        Some(Arc::new(native_input::PaneCodex::new(
+            self.shared_codex_handle(),
+        )))
+    }
+
+    /// Install a test admission port. This does not construct a runtime.
+    #[cfg(all(test, unix))]
+    pub(crate) fn bind_native_input(&self, input: native_input::NativeInputHandle) {
+        *self
+            .native_input_override
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(input);
     }
 }

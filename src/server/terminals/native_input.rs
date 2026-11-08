@@ -24,7 +24,5 @@ pub(in crate::server) fn test_bind(
         .lock()
         .unwrap_or_else(|error| error.into_inner()) =
         Some(crate::agents::providers::codex::native::test_support::connected_runtime(socket));
-    runtime
-        .native_input()
-        .expect("pane codex runtime")
+    runtime.native_input().expect("pane codex runtime")
 }

@@ -77,6 +77,10 @@ pub(super) enum PaneLaunchIdentity {
 }
 
 impl PaneLaunchEnv {
+    pub(crate) fn extra(&self) -> &[(String, String)] {
+        &self.extra
+    }
+
     pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
         Self {
             extra,
@@ -831,6 +835,8 @@ impl TerminalRuntime {
             kimi_code_home,
             #[cfg(unix)]
             shared_codex: Arc::new(Mutex::new(None)),
+            #[cfg(all(test, unix))]
+            native_input_override: Mutex::new(None),
             preserve_processes_on_drop: false,
             shell_integration: None,
             launch_transaction: Default::default(),

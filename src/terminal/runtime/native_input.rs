@@ -36,9 +36,7 @@ pub(crate) trait NativeInput: Send + Sync {
 pub(crate) type NativeInputHandle = Arc<dyn NativeInput>;
 
 /// Forwards admission to the pane-owned runtime. This is not a second runtime.
-pub(crate) struct PaneCodex(
-    Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>>,
-);
+pub(crate) struct PaneCodex(Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>>);
 
 impl PaneCodex {
     pub(super) fn new(
@@ -63,7 +61,9 @@ impl NativeInput for PaneCodex {
 
     fn has_session(&self) -> bool {
         match self.0.try_lock() {
-            Ok(runtime) => runtime.as_ref().is_some_and(|runtime| runtime.has_session()),
+            Ok(runtime) => runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.has_session()),
             // The app thread must not wait. A held lock is an in-flight call
             // on this same runtime, so admission still proceeds.
             Err(_) => true,
@@ -97,9 +97,9 @@ impl NativeInput for PaneCodex {
             .unwrap_or_else(|error| error.into_inner())
             .as_mut()
             .and_then(|runtime| {
-                runtime.interrupt(thread, deadline).map(|result| {
-                    result.map(|turn_id| NativeInterruptCompletion { turn_id })
-                })
+                runtime
+                    .interrupt(thread, deadline)
+                    .map(|result| result.map(|turn_id| NativeInterruptCompletion { turn_id }))
             })
     }
 }
