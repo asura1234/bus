@@ -214,6 +214,9 @@ fn serve_connection(
 }
 
 #[cfg(test)]
+#[path = "tests/page_render_test.rs"]
+mod page_render_tests;
+#[cfg(test)]
 #[path = "tests/server_test.rs"]
 mod tests;
 
