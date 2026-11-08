@@ -8,12 +8,20 @@ impl BusState {
         self.match_owned_claude_paste(&mut callback);
         let agent = callback.agent_id;
         let occurred_at_ms = callback.occurred_at_ms;
-        let current = self.agents.get(&agent).and_then(|a| a.current_request);
+        let before = self.agents.get(&agent).and_then(|a| a.current_request);
         let final_event =
             matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
         let reply_event = final_event.is_some();
         let started_event = matches!(callback.kind, CallbackEventKind::PromptStarted);
         let disposition = self.accept_callback_unrecorded(callback);
+        // Retry acceptance rebinds current_request onto the steered member.
+        // A completed final clears it, so that path keeps the request that
+        // was current when the callback arrived.
+        let current = self
+            .agents
+            .get(&agent)
+            .and_then(|agent_state| agent_state.current_request)
+            .or(before);
         if let Some(callback) = final_event {
             self.record_worker_final(&callback, &disposition);
         }
