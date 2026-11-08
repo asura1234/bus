@@ -42,9 +42,10 @@ you saw. You do not decide what the product should do, and you never change the 
   colours for a separate accessible palette, some barely different (`#dd00ff` to `#dd33ff`),
   some far apart (`#aa7733` to `#eebbff`): compare `cells`, do not eyeball.
 - The add-agent form: providers are hits `provider:claude|codex|cursor`; its PWD field starts
-  as `~/`. While path suggestions show, Tab/Shift+Tab in PWD only move the highlight (the text
-  stays as typed) and Enter completes the highlighted path without adding the agent; with the
-  list closed, Tab moves to the next field.
+  as `~/`. Up/Down move the PWD suggestion highlight and leave the typed text unchanged.
+  Tab/Shift+Tab move focus to the next or previous field even while suggestions are shown.
+  Enter submits Add from Name, PWD and Additional launch args, using the typed directory.
+  In the file picker, Tab still completes a path.
 - The recipient picker (Ctrl+P): rows are hits `recipient:NAME`; the All row is
   `recipient:none`.
 - Drafts: the composer text reaches the saved `state.json` only when you switch rooms or quit,

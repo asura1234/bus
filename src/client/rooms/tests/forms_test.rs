@@ -588,88 +588,196 @@ fn provider_menu_erases_the_pwd_suffix_under_its_choice() {
     );
 }
 
-#[test]
-fn pwd_tab_moves_the_suggestion_highlight_and_enter_takes_the_path_without_adding() {
+fn agent_form_with_open_pwd_suggestions(master: bool) -> BusUi {
     use crate::agents::providers::suggest::PathSuggestion;
-    // The room form and the MASTER (orchestrator) form share this key handling.
-    for master in [false, true] {
-        let (mut ui, room, _) = fixture();
-        let orchestrates = master.then_some(forms::Orchestrates(Some(room)));
-        let prompt = master.then(|| {
+    let (mut ui, room, _) = fixture();
+    ui.form = Some(forms::Form::Agent {
+        name: editor::Editor::new("frontend".into()),
+        provider: Some(Provider::ClaudeCode),
+        provider_cursor: Provider::ClaudeCode,
+        cwd: editor::Editor::new("/projects/fr".into()),
+        args: Box::new(editor::Editor::new(String::new())),
+        field: 2,
+        orchestrates: master.then_some(forms::Orchestrates(Some(room))),
+        prompt: master.then(|| {
             Box::new(forms::PromptField {
                 editor: editor::Editor::new("You orchestrate.".into()),
                 filled: String::new(),
             })
-        });
-        ui.form = Some(forms::Form::Agent {
-            name: editor::Editor::new("frontend".into()),
-            provider: Some(Provider::ClaudeCode),
-            provider_cursor: Provider::ClaudeCode,
-            cwd: editor::Editor::new("/projects/fr".into()),
-            args: Box::new(editor::Editor::new(String::new())),
-            field: 2,
-            orchestrates,
-            prompt,
-        });
-        ui.receive_event(BusEvent::Suggestions {
-            query_id: ui.suggestions.query_id,
-            result: Ok([
-                "/projects/frontend",
-                "/projects/framework",
-                "/projects/fresh",
-            ]
-            .into_iter()
-            .map(|path| PathSuggestion {
-                path: path.into(),
-                is_directory: true,
-            })
-            .collect()),
-        });
-        let added_cwd = |ui: &BusUi| {
-            ui.pending.iter().find_map(|p| match &p.command {
-                BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => {
-                    Some(input.cwd.clone())
-                }
-                _ => None,
-            })
-        };
-        let cwd_text =
-            |ui: &mut BusUi| ui.form.as_mut().unwrap().editor_mut().unwrap().text.clone();
-        let field = |ui: &BusUi| match &ui.form {
-            Some(forms::Form::Agent { field, .. }) => *field,
-            _ => usize::MAX,
-        };
+        }),
+    });
+    ui.receive_event(BusEvent::Suggestions {
+        query_id: ui.suggestions.query_id,
+        result: Ok([
+            "/projects/frontend",
+            "/projects/framework",
+            "/projects/fresh",
+        ]
+        .into_iter()
+        .map(|path| PathSuggestion {
+            path: path.into(),
+            is_directory: true,
+        })
+        .collect()),
+    });
+    // Hits must exist: the old handler ignores Tab until the list is drawn.
+    room_screen(&mut ui, 120, 40);
+    ui
+}
 
-        room_screen(&mut ui, 120, 40);
-        // Tab walks the list and wraps; the field text and focus stay put.
-        for expected in [1, 2, 0, 1] {
-            key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
-            assert_eq!(ui.suggestions.selected, expected);
-            assert_eq!(cwd_text(&mut ui), "/projects/fr");
-            assert_eq!(field(&ui), 2);
-        }
-        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
-        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
-        assert_eq!(ui.suggestions.selected, 2, "Shift+Tab walks back and wraps");
-        assert_eq!(cwd_text(&mut ui), "/projects/fr");
-        assert_eq!(added_cwd(&ui), None);
+fn agent_focus(ui: &BusUi) -> (usize, usize, String) {
+    let field = match &ui.form {
+        Some(forms::Form::Agent { field, .. }) => *field,
+        _ => usize::MAX,
+    };
+    let cwd = match &ui.form {
+        Some(forms::Form::Agent { cwd, .. }) => cwd.text.clone(),
+        _ => String::new(),
+    };
+    (field, ui.suggestions.selected, cwd)
+}
 
-        // Enter takes the highlighted path into PWD and closes the list, nothing more.
-        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(cwd_text(&mut ui), "/projects/fresh/");
-        assert!(ui.suggestions.entries.is_empty());
-        assert_eq!(field(&ui), 2);
+fn submitted_launch(ui: &BusUi) -> Option<(String, String)> {
+    ui.pending
+        .iter()
+        .find_map(|pending| match &pending.command {
+            BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => {
+                Some((input.cwd.clone(), input.extra_args.clone()))
+            }
+            _ => None,
+        })
+}
+
+#[test]
+fn tab_moves_agent_form_focus_while_pwd_suggestions_are_open() {
+    for master in [false, true] {
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
+        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
         assert_eq!(
-            added_cwd(&ui),
-            None,
-            "Enter on a suggestion must not add the agent"
+            agent_focus(&ui),
+            (3, 0, "/projects/fr".to_string()),
+            "Tab must focus Additional launch args; master={master}"
+        );
+        assert_eq!(submitted_launch(&ui), None);
+        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        let after_args = if master { 4 } else { 0 };
+        assert_eq!(
+            agent_focus(&ui).0,
+            after_args,
+            "the next Tab leaves Additional launch args; master={master}"
         );
 
-        // With the list closed, Tab moves fields and Enter adds as before.
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
+        key(&mut ui, KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(
+            agent_focus(&ui),
+            (1, 0, "/projects/fr".to_string()),
+            "Shift+Tab must focus Agent, not the previous suggestion; master={master}"
+        );
+    }
+}
+
+#[test]
+fn up_and_down_are_the_only_pwd_list_navigation() {
+    for master in [false, true] {
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(
+            agent_focus(&ui),
+            (2, 2, "/projects/fr".to_string()),
+            "Down moves the highlight and stops on the last row; master={master}"
+        );
+        assert_eq!(submitted_launch(&ui), None);
+        key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(agent_focus(&ui).1, 1);
+        key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            agent_focus(&ui),
+            (2, 0, "/projects/fr".to_string()),
+            "Up moves the highlight and stops on the first row; master={master}"
+        );
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
         key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
-        assert_eq!(field(&ui), 3);
+        assert_eq!(
+            agent_focus(&ui),
+            (3, 1, "/projects/fr".to_string()),
+            "Tab must not move the directory highlight; master={master}"
+        );
+    }
+}
+
+#[test]
+fn enter_submits_the_agent_form_from_each_unambiguous_field() {
+    for master in [false, true] {
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
         key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(added_cwd(&ui).as_deref(), Some("/projects/fresh/"));
+        assert_eq!(
+            submitted_launch(&ui),
+            Some(("/projects/fr".into(), String::new())),
+            "Enter in PWD must Add the typed directory; master={master}"
+        );
+        assert_eq!(agent_focus(&ui).2, "/projects/fr");
+
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
+        ui.action(render::Action::Field(0));
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            submitted_launch(&ui).map(|(cwd, _)| cwd),
+            Some("/projects/fr".into()),
+            "Enter in Name must Add; master={master}"
+        );
+
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
+        if let Some(forms::Form::Agent { field, args, .. }) = &mut ui.form {
+            *field = 3;
+            *args = Box::new(editor::Editor::new("--verbose".into()));
+        }
+        room_screen(&mut ui, 120, 40);
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            submitted_launch(&ui),
+            Some(("/projects/fr".into(), "--verbose".into())),
+            "Enter in Additional launch args must Add; master={master}"
+        );
+
+        let mut ui = agent_form_with_open_pwd_suggestions(master);
+        if let Some(forms::Form::Agent {
+            field, provider, ..
+        }) = &mut ui.form
+        {
+            *field = 1;
+            *provider = None;
+        }
+        room_screen(&mut ui, 120, 40);
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            submitted_launch(&ui),
+            None,
+            "Enter on Agent chooses the model; master={master}"
+        );
+        assert!(matches!(
+            &ui.form,
+            Some(forms::Form::Agent {
+                provider: Some(Provider::ClaudeCode),
+                field: 2,
+                ..
+            })
+        ));
+
+        if master {
+            let mut ui = agent_form_with_open_pwd_suggestions(true);
+            ui.action(render::Action::Field(forms::PROMPT_FIELD));
+            key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(submitted_launch(&ui), None);
+            assert!(matches!(
+                &ui.form,
+                Some(forms::Form::Agent { prompt: Some(prompt), .. })
+                    if prompt.editor.text.contains('\n')
+            ));
+        }
     }
 }
 
@@ -717,7 +825,7 @@ fn ctrl_enter_confirms_the_typed_pwd_even_with_directory_suggestions_open() {
 }
 
 #[test]
-fn master_pwd_suggestions_are_visible_before_enter_completes_at_120x40() {
+fn master_pwd_suggestions_stay_visible_and_enter_submits_the_typed_directory() {
     let (mut ui, room, _) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let master = snapshot.state.ensure_master_room();
@@ -750,7 +858,7 @@ fn master_pwd_suggestions_are_visible_before_enter_completes_at_120x40() {
         assert!(screen.contains("System prompt"), "{screen}");
         assert!(screen.contains("Add (Enter)"), "{screen}");
         assert!(screen.contains("/projects/frontend/"), "{screen}");
-        key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
         let screen = room_screen(&mut ui, 120, 40);
         let selected = ui.suggestions.selected;
         assert!(
@@ -762,13 +870,11 @@ fn master_pwd_suggestions_are_visible_before_enter_completes_at_120x40() {
         );
     }
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(
-        matches!(&ui.form, Some(forms::Form::Agent { cwd, field: 2, .. })
-        if cwd.text == "/projects/fresh/")
-    );
-    assert!(!ui.pending.iter().any(|p| matches!(
-        p.command,
-        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+    assert!(matches!(&ui.form, Some(forms::Form::Agent { cwd, .. }) if cwd.text == "/projects/fr"));
+    assert!(ui.pending.iter().any(|p| matches!(
+        &p.command,
+        BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _)
+            if input.cwd == "/projects/fr"
     )));
     assert_ne!(master, room);
 }
