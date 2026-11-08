@@ -53,9 +53,9 @@ needed), recorded once before clients connect, preserving sessions, room binding
 
 A message has one ID and one recipient request per selected agent, tracking delivery and its answer.
 A provider turn is the agent's execution context. A same-room message can steer into a running turn
-and join its group; `--queue` gets an independent idle turn. A cross-room message waits for the next
-turn. Explicit correlated replies complete individual requests without ending the turn; an eventual
-final answers only the group's still-outstanding requests.
+and join its group; `--queue` gets an independent idle turn. Ordinary agent-authored orchestrator requests always
+queue independently without steering or coalescing; developer steering is unchanged. Cross-room messages wait for a new turn.
+Explicit replies complete individual requests without ending the turn; the final answers only outstanding group requests.
 
 A reply lands in the message's room, equally for developer and agent senders. A turn no message started
 posts in the orchestrator's work room. A captured Stop answer ends matching requests immediately,

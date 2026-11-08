@@ -1709,3 +1709,207 @@ async fn paused_idle_cycle_preserves_reply_across_scheduling_gap_before_freeze()
     f.stop(agent, turn, "late-gap-reply", json!([]), json!([]));
     f.assert_reply(request, "late-gap-reply");
 }
+
+#[tokio::test]
+async fn orchestrator_independent_claude_request_never_inherits_another_workers_final() {
+    orchestrator_request_incident(Provider::ClaudeCode).await;
+}
+
+#[tokio::test]
+async fn orchestrator_independent_codex_request_never_inherits_another_workers_final() {
+    orchestrator_request_incident(Provider::Codex).await;
+}
+
+async fn orchestrator_request_incident(provider: Provider) {
+    let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+    let (sender, other) = (f.agents[0], f.agents[1]);
+    let orch = f.add_owned(f.master, provider, "orch", true);
+    let lead = f.send(orch, f.work, "first worker question", false, Some(sender));
+    f.tick();
+    let payload = f.typed(orch).last().unwrap().clone();
+    f.start(orch, "first-turn", &payload);
+    let queued = f.send(orch, f.work, "second worker question", false, Some(other));
+    f.tick();
+    // Replay the incident's same-turn submit if admission allowed steering.
+    if f.typed(orch).len() > 1 {
+        let payload = f.typed(orch).last().unwrap().clone();
+        f.start(orch, "first-turn", &payload);
+    }
+    f.stop(
+        orch,
+        "first-turn",
+        "answer only for first worker",
+        json!([]),
+        json!([]),
+    );
+    assert!(
+        f.state().request(queued).unwrap().reply().is_none(),
+        "{provider:?}: an unrelated final answered the queued request: {:?}",
+        f.state().request(queued)
+    );
+    assert_eq!(f.state().request(queued).unwrap().group, None);
+    f.assert_reply(lead, "answer only for first worker");
+    f.elapse(31_000);
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(payload.contains("second worker question"), "{payload}");
+    f.start(orch, "second-turn", &payload);
+    let message = f.state().request(queued).unwrap().prompt.id.0.to_string();
+    for _ in 0..2 {
+        let reply = f.call(
+            "message.send",
+            json!({"reply_to":message,"as":orch.0.to_string(),"text":"second worker answer"}),
+        );
+        assert_eq!(reply["stage"], "replied");
+    }
+    f.stop(
+        orch,
+        "second-turn",
+        "later generic final",
+        json!([]),
+        json!([]),
+    );
+    f.elapse(31_000);
+    f.assert_reply(queued, "second worker answer");
+    f.assert_reply(lead, "answer only for first worker");
+}
+
+#[tokio::test]
+async fn orchestrator_independent_requests_remain_separate_when_idle_and_after_restart() {
+    for (restart, count) in [(false, 3), (true, 1)] {
+        let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+        let orch = f.add_orchestrator();
+        f.status(orch, AgentState::Working);
+        f.tick();
+        let mut requests = Vec::new();
+        for i in 0..count {
+            let sender = f.agents[i % 2];
+            // Equal text does not turn distinct message IDs into one request.
+            requests.push(f.send(orch, f.work, "independent question", false, Some(sender)));
+        }
+        if restart {
+            f.reopen();
+        }
+        f.status(orch, AgentState::Idle);
+        f.tick();
+        for (i, request) in requests.iter().enumerate() {
+            assert_eq!(f.state().request(*request).unwrap().group, None);
+            assert_eq!(f.typed(orch).len(), i + 1);
+            for waiting in &requests[i + 1..] {
+                let r = f.state().request(*waiting).unwrap();
+                assert_eq!(r.phase, RequestPhase::Queued, "{r:?}");
+                assert_eq!(r.group, None);
+                assert!(r.reply().is_none());
+            }
+            let payload = f.typed(orch).last().unwrap().clone();
+            let turn = format!("independent-{i}");
+            f.start(orch, &turn, &payload);
+            f.stop(orch, &turn, &format!("answer {i}"), json!([]), json!([]));
+            f.elapse(31_000);
+            f.assert_reply(*request, &format!("answer {i}"));
+        }
+        assert_eq!(f.typed(orch).len(), count);
+    }
+}
+
+#[tokio::test]
+async fn orchestrator_independent_policy_preserves_developer_and_worker_steering() {
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        for orchestrator in [false, true] {
+            let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+            let (sender, other) = (f.agents[0], f.agents[1]);
+            let target_room = if orchestrator { f.master } else { f.work };
+            let target = f.add_owned(target_room, provider, "target", orchestrator);
+            let lead = f.send(target, f.work, "original request", false, Some(sender));
+            f.tick();
+            let payload = f.typed(target).last().unwrap().clone();
+            f.start(target, "shared-turn", &payload);
+            let author = (!orchestrator).then_some(other);
+            let steer = f.send(target, f.work, "intentional steering", false, author);
+            f.tick();
+            assert_eq!(f.state().request(steer).unwrap().group, Some(lead));
+            let payload = f.typed(target).last().unwrap().clone();
+            f.start(target, "shared-turn", &payload);
+            f.stop(target, "shared-turn", "shared answer", json!([]), json!([]));
+            f.elapse(31_000);
+            f.assert_reply(lead, "shared answer");
+            // The worker-led group's one MASTER decision is checked with its lead.
+            let member = f.state().request(steer).unwrap();
+            assert_eq!(member.phase, RequestPhase::Completed);
+            assert_eq!(member.reply(), f.state().request(lead).unwrap().reply());
+        }
+    }
+}
+
+#[tokio::test]
+async fn legacy_agent_request_does_not_enter_claude_autonomous_turn() {
+    let mut f = Delivery::new(&[Provider::ClaudeCode], true);
+    let orch = f.agents[0];
+    let sender = f.add_owned(f.master, Provider::Codex, "sender", false);
+    f.human_start(orch, "autonomous", "unrelated autonomous work");
+    let queued = f.send(
+        orch,
+        f.master,
+        "legacy independent request",
+        false,
+        Some(sender),
+    );
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    saved["state"]["requests"]
+        .as_object_mut()
+        .unwrap()
+        .get_mut(&queued.0.to_string())
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("queue_only");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    f.reopen();
+    assert!(
+        f.typed(orch).is_empty(),
+        "legacy independent request entered the autonomous turn: {:?}",
+        f.state().request(queued).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn agent_orchestrator_question_still_batches_its_bus_routing_envelope() {
+    let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+    let sender = f.agents[0];
+    let orch = f.add_orchestrator();
+    f.status(orch, AgentState::Working);
+    f.tick();
+    let lead = f.send(orch, f.work, "AUTHORED_QUESTION", false, Some(sender));
+    let hidden = f.send(orch, f.work, "HIDDEN_ROUTING_ENVELOPE", false, Some(sender));
+    let path = f.dir.join("state.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let envelope = saved["state"]["requests"]
+        .as_object_mut()
+        .unwrap()
+        .get_mut(&hidden.0.to_string())
+        .unwrap()
+        .as_object_mut()
+        .unwrap();
+    envelope.insert("bus_generated".into(), json!(true));
+    envelope.remove("queue_only");
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    f.reopen();
+    f.status(orch, AgentState::Idle);
+    f.tick();
+    let typed = f.typed(orch);
+    assert!(
+        typed.iter().any(|payload| {
+            payload.contains("AUTHORED_QUESTION") && payload.contains("HIDDEN_ROUTING_ENVELOPE")
+        }),
+        "bus routing envelope was not batched into the authored question: {typed:?}; lead={:?}; envelope={:?}",
+        f.state().request(lead),
+        f.state().request(hidden)
+    );
+    assert_eq!(
+        f.state().request(hidden).unwrap().group,
+        Some(lead),
+        "routing envelope must share the authored question's reply"
+    );
+}

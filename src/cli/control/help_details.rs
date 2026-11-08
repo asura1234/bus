@@ -413,7 +413,9 @@ Agent posts to you always notify the developer in the TUI in every room; only
 that tag for hard blockers. The YOU checkbox controls audio only; developer sends
 never notify. See docs/developer-notifications.md for setup and deduplication.
 Use --file repeatedly; attachments are validated before queueing.
-Same-room working recipients receive steering into their current turn group;
+Ordinary agent-authored requests to orchestrators get independent queued turns
+and replies, without steering or coalescing. Developer steering is unchanged.
+Other same-room working recipients receive steering into their current turn group;
 Claude/Codex take it into that turn, Cursor into its next generation answering
 the group. --queue gives its own idle turn/reply and never joins. Cross-room
 messages wait for a new turn. Blocked/launching recipients queue; accumulated

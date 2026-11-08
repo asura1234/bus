@@ -6,6 +6,7 @@ use super::{
     DELIVERED_STALL_MS, QUEUED_STALL_MS,
 };
 
+mod policy;
 mod queue_order;
 mod rejection;
 mod submit;
@@ -500,7 +501,7 @@ impl BusState {
         {
             return None;
         }
-        (!queued.queue_only && queued.room_id == lead.room_id).then_some((first, lead.id))
+        (self.can_join_turn(queued) && queued.room_id == lead.room_id).then_some((first, lead.id))
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it
@@ -612,19 +613,28 @@ impl BusState {
 
     /// Joins the queued messages that piled up while the agent could not take
     /// them into `lead`'s prompt: consecutive ones from the queue front, up to
-    /// the first sent with `--queue`, from another room, or in another
-    /// orchestrator priority class. Returns the text to type, each part
-    /// marked with its sender and time, or `None` when `lead` goes alone.
+    /// the first sent with `--queue`, an independent request, from another
+    /// room, or in another orchestrator priority class. An ordinary agent
+    /// request stays out of every other turn, and still anchors the joinable
+    /// followers of its own turn, including its routing envelope. An explicit
+    /// `--queue` lead, including a dialog notice, goes alone. Returns the text
+    /// to type, each part marked with its sender and time, or `None` when
+    /// `lead` goes alone.
     pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
         let request = self.requests.get(&lead)?;
         let (agent_id, room) = (request.agent_id, request.room_id);
+        let generated = request.bus_generated;
+        let author = request.prompt.author.clone();
         let priority = self
             .agents
             .get(&agent_id)
             .is_some_and(|agent| agent.orchestrates.is_some())
             .then(|| self.orchestrator_queue_class(lead));
         let queue = self.queues.get(&agent_id)?;
-        if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
+        // `can_join_turn` is false for this lead so another turn cannot absorb
+        // it. That must not also drop the bus-generated envelope behind it.
+        let anchors_own_envelope = self.agent_request_queues(agent_id, &author, generated);
+        if queue.first() != Some(&lead) || !(self.can_join_turn(request) || anchors_own_envelope) {
             return None;
         }
         let members: Vec<RequestId> = queue[1..]
@@ -633,7 +643,7 @@ impl BusState {
             .take_while(|id| {
                 self.requests
                     .get(id)
-                    .is_some_and(|r| !r.queue_only && r.room_id == room)
+                    .is_some_and(|r| self.can_join_turn(r) && r.room_id == room)
                     && priority.is_none_or(|class| self.orchestrator_queue_class(*id) == class)
             })
             .collect();
