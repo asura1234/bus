@@ -482,7 +482,7 @@ impl Worker {
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
-        self.trace_native_request(agent, request)?;
+        self.trace_provider_retry(agent, request);
         let started = std::time::Instant::now();
         let _span = tracing::info_span!(
             "bus.delivery",
@@ -498,6 +498,7 @@ impl Worker {
         );
         let method = submission_method(agent, text, terminal, pane, steer);
         let response = self.transport.request(method);
+        self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
         let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
@@ -601,7 +602,6 @@ impl Worker {
         state.begin_dialog_notice_write(request, io::now_ms());
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
-        self.note_native_requested(request, io::now_ms());
         let started = std::time::Instant::now();
         let response =
             self.transport
@@ -614,6 +614,7 @@ impl Worker {
                     expected_session_id: session.clone(),
                     steer: true,
                 }));
+        self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
         let outcome = match response {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
@@ -645,16 +646,6 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         self.save(state)?;
         self.note_withdrawn(agent, request, &outcome);
-        Ok(())
-    }
-
-    fn trace_native_request(
-        &mut self,
-        agent: &RoomAgent,
-        request: RequestId,
-    ) -> Result<(), String> {
-        self.trace_provider_retry(agent, request);
-        self.note_native_requested(request, io::now_ms());
         Ok(())
     }
 }

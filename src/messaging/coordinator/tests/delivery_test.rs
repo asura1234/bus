@@ -2377,6 +2377,94 @@ fn stale_delivery_wait_does_not_mark_the_request_that_is_sent() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+struct NativeStampProbe {
+    state_path: PathBuf,
+    during_request: Arc<Mutex<Option<u64>>>,
+    reject: bool,
+}
+
+impl Transport for NativeStampProbe {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let Method::AgentPromptIfIdle(_) = &method else {
+            panic!("unexpected call during native stamp probe: {method:?}");
+        };
+        let loaded = JsonStore::new(self.state_path.clone())
+            .load()
+            .unwrap()
+            .unwrap();
+        *self.during_request.lock().unwrap() = loaded
+            .requests()
+            .find_map(|request| request.latency.native_requested_at_ms);
+        if self.reject {
+            return Err(TransportError {
+                timestamps: Default::default(),
+                message: "prompt was not shown".into(),
+                code: Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN.into()),
+                definitely_rejected: true,
+            });
+        }
+        Ok(ResponseResult::AgentPrompted {
+            agent: native_info("pane", "codex", "session"),
+            timestamps: Default::default(),
+        })
+    }
+}
+
+fn deliver_with_stamp_probe(reject: bool) -> (Option<u64>, RequestPhase, Option<u64>) {
+    let during = Arc::new(Mutex::new(None));
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.transport = Box::new(NativeStampProbe {
+        state_path: dir.join("state.json"),
+        during_request: Arc::clone(&during),
+        reject,
+    });
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "stamp after the transport returns"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+    worker.submit_ready().unwrap();
+    let phase = worker.state.request(request).unwrap().phase;
+    let after = worker
+        .state
+        .request(request)
+        .unwrap()
+        .latency
+        .native_requested_at_ms;
+    let during = *during.lock().unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    (during, phase, after)
+}
+
+#[test]
+fn native_requested_is_journaled_after_the_transport_returns() {
+    let (during, phase, after) = deliver_with_stamp_probe(false);
+    assert_eq!(phase, RequestPhase::Active);
+    assert_eq!(
+        during, None,
+        "the native request stamp is not durable until the transport returns"
+    );
+    assert!(
+        after.is_some(),
+        "a completed transport still records native_requested"
+    );
+}
+
+#[test]
+fn rejected_native_attempt_does_not_keep_the_request_stamp() {
+    let (during, phase, after) = deliver_with_stamp_probe(true);
+    assert_eq!(phase, RequestPhase::Queued);
+    assert_eq!(during, None);
+    assert_eq!(
+        after, None,
+        "a rejected attempt clears native_requested before the outcome save"
+    );
+}
+
 #[test]
 fn grok_resume_of_superseded_session_is_not_silently_retired() {
     // Grok 1.0.70 `/resume <id>` reloads a session in place and reports
