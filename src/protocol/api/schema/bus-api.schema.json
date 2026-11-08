@@ -4420,7 +4420,7 @@
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
             "compaction_banner": {
-              "description": "Grok or Kimi is showing a compaction banner on this pane. False when\nthe screen was not read. Claude counts compactions from its hook.",
+              "description": "Grok is showing a compaction banner on this pane. False when the\nscreen was not read. Claude counts compactions from its hook.",
               "type": "boolean"
             },
             "cwd": {
