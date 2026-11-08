@@ -135,6 +135,83 @@ fn room_created_ack_after_settlement_completes_its_origin_form() {
 }
 
 #[test]
+fn room_created_ack_after_dismiss_stays_in_the_selected_room() {
+    let (mut ui, first, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let selected = snapshot.state.create_room("selected").unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    submit_room_form(&mut ui, "created-room");
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    settle_creation_command(&mut ui);
+    ui.action(render::Action::Room(selected));
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(selected));
+    assert_ne!(ui.room, Some(first));
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let created = snapshot.state.create_room("created-room").unwrap();
+    ui.receive_event(BusEvent::RoomCreated {
+        room: created,
+        command_id,
+    });
+
+    assert_eq!(
+        ui.room,
+        Some(selected),
+        "a stale acknowledgement left the room selected before it arrived"
+    );
+    assert!(
+        !ui.pending.iter().any(|pending| matches!(
+            pending.command,
+            BusCommand::SelectRoom(id) if id == created
+        )),
+        "a stale acknowledgement selected the created room"
+    );
+}
+
+#[test]
+fn agent_added_ack_after_esc_does_not_open_the_created_terminal() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().expect("creation origin").id;
+    settle_creation_command(&mut ui);
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(room));
+    assert!(ui.terminal.is_none());
+
+    let mut snapshot = (*ui.snapshot).clone();
+    let added = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+    ui.receive_event(BusEvent::AgentAdded {
+        agent: added,
+        command_id,
+    });
+
+    assert_eq!(ui.room, Some(room));
+    assert!(
+        ui.terminal.is_none(),
+        "a stale acknowledgement opened the created terminal after Esc"
+    );
+    assert!(
+        !ui.pending.iter().any(|pending| matches!(
+            pending.command,
+            BusCommand::FocusTerminal(id) if id == added
+        )),
+        "a stale acknowledgement focused the created terminal"
+    );
+}
+
+#[test]
 fn agent_added_ack_after_settlement_completes_its_origin_form() {
     let (mut ui, room, _) = fixture();
     submit_agent_form(&mut ui);

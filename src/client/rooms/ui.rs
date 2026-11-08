@@ -392,6 +392,14 @@ impl BusUi {
         if self.rename.is_some() {
             return false;
         }
+        // Esc and selecting a room clear the form and advance generation
+        // before a held acknowledgement is applied. A closed form is not
+        // enough to navigate: the stored generation may already be stale.
+        if let Some(Some(generation)) = form_generation {
+            if generation != self.form_generation {
+                return false;
+            }
+        }
         if self.form.is_none() {
             return true;
         }
