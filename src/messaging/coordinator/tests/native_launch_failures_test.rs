@@ -16,6 +16,7 @@ fn launch_metrics_definite_start_rejection_keeps_its_exact_cause() {
             agent,
             vec![],
             Err(TransportError {
+                timestamps: Default::default(),
                 code: code.map(str::to_owned),
                 message: "launch rejected".into(),
                 definitely_rejected: true,
@@ -45,6 +46,7 @@ fn launch_metrics_unknown_start_response_and_recoverable_shell_wait_stay_pending
             agent,
             vec![],
             Err(TransportError {
+                timestamps: Default::default(),
                 code: Some(code.into()),
                 message: "requires inspection".into(),
                 definitely_rejected: rejected,
@@ -82,12 +84,14 @@ impl Transport for RejectTerminal {
             assert!(attempt.launch_id.is_some());
             assert!(attempt.terminal_id.is_none());
             return Err(TransportError {
+                timestamps: Default::default(),
                 code: self.code.map(str::to_owned),
                 message: "terminal rejected".into(),
                 definitely_rejected: true,
             });
         }
         Err(TransportError {
+            timestamps: Default::default(),
             code: None,
             message: "no diagnostic native screen".into(),
             definitely_rejected: false,

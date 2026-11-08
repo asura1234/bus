@@ -168,6 +168,7 @@ impl Transport for StaleResume {
                 Ok(ResponseResult::AgentList { agents })
             }
             Method::TabCreate(_) => Err(TransportError {
+                timestamps: Default::default(),
                 code: None,
                 message: "lost tab create".into(),
                 definitely_rejected: false,
