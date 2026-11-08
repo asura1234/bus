@@ -928,3 +928,58 @@ fn delivery_rate_excludes_external_failures_and_pending() {
         assert!(rate.caption.contains("0 Bus failures"), "{}", rate.caption);
     }
 }
+
+// External-only and pending-only hours have no Bus denominator, so Delivery %
+// is absent. Drawing that absence as 0% puts the excluded outcome back on the axis.
+#[test]
+fn absent_delivery_rate_is_not_drawn_as_zero_percent() {
+    let external_only = snapshot(
+        &fixture_state([named_case("interrupted-before-start")]),
+        singapore_hour,
+    );
+    let hour = &external_only.all.hours[0];
+    assert!(hour.counts.attempts >= 1);
+    assert!(hour.counts.delivery_external >= 1);
+    assert_eq!(hour.counts.delivered, 0);
+    assert_eq!(hour.counts.delivery_bus, 0);
+    assert_eq!(hour.rates.delivery.percent, None);
+    assert_eq!(hour.rates.delivery_share.percent, None);
+    assert_eq!(hour.rates.delivery_share.denominator, 0);
+    assert!(
+        !hour.rates.delivery_share.caption.contains("0%"),
+        "{}",
+        hour.rates.delivery_share.caption
+    );
+    assert!(
+        hour.rates
+            .delivery_share
+            .caption
+            .contains("1 external failure"),
+        "{}",
+        hour.rates.delivery_share.caption
+    );
+
+    let pending = snapshot(
+        &fixture_state([named_case("awaiting-start")]),
+        singapore_hour,
+    );
+    let pending_hour = &pending.all.hours[0];
+    assert!(pending_hour.counts.open >= 1);
+    assert_eq!(pending_hour.counts.delivery_bus, 0);
+    assert_eq!(pending_hour.counts.delivered, 0);
+    assert_eq!(pending_hour.rates.delivery_share.percent, None);
+    assert_eq!(pending_hour.rates.delivery_share.denominator, 0);
+
+    let page = include_str!("../page.html");
+    let graph = page
+        .split_once("function renderGraph")
+        .expect("renderGraph")
+        .1
+        .split_once("function renderDetail")
+        .expect("renderDetail")
+        .0;
+    assert!(
+        !graph.contains("delivery_share.percent??0"),
+        "absent Delivery % is plotted as 0, so an external-only or pending-only hour sits on the axis"
+    );
+}
