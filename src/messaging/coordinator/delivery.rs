@@ -100,32 +100,7 @@ impl Worker {
             }) {
                 continue;
             }
-            let head = self.state.queued_requests(agent.id).first().copied();
-            // The flag belongs to the request about to be sent. A stale map
-            // entry for an older head must not mark this one.
-            let waited = head.is_some_and(|request| {
-                self.delivery_waits
-                    .get(&agent.id)
-                    .is_some_and(|(waited_for, _)| *waited_for == request)
-            });
-            if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
-                // Dialog blocks the send below without entering wait_reason.
-                // That function keeps its precedence, including the Codex
-                // first-session exception, so the hold is recorded here.
-                let reason =
-                    diagnostics::wait_reason(&agent).or(agent.dialog.then_some("agent_dialog"));
-                if let Some(reason) = reason {
-                    if self.delivery_waits.insert(agent.id, (request, reason))
-                        != Some((request, reason))
-                    {
-                        diagnostics::request(&self.state, request, "bus.delivery.wait", reason);
-                    }
-                } else {
-                    self.delivery_waits.remove(&agent.id);
-                }
-            } else {
-                self.delivery_waits.remove(&agent.id);
-            }
+            let waited = self.note_queued_delivery_wait(&agent);
             if self.withdrawn_at.contains_key(&agent.id) {
                 continue;
             }
@@ -187,6 +162,36 @@ impl Worker {
             self.deliver_queued_request(&agent, waited, steer_unbound)?;
         }
         Ok(())
+    }
+
+    /// Whether the queued head already waited for this agent.
+    ///
+    /// The flag belongs to the request about to be sent. A stale map entry for
+    /// an older head must not mark this one. Dialog blocks the send without
+    /// entering `wait_reason`; that function keeps its precedence, including
+    /// the Codex first-session exception, so the hold is recorded here.
+    fn note_queued_delivery_wait(&mut self, agent: &RoomAgent) -> bool {
+        let head = self.state.queued_requests(agent.id).first().copied();
+        let waited = head.is_some_and(|request| {
+            self.delivery_waits
+                .get(&agent.id)
+                .is_some_and(|(waited_for, _)| *waited_for == request)
+        });
+        if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
+            let reason = diagnostics::wait_reason(agent).or(agent.dialog.then_some("agent_dialog"));
+            if let Some(reason) = reason {
+                if self.delivery_waits.insert(agent.id, (request, reason))
+                    != Some((request, reason))
+                {
+                    diagnostics::request(&self.state, request, "bus.delivery.wait", reason);
+                }
+            } else {
+                self.delivery_waits.remove(&agent.id);
+            }
+        } else {
+            self.delivery_waits.remove(&agent.id);
+        }
+        waited
     }
 
     fn prepare_provider_retries(&self, state: &mut super::BusState, now_ms: u64) -> bool {
@@ -500,35 +505,7 @@ impl Worker {
         let response = self.transport.request(method);
         self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
-        let outcome = match response {
-            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
-                provider_session_id: identity.session_id.clone(),
-                provider_turn_id: None,
-            },
-            Ok(other) => SubmissionOutcome::Uncertain {
-                message: format!("Unexpected submit response; no automatic retry: {other:?}"),
-            },
-            Err(error)
-                if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) =>
-            {
-                SubmissionOutcome::ComposerBusy
-            }
-            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
-                message: error.message,
-            },
-            Err(error) => SubmissionOutcome::Uncertain {
-                message: format!(
-                    "Submit outcome unknown; no automatic retry: {}",
-                    error.message
-                ),
-            },
-        };
-        let outcome_name = match &outcome {
-            SubmissionOutcome::ComposerBusy => "composer_wait",
-            SubmissionOutcome::Confirmed { .. } => "confirmed",
-            SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
-            SubmissionOutcome::Uncertain { .. } => "uncertain",
-        };
+        let (outcome, outcome_name) = native_submit_outcome(response, &identity.session_id);
         tracing::info!(
             event = "bus.delivery.result",
             request_id = request.0,
@@ -648,6 +625,40 @@ impl Worker {
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }
+}
+
+fn native_submit_outcome(
+    response: Result<ResponseResult, TransportError>,
+    provider_session_id: &Option<String>,
+) -> (SubmissionOutcome, &'static str) {
+    let outcome = match response {
+        Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
+            provider_session_id: provider_session_id.clone(),
+            provider_turn_id: None,
+        },
+        Ok(other) => SubmissionOutcome::Uncertain {
+            message: format!("Unexpected submit response; no automatic retry: {other:?}"),
+        },
+        Err(error) if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) => {
+            SubmissionOutcome::ComposerBusy
+        }
+        Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
+            message: error.message,
+        },
+        Err(error) => SubmissionOutcome::Uncertain {
+            message: format!(
+                "Submit outcome unknown; no automatic retry: {}",
+                error.message
+            ),
+        },
+    };
+    let outcome_name = match &outcome {
+        SubmissionOutcome::ComposerBusy => "composer_wait",
+        SubmissionOutcome::Confirmed { .. } => "confirmed",
+        SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
+        SubmissionOutcome::Uncertain { .. } => "uncertain",
+    };
+    (outcome, outcome_name)
 }
 
 fn native_response_timestamps(
