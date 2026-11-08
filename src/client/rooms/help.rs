@@ -55,11 +55,10 @@ F6             Return from terminal to room
 Ctrl+C         In an agent terminal, interrupt the agent
 
 Forms
-Tab / Shift+Tab  Move fields; with PWD suggestions shown, move
-               the highlight (Tab completes a path in the file picker)
-Up / Down      Select path suggestions or agent type
-Enter          Take the highlighted PWD suggestion; add agent / room;
-               complete or add file
+Tab / Shift+Tab  Move to the next or previous field
+               (Tab completes a path in the file picker)
+Up / Down      Move through path suggestions or agent type
+Enter          Add agent / room; complete or add file
                (in a MASTER agent's system prompt, add a line)
 Ctrl+Enter     Confirm form
 Esc            Cancel

@@ -1229,7 +1229,7 @@ fn scrolled_master_sidebar_reaches_its_last_orchestrator_below_the_room_name() {
 }
 
 #[test]
-fn master_pwd_enter_completes_only_a_visible_highlight_when_more_than_three_suggestions_scroll() {
+fn master_pwd_list_scrolls_with_down_and_enter_submits_the_typed_directory() {
     let (mut ui, master, _, _, _) = master_fixture();
     ui.open_room(master);
     ui.action(render::Action::NewAgent);
@@ -1259,17 +1259,15 @@ fn master_pwd_enter_completes_only_a_visible_highlight_when_more_than_three_sugg
             "step {step}:\n{screen}"
         );
         if step + 1 < paths.len() {
-            key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+            key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
         }
     }
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(
-        matches!(&ui.form, Some(forms::Form::Agent { cwd, field: 2, .. })
-        if cwd.text == "/projects/f-echo/")
-    );
-    assert!(!ui.pending.iter().any(|p| matches!(
-        p.command,
-        BusCommand::AddAgent(_) | BusCommand::AddOrchestrator(..)
+    assert!(matches!(&ui.form, Some(forms::Form::Agent { cwd, .. }) if cwd.text == "/projects/f"));
+    assert!(ui.pending.iter().any(|p| matches!(
+        &p.command,
+        BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _)
+            if input.cwd == "/projects/f"
     )));
 }
 

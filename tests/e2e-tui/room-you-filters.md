@@ -6,7 +6,7 @@
 - The room header must show `# ROOM` on one row and, directly beneath it, right-aligned `[ ] * → You` followed by `[ ] You → *`. Checked controls read `[x]`. These filters hide nonmatching history directly; Ctrl+F contains only text search and narrows the already-filtered history.
 - Every numbered step is action → expected result. Capture snapshots/hits and a cell screenshot judged by the runner for each named visual state. State/history read through the scratch CLI may corroborate fixtures, not replace visible filter evidence. A captured mismatch is FAIL; unavailable required evidence is SKIP with reason.
 - **R(name), create a work room:** press Ctrl+Shift+R, type the name, press Enter, and verify `# name` opens.
-- **A(room, name), add a fake Claude worker:** click the room, press Ctrl+N, type the name, Tab to Agent, select Claude Code, replace PWD with the absolute scratch workspace, complete the highlighted path, leave additional args empty, and click Add. Accept hook setup only for the isolated scratch project if asked. Wait for the fake terminal, then press F6.
+- **A(room, name), add a fake Claude worker:** click the room, press Ctrl+N, type the name, Tab to Agent, select Claude Code, replace PWD with the absolute scratch workspace and a trailing slash, leave additional args empty, and press Enter. Accept hook setup only for the isolated scratch project if asked. Wait for the fake terminal, then press F6.
 - **P(names), select recipients:** press Ctrl+P, make exactly the named workers checked, then Esc.
 - Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake replies settle before judging history.
 

@@ -102,6 +102,8 @@ impl BusUi {
             self.help_form_key(code);
             return;
         }
+        // Up/Down are the only directory-list navigation. They move the highlight
+        // and leave the typed path and the focused field alone.
         if matches!(code, KeyCode::Up | KeyCode::Down) && !self.suggestions.entries.is_empty() {
             self.suggestions.selected = if code == KeyCode::Up {
                 self.suggestions.selected.saturating_sub(1)
@@ -111,13 +113,6 @@ impl BusUi {
             return;
         }
         if self.agent_choice_key(code) {
-            return;
-        }
-        // While the PWD list is shown, Tab/Shift+Tab only move the highlight and
-        // Enter takes the highlighted path: neither leaves the field nor adds the agent.
-        // Ctrl+Enter still confirms the typed directory, as with the list closed.
-        if matches!(self.form, Some(Form::Agent { .. })) && self.pwd_suggestion_key(code, modifiers)
-        {
             return;
         }
         // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
@@ -134,32 +129,30 @@ impl BusUi {
             self.insert("\n");
             return;
         }
+        // Enter activates Add from every other agent field, including PWD while
+        // its suggestions are open and Additional launch args. The typed directory
+        // is submitted; the highlight is not taken.
         if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
             self.add();
             return;
         }
+        // Tab and Shift+Tab only move focus, including while PWD suggestions are open.
+        if matches!(self.form, Some(Form::Agent { .. }))
+            && matches!(code, KeyCode::Tab | KeyCode::BackTab)
+        {
+            self.cycle_agent_field(code == KeyCode::BackTab);
+            return;
+        }
+        // The file picker still completes the highlighted path on Tab or Enter.
         if matches!(code, KeyCode::Tab | KeyCode::Enter) && !self.suggestions.entries.is_empty() {
             self.complete_path();
             return;
         }
-        if code == KeyCode::Enter && modifiers.contains(KeyModifiers::CONTROL) {
+        if code == KeyCode::Enter {
             self.add();
             return;
         }
-        if code == KeyCode::Tab || code == KeyCode::BackTab || code == KeyCode::Enter {
-            let count = self.form.as_ref().map_or(0, Form::agent_field_count);
-            if let Some(Form::Agent { field, .. }) = &mut self.form {
-                *field = if code == KeyCode::BackTab {
-                    (*field + count - 1) % count
-                } else {
-                    (*field + 1) % count
-                };
-                self.query_paths();
-                return;
-            }
-            if code == KeyCode::Enter {
-                self.add();
-            }
+        if code == KeyCode::Tab || code == KeyCode::BackTab {
             return;
         }
         if let KeyCode::Char(c) = code {
@@ -321,28 +314,19 @@ impl BusUi {
         false
     }
 
-    /// Handles a key while the agent form's PWD suggestions are expanded; false
-    /// when no list is shown or the key is not one of Tab, Shift+Tab or plain Enter.
-    fn pwd_suggestion_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
-        let count = self.suggestions.entries.len();
-        if count == 0
-            || self.form.as_ref().and_then(Form::path_query).is_none()
-            || !self
-                .view
-                .hits
-                .iter()
-                .any(|hit| hit.action == Action::Suggestion(self.suggestions.selected))
-        {
-            return false;
+    fn cycle_agent_field(&mut self, backward: bool) {
+        let count = self.form.as_ref().map_or(0, Form::agent_field_count);
+        if let Some(Form::Agent { field, .. }) = &mut self.form {
+            if count == 0 {
+                return;
+            }
+            *field = if backward {
+                (*field + count - 1) % count
+            } else {
+                (*field + 1) % count
+            };
         }
-        let selected = self.suggestions.selected;
-        match code {
-            KeyCode::Tab => self.suggestions.selected = (selected + 1) % count,
-            KeyCode::BackTab => self.suggestions.selected = (selected + count - 1) % count,
-            KeyCode::Enter if !modifiers.contains(KeyModifiers::CONTROL) => self.complete_path(),
-            _ => return false,
-        }
-        true
+        self.query_paths();
     }
 
     pub(super) fn query_paths(&mut self) {

@@ -25,8 +25,8 @@ directory ancestors. Use the driver's fake providers; no live model is needed.
 checkout's absolute path and the driver's scratch workspace path.
 
 1. Click MASTER and press Ctrl+N. Fill the name `wf-dev`, choose Claude Code,
-   set PWD to the scratch workspace (complete its path suggestion before leaving
-   the field), and select the default work room in Orchestrates room. Leave the
+   set PWD to the absolute scratch workspace with a trailing slash, Tab to
+   Orchestrates room, and leave the default work room selected. Leave the
    system prompt unedited and click Add. Accept hook consent only for that scratch
    workspace if shown. → An orchestrator exists in MASTER, targets the default
    work room, and its fake Claude terminal opens.
@@ -49,8 +49,8 @@ binary and no source checkout in either launch anchor. Record the binary path,
 working directory, and scratch data path.
 
 1. Click MASTER and press Ctrl+N. Fill the name `wf-release`, choose Claude Code,
-   set PWD to the scratch workspace (complete its path suggestion before leaving
-   the field), and select the default work room in Orchestrates room. Leave the
+   set PWD to the absolute scratch workspace with a trailing slash, Tab to
+   Orchestrates room, and leave the default work room selected. Leave the
    system prompt unedited and click Add. Accept hook consent only for that scratch
    workspace if shown. → An orchestrator exists in MASTER, targets the default
    work room, and its fake Claude terminal opens.
