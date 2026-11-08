@@ -102,10 +102,10 @@ default; add a second independent lane only when the change is high-risk
 (delivery, security, cross-cutting behavior) or the first lane is uncertain.
 Once the reviewer is Ready on a head, that phase closes:
 
-1. Prove the head can merge before spending a gate on it:
-   `git merge-tree --write-tree origin/<base> <head>` must produce a tree with no
-   conflicts. Converge a conflicted head onto the current base first - rebase a
-   short branch, merge the base into a long-lived one - then prove it again.
+1. Check that the PR is mergeable before spending a gate on it: GitHub reports a
+   conflict on the PR itself, so no local precheck is needed. Converge a
+   conflicted head onto the current base first - rebase a short branch, merge the
+   base into a long-lived one - and confirm the PR is mergeable before gating.
 2. Run the gate on that exact head. Gate-and-fix is a loop: fix PR-caused
    failures inside it and re-run until green; escalate only when the correct fix
    would change the PR's intended behavior. A gate whose run aborts because HEAD

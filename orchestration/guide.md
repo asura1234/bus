@@ -529,10 +529,10 @@ Run this audit every few events and on a timer while work remains open:
 - After a rebase, compare `git range-diff` or before/after PR diffs. Record an
   unchanged own diff to carry verification forward; re-run fast gates. Use the
   slow resource again only when the PR's own changes moved.
-- Prove a head can merge before spending a gate on it:
-  `git merge-tree --write-tree origin/<base> <head>` must report no conflicts.
-  Converge a conflicted head onto the current base first - rebase a short
-  branch, merge the base into a long-lived one - then prove it again.
+- Check that the PR is mergeable before spending a gate on it: GitHub reports a
+  conflict on the PR itself, so no local precheck is needed. Converge a
+  conflicted head onto the current base first - rebase a short branch, merge the
+  base into a long-lived one.
 - Merge every PR the moment its gate is green. Land small independent PRs
   first; converge a long-lived branch or train onto the current base and gate
   it with other merges frozen, so the base cannot move under the gate. A gate
