@@ -62,6 +62,7 @@ fn orchestrator_idle_submission_selects_original_developer_and_saves_a_clean_bat
         Provider::Codex,
         vec![Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "codex", "session"),
+            timestamps: Default::default(),
         })],
     );
     let orch = orchestrator(&mut worker, room);

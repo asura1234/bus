@@ -170,6 +170,7 @@ fn delete_unknown_launch_identity_fails_closed_after_native_ownership_lookup() {
             message: "ownership lookup failed".into(),
             code: None,
             definitely_rejected: false,
+            timestamps: Default::default(),
         }),
         Ok(ResponseResult::Ok {}),
     ] {
