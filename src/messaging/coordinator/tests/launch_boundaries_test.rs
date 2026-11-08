@@ -53,6 +53,44 @@ fn launch_metrics_unbound_resume_expires_on_authoritative_absence() {
     assert_eq!(saved["launch_attempts"]["1"]["cause"], "startup_timeout");
 }
 
+#[test]
+fn launch_metrics_listed_previous_terminal_expires_unbound_resume() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, u64::MAX);
+    let mut doc = serde_json::to_value(&worker.state).unwrap();
+    doc["launch_attempts"]["1"]["launch_id"] = serde_json::Value::Null;
+    doc["launch_attempts"]["1"]["terminal_id"] = serde_json::Value::Null;
+    doc["launch_attempts"]["1"]["kind"] = json!("resume");
+    let mut state: BusState = serde_json::from_value(doc.clone()).unwrap();
+    let previous = state.agent(agent).unwrap().clone();
+    let mut info = native_info("pane", "codex", "session");
+    info.terminal_id = "terminal".into();
+    info.native_ready = true;
+    info.interactive_ready = true;
+    info.agent_status = schema::AgentStatus::Idle;
+    crate::messaging::coordinator::launch_metrics::observe(&mut state, &previous, Some(&info), 100)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&state).unwrap()["launch_attempts"]["1"]["outcome"],
+        "pending",
+        "a listed previous terminal must not settle before the deadline"
+    );
+    doc["launch_attempts"]["1"]["deadline_at_ms"] = json!(0);
+    let mut state: BusState = serde_json::from_value(doc).unwrap();
+    crate::messaging::coordinator::launch_metrics::observe(&mut state, &previous, Some(&info), 100)
+        .unwrap();
+    let saved = serde_json::to_value(&state).unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(saved["launch_attempts"]["1"]["outcome"], "failed");
+    assert_eq!(saved["launch_attempts"]["1"]["cause"], "startup_timeout");
+    assert!(saved["launch_attempts"]["1"]["terminal_id"].is_null());
+    assert_eq!(
+        saved["agents"][agent.0.to_string()]["runtime_identity"]["terminal_id"],
+        "terminal"
+    );
+}
+
 // The existing submission revision is causal even when clocks tie. A new
 // message can also join an older running turn, whose lead remains current.
 fn bound_turn(fresh_member: bool) -> (BusState, AgentId, Worker, PathBuf) {

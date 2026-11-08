@@ -219,6 +219,61 @@ fn launch_metrics_uncertain_resume_tab_does_not_adopt_the_previous_terminal() {
 }
 
 #[test]
+fn launch_metrics_uncertain_resume_expires_while_previous_terminal_stays_listed() {
+    let _providers = provider_binaries();
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, u64::MAX);
+    let hooks = worker.data_dir.join(".codex/hooks.json");
+    let document = crate::agents::providers::hook_json::merge_hooks(
+        json!({}),
+        crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let mut state = worker.state.clone();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 1)
+        .unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(StaleResume {
+        state_path: dir.join("state.json"),
+        agent,
+        lists: 0,
+    });
+    let result = worker.resume_room(room).unwrap();
+    let reason = result["agents"][0]["reason"].as_str().unwrap_or("");
+    assert!(
+        reason.contains("Terminal creation outcome needs inspection"),
+        "probe must stop on the uncertain tab create: {result}"
+    );
+    worker.poll().unwrap();
+    let listed = ledger(&worker);
+    assert_eq!(listed["2"]["outcome"], "pending", "{listed}");
+    assert!(listed["2"]["cause"].is_null(), "{listed}");
+    assert!(listed["2"]["terminal_id"].is_null(), "{listed}");
+    let mut doc = serde_json::to_value(&worker.state).unwrap();
+    doc["launch_attempts"]["2"]["deadline_at_ms"] = json!(0);
+    worker.save(serde_json::from_value(doc).unwrap()).unwrap();
+    worker.poll().unwrap();
+    let saved = ledger(&worker);
+    let identity = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .runtime_identity
+        .terminal_id
+        .clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(saved["2"]["outcome"], "failed", "{saved}");
+    assert_eq!(saved["2"]["cause"], "startup_timeout", "{saved}");
+    assert!(saved["2"]["terminal_id"].is_null(), "{saved}");
+    assert_eq!(identity.as_deref(), Some("terminal"));
+}
+
+#[test]
 fn launch_metrics_explicit_resume_records_before_input_and_preserves_failed_predecessor() {
     let _providers = provider_binaries();
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);

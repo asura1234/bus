@@ -142,7 +142,8 @@ fn observe_generation(
     }
     // An identity already on the agent before this attempt must not fill an
     // unbound record. A still-listed previous terminal would otherwise settle
-    // an unsent resume as usable. Absence still times out that record later.
+    // an unsent resume as usable. Absence, or that same listing past the
+    // deadline, still times the unbound record out.
     let identity_predates_attempt = unbound_pending
         && previous.runtime_identity.launch_id == agent.runtime_identity.launch_id
         && previous.runtime_identity.terminal_id == agent.runtime_identity.terminal_id;
@@ -227,8 +228,20 @@ pub(super) fn observe(
         && record.terminal_id == agent.runtime_identity.terminal_id;
     if !matching {
         // A lost terminal-create response can leave the saved OLD identity on
-        // the agent. Fresh absence still bounds the new unbound attempt.
-        if record.terminal_id.is_none() && info.is_none() && now >= record.deadline_at_ms {
+        // the agent. Fresh absence, or that same identity still listed, bounds
+        // the new unbound attempt. Do not bind it: that would record the
+        // unsent resume as usable.
+        let previous_identity_still_listed = info.is_some_and(|listed| {
+            previous.runtime_identity.launch_id == agent.runtime_identity.launch_id
+                && previous.runtime_identity.terminal_id == agent.runtime_identity.terminal_id
+                && Some(listed.terminal_id.as_str())
+                    == agent.runtime_identity.terminal_id.as_deref()
+                && Some(listed.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
+        });
+        if record.terminal_id.is_none()
+            && now >= record.deadline_at_ms
+            && (info.is_none() || previous_identity_still_listed)
+        {
             settle_current(
                 state,
                 agent.id,
