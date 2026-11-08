@@ -71,14 +71,55 @@ fn writer_lock(capture: &Path) -> io::Result<fs::File> {
             {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(error) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("Cannot verify Codex writer ownership: {}", error.kind()),
-                ))
-            }
+            Err(error) => return Err(writer_lock_error(capture, error)),
         }
     }
+}
+
+#[derive(Debug)]
+struct WriterLockCause {
+    message: String,
+    source: io::Error,
+}
+
+impl std::fmt::Display for WriterLockCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for WriterLockCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn writer_lock_error(capture: &Path, error: io::Error) -> io::Error {
+    let path = capture.join("codex-native-writer.lock");
+    let expired = error.kind() == io::ErrorKind::WouldBlock;
+    let kind = if expired {
+        io::ErrorKind::TimedOut
+    } else {
+        error.kind()
+    };
+    let message = if expired {
+        format!(
+            "Codex writer lock still held after 5 seconds: {} ({error})",
+            path.display()
+        )
+    } else {
+        format!(
+            "Cannot verify Codex writer ownership for {}: {error}",
+            path.display()
+        )
+    };
+    io::Error::new(
+        kind,
+        WriterLockCause {
+            message,
+            source: error,
+        },
+    )
 }
 
 struct Server {

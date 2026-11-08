@@ -242,3 +242,24 @@ printf '%s\n' "$@" > "$BUS_CODEX_FALLBACK_TEST_ROOT/tui-argv"
     drop(provider);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn codex_native_writer_lock_failure_keeps_the_open_error() {
+    use std::error::Error;
+    let missing = crate::utils::test_temp::unique_temp_path("codex-writer-lock-missing");
+    let error = super::writer_lock(&missing).unwrap_err();
+    let message = error.to_string();
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::NotFound,
+        "a missing capture directory must keep the open error, not a relabeled kind: {message}"
+    );
+    assert!(
+        message.contains("codex-native-writer.lock") && message.contains("No such file"),
+        "the lock path and the open error must survive: {message}"
+    );
+    assert!(
+        error.source().is_some(),
+        "the original open error must stay chained: {message}"
+    );
+}
