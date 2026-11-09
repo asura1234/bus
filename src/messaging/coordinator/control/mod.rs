@@ -106,6 +106,16 @@ impl Worker {
             Ok(reserve) => reserve,
             Err(response) => return response,
         };
+        let response = self.execute_control(request, events);
+        self.record_control_receipt(request, &response, mutation, reserve);
+        response
+    }
+
+    fn execute_control(
+        &mut self,
+        request: &ControlRequest,
+        events: Option<&mpsc::Sender<BusEvent>>,
+    ) -> Response {
         let _span = tracing::info_span!("bus.control.command", control_request_id = %request.id, method = %request.method).entered();
         let started = std::time::Instant::now();
         let response = match self.control_execute(&request.method, &request.params, events) {
@@ -145,10 +155,20 @@ impl Worker {
                 "Bus control command finished"
             );
         }
+        response
+    }
+
+    fn record_control_receipt(
+        &mut self,
+        request: &ControlRequest,
+        response: &Response,
+        mutation: bool,
+        reserve: usize,
+    ) {
         if mutation {
             self.control_receipt_bytes = self.control_receipt_bytes.saturating_add(reserve);
             self.control_receipt_order.push_back(request.id.clone());
-            let inferred_sender = self.receipt_sender(request, &response);
+            let inferred_sender = self.receipt_sender(request, response);
             self.control_receipts.insert(
                 request.id.clone(),
                 ControlReceipt {
@@ -160,7 +180,6 @@ impl Worker {
                 },
             );
         }
-        response
     }
 
     fn reserve_control_receipt(
