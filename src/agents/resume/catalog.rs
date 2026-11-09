@@ -90,22 +90,29 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         return None;
     }
 
+    let argv = resume_argv(source, agent, session_ref)?;
+
+    Some(AgentResumePlan {
+        agent: agent.to_string(),
+        argv,
+        dedupe_key: dedupe_key(source, agent, session_ref),
+    })
+}
+
+/// Providers whose resume flag takes the saved session as the next argument.
+fn flag_resume_argv(executable: &str, flag: &str, session: &str) -> Vec<String> {
+    vec![executable.into(), flag.into(), session.into()]
+}
+
+fn resume_argv(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<Vec<String>> {
     let argv = match (source, agent, session_ref.kind) {
         #[cfg(feature = "dev-tools")]
         ("herdr:fake", "fake", AgentSessionRefKind::Id) => fake_resume_args(&session_ref.value),
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
-            vec![
-                "claude".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("claude", "--resume", &session_ref.value)
         }
         ("herdr:claude-ds", "claude-ds", AgentSessionRefKind::Id) => {
-            vec![
-                "claude-ds".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("claude-ds", "--resume", &session_ref.value)
         }
         ("herdr:codex", "codex", AgentSessionRefKind::Id) => {
             vec!["codex".into(), "resume".into(), session_ref.value.clone()]
@@ -114,23 +121,19 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             vec!["copilot".into(), format!("--resume={}", session_ref.value)]
         }
         ("herdr:devin", "devin", AgentSessionRefKind::Id) => {
-            vec!["devin".into(), "--resume".into(), session_ref.value.clone()]
+            flag_resume_argv("devin", "--resume", &session_ref.value)
         }
         ("herdr:droid", "droid", AgentSessionRefKind::Id) => {
-            vec!["droid".into(), "--resume".into(), session_ref.value.clone()]
+            flag_resume_argv("droid", "--resume", &session_ref.value)
         }
         ("herdr:kimi", "kimi", AgentSessionRefKind::Id) => {
-            vec!["kimi".into(), "--session".into(), session_ref.value.clone()]
+            flag_resume_argv("kimi", "--session", &session_ref.value)
         }
         ("herdr:mastracode", "mastracode", AgentSessionRefKind::Id) => {
-            vec![
-                "mastracode".into(),
-                "--thread".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("mastracode", "--thread", &session_ref.value)
         }
         ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
-            vec!["pi".into(), "--session".into(), session_ref.value.clone()]
+            flag_resume_argv("pi", "--session", &session_ref.value)
         }
         ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
@@ -138,62 +141,37 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             vec!["omp".into(), format!("--resume={}", session_ref.value)]
         }
         ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
-            vec![
-                "hermes".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("hermes", "--resume", &session_ref.value)
         }
         ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
-            vec![
-                "opencode".into(),
-                "--session".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("opencode", "--session", &session_ref.value)
         }
         ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
-            vec![
-                "qodercli".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("qodercli", "--resume", &session_ref.value)
         }
         ("herdr:qwen", "qwen", AgentSessionRefKind::Id) => {
-            vec!["qwen".into(), "--resume".into(), session_ref.value.clone()]
+            flag_resume_argv("qwen", "--resume", &session_ref.value)
         }
         ("herdr:kilo", "kilo", AgentSessionRefKind::Id) => {
-            vec!["kilo".into(), "--session".into(), session_ref.value.clone()]
+            flag_resume_argv("kilo", "--session", &session_ref.value)
         }
         ("herdr:cursor", "cursor", AgentSessionRefKind::Id) => {
-            vec![
-                if cfg!(windows) {
-                    "cursor-agent.cmd"
-                } else {
-                    "cursor-agent"
-                }
-                .into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
+            let executable = if cfg!(windows) {
+                "cursor-agent.cmd"
+            } else {
+                "cursor-agent"
+            };
+            flag_resume_argv(executable, "--resume", &session_ref.value)
         }
         ("herdr:antigravity_cli", "agy", AgentSessionRefKind::Id) => {
-            vec![
-                "agy".into(),
-                "--conversation".into(),
-                session_ref.value.clone(),
-            ]
+            flag_resume_argv("agy", "--conversation", &session_ref.value)
         }
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
-            vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
+            flag_resume_argv("grok", "--resume", &session_ref.value)
         }
         _ => return None,
     };
-
-    Some(AgentResumePlan {
-        agent: agent.to_string(),
-        argv,
-        dedupe_key: dedupe_key(source, agent, session_ref),
-    })
+    Some(argv)
 }
 
 #[cfg(feature = "dev-tools")]
