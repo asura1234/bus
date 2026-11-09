@@ -158,6 +158,36 @@ fn sgr_mouse_sequence_split_after_button_prefix_is_reassembled_before_timeout() 
 }
 
 #[test]
+fn split_sgr_mouse_report_emits_hold_and_unparsed_events() {
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    let mut tail = Vec::new();
+    capture.run(|| {
+        let mut framer = RawInputByteFramer::default();
+        assert!(framer.push(b"\x1b[<0;20").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        // The Unix reader flushes once more while the orphaned tail is still absent.
+        let _ = framer.flush_timeout();
+        tail = framer.push(b";10M");
+    });
+    // That empty flush must not clear the discard. Logging must not insert the tail.
+    assert!(
+        tail.is_empty(),
+        "orphaned SGR tail must stay discarded, got {tail:?}"
+    );
+    let logs = capture.text();
+    assert!(
+        logs.contains("bus.client.input_sequence_held"),
+        "missing hold event: {logs}"
+    );
+    assert!(
+        logs.contains("bus.client.input_unparsed")
+            && logs.contains("incomplete_sgr")
+            && logs.contains("1b5b3c"),
+        "missing unparsed event: {logs}"
+    );
+}
+
+#[test]
 fn timed_out_split_sgr_mouse_tail_is_discarded_and_following_input_is_preserved() {
     let mut framer = RawInputFramer::default();
 

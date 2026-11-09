@@ -72,10 +72,19 @@ impl RawInputFramer {
                             .with_vt_bytes(chunk),
                     ));
                 }
-                extract_one_event(&chunk).map(|(event, _consumed)| {
-                    tracing::debug!(raw_bytes = ?chunk, event = ?event, "raw input event parsed");
-                    event
-                })
+                match extract_one_event(&chunk) {
+                    Some((event, _)) => {
+                        if matches!(event, RawInputEvent::Unsupported) {
+                            log_unparsed_input(&chunk, "unsupported");
+                        }
+                        tracing::debug!(raw_bytes = ?chunk, event = ?event, "raw input event parsed");
+                        Some(event)
+                    }
+                    None => {
+                        log_unparsed_input(&chunk, "rejected");
+                        None
+                    }
+                }
             })
             .collect()
     }
@@ -94,6 +103,8 @@ pub(crate) struct RawInputByteFramer {
     host_color_scheme_change_tracking: bool,
     host_appearance_query_on_focus: bool,
     split_coalesced_escape: bool,
+    /// Set only so a later read can log that a held fragment completed.
+    held_incomplete: bool,
 }
 
 pub(super) const HOST_COLOR_QUERY_REPLIES: u16 = 258;
@@ -200,19 +211,13 @@ impl RawInputByteFramer {
                 &mut self.discard_until,
                 &mut self.discarded_tail_bytes,
             );
+            self.held_incomplete = false;
             self.lone_escape_recently_flushed = false;
             return chunks;
         }
 
         if starts_with_incomplete_sgr_mouse_sequence(&self.buffer) {
-            tracing::debug!(
-                bytes = ?self.buffer,
-                "discarding incomplete SGR mouse sequence after input timeout"
-            );
-            self.discarded_tail_bytes = self.buffer.len();
-            self.discard_until = (self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES)
-                .then_some(ControlStringFamily::OrphanedSgrMouseTail);
-            self.buffer.clear();
+            self.discard_incomplete_sgr_mouse();
             return chunks;
         }
 
@@ -235,6 +240,7 @@ impl RawInputByteFramer {
                 bytes = ?self.buffer,
                 "flushing lone escape after input timeout; if this follows an alt chord or focus switch it may reach the pane as plain esc"
             );
+            self.note_sequence_completed(self.buffer.len());
             self.lone_escape_recently_flushed = true;
             chunks.push(std::mem::take(&mut self.buffer));
             return chunks;
@@ -242,6 +248,7 @@ impl RawInputByteFramer {
 
         if let Ok(text) = std::str::from_utf8(&self.buffer) {
             if parse_terminal_key_sequence(text).is_some() {
+                self.note_sequence_completed(self.buffer.len());
                 chunks.push(std::mem::take(&mut self.buffer));
                 return chunks;
             }
@@ -259,9 +266,53 @@ impl RawInputByteFramer {
         }
 
         tracing::debug!(bytes = ?self.buffer, "dropping incomplete raw input buffer after timeout");
+        if !self.buffer.is_empty() {
+            log_unparsed_input(&self.buffer, "incomplete");
+            tracing::debug!(
+                event = "bus.client.input_sequence_discarded",
+                len = self.buffer.len(),
+            );
+        }
+        self.held_incomplete = false;
         self.lone_escape_recently_flushed = false;
         self.buffer.clear();
         chunks
+    }
+
+    fn discard_incomplete_sgr_mouse(&mut self) {
+        let discarded = std::mem::take(&mut self.buffer);
+        tracing::debug!(
+            bytes = ?discarded,
+            "discarding incomplete SGR mouse sequence after input timeout"
+        );
+        log_unparsed_input(&discarded, "incomplete_sgr");
+        tracing::debug!(
+            event = "bus.client.input_sequence_discarded",
+            len = discarded.len(),
+        );
+        self.held_incomplete = false;
+        self.discarded_tail_bytes = discarded.len();
+        self.discard_until = (self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES)
+            .then_some(ControlStringFamily::OrphanedSgrMouseTail);
+    }
+
+    fn note_sequence_held(&mut self) {
+        if self.buffer.is_empty() {
+            return;
+        }
+        tracing::debug!(
+            event = "bus.client.input_sequence_held",
+            len = self.buffer.len(),
+        );
+        self.held_incomplete = true;
+    }
+
+    fn note_sequence_completed(&mut self, len: usize) {
+        if !self.held_incomplete {
+            return;
+        }
+        tracing::debug!(event = "bus.client.input_sequence_completed", len);
+        self.held_incomplete = false;
     }
 
     fn discard_timeout_tail(&mut self, family: ControlStringFamily) {
@@ -274,7 +325,7 @@ impl RawInputByteFramer {
                 if self.buffer.is_empty() {
                     return;
                 }
-                self.buffer.clear();
+                self.forget_held_sequence("orphaned_sgr_tail");
                 self.discard_until = None;
                 self.discarded_tail_bytes = 0;
                 return;
@@ -284,6 +335,7 @@ impl RawInputByteFramer {
         };
 
         self.discarded_tail_bytes = self.discarded_tail_bytes.saturating_add(self.buffer.len());
+        self.held_incomplete = false;
         self.buffer.clear();
         if keep_discarding && self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
             if keep_split_st {
@@ -348,7 +400,7 @@ impl RawInputByteFramer {
             self.held_pending_host_reply_esc = false;
             self.discard_until = Some(ControlStringFamily::HostReplyCsi);
             self.discarded_tail_bytes = 0;
-            self.buffer.clear();
+            self.forget_held_sequence("host_cell_size");
             return true;
         }
 
@@ -369,7 +421,7 @@ impl RawInputByteFramer {
             self.held_pending_host_reply_esc = false;
             self.discard_until = Some(ControlStringFamily::HostReplyCsi);
             self.discarded_tail_bytes = 0;
-            self.buffer.clear();
+            self.forget_held_sequence("host_color_scheme");
             return true;
         }
 
@@ -382,10 +434,22 @@ impl RawInputByteFramer {
             // Alt forms like Alt+] after timeout, so later reply tails cannot leak.
             self.discard_until = Some(family);
             self.discarded_tail_bytes = 0;
-            self.buffer.clear();
+            self.forget_held_sequence("host_control");
             return true;
         }
         false
+    }
+
+    fn forget_held_sequence(&mut self, state: &'static str) {
+        if !self.buffer.is_empty() {
+            log_unparsed_input(&self.buffer, state);
+            tracing::debug!(
+                event = "bus.client.input_sequence_discarded",
+                len = self.buffer.len(),
+            );
+        }
+        self.held_incomplete = false;
+        self.buffer.clear();
     }
 
     fn drain_available_chunks(&mut self) -> Vec<Vec<u8>> {
@@ -394,6 +458,7 @@ impl RawInputByteFramer {
         loop {
             if self.lone_escape_recently_flushed {
                 if starts_with_incomplete_orphaned_sgr_mouse_tail(&self.buffer) {
+                    self.note_sequence_held();
                     break;
                 }
                 if discard_complete_orphaned_sgr_mouse_tail(&mut self.buffer) {
@@ -453,8 +518,10 @@ impl RawInputByteFramer {
             }
 
             let Some((event, consumed)) = extract_one_event(&self.buffer) else {
+                self.note_sequence_held();
                 break;
             };
+            self.note_sequence_completed(consumed);
             if matches!(
                 event,
                 RawInputEvent::HostDefaultColor { .. } | RawInputEvent::HostPaletteColors { .. }
@@ -483,3 +550,33 @@ impl RawInputByteFramer {
 }
 
 pub(super) const MAX_DISCARDED_CONTROL_TAIL_BYTES: usize = 128;
+
+const UNPARSED_INPUT_HEX_LIMIT: usize = 64;
+
+/// Bytes the host input parser did not accept as a key, paste, or complete escape.
+pub(super) fn log_unparsed_input(bytes: &[u8], state: &'static str) {
+    if bytes.is_empty() {
+        return;
+    }
+    tracing::debug!(
+        event = "bus.client.input_unparsed",
+        bytes = %truncated_input_hex(bytes),
+        read_len = bytes.len(),
+        state,
+    );
+}
+
+fn truncated_input_hex(bytes: &[u8]) -> String {
+    let shown = bytes.len().min(UNPARSED_INPUT_HEX_LIMIT);
+    let mut hex = String::with_capacity(shown * 2 + usize::from(bytes.len() > shown));
+    for byte in &bytes[..shown] {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let byte = *byte;
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    if bytes.len() > shown {
+        hex.push('…');
+    }
+    hex
+}
