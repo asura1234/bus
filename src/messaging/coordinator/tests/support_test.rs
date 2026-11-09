@@ -10,7 +10,7 @@ pub(in crate::messaging::coordinator) struct ProviderBinaries {
 pub(in crate::messaging::coordinator) fn provider_binaries() -> ProviderBinaries {
     let root = crate::utils::test_temp::unique_temp_path("bus-synthetic-providers");
     crate::platform::fs::private_dir(&root).unwrap();
-    for name in ["claude", "codex", "cursor-agent"] {
+    for name in ["claude", "claude-ds", "codex", "cursor-agent"] {
         let path = root.join(name);
         std::fs::write(&path, "#!/bin/sh\nexit 91\n").unwrap();
         #[cfg(unix)]

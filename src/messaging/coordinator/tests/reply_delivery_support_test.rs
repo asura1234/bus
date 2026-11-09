@@ -17,7 +17,7 @@ fn sequence() -> u64 {
 
 fn screen(provider: Provider, draft: &str) -> String {
     let body = match provider {
-        Provider::ClaudeCode => {
+        Provider::ClaudeCode | Provider::ClaudeDs => {
             format!("────────────────────────\r\n❯ {draft}\r\n────────────────────────")
         }
         Provider::Cursor => format!(" > {draft}\r\n / commands · @ files"),
@@ -75,7 +75,7 @@ impl NativeServer {
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
             }
-            Provider::ClaudeCode => AgentKind::Claude,
+            Provider::ClaudeCode | Provider::ClaudeDs => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,
             Provider::Cursor => AgentKind::Cursor,
             #[cfg(feature = "dev-tools")]
@@ -626,7 +626,7 @@ impl Delivery {
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
             }
-            Provider::ClaudeCode => AgentKind::Claude,
+            Provider::ClaudeCode | Provider::ClaudeDs => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,
             Provider::Cursor => AgentKind::Cursor,
             #[cfg(feature = "dev-tools")]

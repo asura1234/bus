@@ -181,7 +181,7 @@ impl Worker {
         if !joinable || agent.current_request.is_some() {
             return false;
         }
-        let claude_lag = agent.provider == Provider::ClaudeCode
+        let claude_lag = agent.provider.uses_claude_harness()
             && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
             && (agent.status == RuntimeStatus::Working || own_turn);
         let busy = agent.status == RuntimeStatus::Working && agent.provider != Provider::Grok;

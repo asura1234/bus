@@ -164,7 +164,7 @@ fn windows(value: &Value) -> UsageWindows {
 fn capture(spool: &Path, launch: &str, input: &[u8]) -> io::Result<()> {
     let manifest: ObservationManifest =
         serde_json::from_value(read_json(&spool.join("manifest.json"))?)?;
-    if manifest.provider != ProviderKind::ClaudeCode || manifest.launch_id != launch {
+    if !manifest.provider.uses_claude_harness() || manifest.launch_id != launch {
         return Err(io::Error::other("Status line launch mismatch"));
     }
     let value: Value = serde_json::from_slice(input)?;

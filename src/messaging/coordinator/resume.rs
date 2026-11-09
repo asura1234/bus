@@ -95,6 +95,7 @@ fn unstarted_provider_plan(
     use crate::agents::providers::{launch, ProviderKind};
     let provider = match facts.managed_agent.as_deref()? {
         "claude" => ProviderKind::ClaudeCode,
+        "claude-ds" => ProviderKind::ClaudeDs,
         "cursor" => ProviderKind::Cursor,
         "grok" => ProviderKind::Grok,
         _ => return None,
@@ -138,6 +139,7 @@ fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
         agent.provider,
         super::Provider::Codex
             | super::Provider::ClaudeCode
+            | super::Provider::ClaudeDs
             | super::Provider::Cursor
             | super::Provider::Grok
             | super::Provider::Kimi
@@ -160,7 +162,7 @@ pub(super) fn native_attempt<'a>(
     let attempt = info.native_resume.as_ref()?;
     let kind = identity::provider_kind(agent.provider).label();
     (attempt.name == identity::managed_name(agent.room_id, agent.id)
-        && attempt.agent == kind
+        && agent.provider.observes_label(&attempt.agent)
         && attempt.session_id == agent.runtime_identity.session_id
         && info.agent_session.as_ref().is_none_or(|session| {
             session.agent == kind
@@ -168,7 +170,10 @@ pub(super) fn native_attempt<'a>(
                 && session.kind == schema::AgentSessionRefKind::Id
                 && Some(&session.value) == attempt.session_id.as_ref()
         })
-        && info.agent.as_deref().is_none_or(|actual| actual == kind))
+        && info
+            .agent
+            .as_deref()
+            .is_none_or(|actual| agent.provider.observes_label(actual)))
     .then_some(attempt)
 }
 
@@ -199,7 +204,10 @@ pub(super) fn restored_agent<'a>(
     let mut matches = infos.iter().filter(|info| {
         native_attempt(agent, info).is_some()
             || (info.name.as_deref() == Some(name.as_str())
-                && (info.agent.as_deref() == Some(kind)
+                && (info
+                    .agent
+                    .as_deref()
+                    .is_some_and(|actual| agent.provider.observes_label(actual))
                     || info.agent.is_none() && info.launch_pending)
                 && match (session, info.agent_session.as_ref()) {
                     (None, None) => true,

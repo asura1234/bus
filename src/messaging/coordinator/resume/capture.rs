@@ -228,7 +228,9 @@ fn capture_args(
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
     use crate::agents::providers::{claude_code, codex, cursor, grok, kimi};
     match identity::provider_kind(provider) {
-        ProviderKind::ClaudeCode => claude_code::resume::capture_args(hooks, project),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
+            claude_code::resume::capture_args(hooks, project)
+        }
         ProviderKind::Codex => codex::resume::capture_args(hooks, project),
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
         ProviderKind::Grok => grok::resume::capture_args(hooks, project),

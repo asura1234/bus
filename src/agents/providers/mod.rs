@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum ProviderKind {
     Codex,
     ClaudeCode,
+    /// DeepSeek wrapper around the Claude Code CLI. The terminal harness is
+    /// Claude's; only the label, PATH executable, and launch command differ.
+    ClaudeDs,
     Cursor,
     Grok,
     Kimi,
@@ -39,6 +42,7 @@ impl ProviderKind {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
+            Self::ClaudeDs => "claude-ds",
             Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
@@ -52,12 +56,25 @@ impl ProviderKind {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
+            Self::ClaudeDs => "claude-ds",
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
             #[cfg(feature = "dev-tools")]
             Self::Fake => "bus-fake-agent",
         }
+    }
+
+    /// Claude Code and `claude-ds` share hook parsing, screen detection,
+    /// composer submission, resume, settings, and dialogs.
+    pub(crate) const fn uses_claude_harness(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::ClaudeDs)
+    }
+
+    /// A live pane reports `claude` after the wrapper execs the Claude CLI.
+    pub(crate) fn observes_label(self, label: &str) -> bool {
+        label == self.label()
+            || (self.uses_claude_harness() && matches!(label, "claude" | "claude-ds"))
     }
 }
 
@@ -67,7 +84,7 @@ pub(crate) fn parse(
 ) -> Result<spool::Parsed, String> {
     match provider {
         ProviderKind::Codex => codex::hooks::parse(value),
-        ProviderKind::ClaudeCode => claude_code::hooks::parse(value),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => claude_code::hooks::parse(value),
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
         ProviderKind::Kimi => kimi::hooks::parse(value),
@@ -87,3 +104,7 @@ mod grok_registration_tests;
 #[cfg(test)]
 #[path = "tests/kimi_registration_test.rs"]
 mod kimi_registration_tests;
+
+#[cfg(test)]
+#[path = "tests/claude_ds_registration_test.rs"]
+mod claude_ds_registration_tests;

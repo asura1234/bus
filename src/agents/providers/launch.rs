@@ -75,6 +75,9 @@ pub(crate) fn selected_executable(
     provider: ProviderKind,
     env: &HashMap<String, String>,
 ) -> Result<Option<String>, String> {
+    if provider == ProviderKind::ClaudeDs {
+        return Ok(Some(provider.executable().to_owned()));
+    }
     if !matches!(provider, ProviderKind::Grok | ProviderKind::Kimi) {
         return Ok(None);
     }
@@ -96,7 +99,7 @@ pub(crate) fn selected_executable(
 pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     match provider {
         ProviderKind::Codex => codex::launch::runtime_args(),
-        ProviderKind::ClaudeCode => claude_code::launch::runtime_args(),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => claude_code::launch::runtime_args(),
         ProviderKind::Cursor => cursor::launch::runtime_args(),
         ProviderKind::Grok => grok::launch::runtime_args(),
         ProviderKind::Kimi => Vec::new(),
@@ -109,6 +112,7 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
     match label {
         "codex" => Some(ProviderKind::Codex),
         "claude" => Some(ProviderKind::ClaudeCode),
+        "claude-ds" => Some(ProviderKind::ClaudeDs),
         "cursor" => Some(ProviderKind::Cursor),
         "kimi" => Some(ProviderKind::Kimi),
         #[cfg(feature = "dev-tools")]
@@ -126,7 +130,7 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
 /// environment setting; user/project settings can also override inherited env.
 pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
     match provider {
-        ProviderKind::ClaudeCode => vec![(
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => vec![(
             "DISABLE_AUTOUPDATER".into(),
             std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
         )],
@@ -153,7 +157,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
         arguments::remove_codex_approval_options(args);
     }
     let (flag, aliases): (&str, &[&str]) = match provider {
-        ProviderKind::ClaudeCode => (
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => (
             "--dangerously-skip-permissions",
             &["--dangerously-skip-permissions"],
         ),
@@ -180,7 +184,9 @@ pub(crate) fn take_adopted_session(
 ) -> Result<Option<String>, String> {
     match provider {
         ProviderKind::Codex => codex::launch::take_adopted_session(args),
-        ProviderKind::ClaudeCode => claude_code::launch::take_adopted_session(args),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
+            claude_code::launch::take_adopted_session(args)
+        }
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
         ProviderKind::Grok => grok::launch::take_adopted_session(args),
         ProviderKind::Kimi => kimi::launch::take_adopted_session(args),
@@ -192,7 +198,9 @@ pub(crate) fn take_adopted_session(
 fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
     match provider {
         ProviderKind::Codex => codex::launch::resume_args(session),
-        ProviderKind::ClaudeCode => claude_code::launch::resume_args(session),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
+            claude_code::launch::resume_args(session)
+        }
         ProviderKind::Cursor => cursor::launch::resume_args(session),
         ProviderKind::Grok => grok::launch::resume_args(session),
         ProviderKind::Kimi => kimi::launch::resume_args(session),
@@ -274,7 +282,7 @@ pub(crate) fn extend_generated_args(
     let flag = match provider {
         ProviderKind::Codex => Some("--no-daemon"),
         ProviderKind::Cursor => Some("--disable-auto-update"),
-        ProviderKind::ClaudeCode => None,
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => None,
         ProviderKind::Grok => None,
         ProviderKind::Kimi => None,
         #[cfg(feature = "dev-tools")]
@@ -318,7 +326,7 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
         let arg = args[index].as_str();
         let incompatible = match provider {
             ProviderKind::Codex => matches!(arg, "exec" | "e" | "review"),
-            ProviderKind::ClaudeCode => matches!(
+            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => matches!(
                 arg,
                 "-p" | "--print" | "--bg" | "--background" | "--bare" | "--safe-mode"
             ),
@@ -343,7 +351,7 @@ pub(crate) fn take_resume_option(provider: ProviderKind, args: &mut Vec<String>)
         .filter(|&index| {
             args[index] == "--resume"
                 || args[index].starts_with("--resume=")
-                || (matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Grok)
+                || ((provider.uses_claude_harness() || matches!(provider, ProviderKind::Grok))
                     && args[index] == "-r")
         })
         .collect();
@@ -422,7 +430,7 @@ pub(crate) fn setup_notice(
     let root = project_root(cwd);
     let notice = match provider {
         ProviderKind::Codex => Some(codex::launch::setup_notice(&root)),
-        ProviderKind::ClaudeCode => None,
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
         ProviderKind::Grok => Some(grok::launch::setup_notice(&root)),
         ProviderKind::Kimi => None,
@@ -487,7 +495,9 @@ pub(crate) fn prepare(
     }
     apply_run_permissions(spec.provider, &mut args);
     match spec.provider {
-        ProviderKind::ClaudeCode => claude_code::launch::prepare(spec, cwd, args, adopted_session),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
+            claude_code::launch::prepare(spec, cwd, args, adopted_session)
+        }
         ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {
             cwd,
             args,

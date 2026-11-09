@@ -74,7 +74,7 @@ impl HookContract {
                 entry_shape: HookEntryShape::NestedCommands,
                 default_version: None,
             },
-            ProviderKind::ClaudeCode => Self {
+            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => Self {
                 adapter: "claude-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
                 entry_shape: HookEntryShape::NestedCommands,

@@ -420,7 +420,7 @@ fn occupied_composer_retries_steering_without_changing_the_lead_turn() {
         let lead = queue(&mut worker, room, agent, "lead");
         worker.submit_ready().unwrap();
         let hook = match provider {
-            Provider::ClaudeCode => {
+            Provider::ClaudeCode | Provider::ClaudeDs => {
                 json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"turn","prompt":"lead"})
             }
             Provider::Codex => {
@@ -570,7 +570,7 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
             | crate::agents::providers::ProviderKind::Kimi => {
                 panic!("This fixture covers the original providers; use dedicated Grok tests")
             }
-            Provider::ClaudeCode => json!({
+            Provider::ClaudeCode | Provider::ClaudeDs => json!({
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "session",
                 "prompt_id": "turn",

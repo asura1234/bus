@@ -459,7 +459,11 @@ fn transient(provider: Provider, error: &str) -> Option<bool> {
         .iter()
         .any(|s| text.contains(s));
     match provider {
-        Provider::Codex | Provider::ClaudeCode if quota || overload || connection => Some(quota),
+        Provider::Codex | Provider::ClaudeCode | Provider::ClaudeDs
+            if quota || overload || connection =>
+        {
+            Some(quota)
+        }
         Provider::Grok | Provider::Kimi if quota || overload || connection => Some(quota),
         _ => None,
     }

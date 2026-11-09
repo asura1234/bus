@@ -1,8 +1,8 @@
 //! Coordinator poll ownership.
 use super::dialogs;
 use super::{
-    io, launch, resume, schema, AgentId, BTreeMap, BusState, Duration, Path, PathBuf,
-    ResponseResult, RoomAgent, RuntimeStatus, Worker,
+    io, resume, schema, AgentId, BTreeMap, BusState, Duration, Path, PathBuf, ResponseResult,
+    RoomAgent, RuntimeStatus, Worker,
 };
 use crate::messaging::model::DeliveryEpoch;
 
@@ -312,7 +312,10 @@ fn polled_agent<'a>(
         .find(|i| {
             Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
                 && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
-                && (i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                && (i
+                    .agent
+                    .as_deref()
+                    .is_some_and(|label| agent.provider.observes_label(label))
                     || i.agent.is_none()
                         && i.launch_pending
                         && i.name.as_deref()

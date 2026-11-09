@@ -265,7 +265,10 @@ impl Worker {
         info.terminal_id == terminal.terminal_id
             && info.pane_id == terminal.pane_id
             && info.name.as_deref() == Some(managed_name)
-            && info.agent.as_deref() == Some(kind)
+            && info
+                .agent
+                .as_deref()
+                .is_some_and(|label| crate::agents::same_detected_agent(kind, label))
             && info.agent_session.is_some_and(|session| {
                 session.source == format!("herdr:{kind}") && session.value != expected
             })
@@ -293,7 +296,10 @@ impl Worker {
         let info = named.next()?;
         if named.next().is_some()
             || info.terminal_id == recorded.terminal_id
-            || info.agent.as_deref() != Some(kind)
+            || !info
+                .agent
+                .as_deref()
+                .is_some_and(|label| crate::agents::same_detected_agent(kind, label))
             || !info.agent_session.as_ref().is_some_and(|session| {
                 session.source == format!("herdr:{kind}") && session.value != expected
             })

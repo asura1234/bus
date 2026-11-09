@@ -295,8 +295,10 @@ impl Worker {
             .set_agent_runtime_identity(id, identity.clone())
             .map_err(|e| e.to_string())?;
         super::launch_metrics::bind_current(&mut state, id);
-        if matches!(provider, Provider::ClaudeCode | Provider::Kimi)
-            || launch::provider_kind(provider) == "fake"
+        if matches!(
+            provider,
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::Kimi
+        ) || launch::provider_kind(provider) == "fake"
         {
             state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
         }
@@ -308,7 +310,9 @@ impl Worker {
                         Provider::Codex | Provider::Cursor | Provider::Grok | Provider::Kimi => {
                             "Not ready; waiting for the provider terminal."
                         }
-                        Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
+                        Provider::ClaudeCode | Provider::ClaudeDs => {
+                            "Not ready; waiting for provider hook readiness."
+                        }
                         #[cfg(feature = "dev-tools")]
                         Provider::Fake => "Not ready; waiting for provider hook readiness.",
                     }

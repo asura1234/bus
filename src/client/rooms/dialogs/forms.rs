@@ -77,6 +77,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
     if orchestrator {
         &[
             Provider::ClaudeCode,
+            Provider::ClaudeDs,
             Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
@@ -86,6 +87,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
         &[
             Provider::Codex,
             Provider::ClaudeCode,
+            Provider::ClaudeDs,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi,

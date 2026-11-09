@@ -82,6 +82,7 @@ impl BusUi {
             Action::Field(index) => format!("field:{index}"),
             // The names `agent add --provider` takes.
             Action::Provider(Provider::ClaudeCode) => "provider:claude".into(),
+            Action::Provider(Provider::ClaudeDs) => "provider:claude-ds".into(),
             Action::Provider(Provider::Codex) => "provider:codex".into(),
             Action::Provider(Provider::Cursor) => "provider:cursor".into(),
             Action::Provider(Provider::Grok) => "provider:grok".into(),

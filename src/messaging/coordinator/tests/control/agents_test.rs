@@ -98,6 +98,8 @@ fn codex_orchestrators_and_workers_reach_the_native_launch() {
     worker.state.create_room("second").unwrap();
     worker.state.create_room("codex-first").unwrap();
     worker.state.create_room("codex-resume-room").unwrap();
+    let ds_work = worker.state.create_room("ds-work").unwrap();
+    worker.state.create_room("ds-worker-room").unwrap();
     // Allowed adds get as far as opening a tab, which tests refuse.
     worker.transport = Box::new(NoTabs);
     let cwd = dir.to_string_lossy().to_string();
@@ -113,6 +115,14 @@ fn codex_orchestrators_and_workers_reach_the_native_launch() {
         (
             "claude-orch",
             json!({"room":"master","name":"claude-orch","provider":"claude","cwd":cwd,"orchestrates":"test","consent_project_hooks":true}),
+        ),
+        (
+            "claude-ds-orch",
+            json!({"room":"master","name":"claude-ds-orch","provider":"claude-ds","cwd":cwd,"orchestrates":"ds-work","consent_project_hooks":true}),
+        ),
+        (
+            "claude-ds-worker",
+            json!({"room":"ds-worker-room","name":"claude-ds-worker","provider":"claude-ds","cwd":cwd,"consent_project_hooks":true}),
         ),
         (
             "cursor-orch",
@@ -133,6 +143,20 @@ fn codex_orchestrators_and_workers_reach_the_native_launch() {
             "{id} reached the launch: {response:?}"
         );
     }
+    let orchestrator = worker
+        .state
+        .agents()
+        .find(|agent| agent.name == "claude-ds-orch")
+        .unwrap();
+    assert_eq!(orchestrator.provider, Provider::ClaudeDs);
+    assert_eq!(orchestrator.orchestrates, Some(ds_work));
+    let worker_agent = worker
+        .state
+        .agents()
+        .find(|agent| agent.name == "claude-ds-worker")
+        .unwrap();
+    assert_eq!(worker_agent.provider, Provider::ClaudeDs);
+    assert!(worker_agent.orchestrates.is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

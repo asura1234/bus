@@ -152,6 +152,7 @@ pub(in crate::client::rooms) fn provider(provider: Provider) -> &'static str {
     match provider {
         Provider::Codex => "Codex",
         Provider::ClaudeCode => "Claude Code",
+        Provider::ClaudeDs => "Claude DS",
         Provider::Cursor => "Cursor",
         Provider::Grok => "Grok",
         Provider::Kimi => "Kimi",

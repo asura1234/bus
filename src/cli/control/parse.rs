@@ -315,10 +315,15 @@ fn agent_cli() -> Command {
             subcommand("add")
                 .arg(option("room"))
                 .arg(option("name"))
-                .arg(
-                    option("provider")
-                        .value_parser(["claude", "codex", "cursor", "grok", "kimi", "fake"]),
-                )
+                .arg(option("provider").value_parser([
+                    "claude",
+                    "claude-ds",
+                    "codex",
+                    "cursor",
+                    "grok",
+                    "kimi",
+                    "fake",
+                ]))
                 .arg(option("pwd"))
                 .arg(Arg::new("args").long("args").allow_hyphen_values(true))
                 .arg(flag("consent-hooks"))
