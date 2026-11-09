@@ -271,3 +271,45 @@ fn errors_tab_ranks_failures_and_labels_caller_errors() {
         "the request column was noise beside the message"
     );
 }
+
+#[test]
+fn errors_tab_tracks_bus_caused_failures_by_hour() {
+    let page = page();
+    let errors = page.find("id=\"errors-view\"").unwrap();
+    let card = page.find("id=\"bus-error-card\"").unwrap();
+    let graph = page.find("id=\"bus-error-graph\"").unwrap();
+    let filter = page.find("id=\"failure-responsibility\"").unwrap();
+    let ranking = page.find("id=\"failure-ranking\"").unwrap();
+    let ranks = page.find("id=\"failure-ranks\"").unwrap();
+    assert!(errors < card && card < graph && graph < ranking);
+    assert!(ranking < filter && filter < ranks);
+    assert!(page.contains(">Bus errors</h2>"));
+    assert!(page.contains("id=\"bus-error-total\""));
+    assert!(page.contains("id=\"bus-error-share\""));
+    assert!(page.contains("id=\"bus-error-busiest\""));
+    assert!(page.contains("id=\"bus-error-graph\" class=\"scroll\""));
+    assert!(page.contains("#bus-error-graph .bar{fill:var(--failure)}"));
+    assert!(page.contains(
+        "id=\"failure-responsibility\" role=\"group\" aria-label=\"Filter by responsibility\""
+    ));
+    assert!(page.contains("data-responsibility=\"all\" aria-pressed=\"true\">All</button>"));
+    assert!(page.contains("data-responsibility=\"bus\" aria-pressed=\"false\">Bus-caused</button>"));
+    assert!(page
+        .contains("data-responsibility=\"caller\" aria-pressed=\"false\">Caller error</button>"));
+    assert!(
+        page.contains("data-responsibility=\"external\" aria-pressed=\"false\">External</button>")
+    );
+    assert!(page.contains("failures.filter(f=>f.cause==='bus')"));
+    assert!(page.contains("byHour.get(f.hour_start_ms)"));
+    assert!(page.contains("f.hour_start_ms===drill.hour"));
+    assert!(page.contains("hour:hour.hour_start_ms"));
+    assert!(page.contains("renderBusErrors();"));
+    assert!(page.contains("renderFailureRanking();"));
+    assert!(page.contains(
+        "<th>Rank</th><th>Reason</th><th>Responsibility</th><th>Count</th><th>Share</th><th>Stages</th>"
+    ));
+    assert_eq!(page.matches("role=\"tabpanel\"").count(), 3);
+    assert_eq!(page.matches("role=\"tab\"").count(), 3);
+    assert!(!page.contains("<select"));
+    assert!(!page.contains("how many failed"));
+}
