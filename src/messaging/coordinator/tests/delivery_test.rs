@@ -21,7 +21,7 @@ struct LaunchPromptTransport(Arc<Mutex<Vec<String>>>);
 impl Transport for LaunchPromptTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentPromptIfIdle(params) => {
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
                 self.0.lock().unwrap().push(params.text);
                 Ok(ResponseResult::AgentPrompted {
                     agent: native_info("pane", "provider", "session"),
@@ -171,7 +171,7 @@ struct LaunchPromptOutcomeTransport {
 impl Transport for LaunchPromptOutcomeTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentPromptIfIdle(params) => {
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
                 self.prompts.lock().unwrap().push(params.text);
                 self.outcomes
                     .pop_front()

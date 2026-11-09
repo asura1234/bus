@@ -528,6 +528,7 @@ impl App {
             )
         });
         Some(crate::protocol::api::schema::AgentInfo {
+            generation: self.state.generation,
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)
                 .and_then(|runtime| runtime.definite_launch_input_error()),

@@ -26,7 +26,7 @@ struct Accepting(Arc<Mutex<Vec<String>>>);
 impl Transport for Accepting {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         let provider = match method {
-            Method::AgentPromptIfIdle(p) => {
+            Method::AgentPromptIfIdle(p) | Method::AgentPromptIfIdleAtGeneration(p) => {
                 self.0.lock().unwrap().push(p.text);
                 p.expected_agent
             }
@@ -902,7 +902,9 @@ struct NeverShown(Arc<Mutex<Vec<String>>>);
 impl Transport for NeverShown {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
-            Method::AgentPromptIfIdle(p) => self.0.lock().unwrap().push(p.text),
+            Method::AgentPromptIfIdle(p) | Method::AgentPromptIfIdleAtGeneration(p) => {
+                self.0.lock().unwrap().push(p.text)
+            }
             other => panic!("unexpected native call: {other:?}"),
         }
         Err(TransportError {

@@ -42,7 +42,10 @@ impl Transport for FloodNative {
                     agents: vec![self.info.clone()],
                 })
             }
-            Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_) => {
+            Method::AgentPromptIfIdle(_)
+            | Method::AgentPromptIfIdleAtGeneration(_)
+            | Method::AgentPromptIfUnbound(_)
+            | Method::AgentPromptIfUnboundAtGeneration(_) => {
                 self.submitted.send(()).unwrap();
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),

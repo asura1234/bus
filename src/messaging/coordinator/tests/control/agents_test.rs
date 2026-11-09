@@ -517,7 +517,9 @@ fn agent_clear_types_each_providers_reset_command_outside_bus_messages() {
     struct Prompts(Arc<Mutex<Vec<String>>>);
     impl Transport for Prompts {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            let Method::AgentPromptIfIdle(params) = method else {
+            let (Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params)) =
+                method
+            else {
                 panic!("agent clear must only type into the idle agent");
             };
             assert_eq!(params.expected_session_id, "session");
@@ -607,7 +609,9 @@ fn agent_clear_restores_reply_instructions_for_first_message_providers() {
     struct Prompts(Arc<Mutex<Vec<String>>>);
     impl Transport for Prompts {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            let Method::AgentPromptIfIdle(params) = method else {
+            let (Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params)) =
+                method
+            else {
                 panic!("agent clear must only type into the idle agent");
             };
             self.0.lock().unwrap().push(params.text);
@@ -685,7 +689,9 @@ fn agent_clear_restores_reply_instructions_for_an_adopted_codex_session() {
     struct Prompts(Arc<Mutex<Vec<String>>>);
     impl Transport for Prompts {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            let Method::AgentPromptIfIdle(params) = method else {
+            let (Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params)) =
+                method
+            else {
                 panic!("agent clear must only type into the idle agent");
             };
             self.0.lock().unwrap().push(params.text);
@@ -816,7 +822,9 @@ fn agent_clear_does_not_reset_provider_when_reset_intent_cannot_be_saved() {
     struct ResetCommands(Arc<Mutex<Vec<String>>>);
     impl Transport for ResetCommands {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            let Method::AgentPromptIfIdle(params) = method else {
+            let (Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params)) =
+                method
+            else {
                 panic!("unexpected request: {method:?}");
             };
             self.0.lock().unwrap().push(params.text);
@@ -873,7 +881,8 @@ fn agent_clear_keeps_reset_intent_only_while_the_reset_may_have_been_typed() {
     struct RefuseReset(bool);
     impl Transport for RefuseReset {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            let Method::AgentPromptIfIdle(_) = method else {
+            let (Method::AgentPromptIfIdle(_) | Method::AgentPromptIfIdleAtGeneration(_)) = method
+            else {
                 panic!("unexpected request: {method:?}");
             };
             Err(TransportError {

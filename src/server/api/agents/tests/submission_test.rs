@@ -21,8 +21,12 @@ fn confirmation_expiry(method: &Method) -> Duration {
     // Provider paste delay varies on ConPTY. Keep the withdrawal reserve
     // while advancing beyond the declared confirmation window.
     let text = match method {
-        Method::AgentPromptIfIdle(params) => params.text.as_bytes(),
-        Method::AgentPromptIfUnbound(params) => params.text.as_bytes(),
+        Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+            params.text.as_bytes()
+        }
+        Method::AgentPromptIfUnbound(params) | Method::AgentPromptIfUnboundAtGeneration(params) => {
+            params.text.as_bytes()
+        }
         _ => panic!("expected guarded prompt"),
     };
     method_budget(method).unwrap() - withdrawal_budget(text) + Duration::from_millis(100)
@@ -75,6 +79,7 @@ fn provider_fixture(
             expected_agent: label.into(),
             expected_session_id: "session".into(),
             steer: false,
+            expected_generation: None,
         })
     } else {
         Method::AgentPromptIfUnbound(AgentPromptIfUnboundParams {
@@ -83,6 +88,7 @@ fn provider_fixture(
             expected_terminal_id: info.terminal_id,
             expected_pane_id: info.pane_id,
             expected_managed_name: "bus-r1-a2".into(),
+            expected_generation: None,
         })
     };
     (app, method, writes)
@@ -97,6 +103,61 @@ fn screen(kind: AgentKind, draft: &str) -> String {
         _ => format!("› {draft}\r\n\r\n GPT-6 · /repo\r\n ? for shortcuts"),
     };
     format!("\x1b[2J\x1b[H{body}")
+}
+
+#[tokio::test]
+async fn generation_fence_rejects_same_terminal_bound_unbound_and_steering_before_input() {
+    use crate::server::api::agents::prompt::{
+        check_prompt_identity_and_idle, check_unbound_prompt_identity_and_idle,
+    };
+    for mode in ["bound", "unbound", "steering"] {
+        let (mut app, method, mut writes) =
+            provider_fixture(AgentKind::Codex, mode != "unbound", "");
+        app.state.generation = 1;
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let before = app.agent_info(0, pane).unwrap();
+        let method = match method {
+            Method::AgentPromptIfIdle(mut params) => {
+                params.expected_generation = Some(1);
+                params.steer = mode == "steering";
+                assert!(
+                    check_prompt_identity_and_idle(&before, &params).is_ok(),
+                    "{mode}"
+                );
+                Method::AgentPromptIfIdleAtGeneration(params)
+            }
+            Method::AgentPromptIfUnbound(mut params) => {
+                params.expected_generation = Some(1);
+                assert!(check_unbound_prompt_identity_and_idle(&before, &params).is_ok());
+                Method::AgentPromptIfUnboundAtGeneration(params)
+            }
+            _ => unreachable!(),
+        };
+        app.state.generation = 2;
+        let after = app.agent_info(0, pane).unwrap();
+        assert_eq!(
+            (before.terminal_id, before.pane_id),
+            (after.terminal_id, after.pane_id)
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_api_request(
+            Request {
+                id: mode.into(),
+                method
+            },
+            tx
+        ));
+        let response: serde_json::Value =
+            serde_json::from_str(&rx.recv_timeout(WAIT).unwrap()).unwrap();
+        assert_eq!(
+            response["error"]["code"], "agent_identity_changed",
+            "{mode}: {response}"
+        );
+        assert!(
+            writes.try_recv().is_err(),
+            "{mode}: stale generation typed native input"
+        );
+    }
 }
 
 #[tokio::test]

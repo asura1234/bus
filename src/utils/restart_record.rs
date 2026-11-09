@@ -138,6 +138,27 @@ pub(crate) fn build_path(root: &Path) -> PathBuf {
     restarts_dir(root).join("build.json")
 }
 
+pub(crate) fn generation_path(root: &Path) -> PathBuf {
+    restarts_dir(root).join("generation.json")
+}
+
+/// Reserve the next serving generation after both native socket owners exist.
+/// A failed persistence step prevents the server from serving this start.
+pub(crate) fn reserve_generation(root: &Path) -> Result<u64, String> {
+    let path = generation_path(root);
+    let current = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice::<u64>(&bytes)
+            .map_err(|error| format!("{}: {error}", path.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let next = current
+        .checked_add(1)
+        .ok_or_else(|| format!("{}: generation overflow", path.display()))?;
+    write_json(&path, &next)?;
+    Ok(next)
+}
+
 pub(crate) fn handoff_path(root: &Path) -> PathBuf {
     restarts_dir(root).join("handoff.json")
 }
@@ -755,3 +776,7 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "tests/restart_generation_test.rs"]
+mod generation_tests;

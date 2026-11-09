@@ -141,7 +141,10 @@ pub(super) fn check_unbound_prompt_identity_and_idle(
     agent: &crate::protocol::api::schema::AgentInfo,
     params: &crate::protocol::api::schema::AgentPromptIfUnboundParams,
 ) -> Result<(), (&'static str, &'static str)> {
-    if agent.terminal_id != params.expected_terminal_id
+    if params
+        .expected_generation
+        .is_some_and(|generation| generation != agent.generation)
+        || agent.terminal_id != params.expected_terminal_id
         || agent.pane_id != params.expected_pane_id
         || !matches!(agent.agent.as_deref(), Some("codex" | "kimi"))
         || agent.name.as_deref() != Some(params.expected_managed_name.as_str())
@@ -173,7 +176,10 @@ pub(super) fn check_prompt_identity_and_idle(
     params: &crate::protocol::api::schema::AgentPromptIfIdleParams,
 ) -> Result<(), (&'static str, &'static str)> {
     use crate::protocol::api::schema::AgentStatus;
-    if agent.terminal_id != params.expected_terminal_id
+    if params
+        .expected_generation
+        .is_some_and(|generation| generation != agent.generation)
+        || agent.terminal_id != params.expected_terminal_id
         || agent.pane_id != params.expected_pane_id
         || agent.agent.as_deref() != Some(params.expected_agent.as_str())
         || agent
@@ -267,10 +273,12 @@ impl App {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
                 self.queue_agent_prompt(request.id, params, false, hard_deadline, false)
             }
-            crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
+            crate::protocol::api::schema::Method::AgentPromptIfIdle(params)
+            | crate::protocol::api::schema::Method::AgentPromptIfIdleAtGeneration(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params, hard_deadline)
             }
-            crate::protocol::api::schema::Method::AgentPromptIfUnbound(params) => {
+            crate::protocol::api::schema::Method::AgentPromptIfUnbound(params)
+            | crate::protocol::api::schema::Method::AgentPromptIfUnboundAtGeneration(params) => {
                 self.queue_agent_prompt_if_unbound(request.id, params, hard_deadline)
             }
             _ => return false,

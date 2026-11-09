@@ -182,6 +182,8 @@ pub struct AgentPromptIfIdleParams {
     /// still refused.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub steer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_generation: Option<u64>,
 }
 
 /// First interactive Codex turn: its SessionStart hook is deferred until input.
@@ -193,10 +195,14 @@ pub struct AgentPromptIfUnboundParams {
     pub expected_terminal_id: String,
     pub expected_pane_id: String,
     pub expected_managed_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentInfo {
+    #[serde(default)]
+    pub generation: u64,
     /// Native restore attempt, including a failure before process detection.
     /// Absent after interactive confirmation and on ordinary client reattach.
     #[serde(default, skip_serializing_if = "Option::is_none")]

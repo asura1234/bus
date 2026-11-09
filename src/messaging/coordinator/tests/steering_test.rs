@@ -55,23 +55,25 @@ struct Native(Arc<Mutex<Vec<Method>>>);
 impl Transport for Native {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         let result = match &method {
-            Method::AgentPromptIfIdle(params) => ResponseResult::AgentPrompted {
-                agent: serde_json::from_value(json!({
-                    "terminal_id": params.expected_terminal_id,
-                    "pane_id": params.expected_pane_id,
-                    "agent": params.expected_agent,
-                    "agent_status": "idle",
-                    "interactive_ready": true,
-                    "workspace_id": "workspace", "tab_id": "tab",
-                    "focused": false, "revision": 1,
-                    "agent_session": {
-                        "source": "bus", "agent": params.expected_agent,
-                        "kind": "id", "value": params.expected_session_id,
-                    },
-                }))
-                .unwrap(),
-                timestamps: Default::default(),
-            },
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+                ResponseResult::AgentPrompted {
+                    agent: serde_json::from_value(json!({
+                        "terminal_id": params.expected_terminal_id,
+                        "pane_id": params.expected_pane_id,
+                        "agent": params.expected_agent,
+                        "agent_status": "idle",
+                        "interactive_ready": true,
+                        "workspace_id": "workspace", "tab_id": "tab",
+                        "focused": false, "revision": 1,
+                        "agent_session": {
+                            "source": "bus", "agent": params.expected_agent,
+                            "kind": "id", "value": params.expected_session_id,
+                        },
+                    }))
+                    .unwrap(),
+                    timestamps: Default::default(),
+                }
+            }
             Method::AgentObserve(params) => open_native_question(&params.target),
             Method::AgentGet(params) => open_native_info(&params.target),
             _ => ResponseResult::Ok {},
@@ -248,7 +250,10 @@ impl Fixture {
             .unwrap()
             .iter()
             .filter_map(|method| match method {
-                Method::AgentPromptIfIdle(params) => Some((params.text.clone(), params.steer)),
+                Method::AgentPromptIfIdle(params)
+                | Method::AgentPromptIfIdleAtGeneration(params) => {
+                    Some((params.text.clone(), params.steer))
+                }
                 _ => None,
             })
             .collect()

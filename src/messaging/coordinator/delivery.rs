@@ -590,6 +590,7 @@ impl Worker {
                     expected_agent: launch::provider_kind(agent.provider).into(),
                     expected_session_id: session.clone(),
                     steer: true,
+                    expected_generation: None,
                 }));
         self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
@@ -697,6 +698,7 @@ fn submission_method(
             expected_agent: launch::provider_kind(agent.provider).into(),
             expected_session_id: session.clone(),
             steer,
+            expected_generation: None,
         })
     } else {
         Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
@@ -705,6 +707,7 @@ fn submission_method(
             expected_terminal_id: terminal.to_owned(),
             expected_pane_id: pane.to_owned(),
             expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+            expected_generation: None,
         })
     }
 }
