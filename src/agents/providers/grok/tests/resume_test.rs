@@ -391,7 +391,7 @@ fn grok_resume_never_executes_an_unchanged_saved_binary() {
 }
 
 #[test]
-fn grok_resume_rejects_changed_or_obsolete_binary_stamps_without_discovery() {
+fn grok_resume_refreshes_a_valid_changed_stamp_and_rejects_obsolete_captures() {
     for change in [
         "size",
         "mtime",
@@ -442,15 +442,18 @@ fn grok_resume_rejects_changed_or_obsolete_binary_stamps_without_discovery() {
             _ => {}
         }
         let spec = f.spec("", true);
-        assert_eq!(
-            capture_args(&spec.hooks, &f.project).is_ok(),
-            change == "unchanged",
-            "{change}"
+        // A still-valid binary whose metadata changed is the 1.0.70 -> 1.0.77
+        // case. Only a missing or obsolete stamp file stays a hard error.
+        let resumes = matches!(
+            change,
+            "size" | "mtime" | "replacement" | "target" | "unchanged"
         );
+        let captured = capture_args(&spec.hooks, &f.project);
+        assert_eq!(captured.is_ok(), resumes, "{change}: {captured:?}");
         assert_eq!(
             launch::environment(&spec.hooks).is_ok(),
-            change == "unchanged",
-            "{change}"
+            resumes,
+            "{change}: {captured:?}"
         );
     }
 }
@@ -486,5 +489,91 @@ fn grok_resume_requires_a_valid_saved_home_before_rebinding() {
         if !valid {
             assert_eq!(std::fs::read(&leaf).unwrap(), original);
         }
+    }
+}
+
+/// Saved stamp is the 1.0.70 download. The same `grok` alias now points at 1.0.77.
+#[cfg(unix)]
+#[test]
+fn grok_resume_revalidates_a_cli_upgrade_from_1_0_70_to_1_0_77() {
+    let f = Fixture::new();
+    let old = f
+        .root
+        .join("home/.grok/downloads/grok-1.0.70-macos-aarch64");
+    let upgraded = f
+        .root
+        .join("home/.grok/downloads/grok-1.0.77-macos-aarch64");
+    let alias = f.root.join("home/.grok/bin/grok");
+    f.executable(&old, "grok 1.0.70 (build70)");
+    std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&old, &alias).unwrap();
+    f.prepare("");
+    let stamp = f.root.join("capture/grok-executable.json");
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&stamp).unwrap()).unwrap();
+    let canonical = saved["stamp"]["canonical_path"].as_str().unwrap();
+    assert!(
+        canonical.ends_with("grok-1.0.70-macos-aarch64"),
+        "prepare must stamp the 1.0.70 target, got {canonical}"
+    );
+    assert_eq!(saved["alias"], alias.to_string_lossy().as_ref());
+    f.executable(&upgraded, "grok 1.0.77 (build77)");
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&upgraded, &alias).unwrap();
+    let spec = f.spec("", true);
+    let captured = capture_args(&spec.hooks, &f.project);
+    assert!(
+        captured.is_ok(),
+        "saved stamp is grok 1.0.70 metadata and the alias now resolves to 1.0.77, but load() blocked: {captured:?}"
+    );
+    let refreshed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&stamp).unwrap()).unwrap();
+    let canonical = refreshed["stamp"]["canonical_path"].as_str().unwrap();
+    assert!(
+        canonical.ends_with("grok-1.0.77-macos-aarch64"),
+        "resume must rewrite the stamp to the 1.0.77 target, got {canonical}"
+    );
+    assert_eq!(
+        refreshed["stamp"]["size"].as_u64(),
+        Some(std::fs::metadata(&upgraded).unwrap().len())
+    );
+    assert_eq!(refreshed["alias"], alias.to_string_lossy().as_ref());
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_resume_still_blocks_a_missing_or_non_executable_alias() {
+    for change in ["removed", "not-executable"] {
+        let f = Fixture::new();
+        let target = f
+            .root
+            .join("home/.grok/downloads/grok-1.0.70-macos-aarch64");
+        let alias = f.root.join("home/.grok/bin/grok");
+        f.executable(&target, "grok 1.0.70 (build70)");
+        std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        f.prepare("");
+        match change {
+            "removed" => std::fs::remove_file(&alias).unwrap(),
+            "not-executable" => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let spec = f.spec("", true);
+        let error = capture_args(&spec.hooks, &f.project).unwrap_err();
+        assert!(
+            !error.contains("Saved Grok executable changed"),
+            "{change} must keep its current hard error, got {error}"
+        );
+        if change == "not-executable" {
+            assert_eq!(error, "Saved Grok executable is not executable");
+        } else {
+            assert!(
+                error.contains("No such file") || error.contains("os error 2"),
+                "{error}"
+            );
+        }
+        assert!(launch::environment(&spec.hooks).is_err(), "{change}");
     }
 }
