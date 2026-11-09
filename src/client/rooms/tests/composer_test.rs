@@ -833,3 +833,26 @@ fn composer_pending_attachment_uses_the_validated_canonical_path() {
     assert!(settled && stopped, "the scratch coordinator must settle and stop");
     assert_eq!(actual, vec![vec![canonical]], "pending files must use the same canonical path as acknowledged attachments");
 }
+
+#[test]
+fn split_sgr_mouse_report_across_a_read_boundary_stays_out_of_the_composer() {
+    let (mut ui, room, _) = fixture();
+    let mut framer = crate::protocol::keys::host::RawInputByteFramer::for_host_input();
+    // The Unix reader idle-flushes twice when the first flush emits nothing.
+    assert!(framer.push(b"\x1b[<35").is_empty());
+    assert!(framer.flush_timeout().is_empty());
+    assert!(framer.flush_timeout().is_empty());
+    let mut chunks = framer.push(b";122;5M\x1b[<35;117;7M\x1b[<35;112;8M");
+    chunks.extend(framer.flush_timeout());
+    for chunk in chunks {
+        for event in crate::protocol::keys::host::parse_raw_input_bytes_sync(&chunk) {
+            ui.input(&event, false, &mut Default::default());
+        }
+    }
+    assert_eq!(
+        ui.locals[&room].text.text, "",
+        "a split SGR mouse report must not be typed into the composer"
+    );
+    key(&mut ui, KeyCode::Char('a'), KeyModifiers::NONE);
+    assert_eq!(ui.locals[&room].text.text, "a");
+}

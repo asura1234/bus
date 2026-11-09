@@ -269,6 +269,11 @@ impl RawInputByteFramer {
         let keep_discarding = match family {
             ControlStringFamily::HostReplyCsi => return,
             ControlStringFamily::OrphanedSgrMouseTail => {
+                // An empty idle flush means the tail has not arrived yet. The
+                // Unix reader flushes twice; clearing here typed `;122;5M`.
+                if self.buffer.is_empty() {
+                    return;
+                }
                 self.buffer.clear();
                 self.discard_until = None;
                 self.discarded_tail_bytes = 0;
