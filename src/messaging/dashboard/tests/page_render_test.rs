@@ -249,3 +249,25 @@ fn page_splits_delivery_launches_and_failures_across_three_tabs() {
     assert!(page.contains("cause:'external'"));
     assert!(page.contains("fetch('/data'"));
 }
+
+#[test]
+fn errors_tab_ranks_failures_and_labels_caller_errors() {
+    let page =
+        String::from_utf8(response_for(Path::new("/nonexistent-dashboard-page"), "GET", "/").body)
+            .unwrap();
+    assert!(page.contains("id=\"failure-ranks\""));
+    assert!(page.contains("Top failures by reason"));
+    assert!(page.contains("<th>Rank</th><th>Reason</th><th>Responsibility</th><th>Count</th><th>Share</th><th>Stages</th>"));
+    assert!(
+        page.contains("renderFailureRanking();"),
+        "the ranking renders with the page"
+    );
+    assert!(
+        page.contains("f.reason==='agent_deleted'||f.reason==='room_deleted'?'Caller error'"),
+        "sends to a deleted recipient are a caller error"
+    );
+    assert!(
+        !page.contains("<th>Request</th>"),
+        "the request column was noise beside the message"
+    );
+}
