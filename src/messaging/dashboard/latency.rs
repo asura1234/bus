@@ -40,7 +40,9 @@ pub(super) fn accepted_to_picked_ms(request: &Request) -> Option<u64> {
 }
 
 /// Ready-queue time for a message that waited for an idle agent. A steer joins
-/// a running turn, so it has no ready-queue sample.
+/// a running turn, so it has no ready-queue sample. The delivery page no longer
+/// reads this; the busy-steer tests do.
+#[cfg(test)]
 pub(crate) fn ready_queue_sample(request: &Request) -> Option<u64> {
     let latency = &request.latency;
     (latency.ready_at_enqueue && !latency.agent_waited && !request.steered)
