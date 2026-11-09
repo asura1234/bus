@@ -6,7 +6,7 @@ use super::{
 use crate::agents::providers::launch;
 use crate::agents::resume::catalog::{self, AgentSessionRefKind};
 use crate::messaging::identity;
-use crate::messaging::model::{LaunchKind, LaunchOutcome, StartupRecovery};
+use crate::messaging::model::{ExitSnapshot, LaunchKind, LaunchOutcome, StartupRecovery};
 use serde_json::{json, Value};
 
 /// Old snapshots may have confirmed hooks solely from file contents. Hold
@@ -350,24 +350,99 @@ impl Worker {
         {
             return Ok(());
         }
-        let closed = self
-            .transport
-            .request(Method::PaneCloseIfIdentity(
-                schema::PaneCloseIfIdentityParams {
-                    pane_id: pane.clone(),
-                    expected_terminal_id: terminal.clone(),
-                    expected_agent: identity::provider_kind(agent.provider).label().into(),
-                    expected_managed_name: identity::managed_name(agent.room_id, agent.id),
-                    expected_session_id: agent.runtime_identity.session_id.clone(),
-                    close_exited_shell: true,
-                    allow_busy_shell: false,
-                },
-            ))
-            .map_err(|e| format!("Previous pane could not be safely closed: {}", e.message))?;
-        if matches!(closed, ResponseResult::Ok {}) {
-            Ok(())
-        } else {
-            Err("Previous pane close is unconfirmed; no provider was launched".into())
+        let pane = pane.clone();
+        let terminal = terminal.clone();
+        let closed = self.transport.request(Method::PaneCloseIfIdentity(
+            schema::PaneCloseIfIdentityParams {
+                pane_id: pane.clone(),
+                expected_terminal_id: terminal.clone(),
+                expected_agent: identity::provider_kind(agent.provider).label().into(),
+                expected_managed_name: identity::managed_name(agent.room_id, agent.id),
+                expected_session_id: agent.runtime_identity.session_id.clone(),
+                close_exited_shell: true,
+                allow_busy_shell: false,
+            },
+        ));
+        match closed {
+            Ok(ResponseResult::Ok {}) => Ok(()),
+            Ok(_) => Err("Previous pane close is unconfirmed; no provider was launched".into()),
+            Err(error) => {
+                self.resume_after_replaced_terminal(agent.id, &pane, &terminal, &error.message)
+            }
         }
+    }
+
+    /// A restarted session keeps the pane id and puts a new terminal in it.
+    /// The saved terminal is already gone; closing this pane would close the
+    /// replacement. Record the saved terminal closed so the early return in
+    /// `close_resume_terminal` applies. A pane whose terminal still matches
+    /// stays blocked: it may still host the provider.
+    fn resume_after_replaced_terminal(
+        &mut self,
+        id: AgentId,
+        pane: &str,
+        terminal: &str,
+        message: &str,
+    ) -> Result<(), String> {
+        if !self.saved_pane_has_replacement_terminal(pane, terminal) {
+            return Err(format!(
+                "Previous pane could not be safely closed: {message}"
+            ));
+        }
+        self.record_restarted_terminal_closed(id, terminal)?;
+        let refreshed = self
+            .state
+            .agent(id)
+            .cloned()
+            .ok_or("Saved agent disappeared")?;
+        self.close_resume_terminal(&refreshed)
+    }
+
+    /// The saved pane is still there, on a different non-empty terminal.
+    /// Anything else is not proof the saved terminal was replaced.
+    fn saved_pane_has_replacement_terminal(&mut self, pane_id: &str, saved_terminal: &str) -> bool {
+        match self.transport.request(Method::PaneGet(schema::PaneTarget {
+            pane_id: pane_id.to_owned(),
+        })) {
+            Ok(ResponseResult::PaneInfo { pane }) => {
+                pane.pane_id == pane_id
+                    && !pane.terminal_id.is_empty()
+                    && pane.terminal_id != saved_terminal
+            }
+            _ => false,
+        }
+    }
+
+    /// The dead session already dropped this terminal. Keep the pane id: the
+    /// replacement pane is the restarted session's, not something resume closed.
+    fn record_restarted_terminal_closed(
+        &mut self,
+        id: AgentId,
+        terminal: &str,
+    ) -> Result<(), String> {
+        let mut state = self.state.clone();
+        let snapshot = {
+            let agent = state.agent(id).ok_or("Saved agent disappeared")?;
+            let mut snapshot = agent
+                .exit_snapshot
+                .clone()
+                .filter(|snapshot| snapshot.terminal_id == terminal)
+                .unwrap_or_else(|| ExitSnapshot {
+                    launch_id: agent.runtime_identity.launch_id.clone(),
+                    terminal_id: terminal.to_owned(),
+                    path: None,
+                    error: Some("Saved terminal was closed when its session restarted".into()),
+                    tail: String::new(),
+                    at_ms: super::io::now_ms(),
+                    terminal_closed: Some(true),
+                });
+            snapshot.terminal_id = terminal.to_owned();
+            snapshot.terminal_closed = Some(true);
+            snapshot
+        };
+        state
+            .record_exit_snapshot(id, snapshot)
+            .map_err(|error| error.to_string())?;
+        self.save(state)
     }
 }

@@ -866,6 +866,9 @@ mod launch_boundaries_tests;
 #[path = "launch_resume_test.rs"]
 mod launch_resume_tests;
 
+#[path = "restart_pane_close_test.rs"]
+mod restart_pane_close_tests;
+
 #[test]
 fn kimi_restore_preserves_a_persisted_provider_hold_until_its_original_request_can_retry() {
     #[cfg(target_os = "macos")]
