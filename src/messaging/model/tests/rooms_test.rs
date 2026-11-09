@@ -285,6 +285,46 @@ fn pending_deletion_rejects_new_work_even_with_an_empty_draft() {
 }
 
 #[test]
+fn submit_to_a_deleted_agent_records_nothing() {
+    let (mut state, room, _agent, _) = state_with_room_and_agents();
+    let retired = state
+        .create_agent(room, "gone", Provider::Codex, PathBuf::from("/repo"), None)
+        .unwrap();
+    state.delete_agent(retired, 1).unwrap();
+    let before = state.clone();
+    let error = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "late".into(),
+                files: Vec::new(),
+                recipient_ids: [retired].into(),
+            },
+            Author::Developer,
+            30,
+            false,
+        )
+        .expect_err("a deleted recipient is refused");
+    assert_eq!(
+        error,
+        ModelError::RecipientDeleted {
+            agent: retired,
+            name: "gone".into(),
+        }
+    );
+    let text = error.to_string();
+    assert_eq!(
+        text,
+        format!(
+            "Recipient gone (agent {}) no longer exists; the message was not sent",
+            retired.0
+        )
+    );
+    assert!(is_recipient_deleted_refusal(&text));
+    assert_eq!(state, before);
+}
+
+#[test]
 fn drafts_and_names_are_room_local_and_ids_survive_renames() {
     let (mut state, first, agent, _) = state_with_room_and_agents();
     let second = state.create_room("second").expect("second room");

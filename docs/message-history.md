@@ -15,7 +15,9 @@ belong to the client log. Permanent errors retain their terminal failure handlin
 
 Deleted participants render as `NAME [deleted]` in history and message status.
 Retired identities are never resumed runtimes. Stale recipient IDs are refused rather than forwarded; names resolve to
-current live agents, or fail if no live match exists. Room history
+current live agents, or fail if no live match exists. A send to an already deleted or retired recipient fails with
+`recipient_deleted`: it names the recipient, says that agent no longer exists and the message was not sent, and records
+nothing. A message already queued when its agent is deleted still settles as `agent_deleted`. Room history
 accepts a deleted room's numeric ID. Live room names resolve first; deleted names
 are a fallback when unambiguous among deleted rooms. An old archive
 that lacks identity tombstones remains readable with `Agent ID [deleted]` as the

@@ -659,3 +659,179 @@ fn notify_you_worker_can_post_in_any_work_room() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn durable_bytes(path: &std::path::Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_default()
+}
+
+/// Dashboard failure rows are the settled requests in state. A refused send
+/// must not add one, and must not append history or the draft journal.
+fn failure_rows(worker: &Worker) -> Vec<(u64, String)> {
+    let mut rows: Vec<_> = worker
+        .state
+        .requests()
+        .filter(|request| {
+            request.failure_reason.is_some() || request.phase == RequestPhase::Abandoned
+        })
+        .map(|request| {
+            (
+                request.id.0,
+                request.failure_reason.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn send_to_a_deleted_or_retired_recipient_fails_before_anything_is_persisted() {
+    let (mut worker, room, live, dir) = fixture();
+    let retired = worker
+        .state
+        .create_agent(room, "gone", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    worker.state.delete_agent(retired, 1).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let before = worker.state.clone();
+    let state_file = durable_bytes(&dir.join("state.json"));
+    let journal = durable_bytes(&dir.join("state.journal.json"));
+    let history = durable_bytes(&dir.join("history.jsonl"));
+    let failures = failure_rows(&worker);
+    let expected = format!(
+        "Recipient gone (agent {}) no longer exists; the message was not sent",
+        retired.0
+    );
+    let selectors = [retired.0.to_string(), "gone".to_owned()];
+    for (index, selector) in selectors.iter().enumerate() {
+        for (kind, author) in [("cli", None), ("agent", Some(live))] {
+            let mut params = json!({
+                "room": room.0.to_string(),
+                "to": [selector],
+                "text": "late ping",
+            });
+            if let Some(author) = author {
+                params["as"] = json!(author.0.to_string());
+            }
+            let sent = call(
+                &mut worker,
+                &format!("deleted-{kind}-{index}"),
+                "message.send",
+                params,
+            );
+            let error = sent.error.expect("deleted recipient is refused");
+            assert_eq!(
+                error.code, "recipient_deleted",
+                "{kind}/{selector}: {error:?}"
+            );
+            assert_eq!(error.message, expected, "{kind}/{selector}");
+            assert!(
+                error.message.contains(selector),
+                "{kind}/{selector}: {error:?}"
+            );
+            assert!(sent.result.is_null());
+        }
+    }
+    let mixed = call(
+        &mut worker,
+        "deleted-mixed",
+        "message.send",
+        json!({"room": room.0.to_string(), "to": [live.0.to_string(), retired.0.to_string()], "text": "partial"}),
+    );
+    let mixed = mixed.error.expect("a mixed list is refused");
+    assert_eq!(mixed.code, "recipient_deleted");
+    assert_eq!(mixed.message, expected);
+    let unknown = call(
+        &mut worker,
+        "never-existed",
+        "message.send",
+        json!({"room": room.0.to_string(), "to": ["never-existed"], "text": "no such agent"}),
+    );
+    let unknown = unknown
+        .error
+        .expect("an unknown recipient stays command_failed");
+    assert_eq!(unknown.code, "command_failed");
+    assert!(!unknown.message.contains("no longer exists"), "{unknown:?}");
+    let (events, _) = mpsc::channel();
+    let submitted = worker.command(
+        BusCommand::Submit(
+            room,
+            Draft {
+                text: "stale composer".into(),
+                files: Vec::new(),
+                recipient_ids: [retired].into(),
+            },
+        ),
+        &events,
+    );
+    let submitted = submitted.expect_err("composer send to a retired id is refused");
+    assert_eq!(submitted, expected);
+    assert!(
+        worker.error.is_none(),
+        "a refused composer send raised coordinator_error"
+    );
+    assert_eq!(
+        worker.state, before,
+        "a refused send changed messaging state"
+    );
+    assert_eq!(durable_bytes(&dir.join("state.json")), state_file);
+    assert_eq!(durable_bytes(&dir.join("state.journal.json")), journal);
+    assert_eq!(durable_bytes(&dir.join("history.jsonl")), history);
+    assert_eq!(failure_rows(&worker), failures);
+    assert!(worker.state.requests().next().is_none());
+    assert!(worker.state.room(room).unwrap().latest_prompt.is_none());
+
+    let broadcast = call(
+        &mut worker,
+        "still-live",
+        "message.send",
+        json!({"room": room.0.to_string(), "to": ["all"], "text": "everyone still here"}),
+    );
+    assert!(broadcast.ok, "{broadcast:?}");
+    assert_eq!(
+        worker
+            .state
+            .requests()
+            .next()
+            .map(|request| request.agent_id),
+        Some(live)
+    );
+
+    worker.state.prepare_delete_agent(live).unwrap();
+    let pending = worker.state.clone();
+    let deleting = call(
+        &mut worker,
+        "still-deleting",
+        "message.send",
+        json!({"room": room.0.to_string(), "to": [live.0.to_string()], "text": "too late"}),
+    );
+    let deleting = deleting.error.unwrap();
+    assert_ne!(deleting.code, "recipient_deleted");
+    assert!(deleting.message.contains("being deleted"), "{deleting:?}");
+    assert_eq!(worker.state, pending);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleting_an_agent_with_a_queued_message_still_settles_agent_deleted() {
+    let (mut worker, room, agent, dir) = fixture();
+    let queued = call(
+        &mut worker,
+        "queued-first",
+        "message.send",
+        json!({"room": room.0.to_string(), "to": [agent.0.to_string()], "text": "already queued"}),
+    );
+    assert!(queued.ok, "{queued:?}");
+    let request = RequestId(queued.result["request_ids"][0].as_u64().unwrap());
+    worker.state.delete_agent(agent, 2).unwrap();
+    let settled = worker.state.request(request).unwrap();
+    assert_eq!(settled.failure_reason.as_deref(), Some("agent_deleted"));
+    assert_eq!(settled.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        crate::messaging::model::classify_request_failure("agent_deleted"),
+        crate::messaging::model::RequestFailureClass::Deliberate
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

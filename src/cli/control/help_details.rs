@@ -22,6 +22,9 @@ pub(super) const CONTROL: &str = r#"JSON and common errors:
   id_conflict: reuse the original parameters, or use a new ID for a new operation.
   command_failed: inspect error.message and state; fix the named selector, provider,
     hook consent, identity, dialog or storage problem before retrying.
+  recipient_deleted: that agent no longer exists and the message was not sent.
+    The error names the recipient. Nothing was recorded. An agent deleted while
+    its message is already queued still settles that request as agent_deleted.
   confirmation_required: inspect the target, then explicitly supply --confirm.
   control_unavailable / transport_error: check the running session and absolute
     BUS_DATA_DIR (otherwise the last opened session is targeted). Control never
@@ -408,9 +411,13 @@ their content and receive the real header. Stored text stays authored; delivered
 payloads and callback matching use the same frozen text.
 orchestrator (case-insensitive) resolves the sender's home-room binding; a real
 member of the conversation room, then home room, with that name takes precedence.
-Deleted IDs and names without a live match are refused with a named error;
-Bus never substitutes a replacement or orchestrator for an explicit recipient.
-A current live name still resolves globally. No binding/match is command_failed.
+Deleted IDs and names without a live match fail with recipient_deleted. The error
+names the recipient, says that agent no longer exists, and says the message was
+not sent. Nothing is recorded. Bus never substitutes a replacement or
+orchestrator for an explicit recipient. A current live name still resolves
+globally. all means current live room members and does not fail because someone
+was previously deleted. An agent deleted while a message is already queued still
+settles that request as agent_deleted. No binding/match is command_failed.
 --to you (human alias, case-insensitive) requires an agent author and one recipient; no
 queue/async or mixed agent list. It stays in this room with requests:[],stage:posted.
 Agent posts to you always notify the developer in the TUI in every room; only
@@ -437,7 +444,9 @@ An explicit or inferred agent author async waiter renews a 3s lease deferring it
 are acknowledged. Killed waiters lose the lease; anonymous waits/status never
 suppress delivery.
 
-Errors: request_already_replied means different text was NOT sent; inspect result
+Errors: recipient_deleted means that agent no longer exists and the message was
+not sent; name a live recipient. request_already_replied means different text
+was NOT sent; inspect result
 {message_id,request_ids,request_complete:true,new_text_sent:false,existing_reply:
 {source:recipient_reply|captured_turn_final,received_at_ms,preview},inspect_command}.
 Preview is at most 160 characters plus ellipsis. Read full message status before

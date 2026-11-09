@@ -20,6 +20,15 @@ impl BusState {
         self.retired_agents.get(&id)
     }
 
+    /// Retired identities that still carry this exact name.
+    pub(crate) fn retired_named(&self, name: &str) -> Vec<(AgentId, String)> {
+        self.retired_agents
+            .iter()
+            .filter(|(_, agent)| agent.name == name)
+            .map(|(id, agent)| (*id, agent.name.clone()))
+            .collect()
+    }
+
     /// A numeric historical identity cannot be rebound to a replacement.
     pub(crate) fn is_retired_selector(&self, selector: &str) -> bool {
         selector

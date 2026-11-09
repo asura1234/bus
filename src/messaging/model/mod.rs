@@ -41,7 +41,9 @@ use requests::rejection_reason;
 
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 pub(crate) use developer_notifications::{developer_alerts, new_developer_notifications};
-pub(crate) use error::ModelError;
+pub(crate) use error::{
+    is_recipient_deleted_refusal, recipient_deleted_message, ModelError, RECIPIENT_DELETED_REFUSAL,
+};
 pub(crate) use history::{Archived, History};
 #[cfg(test)]
 pub(crate) use history::{ARCHIVE_AFTER_MS, HISTORY_RETENTION_MS};

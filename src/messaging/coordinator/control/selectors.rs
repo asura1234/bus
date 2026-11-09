@@ -15,12 +15,8 @@ impl Worker {
         if let Some(id) = self.exact_agent(selector) {
             return Ok(id);
         }
-        if selector
-            .parse::<u64>()
-            .ok()
-            .is_some_and(|id| self.state.retired_agent(AgentId(id)).is_some())
-        {
-            return Err(format!("No agent matches {selector:?}; it was deleted"));
+        if let Some(message) = self.retired_send_target(selector, recipient_alias) {
+            return Err(message);
         }
         // Normal names are globally unique. Retain the ambiguity guard for
         // legacy state read directly through the storage/recovery boundary.
@@ -55,10 +51,45 @@ impl Worker {
         if let Some(agent) = named {
             return Ok(agent.id);
         }
-        if self.state.is_retired_selector(selector) {
-            return Err(format!("No agent matches {selector:?}; it was deleted"));
-        }
         Err(format!("No agent matches {selector:?}"))
+    }
+
+    /// Live ids and names win. On a send, the orchestrator alias also wins over
+    /// a retired agent that happens to be named orchestrator. Anything else
+    /// that still matches a retired identity is refused before persistence.
+    pub(super) fn retired_send_target(
+        &self,
+        selector: &str,
+        recipient_alias: bool,
+    ) -> Option<String> {
+        if self.exact_agent(selector).is_some() {
+            return None;
+        }
+        if let Ok(raw) = selector.parse::<u64>() {
+            let id = AgentId(raw);
+            if let Some(retired) = self.state.retired_agent(id) {
+                return Some(crate::messaging::model::recipient_deleted_message(
+                    &retired.name,
+                    id,
+                ));
+            }
+        }
+        if self.state.agents().any(|agent| agent.name == selector) {
+            return None;
+        }
+        if recipient_alias && selector.eq_ignore_ascii_case("orchestrator") {
+            return None;
+        }
+        match self.state.retired_named(selector).as_slice() {
+            [] => None,
+            [(id, name)] => Some(crate::messaging::model::recipient_deleted_message(
+                name, *id,
+            )),
+            _ => Some(format!(
+                "Recipient {selector} {}",
+                crate::messaging::model::RECIPIENT_DELETED_REFUSAL
+            )),
+        }
     }
 
     /// Optional context is validated for named targets; it never narrows the

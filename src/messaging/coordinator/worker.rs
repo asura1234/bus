@@ -432,16 +432,29 @@ impl Worker {
                     #[cfg(test)]
                     self.observe_test_saves(Some(id), name, saves_before);
                     self.last_command_id = id;
+                    let quiet_refusal = result.as_ref().err().is_some_and(|error| {
+                        crate::messaging::model::is_recipient_deleted_refusal(error)
+                    });
                     if submitting {
-                        tracing::info!(
-                            event = "bus.message.accepted",
-                            command_id = id,
-                            outcome = if result.is_ok() { "queued" } else { "rejected" },
-                            "Bus submit command settled"
-                        );
+                        if quiet_refusal {
+                            tracing::debug!(
+                                event = "bus.message.not_sent",
+                                command_id = id,
+                                "Deleted recipient was not sent"
+                            );
+                        } else {
+                            tracing::info!(
+                                event = "bus.message.accepted",
+                                command_id = id,
+                                outcome = if result.is_ok() { "queued" } else { "rejected" },
+                                "Bus submit command settled"
+                            );
+                        }
                     }
                     if let Err(error) = &result {
-                        self.error = Some(error.clone());
+                        if !quiet_refusal {
+                            self.error = Some(error.clone());
+                        }
                     }
                     let _ = events.send(BusEvent::CommandFinished {
                         command_id: id,
