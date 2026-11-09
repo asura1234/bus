@@ -469,9 +469,12 @@ impl BusState {
     /// The request a message may steer into: the agent's current request while
     /// its turn visibly runs, or while the idle agent has no answer yet and
     /// waits for background work that turn started (shells, agents, crons),
-    /// bound by its submit hook, with no final reply yet. Only the lead's own
-    /// room can steer ordinary work; blocked-dialog notices may interrupt any
-    /// room's turn, including when older cross-room work heads the queue.
+    /// bound by its submit hook, with no final reply yet. A Working turn whose
+    /// native write already succeeded can take a steer before that hook binds.
+    /// A write that is still Submitting occupies the submission window, so the
+    /// queue waits for a later tick instead of typing over it. Only the lead's
+    /// own room can steer ordinary work; blocked-dialog notices may interrupt
+    /// any room's turn, including when older cross-room work heads the queue.
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
         if !matches!(
@@ -488,7 +491,7 @@ impl BusState {
         let lead = self.requests.get(&agent_state.current_request?)?;
         if (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
             || lead.phase != RequestPhase::Active
-            || !lead.trusted_start_bound
+            || (!lead.trusted_start_bound && agent_state.status != RuntimeStatus::Working)
             || lead.pending_final.is_some()
             || lead.turn_ended_at_ms.is_some()
             // An uncertain member may still occupy the native composer. Its

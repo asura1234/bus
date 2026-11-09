@@ -127,20 +127,7 @@ impl Worker {
                 .own_turns
                 .get(&agent.id)
                 .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
-            // Claude accepts follow-ups during a turn it started outside Bus,
-            // including while the native idle status still lags its start hook.
-            // The new request binds only when its own payload is reported.
-            let steer_unbound = agent.provider_retry.is_none()
-                && agent.provider == Provider::ClaudeCode
-                && agent.current_request.is_none()
-                && !agent.dialog
-                && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
-                && (agent.status == RuntimeStatus::Working || own_turn)
-                && self.state.next_queued_request(agent.id).is_some_and(|id| {
-                    self.state.request(id).is_some_and(|request| {
-                        self.state.can_join_turn(request) && request.room_id == agent.room_id
-                    })
-                });
+            let steer_unbound = self.steer_into_unbound_turn(&agent, own_turn);
             // The native status lags a turn the agent just began on its own (a
             // task notification, say); text typed then joins that turn and is
             // never seen starting. Its Stop, or the status catching up, ends this.
@@ -160,9 +147,45 @@ impl Worker {
             if self.deliver_launch_prompt(&agent)? {
                 continue;
             }
-            self.deliver_queued_request(&agent, waited, steer_unbound)?;
+            // A steer is one message, in queue order. Coalescing is only for
+            // text that waited until the agent was idle.
+            self.deliver_queued_request(&agent, waited && !steer_unbound, steer_unbound)?;
         }
         Ok(())
+    }
+
+    /// Whether the queue head can be typed into a turn Bus does not own yet.
+    ///
+    /// Claude accepts that follow-up while its idle status still lags a turn
+    /// it started itself. Any other provider that can take input does the same
+    /// once it is Working: the native `steer` flag, not an interrupt. Grok's
+    /// composer refuses a follow-up for the whole turn, so that provider stays
+    /// queued. Queue-only work, a restart, a dialog, and an explicit interrupt
+    /// stay queued too. A closed composer is the native submission window
+    /// (a few hundred milliseconds); a definite refusal returns the head
+    /// to the queue. This tick does not sleep.
+    fn steer_into_unbound_turn(&self, agent: &RoomAgent, own_turn: bool) -> bool {
+        if agent.interrupt_pending || agent.provider_retry.is_some() || agent.dialog {
+            return false;
+        }
+        let joinable = self
+            .state
+            .queued_requests(agent.id)
+            .first()
+            .copied()
+            .is_some_and(|id| {
+                self.state.request(id).is_some_and(|request| {
+                    self.state.can_join_turn(request) && request.room_id == agent.room_id
+                })
+            });
+        if !joinable || agent.current_request.is_some() {
+            return false;
+        }
+        let claude_lag = agent.provider == Provider::ClaudeCode
+            && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
+            && (agent.status == RuntimeStatus::Working || own_turn);
+        let busy = agent.status == RuntimeStatus::Working && agent.provider != Provider::Grok;
+        claude_lag || busy
     }
 
     /// Whether the queued head already waited for this agent.
@@ -471,6 +494,7 @@ impl Worker {
         &mut self,
         request: RequestId,
         waited: bool,
+        steer: bool,
         launch: &str,
         terminal: &str,
         pane: &str,
@@ -502,7 +526,7 @@ impl Worker {
             )
             .map_err(|e| e.to_string())?;
         state
-            .record_picked(request, io::now_ms(), waited)
+            .record_picked(request, io::now_ms(), waited || steer)
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.mark_open_dispatch(&mut state, request, DispatchMark::Notice);
@@ -536,7 +560,8 @@ impl Worker {
                 .request(request)
                 .is_some_and(super::Request::is_error_report),
         );
-        let (state, text) = self.prepare_native_prompt(request, waited, launch, terminal, pane)?;
+        let (state, text) =
+            self.prepare_native_prompt(request, waited, steer, launch, terminal, pane)?;
         self.save(state)?;
         self.mark_live_dispatch(request, DispatchMark::Save);
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");

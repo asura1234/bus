@@ -65,6 +65,8 @@ fn serve_connections(
     }
 }
 
+#[cfg(test)]
+pub(crate) use latency::ready_queue_sample;
 pub(crate) use service::open_in_browser;
 
 struct Response {
