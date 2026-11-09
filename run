@@ -54,6 +54,23 @@ print(found)
     printf '%s\n' "$executable"
 }
 
+# Keep only the executable in its build directory. Bus re-execs current_exe for
+# its native runtime helper, so the binary itself must stay; everything else
+# there (deps, build scripts, fingerprints, incremental state) is regenerable,
+# and shipping builds come from the prod/release path. Only acts inside this
+# checkout's own target, so an inherited CARGO_TARGET_DIR is never touched.
+prune_build_dir() {
+    local binary="$1" dir
+    dir=$(dirname -- "$binary")
+    case "$dir" in
+        "$REPO_ROOT"/target/*) ;;
+        *) return 0 ;;
+    esac
+    find "$dir" -mindepth 1 -maxdepth 1 ! -name "$(basename -- "$binary")" \
+        -exec rm -rf -- {} + 2>/dev/null || true
+    rm -rf -- "$REPO_ROOT/target/llvm-cov-target" 2>/dev/null || true
+}
+
 case "${1:-}" in
     test)
         shift
@@ -66,6 +83,7 @@ case "${1:-}" in
         shift
         cd "$REPO_ROOT"
         binary=$(build_bus --bin bus --features dev-tools) || exit $?
+        prune_build_dir "$binary"
         exec "$binary" --dev "$@"
         ;;
     prod)
