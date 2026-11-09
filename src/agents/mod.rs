@@ -21,7 +21,9 @@ mod identify;
 pub use identify::identify_agent;
 
 pub(crate) use self::catalog::parse_canonical_agent_label;
-pub use self::catalog::{agent_label, interactive_agent_executable, parse_agent_label, AgentKind};
+pub use self::catalog::{
+    agent_label, interactive_agent_executable, parse_agent_label, same_detected_agent, AgentKind,
+};
 pub(crate) use self::composer::{is_empty_codex_composer, CODEX_EMPTY_COMPOSER_PLACEHOLDERS};
 pub(crate) use self::detect::{
     detect_agent_with_launch_context, session_identity_only_integration,

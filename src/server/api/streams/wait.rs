@@ -331,7 +331,11 @@ fn scan_agent_wait_events(
                         .map(AgentWaitOutcome::Response)
                         .map(AgentWaitEventScan::Outcome);
                 }
-                if agent.is_some() && expected_agent.is_some() && &agent != expected_agent {
+                if agent.as_deref().is_some_and(|current| {
+                    expected_agent.as_deref().is_some_and(|expected| {
+                        !crate::agents::same_detected_agent(current, expected)
+                    })
+                }) {
                     return agent_wait_not_running(request_id.to_owned())
                         .map(AgentWaitOutcome::Response)
                         .map(AgentWaitEventScan::Outcome);
@@ -398,7 +402,9 @@ pub(super) fn agent_wait_identity_matches(
     agent.terminal_id == expected_terminal_id
         && expected_name.is_none_or(|name| agent.name.as_deref() == Some(name))
         && match (expected_agent, agent.agent.as_deref()) {
-            (Some(expected), Some(current)) => expected == current,
+            (Some(expected), Some(current)) => {
+                crate::agents::same_detected_agent(expected, current)
+            }
             (Some(_), None) => agent.name.is_some(),
             (None, _) => true,
         }

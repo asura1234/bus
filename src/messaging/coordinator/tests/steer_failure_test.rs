@@ -11,7 +11,7 @@ fn join(f: &mut Fixture, text: &str) -> RequestId {
 
 fn fail(f: &mut Fixture) -> String {
     let reason = match f.provider {
-        Provider::ClaudeCode => {
+        Provider::ClaudeCode | Provider::ClaudeDs => {
             f.record(
                 json!({"hook_event_name":"StopFailure","session_id":"session",
                 "prompt_id":"turn-1","error":"authentication_error",

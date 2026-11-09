@@ -104,7 +104,9 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
             }
-            ProviderKind::ClaudeCode => fixture.hooks.spool.join("claude-settings.json"),
+            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
+                fixture.hooks.spool.join("claude-settings.json")
+            }
             ProviderKind::Codex => fixture.root.join(".codex/hooks.json"),
             ProviderKind::Cursor => fixture.root.join(".cursor/hooks.json"),
             #[cfg(feature = "dev-tools")]
@@ -123,7 +125,7 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
             }
-            ProviderKind::ClaudeCode => {
+            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
                 claude_code::resume::capture_args(&fixture.hooks, &fixture.root)
             }
             ProviderKind::Codex => codex::resume::capture_args(&fixture.hooks, &fixture.root),
@@ -141,7 +143,7 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
             }
-            ProviderKind::ClaudeCode => assert_eq!(
+            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => assert_eq!(
                 args,
                 vec!["--settings".to_owned(), path.to_string_lossy().into_owned()]
             ),

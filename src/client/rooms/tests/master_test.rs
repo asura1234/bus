@@ -1063,12 +1063,14 @@ fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
         choices(&mut ui),
         [
             Provider::ClaudeCode,
+            Provider::ClaudeDs,
             Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi
         ]
     );
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     assert!(matches!(
         &ui.form,
@@ -1103,6 +1105,7 @@ fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
         [
             Provider::Codex,
             Provider::ClaudeCode,
+            Provider::ClaudeDs,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi

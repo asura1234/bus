@@ -61,7 +61,7 @@ svg{display:block}svg .bar{fill:var(--accent)}svg g[role=button]{cursor:pointer}
 </main>
 <script>
 'use strict';
-const $=id=>document.getElementById(id), names={all:'Whole session',claude:'Claude',codex:'Codex',kimi:'Kimi',grok:'Grok',cursor:'Cursor',unknown:'Unknown'};
+const $=id=>document.getElementById(id), names={all:'Whole session',claude:'Claude','claude-ds':'Claude DS',codex:'Codex',kimi:'Kimi',grok:'Grok',cursor:'Cursor',unknown:'Unknown'};
 let latest=null, selected={mode:'all',id:null}, drill={}, failureResponsibility='all';
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
 function button(text,action){const b=node('button',text);b.type='button';b.addEventListener('click',action);return b}

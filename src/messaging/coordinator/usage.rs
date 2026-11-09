@@ -83,7 +83,7 @@ impl Usage {
     pub(crate) fn retry_reset(&self, agent: &RoomAgent, now_ms: u64) -> Option<u64> {
         let snapshot = match agent.provider {
             Provider::Codex => self.codex.as_ref(),
-            Provider::ClaudeCode => self.claude.as_ref(),
+            Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
             _ => None,
         }?;
         if snapshot.observed_by_agent != agent.id || !snapshot.fresh(now_ms) {
@@ -236,7 +236,7 @@ impl Usage {
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.
     pub(crate) fn refresh_claude(&mut self, agent: &RoomAgent, spool: &Path) {
-        if agent.provider != Provider::ClaudeCode || agent.session_binding_invalidated {
+        if !agent.provider.uses_claude_harness() || agent.session_binding_invalidated {
             return;
         }
         let now = Instant::now();
@@ -252,7 +252,7 @@ impl Usage {
             return;
         };
         if record.manifest.agent_id != agent.id.0
-            || record.manifest.provider != ProviderKind::ClaudeCode
+            || !record.manifest.provider.uses_claude_harness()
             || Some(record.manifest.launch_id.as_str())
                 != agent.runtime_identity.launch_id.as_deref()
             || Some(record.session_id.as_str()) != agent.runtime_identity.session_id.as_deref()

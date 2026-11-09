@@ -1,5 +1,5 @@
 //! Observe launch outcomes without changing native launch or delivery behavior.
-use super::{io, launch, resume, schema, AgentId, BusState, Provider, RoomAgent, RoomId, Worker};
+use super::{io, resume, schema, AgentId, BusState, Provider, RoomAgent, RoomId, Worker};
 use crate::messaging::model::{AgentRuntimeIdentity, LaunchAttempt, LaunchKind, LaunchOutcome};
 
 impl Worker {
@@ -253,7 +253,9 @@ pub(super) fn observe(
         return Ok(());
     }
     let ready = info.is_some_and(|i| {
-        i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+        i.agent
+            .as_deref()
+            .is_some_and(|label| agent.provider.observes_label(label))
             && i.native_ready
             && i.interactive_ready
             && !i.launch_pending

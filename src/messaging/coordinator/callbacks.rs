@@ -313,8 +313,7 @@ impl Worker {
                 .rebind_reset_session(id, session)
                 .map_err(|e| e.to_string())?;
         }
-        if record.manifest.provider == Provider::ClaudeCode && source.as_deref() == Some("startup")
-        {
+        if record.manifest.provider.uses_claude_harness() && source.as_deref() == Some("startup") {
             state
                 .initialize_claude_shells(id)
                 .map_err(|e| e.to_string())?;

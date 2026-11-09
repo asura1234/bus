@@ -31,7 +31,10 @@ impl Worker {
             }
             return Ok(false);
         }
-        if !matches!(agent.provider, Provider::ClaudeCode | Provider::Codex) {
+        if !matches!(
+            agent.provider,
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::Codex
+        ) {
             return Ok(false);
         }
         let (terminal, _, _) = self.terminal_identity(id)?;

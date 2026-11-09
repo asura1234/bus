@@ -343,7 +343,7 @@ impl Fixture {
             | crate::agents::providers::ProviderKind::Kimi => panic!(
                 "This fixture covers the original providers; use dedicated Grok provider tests"
             ),
-            Provider::ClaudeCode => self
+            Provider::ClaudeCode | Provider::ClaudeDs => self
                 .root
                 .join("callbacks/owned-launch/claude-settings.json"),
             Provider::Codex => self.project.join(".codex/hooks.json"),
@@ -359,7 +359,7 @@ impl Fixture {
             | crate::agents::providers::ProviderKind::Kimi => panic!(
                 "This fixture covers the original providers; use dedicated Grok provider tests"
             ),
-            Provider::ClaudeCode => (
+            Provider::ClaudeCode | Provider::ClaudeDs => (
                 "claude-hook",
                 &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
             ),
@@ -727,7 +727,7 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
                 | crate::agents::providers::ProviderKind::Kimi => panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 ),
-                Provider::ClaudeCode => vec![
+                Provider::ClaudeCode | Provider::ClaudeDs => vec![
                     "--settings".to_owned(),
                     fixture.hook_path().to_string_lossy().into_owned(),
                 ],
@@ -1219,7 +1219,7 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
                 panic!("This fixture covers the original providers; use dedicated provider tests")
             }
             Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
-            Provider::ClaudeCode => vec![
+            Provider::ClaudeCode | Provider::ClaudeDs => vec![
                 "--settings".into(),
                 fixture.hook_path().to_string_lossy().into_owned(),
             ],

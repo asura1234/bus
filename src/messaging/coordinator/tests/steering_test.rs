@@ -280,7 +280,7 @@ impl Fixture {
             Provider::Grok => {
                 json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":turn,"prompt":prompt})
             }
-            Provider::ClaudeCode => {
+            Provider::ClaudeCode | Provider::ClaudeDs => {
                 json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":turn,"prompt":prompt})
             }
             Provider::Codex => {
@@ -300,7 +300,7 @@ impl Fixture {
     fn stopped(&self, turn: &str, text: &str) {
         match self.provider {
             crate::agents::providers::ProviderKind::Grok | crate::agents::providers::ProviderKind::Kimi => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
-            Provider::ClaudeCode => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
+            Provider::ClaudeCode | Provider::ClaudeDs => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
             Provider::Codex => self.record(json!({"hook_event_name":"Stop","session_id":"session","turn_id":turn,"last_assistant_message":text,"transcript_path":"/tmp/rollout.jsonl"})),
             Provider::Cursor => {
                 self.record(json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":turn,"text":text}));

@@ -40,6 +40,7 @@ impl Worker {
             "agent.add" => {
                 let provider = match required(p, "provider")? {
                     "claude" => Provider::ClaudeCode,
+                    "claude-ds" => Provider::ClaudeDs,
                     "codex" => Provider::Codex,
                     "cursor" => Provider::Cursor,
                     "grok" => Provider::Grok,
@@ -50,11 +51,10 @@ impl Worker {
                     {
                         Provider::Fake
                     }
-                    _ => {
-                        return Err(
-                            "Provider must be claude, codex, cursor, grok, kimi, or fake".into(),
-                        )
-                    }
+                    _ => return Err(
+                        "Provider must be claude, claude-ds, codex, cursor, grok, kimi, or fake"
+                            .into(),
+                    ),
                 };
                 let room = self.control_room(required(p, "room")?)?;
                 let master = self.state.master_room().is_some_and(|m| m.id == room);
@@ -443,7 +443,7 @@ fn needs_stop(
 /// Ctrl+C clears `[stop]`. A second Ctrl+C paints `Ctrl+c:press again to quit`.
 fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
-        Provider::ClaudeCode | Provider::Codex | Provider::Kimi => "esc",
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::Codex | Provider::Kimi => "esc",
         Provider::Cursor | Provider::Grok => "ctrl+c",
         #[cfg(feature = "dev-tools")]
         Provider::Fake => "esc",
@@ -454,7 +454,7 @@ fn interrupt_key(provider: Provider) -> &'static str {
 /// Codex's `/new` asks where the new conversation runs; `/clear` does not.
 fn clear_command(provider: Provider) -> &'static str {
     match provider {
-        Provider::ClaudeCode | Provider::Codex => "/clear",
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::Codex => "/clear",
         Provider::Cursor => "/new-chat",
         Provider::Grok => "/new",
         Provider::Kimi => "/new",

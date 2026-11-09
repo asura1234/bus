@@ -252,7 +252,9 @@ impl Worker {
             // own startup dialog, proves it started. Preserve that help wait.
             if native_error.is_none()
                 && info.is_some_and(|info| {
-                    info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                    info.agent
+                        .as_deref()
+                        .is_some_and(|label| agent.provider.observes_label(label))
                         && (info.interactive_ready
                             || info.launch_pending
                                 && (info.agent_status == schema::AgentStatus::Blocked
@@ -273,7 +275,9 @@ impl Worker {
             }
             let expired = now_ms.saturating_sub(startup.started_at_ms) >= STARTUP_TIMEOUT_MS;
             let process_present = terminal_info.is_some_and(|info| {
-                info.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                info.agent
+                    .as_deref()
+                    .is_some_and(|label| agent.provider.observes_label(label))
             });
             let process_exited = startup.process_observed && !process_present;
             // Startup confirmation is bounded independently of native ownership;

@@ -1,9 +1,6 @@
 //! Provider turn facts read beyond the hook's own verdict: background shells
 //! for wake ownership, and Codex usage from its rollout.
-use super::{
-    callbacks, AgentId, CallbackEventKind, Parsed, Path, Provider, ProviderCallback, ProviderKind,
-    Worker,
-};
+use super::{callbacks, AgentId, CallbackEventKind, Parsed, Path, ProviderCallback, Worker};
 
 impl Worker {
     pub(super) fn mark_scheduled_turn(
@@ -11,7 +8,7 @@ impl Worker {
         callback: &ProviderCallback,
         record: &callbacks::Record,
     ) -> bool {
-        if record.manifest.provider != Provider::ClaudeCode
+        if !record.manifest.provider.uses_claude_harness()
             || !matches!(callback.kind, super::CallbackEventKind::PromptStarted)
         {
             return true;
@@ -55,7 +52,7 @@ impl Worker {
         record: &callbacks::Record,
         parsed: &mut Parsed,
     ) -> Result<(), String> {
-        if record.manifest.provider != Provider::ClaudeCode {
+        if !record.manifest.provider.uses_claude_harness() {
             return Ok(());
         }
         let running = matches!(
@@ -165,7 +162,11 @@ pub(super) fn callback(
         launch_id: record.manifest.launch_id.clone(),
         provider_session_id: Some(session),
         provider_turn_id: Some(turn.clone()),
-        provider_prompt_id: (record.manifest.provider == ProviderKind::ClaudeCode).then_some(turn),
+        provider_prompt_id: record
+            .manifest
+            .provider
+            .uses_claude_harness()
+            .then_some(turn),
         prompt_payload: prompt,
         kind,
     }

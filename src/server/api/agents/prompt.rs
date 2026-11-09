@@ -181,7 +181,9 @@ pub(super) fn check_prompt_identity_and_idle(
         .is_some_and(|generation| generation != agent.generation)
         || agent.terminal_id != params.expected_terminal_id
         || agent.pane_id != params.expected_pane_id
-        || agent.agent.as_deref() != Some(params.expected_agent.as_str())
+        || !agent.agent.as_deref().is_some_and(|current| {
+            crate::agents::same_detected_agent(current, &params.expected_agent)
+        })
         || agent
             .agent_session
             .as_ref()

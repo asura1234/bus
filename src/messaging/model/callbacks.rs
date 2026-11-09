@@ -26,7 +26,7 @@ impl BusState {
         let Some(agent) = self.agents.get(&callback.agent_id) else {
             return;
         };
-        if agent.provider != super::Provider::ClaudeCode {
+        if !agent.provider.uses_claude_harness() {
             return;
         }
         let Some(request) = agent.current_request.and_then(|id| self.requests.get(&id)) else {

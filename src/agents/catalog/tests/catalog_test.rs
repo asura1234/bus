@@ -3,6 +3,7 @@ fn identify_known_agents() {
     assert_eq!(identify_agent("pi"), Some(AgentKind::Pi));
     assert_eq!(identify_agent("claude"), Some(AgentKind::Claude));
     assert_eq!(identify_agent("claude-code"), Some(AgentKind::Claude));
+    assert_eq!(identify_agent("claude-ds"), Some(AgentKind::Claude));
     assert_eq!(identify_agent("codex"), Some(AgentKind::Codex));
     assert_eq!(identify_agent("gemini"), Some(AgentKind::Gemini));
     assert_eq!(identify_agent("cursor"), Some(AgentKind::Cursor));

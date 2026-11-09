@@ -228,8 +228,9 @@ impl App {
                         .get(terminal_id)
                         .is_some_and(crate::server::terminals::agents::runtime_is_idle_shell));
         }
-        pane.agent.as_deref() == Some(params.expected_agent.as_str())
-            && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())
+        pane.agent.as_deref().is_some_and(|current| {
+            crate::agents::same_detected_agent(current, &params.expected_agent)
+        }) && terminal.agent_name.as_deref() == Some(params.expected_managed_name.as_str())
             && pane
                 .agent_session
                 .as_ref()

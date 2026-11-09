@@ -92,7 +92,7 @@ pub(crate) fn append(
     nested_provider: bool,
 ) -> io::Result<()> {
     let manifest: Manifest = serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
-    if manifest.launch_id != launch || manifest.provider != provider {
+    if manifest.launch_id != launch || !manifest.provider.observes_label(provider.label()) {
         return Err(io::Error::other("Bus callback launch identity mismatch"));
     }
     // Identical hooks share one spool file, so a hook retry counts once. A session

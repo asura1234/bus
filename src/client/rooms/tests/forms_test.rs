@@ -1322,6 +1322,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
     for provider in [
         Provider::Codex,
         Provider::ClaudeCode,
+        Provider::ClaudeDs,
         Provider::Cursor,
         Provider::Grok,
         Provider::Kimi,

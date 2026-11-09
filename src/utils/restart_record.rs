@@ -274,7 +274,7 @@ pub(crate) fn parse_identity(stdout: &str) -> Result<Identity, String> {
 pub(crate) fn identity_json() -> String {
     serde_json::json!({
         "sha": env!("BUS_BUILD_SHA"),
-        "providers": ["claude", "codex", "cursor", "grok", "kimi"],
+        "providers": ["claude", "claude-ds", "codex", "cursor", "grok", "kimi"],
     })
     .to_string()
 }
@@ -600,7 +600,7 @@ mod tests {
         let identity = parse_identity(&identity_json()).unwrap();
         assert_eq!(
             identity.providers,
-            ["claude", "codex", "cursor", "grok", "kimi"]
+            ["claude", "claude-ds", "codex", "cursor", "grok", "kimi"]
         );
     }
 
