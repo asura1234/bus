@@ -66,15 +66,48 @@ fn labeled_grok_border(line: &str) -> bool {
     let Some(label) = label.strip_suffix(" ─") else {
         return false;
     };
-    rule_run(rule) && model_label(grok_model_suffix(label))
+    rule_run(rule) && grok_label(label)
 }
 
-fn grok_model_suffix(label: &str) -> Option<&str> {
+fn grok_label(label: &str) -> bool {
     if let Some(model) = label.strip_prefix("Grok ") {
-        return Some(model);
+        return model_label(Some(model));
     }
-    let (prefix, model) = label.rsplit_once(" · Grok ")?;
-    weekly_limit_prefix(prefix).then_some(model)
+    let Some((prefix, tail)) = label.rsplit_once(" · Grok ") else {
+        return false;
+    };
+    weekly_limit_prefix(prefix) && weekly_tail(tail)
+}
+
+/// The quota label's tail after `Grok`: one model token, an optional
+/// `(effort)` token, and an optional `· status` token. `4.7 (high) ·
+/// always-approve` passes; prose with spaces in the model slot does not.
+fn weekly_tail(text: &str) -> bool {
+    let Some(rest) = take_border_token(text) else {
+        return false;
+    };
+    let rest = match rest.strip_prefix(" (") {
+        Some(inner) => {
+            let Some(rest) = take_border_token(inner) else {
+                return false;
+            };
+            let Some(rest) = rest.strip_prefix(')') else {
+                return false;
+            };
+            rest
+        }
+        None => rest,
+    };
+    let rest = rest.strip_prefix(" · ").unwrap_or(rest);
+    rest.is_empty() || take_border_token(rest).is_some_and(str::is_empty)
+}
+
+/// One border-label token: ASCII alphanumeric plus `.` and `-`, never a space.
+fn take_border_token(text: &str) -> Option<&str> {
+    let end = text
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
+        .unwrap_or(text.len());
+    (end > 0).then(|| &text[end..])
 }
 
 fn weekly_limit_prefix(prefix: &str) -> bool {
