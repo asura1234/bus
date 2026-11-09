@@ -39,6 +39,15 @@ pub(super) fn accepted_to_picked_ms(request: &Request) -> Option<u64> {
     elapsed(request.latency.accepted_at_ms, request.latency.picked_at_ms)
 }
 
+/// Ready-queue time for a message that waited for an idle agent. A steer joins
+/// a running turn, so it has no ready-queue sample.
+pub(crate) fn ready_queue_sample(request: &Request) -> Option<u64> {
+    let latency = &request.latency;
+    (latency.ready_at_enqueue && !latency.agent_waited && !request.steered)
+        .then(|| elapsed(latency.queued_at_ms, latency.picked_at_ms))
+        .flatten()
+}
+
 pub(super) fn elapsed(start: Option<u64>, end: Option<u64>) -> Option<u64> {
     end?.checked_sub(start?)
 }
