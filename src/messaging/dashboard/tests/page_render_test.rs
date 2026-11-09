@@ -172,22 +172,37 @@ fn page_splits_delivery_launches_and_failures_across_three_tabs() {
     assert!(!page.contains("<select"));
     assert!(page.contains("role=\"tablist\""));
     assert!(page.contains("aria-label=\"Dashboard\""));
+    assert!(page.contains(
+        ".tabs button[aria-selected=true]{color:var(--accent);background:var(--selection);border-bottom-color:var(--accent)}"
+    ));
     let messaging_tab = page.find("id=\"tab-messaging\"").unwrap();
     let agent_tab = page.find("id=\"tab-agent\"").unwrap();
     let errors_tab = page.find("id=\"tab-errors\"").unwrap();
     assert!(messaging_tab < agent_tab && agent_tab < errors_tab);
-    assert!(page.contains("aria-selected=\"true\">Messaging</button>"));
-    assert!(page.contains("aria-selected=\"false\">Agent</button>"));
-    assert!(page.contains("aria-selected=\"false\">Errors</button>"));
+    assert!(page.contains("tabindex=\"0\" aria-selected=\"true\">Messaging</button>"));
+    assert!(page.contains("tabindex=\"-1\" aria-selected=\"false\">Agent</button>"));
+    assert!(page.contains("tabindex=\"-1\" aria-selected=\"false\">Errors</button>"));
+    assert!(page.contains("ArrowRight:1"));
+    assert!(page.contains("ArrowLeft:-1"));
+    assert!(page.contains("showTab(next,true)"));
 
     let messaging = page.find("id=\"messaging-view\"").unwrap();
     let agent = page.find("id=\"agent-view\"").unwrap();
     let errors = page.find("id=\"errors-view\"").unwrap();
     let script = page.find("<script>").unwrap();
+    assert!(page.find("id=\"dashboard-tabs\"").unwrap() < messaging);
     assert!(messaging < agent && agent < errors && errors < script);
-    assert!(page.contains("id=\"agent-view\" hidden"));
-    assert!(page.contains("id=\"errors-view\" hidden"));
-    assert!(!page.contains("id=\"messaging-view\" hidden"));
+    assert!(
+        page.contains("id=\"messaging-view\" role=\"tabpanel\" aria-labelledby=\"tab-messaging\">")
+    );
+    assert!(
+        page.contains("id=\"agent-view\" role=\"tabpanel\" aria-labelledby=\"tab-agent\" hidden")
+    );
+    assert!(
+        page.contains("id=\"errors-view\" role=\"tabpanel\" aria-labelledby=\"tab-errors\" hidden")
+    );
+    assert_eq!(page.matches("role=\"tabpanel\"").count(), 3);
+    assert_eq!(page.matches("role=\"tab\"").count(), 3);
 
     let messaging_html = &page[messaging..agent];
     let agent_html = &page[agent..errors];
