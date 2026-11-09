@@ -165,14 +165,14 @@ fn split_sgr_mouse_report_emits_hold_and_unparsed_events() {
         let mut framer = RawInputByteFramer::default();
         assert!(framer.push(b"\x1b[<0;20").is_empty());
         assert!(framer.flush_timeout().is_empty());
-        // The Unix reader flushes once more when that flush held the buffer.
+        // The Unix reader flushes once more while the orphaned tail is still absent.
         let _ = framer.flush_timeout();
         tail = framer.push(b";10M");
     });
-    // The tail is still delivered. Logging must not change what gets inserted.
-    assert_eq!(
-        tail,
-        vec![b";".to_vec(), b"1".to_vec(), b"0".to_vec(), b"M".to_vec()]
+    // That empty flush must not clear the discard. Logging must not insert the tail.
+    assert!(
+        tail.is_empty(),
+        "orphaned SGR tail must stay discarded, got {tail:?}"
     );
     let logs = capture.text();
     assert!(
