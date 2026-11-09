@@ -88,8 +88,9 @@ URL, serves one page with inline assets, and refreshes every thirty seconds.
 `BUS_DATA_DIR` selects an exact session root; otherwise the last session is read
 without recording a resume. It reads persisted state, journal and archived
 requests; it never sends control commands or saves session state. Stop with Ctrl+C.
-The page leads with delivery. A direct message counts as delivered once Bus
-hands it off, including when the recipient has not replied. Delivery % is
+The page has Messaging, Agent, and Errors tabs. Messaging leads with delivery.
+A direct message counts as delivered once Bus hands it off, including when the
+recipient has not replied. Delivery % is
 delivered ÷ attempted and names that fraction plus the pending and failed
 counts. Pending is still open, with the oldest pending age. Failed messages
 are split into Bus-caused and external, with causes. The order is the delivery
@@ -105,9 +106,9 @@ the note and the counts line use an em dash and do not print 0/0. Provider and
 room rows show Delivered, Attempted, Pending, Delivery %, Bus failures,
 External, p50, p90, p99 and n. Attempted = Delivered + Pending + Bus failures +
 External. There is no per-recipient breakdown and no per-row cause list. Bus
-failure and external counts open undelivered request metadata and a copyable
-`bus message status MESSAGE_ID` command. The full classification is
-printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
+failure and external counts open the Errors tab: undelivered request metadata
+and a copyable `bus message status MESSAGE_ID` command. The full
+classification is on the Errors tab. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.
 
 Settings > Developer > Open delivery dashboard opens the attached session's
@@ -116,12 +117,12 @@ service for the current build. Discovery verifies the serving build; leases live
 under `dashboard-runtime/BUILD_SHA/`, and a new build cooperatively retires the
 previous service. These runtime files are separate from message/request records.
 
-The Agent launches view shows usable / (usable + failed) for tracked creation,
+The Agent tab shows usable / (usable + failed) for tracked creation,
 resume and recovery attempts, overall and by local start hour and provider.
 Pending attempts and deliberate cancellations are shown separately. Usability
 requires identity-matched process and prompt readiness, or a trusted new-message
 start; saved identity and failed native observations do not establish success or
-failure. Native restores use their first-observed time. The view labels when
+failure. Native restores use their first-observed time. The tab labels when
 tracking began: earlier launches have no durable outcome history and are not
 backfilled from the current roster. Failure counts and causes open a bounded list
 with the saved attempt identity, provider, time, cause and log/record references.

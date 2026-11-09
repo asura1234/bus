@@ -164,3 +164,110 @@ fn latency_series_and_page_do_not_reference_reply_timestamps() {
     assert!(page.contains("accepted_to_picked"));
     assert!(metrics.contains("accepted_to_picked"));
 }
+
+#[test]
+fn page_splits_delivery_launches_and_failures_across_three_tabs() {
+    let page = page();
+    assert!(!page.contains("id=\"view-mode\""));
+    assert!(!page.contains("<select"));
+    assert!(page.contains("role=\"tablist\""));
+    assert!(page.contains("aria-label=\"Dashboard\""));
+    assert!(page.contains(
+        ".tabs button[aria-selected=true]{color:var(--accent);background:var(--selection);border-bottom-color:var(--accent)}"
+    ));
+    let messaging_tab = page.find("id=\"tab-messaging\"").unwrap();
+    let agent_tab = page.find("id=\"tab-agent\"").unwrap();
+    let errors_tab = page.find("id=\"tab-errors\"").unwrap();
+    assert!(messaging_tab < agent_tab && agent_tab < errors_tab);
+    assert!(page.contains("tabindex=\"0\" aria-selected=\"true\">Messaging</button>"));
+    assert!(page.contains("tabindex=\"-1\" aria-selected=\"false\">Agent</button>"));
+    assert!(page.contains("tabindex=\"-1\" aria-selected=\"false\">Errors</button>"));
+    assert!(page.contains("ArrowRight:1"));
+    assert!(page.contains("ArrowLeft:-1"));
+    assert!(page.contains("showTab(next,true)"));
+
+    let messaging = page.find("id=\"messaging-view\"").unwrap();
+    let agent = page.find("id=\"agent-view\"").unwrap();
+    let errors = page.find("id=\"errors-view\"").unwrap();
+    let script = page.find("<script>").unwrap();
+    assert!(page.find("id=\"dashboard-tabs\"").unwrap() < messaging);
+    assert!(messaging < agent && agent < errors && errors < script);
+    assert!(
+        page.contains("id=\"messaging-view\" role=\"tabpanel\" aria-labelledby=\"tab-messaging\">")
+    );
+    assert!(
+        page.contains("id=\"agent-view\" role=\"tabpanel\" aria-labelledby=\"tab-agent\" hidden")
+    );
+    assert!(
+        page.contains("id=\"errors-view\" role=\"tabpanel\" aria-labelledby=\"tab-errors\" hidden")
+    );
+    assert_eq!(page.matches("role=\"tabpanel\"").count(), 3);
+    assert_eq!(page.matches("role=\"tab\"").count(), 3);
+
+    let messaging_html = &page[messaging..agent];
+    let agent_html = &page[agent..errors];
+    let errors_html = &page[errors..script];
+    assert!(messaging_html.contains("id=\"cards\""));
+    assert!(messaging_html.contains("aria-label=\"Provider delivery\""));
+    assert!(messaging_html.contains("aria-label=\"Room delivery\""));
+    assert!(messaging_html.contains("id=\"graph\""));
+    assert!(messaging_html.contains("<th>p50</th><th>p90</th><th>p99</th><th>n</th>"));
+    assert!(messaging_html.contains("id=\"bus-note\""));
+    assert!(!messaging_html.contains("id=\"failures\""));
+    assert!(!messaging_html.contains("How these are counted"));
+    assert!(page.contains("Delivery success"));
+    assert!(page.contains("Average latency"));
+    assert!(page.contains("Pending and failed"));
+    assert!(page.contains("combined.id='pending-failed'"));
+
+    assert!(agent_html.contains("Launches by provider"));
+    assert!(agent_html.contains("aria-label=\"Agent launch success by provider\""));
+    assert!(agent_html.contains("id=\"launch-graph\""));
+    assert!(agent_html.contains("id=\"launch-failure-section\""));
+    assert!(agent_html.contains("aria-label=\"Failed agent launch evidence\""));
+    assert!(!agent_html.contains("id=\"failures\""));
+
+    assert!(errors_html.contains("id=\"failure-section\""));
+    assert!(errors_html.contains("id=\"failures\""));
+    assert!(errors_html.contains("aria-label=\"Failed request evidence\""));
+    assert!(errors_html.contains(">Stage</th>"));
+    assert!(errors_html.contains(">Reason</th>"));
+    assert!(errors_html.contains(">Responsibility</th>"));
+    assert!(errors_html.contains("How these are counted"));
+    assert!(errors_html.contains("aria-label=\"Outcome classification\""));
+    assert!(errors_html.contains("aria-label=\"Failure responsibility\""));
+    assert!(errors_html.contains(">External</td>"));
+    assert!(errors_html.contains(">Bus-caused</td>"));
+    assert!(page.contains("showTab('errors')"));
+    assert!(page.contains("drill.mode==='providers'"));
+    assert!(page.contains("drill.mode==='rooms'"));
+    assert!(page.contains("f.hour_start_ms===drill.hour"));
+    assert!(page.contains("f.reason===drill.reason"));
+    assert!(page.contains("f.cause===drill.cause"));
+    assert!(page.contains("f.stage"));
+    assert!(page.contains("cause:'bus'"));
+    assert!(page.contains("cause:'external'"));
+    assert!(page.contains("fetch('/data'"));
+}
+
+#[test]
+fn errors_tab_ranks_failures_and_labels_caller_errors() {
+    let page =
+        String::from_utf8(response_for(Path::new("/nonexistent-dashboard-page"), "GET", "/").body)
+            .unwrap();
+    assert!(page.contains("id=\"failure-ranks\""));
+    assert!(page.contains("Top failures by reason"));
+    assert!(page.contains("<th>Rank</th><th>Reason</th><th>Responsibility</th><th>Count</th><th>Share</th><th>Stages</th>"));
+    assert!(
+        page.contains("renderFailureRanking();"),
+        "the ranking renders with the page"
+    );
+    assert!(
+        page.contains("f.reason==='agent_deleted'||f.reason==='room_deleted'?'Caller error'"),
+        "sends to a deleted recipient are a caller error"
+    );
+    assert!(
+        !page.contains("<th>Request</th>"),
+        "the request column was noise beside the message"
+    );
+}
