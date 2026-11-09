@@ -164,3 +164,73 @@ fn latency_series_and_page_do_not_reference_reply_timestamps() {
     assert!(page.contains("accepted_to_picked"));
     assert!(metrics.contains("accepted_to_picked"));
 }
+
+#[test]
+fn page_splits_delivery_launches_and_failures_across_three_tabs() {
+    let page = page();
+    assert!(!page.contains("id=\"view-mode\""));
+    assert!(!page.contains("<select"));
+    assert!(page.contains("role=\"tablist\""));
+    assert!(page.contains("aria-label=\"Dashboard\""));
+    let messaging_tab = page.find("id=\"tab-messaging\"").unwrap();
+    let agent_tab = page.find("id=\"tab-agent\"").unwrap();
+    let errors_tab = page.find("id=\"tab-errors\"").unwrap();
+    assert!(messaging_tab < agent_tab && agent_tab < errors_tab);
+    assert!(page.contains("aria-selected=\"true\">Messaging</button>"));
+    assert!(page.contains("aria-selected=\"false\">Agent</button>"));
+    assert!(page.contains("aria-selected=\"false\">Errors</button>"));
+
+    let messaging = page.find("id=\"messaging-view\"").unwrap();
+    let agent = page.find("id=\"agent-view\"").unwrap();
+    let errors = page.find("id=\"errors-view\"").unwrap();
+    let script = page.find("<script>").unwrap();
+    assert!(messaging < agent && agent < errors && errors < script);
+    assert!(page.contains("id=\"agent-view\" hidden"));
+    assert!(page.contains("id=\"errors-view\" hidden"));
+    assert!(!page.contains("id=\"messaging-view\" hidden"));
+
+    let messaging_html = &page[messaging..agent];
+    let agent_html = &page[agent..errors];
+    let errors_html = &page[errors..script];
+    assert!(messaging_html.contains("id=\"cards\""));
+    assert!(messaging_html.contains("aria-label=\"Provider delivery\""));
+    assert!(messaging_html.contains("aria-label=\"Room delivery\""));
+    assert!(messaging_html.contains("id=\"graph\""));
+    assert!(messaging_html.contains("<th>p50</th><th>p90</th><th>p99</th><th>n</th>"));
+    assert!(messaging_html.contains("id=\"bus-note\""));
+    assert!(!messaging_html.contains("id=\"failures\""));
+    assert!(!messaging_html.contains("How these are counted"));
+    assert!(page.contains("Delivery success"));
+    assert!(page.contains("Average latency"));
+    assert!(page.contains("Pending and failed"));
+    assert!(page.contains("combined.id='pending-failed'"));
+
+    assert!(agent_html.contains("Launches by provider"));
+    assert!(agent_html.contains("aria-label=\"Agent launch success by provider\""));
+    assert!(agent_html.contains("id=\"launch-graph\""));
+    assert!(agent_html.contains("id=\"launch-failure-section\""));
+    assert!(agent_html.contains("aria-label=\"Failed agent launch evidence\""));
+    assert!(!agent_html.contains("id=\"failures\""));
+
+    assert!(errors_html.contains("id=\"failure-section\""));
+    assert!(errors_html.contains("id=\"failures\""));
+    assert!(errors_html.contains("aria-label=\"Failed request evidence\""));
+    assert!(errors_html.contains(">Stage</th>"));
+    assert!(errors_html.contains(">Reason</th>"));
+    assert!(errors_html.contains(">Responsibility</th>"));
+    assert!(errors_html.contains("How these are counted"));
+    assert!(errors_html.contains("aria-label=\"Outcome classification\""));
+    assert!(errors_html.contains("aria-label=\"Failure responsibility\""));
+    assert!(errors_html.contains(">External</td>"));
+    assert!(errors_html.contains(">Bus-caused</td>"));
+    assert!(page.contains("showTab('errors')"));
+    assert!(page.contains("drill.mode==='providers'"));
+    assert!(page.contains("drill.mode==='rooms'"));
+    assert!(page.contains("f.hour_start_ms===drill.hour"));
+    assert!(page.contains("f.reason===drill.reason"));
+    assert!(page.contains("f.cause===drill.cause"));
+    assert!(page.contains("f.stage"));
+    assert!(page.contains("cause:'bus'"));
+    assert!(page.contains("cause:'external'"));
+    assert!(page.contains("fetch('/data'"));
+}
