@@ -412,50 +412,7 @@ impl Worker {
                     }
                 }
                 Ok((id, command)) => {
-                    self.active_command_id = id;
-                    let submitting = matches!(
-                        command,
-                        BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
-                    );
-                    let _span = tracing::debug_span!("bus.command", command_id = id).entered();
-                    let name = perf::command_name(&command);
-                    let started = std::time::Instant::now();
-                    #[cfg(test)]
-                    let saves_before = self.store.writes();
-                    let result = if self.storage_pause.is_some() {
-                        Err(self.storage_notice().into())
-                    } else {
-                        self.delay_dev_command();
-                        self.command(command, &events)
-                    };
-                    perf::COMMAND.record_op(started.elapsed(), name);
-                    #[cfg(test)]
-                    self.observe_test_saves(Some(id), name, saves_before);
-                    self.last_command_id = id;
-                    let quiet_refusal = result.as_ref().err().is_some_and(|error| {
-                        crate::messaging::model::is_recipient_deleted_refusal(error)
-                    });
-                    if submitting {
-                        if quiet_refusal {
-                            tracing::debug!(
-                                event = "bus.message.not_sent",
-                                command_id = id,
-                                "Deleted recipient was not sent"
-                            );
-                        } else {
-                            tracing::info!(
-                                event = "bus.message.accepted",
-                                command_id = id,
-                                outcome = if result.is_ok() { "queued" } else { "rejected" },
-                                "Bus submit command settled"
-                            );
-                        }
-                    }
-                    if let Err(error) = &result {
-                        if !quiet_refusal {
-                            self.error = Some(error.clone());
-                        }
-                    }
+                    let result = self.run_command(id, command, &events);
                     let _ = events.send(BusEvent::CommandFinished {
                         command_id: id,
                         result,
@@ -492,6 +449,60 @@ impl Worker {
             busy.stage("snapshot");
             self.publish_snapshot(&snapshots);
         }
+    }
+
+    fn run_command(
+        &mut self,
+        id: u64,
+        command: BusCommand,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        self.active_command_id = id;
+        let submitting = matches!(
+            command,
+            BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
+        );
+        let _span = tracing::debug_span!("bus.command", command_id = id).entered();
+        let name = perf::command_name(&command);
+        let started = std::time::Instant::now();
+        #[cfg(test)]
+        let saves_before = self.store.writes();
+        let result = if self.storage_pause.is_some() {
+            Err(self.storage_notice().into())
+        } else {
+            self.delay_dev_command();
+            self.command(command, events)
+        };
+        perf::COMMAND.record_op(started.elapsed(), name);
+        #[cfg(test)]
+        self.observe_test_saves(Some(id), name, saves_before);
+        self.last_command_id = id;
+        let quiet_refusal = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| crate::messaging::model::is_recipient_deleted_refusal(error));
+        if submitting {
+            if quiet_refusal {
+                tracing::debug!(
+                    event = "bus.message.not_sent",
+                    command_id = id,
+                    "Deleted recipient was not sent"
+                );
+            } else {
+                tracing::info!(
+                    event = "bus.message.accepted",
+                    command_id = id,
+                    outcome = if result.is_ok() { "queued" } else { "rejected" },
+                    "Bus submit command settled"
+                );
+            }
+        }
+        if let Err(error) = &result {
+            if !quiet_refusal {
+                self.error = Some(error.clone());
+            }
+        }
+        result
     }
 
     #[cfg(test)]
