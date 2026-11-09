@@ -13,7 +13,6 @@ mod metrics;
 mod service;
 
 const PAGE: &str = include_str!("page.html");
-const LATENCY_PAGE: &str = include_str!("latency_page.html");
 const MAX_HEADERS: usize = 8192;
 const REQUEST_DEADLINE: Duration = Duration::from_secs(1);
 
@@ -93,27 +92,6 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
             content_type: "text/html; charset=utf-8",
             body: PAGE.as_bytes().to_vec(),
         },
-        "/latency" => Response {
-            status: "200 OK",
-            content_type: "text/html; charset=utf-8",
-            body: LATENCY_PAGE.as_bytes().to_vec(),
-        },
-        "/latency/data" => {
-            let now = crate::utils::time::now_ms();
-            let metrics = match JsonStore::new(root.join("state.json")).load() {
-                Ok(state) => state.map(|state| latency::snapshot(&state, latency::local_hour)),
-                Err(error) => {
-                    tracing::warn!(event = "bus.dashboard.latency_read_failed", %error);
-                    None
-                }
-            };
-            let hour = latency::local_hour(now);
-            let offset = hour
-                .label
-                .rsplit_once(' ')
-                .map_or("unknown offset", |(_, offset)| offset);
-            data_envelope(serde_json::json!(metrics), None, now, offset)
-        }
         "/data" => {
             let now = crate::utils::time::now_ms();
             let state = match JsonStore::new(root.join("state.json")).load() {

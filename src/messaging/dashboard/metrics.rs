@@ -104,6 +104,9 @@ struct Series {
     hours: Vec<Hour>,
     rates: Rates,
     identity: String,
+    /// Send accepted until agent pickup. Empty stays None.
+    /// Not computed from reply capture or reply delivery.
+    accepted_to_picked: super::latency::Percentiles,
 }
 #[derive(Default, Serialize)]
 struct Rates {
@@ -359,6 +362,7 @@ fn external(reason: &str) -> bool {
 struct SeriesBuilder {
     counts: Counts,
     hours: BTreeMap<i64, (String, Counts)>,
+    accepted_to_picked: Vec<u64>,
 }
 impl SeriesBuilder {
     fn add(&mut self, hour: &HourKey, request: &Request, outcome: &Outcome) {
@@ -368,6 +372,9 @@ impl SeriesBuilder {
             .or_insert_with(|| (hour.label.clone(), Counts::default()))
             .1
             .add(request, outcome);
+        if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
+            self.accepted_to_picked.push(ms);
+        }
     }
     fn finish(self) -> Series {
         let rates = Rates::from(&self.counts);
@@ -376,6 +383,7 @@ impl SeriesBuilder {
             counts: self.counts,
             rates,
             identity,
+            accepted_to_picked: super::latency::percentiles(&self.accepted_to_picked),
             hours: self
                 .hours
                 .into_iter()
