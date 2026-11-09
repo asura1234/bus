@@ -264,10 +264,8 @@ fn restart_request_plain_coordinator_reopen_keeps_a_live_turn() {
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
     fixture.stopped("turn-1", "completed after the coordinator reopened");
     fixture.consume();
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("completed after the coordinator reopened")
-    );
+    assert_completed_without_reply(&fixture, lead);
+    assert_reply_text_absent(&fixture, "completed after the coordinator reopened");
 }
 
 #[cfg(unix)]
@@ -300,10 +298,8 @@ fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_f
         restart(&mut completed);
         completed.status(RuntimeStatus::Idle);
         completed.worker.settle_requests().unwrap();
-        assert_eq!(
-            completed.reply(answered).as_deref(),
-            Some("finished before the stop")
-        );
+        assert_completed_without_reply(&completed, answered);
+        assert_reply_text_absent(&completed, "finished before the stop");
         completed.deliver();
         assert_ne!(completed.request(next).phase, RequestPhase::Queued);
     }
@@ -330,11 +326,8 @@ fn restart_request_recovers_a_completed_codex_turn_from_its_rollout_before_relea
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("recovered after restart")
-    );
+    assert_completed_without_reply(&fixture, lead);
+    assert_reply_text_absent(&fixture, "recovered after restart");
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
@@ -366,12 +359,8 @@ fn restart_request_recovers_codex_final_from_the_rollout_learned_before_stop() {
     restart(&mut fixture);
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("committed before the stop"),
-        "a consumed pre-stop submit hook already identified the transcript; a fresh hook is not required"
-    );
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_completed_without_reply(&fixture, lead);
+    assert_reply_text_absent(&fixture, "committed before the stop");
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
@@ -401,11 +390,8 @@ fn restart_request_recovers_a_completed_kimi_turn_from_its_wire_before_releasing
     restart(&mut fixture);
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
-    assert_eq!(
-        fixture.reply(lead).as_deref(),
-        Some("Kimi final recovered after restart")
-    );
+    assert_completed_without_reply(&fixture, lead);
+    assert_reply_text_absent(&fixture, "Kimi final recovered after restart");
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
@@ -1887,8 +1873,12 @@ fn restart_published_recovers_distinct_committed_steering_final() {
         f.record(json!({"hook_event_name":"Stop","session_id":"session",
             "turn_id":"turn-1","last_assistant_message":"first committed answer","transcript_path":rollout}));
         f.consume();
-        assert_eq!(f.reply(lead).as_deref(), Some("first committed answer"));
-        assert!(f.request(lead).pending_final.is_some());
+        assert!(f.reply(lead).is_none());
+        assert!(
+            f.request(lead).pending_final.is_some(),
+            "the completed lead stays an anchor while the followup is unproven"
+        );
+        assert_reply_text_absent(&f, "first committed answer");
         if restored {
             restart_lifecycle_reopen(&mut f, true);
             f.worker.tick().unwrap();
@@ -1909,19 +1899,13 @@ fn restart_published_recovers_distinct_committed_steering_final() {
         assert_eq!(
             outcomes,
             vec![
-                (
-                    RequestPhase::Completed,
-                    Some("first committed answer".into()),
-                    None
-                ),
-                (
-                    RequestPhase::Completed,
-                    Some("second committed answer".into()),
-                    None
-                ),
+                (RequestPhase::Completed, None, None),
+                (RequestPhase::Completed, None, None),
             ],
-            "restored={restored}: every committed turn retains its own reply"
+            "restored={restored}: every committed turn settles without a stored reply"
         );
+        assert_reply_text_absent(&f, "first committed answer");
+        assert_reply_text_absent(&f, "second committed answer");
     }
 }
 
@@ -1937,7 +1921,8 @@ fn restart_published_settles_the_pre_stop_started_successor() {
     f.started("turn-2", "followup started before restart");
     restart_lifecycle_reopen(&mut f, true);
     f.worker.tick().unwrap();
-    assert_eq!(f.reply(lead).as_deref(), Some("first task completed"));
+    assert_completed_without_reply(&f, lead);
+    assert_reply_text_absent(&f, "first task completed");
     assert_eq!(
         f.request(member).provider_turn_id.as_deref(),
         Some("turn-2")
