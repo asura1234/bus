@@ -397,6 +397,7 @@ impl BusState {
             "rollout",
             unavailable,
             "Agent became unavailable after its turn ended; request closed. Inspect its terminal and resume it.",
+            None,
         )
     }
 
@@ -474,6 +475,7 @@ impl BusState {
             "kimi-wire",
             exited,
             "Kimi process exited after its turn ended; inspect its terminal.",
+            None,
         )
     }
 
@@ -486,6 +488,7 @@ impl BusState {
         callback_prefix: &str,
         unavailable: bool,
         unavailable_error: &str,
+        no_reply_error: Option<&str>,
     ) -> Option<RequestId> {
         if let Some(RecordedTurnEnd::Error(message)) = &recorded {
             if self.hold_provider_error(id, message, now_ms) {
@@ -517,9 +520,13 @@ impl BusState {
         let (reason, error) = match provider_error {
             Some(message) => provider_error_outcome(&message),
             None if unavailable => (AGENT_UNAVAILABLE.to_owned(), unavailable_error.to_owned()),
-            // The turn ended and nobody sent an explicit reply. Close it now
-            // so the queue moves; do not wait for a captured final.
-            None => return self.complete_silent_turn(agent, id, now_ms),
+            // A generation restart has no recorded end. That interrupted
+            // delivery is still reply_not_captured. A turn that actually ended
+            // completes silently so the queue moves without a stored reply.
+            None => match no_reply_error {
+                Some(message) => ("reply_not_captured".to_owned(), message.to_owned()),
+                None => return self.complete_silent_turn(agent, id, now_ms),
+            },
         };
         let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
         let error = closed
