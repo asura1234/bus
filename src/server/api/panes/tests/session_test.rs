@@ -152,6 +152,58 @@ fn api_pane_report_agent_session_preserves_session_identity_and_detected_state()
 }
 
 #[test]
+fn api_pane_report_agent_session_keeps_claude_ds_namespace_and_confirms_startup() {
+    let (mut app, public_pane_id) = app_with_test_workspace();
+    let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+    {
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.begin_managed_agent(
+            "bus-r1-a741".into(),
+            AgentKind::Claude,
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(30),
+        );
+        // The wrapper has already exec'd claude, so detection says Claude while
+        // the hook still reports the claude-ds namespace.
+        terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Working);
+    }
+
+    let response = app.handle_api_request(crate::protocol::api::schema::Request {
+        id: "claude-ds-session".into(),
+        method: crate::protocol::api::schema::Method::PaneReportAgentSession(
+            PaneReportAgentSessionParams {
+                pane_id: public_pane_id,
+                source: "herdr:claude-ds".into(),
+                agent: "claude-ds".into(),
+                seq: Some(1),
+                agent_session_id: Some("ds-session".into()),
+                agent_session_path: None,
+                session_start_source: Some("startup".into()),
+                reporter: Vec::new(),
+            },
+        ),
+    });
+
+    let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+    assert_eq!(success.id, "claude-ds-session");
+    assert_eq!(success.result, ResponseResult::Ok {});
+    assert_eq!(
+        app.state.terminal_id_for_pane(0, pane_id).as_ref(),
+        Some(&terminal_id)
+    );
+    let terminal = &app.state.terminals[&terminal_id];
+    let session = terminal.persisted_agent_session.as_ref().unwrap();
+    assert_eq!(session.source, "herdr:claude-ds");
+    assert_eq!(session.agent, "claude-ds");
+    assert_eq!(session.session_ref.value, "ds-session");
+    assert_eq!(terminal.agent_name.as_deref(), Some("bus-r1-a741"));
+    assert!(terminal.managed_agent_interactive_ready());
+    assert_eq!(terminal.state, AgentState::Working);
+}
+
+#[test]
 fn api_pane_report_agent_session_rejects_missing_panes_and_empty_agents() {
     let (mut app, public_pane_id) = app_with_test_workspace();
     let pane_id = app.state.workspaces[0].tabs[0].root_pane;

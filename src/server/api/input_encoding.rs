@@ -82,6 +82,12 @@ pub(in crate::server) fn normalize_reported_agent_label(agent: &str) -> Option<S
     if trimmed.is_empty() {
         return None;
     }
+    // claude-ds shares Claude's process kind, but its session namespace is
+    // herdr:claude-ds / claude-ds. Collapsing the label to claude makes
+    // session_ref_from_report drop the pair, so startup never confirms.
+    if trimmed.eq_ignore_ascii_case("claude-ds") {
+        return Some("claude-ds".to_string());
+    }
     if let Some(agent) = crate::agents::parse_agent_label(trimmed) {
         return Some(crate::agents::agent_label(agent).to_string());
     }

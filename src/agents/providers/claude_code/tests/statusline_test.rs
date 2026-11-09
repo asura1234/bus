@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::providers::ProviderKind;
 
 struct Fixture(PathBuf);
 impl Fixture {
