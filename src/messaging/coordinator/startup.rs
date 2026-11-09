@@ -247,30 +247,7 @@ impl Worker {
                 .and_then(|info| super::resume::native_attempt(&agent, info))
                 .and_then(|attempt| attempt.error.as_deref())
                 .or(input_error);
-            // Codex defers SessionStart until its first prompt. Native
-            // interactive confirmation, or a provider already waiting at its
-            // own startup dialog, proves it started. Preserve that help wait.
-            if native_error.is_none()
-                && info.is_some_and(|info| {
-                    info.agent
-                        .as_deref()
-                        .is_some_and(|label| agent.provider.observes_label(label))
-                        && (info.interactive_ready
-                            || info.launch_pending
-                                && (info.agent_status == schema::AgentStatus::Blocked
-                                    || info.dialog_id.is_some()))
-                })
-            {
-                let mut state = self.state.clone();
-                state
-                    .set_agent_startup(agent.id, None)
-                    .map_err(|e| e.to_string())?;
-                if startup.reported {
-                    state
-                        .set_agent_error(agent.id, None)
-                        .map_err(|e| e.to_string())?;
-                }
-                self.save(state)?;
+            if self.confirm_startup_ready(&agent, info, &startup, native_error)? {
                 continue;
             }
             let expired = now_ms.saturating_sub(startup.started_at_ms) >= STARTUP_TIMEOUT_MS;
@@ -284,57 +261,124 @@ impl Worker {
             // only exit/replacement releases it. A failed list request never
             // reaches here, so silence is not failure.
             if !startup.reported && !expired && !process_exited && native_error.is_none() {
-                if !startup.process_observed && process_present && info.is_some() {
-                    startup.process_observed = true;
-                    let mut state = self.state.clone();
-                    state
-                        .set_agent_startup(agent.id, Some(startup))
-                        .map_err(|e| e.to_string())?;
-                    self.save(state)?;
-                }
+                self.note_observed_startup_process(agent.id, process_present, info, &mut startup)?;
                 continue;
             }
             if !startup.reported {
-                let evidence =
-                    if input_error.is_some() && agent.runtime_identity.session_id.is_some() {
-                        "> Conversation screen omitted".into()
-                    } else {
-                        self.startup_screen(agent.id)
-                    };
-                let diagnostics = self.startup_diagnostics(&agent);
-                let reason = if let Some(reason) = native_error {
-                    reason
-                } else if expired {
-                    "no provider session or interactive confirmation within 30 seconds"
-                } else {
-                    "the native provider launch ended before startup was confirmed"
-                };
-                let failure = startup_failure(reason, &evidence);
-                let text = format!(
-                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
-                    failure.notice(), launch::provider_kind(agent.provider), startup.command
-                );
-                startup.failure = Some(failure);
-                let mut state = self.state.clone();
-                state
-                    .set_agent_error(agent.id, Some(text))
-                    .map_err(|e| e.to_string())?;
-                tracing::warn!(
-                    event = "bus.agent.startup_failed",
-                    agent_id = agent.id.0,
-                    provider = launch::provider_kind(agent.provider),
-                    reason,
-                    "Agent startup failed; identity retained and never-submitted queued requests closed"
-                );
-                startup.reported = true;
-                state
-                    .set_agent_startup(agent.id, Some(startup))
-                    .map_err(|e| e.to_string())?;
-                state.abandon_failed_startup_queue(agent.id, now_ms);
-                // The persisted marker deduplicates this blocker across restarts.
-                self.save(state)?;
+                self.report_failed_startup(
+                    &agent,
+                    &startup,
+                    input_error,
+                    native_error,
+                    expired,
+                    now_ms,
+                )?;
             }
         }
+        Ok(())
+    }
+
+    fn confirm_startup_ready(
+        &mut self,
+        agent: &super::RoomAgent,
+        info: Option<&schema::AgentInfo>,
+        startup: &AgentStartup,
+        native_error: Option<&str>,
+    ) -> Result<bool, String> {
+        // Codex defers SessionStart until its first prompt. Native
+        // interactive confirmation, or a provider already waiting at its
+        // own startup dialog, proves it started. Preserve that help wait.
+        let ready = native_error.is_none()
+            && info.is_some_and(|info| {
+                info.agent
+                    .as_deref()
+                    .is_some_and(|label| agent.provider.observes_label(label))
+                    && (info.interactive_ready
+                        || info.launch_pending
+                            && (info.agent_status == schema::AgentStatus::Blocked
+                                || info.dialog_id.is_some()))
+            });
+        if !ready {
+            return Ok(false);
+        }
+        let mut state = self.state.clone();
+        state
+            .set_agent_startup(agent.id, None)
+            .map_err(|e| e.to_string())?;
+        if startup.reported {
+            state
+                .set_agent_error(agent.id, None)
+                .map_err(|e| e.to_string())?;
+        }
+        self.save(state)?;
+        Ok(true)
+    }
+
+    fn note_observed_startup_process(
+        &mut self,
+        agent_id: AgentId,
+        process_present: bool,
+        info: Option<&schema::AgentInfo>,
+        startup: &mut AgentStartup,
+    ) -> Result<(), String> {
+        if !startup.process_observed && process_present && info.is_some() {
+            startup.process_observed = true;
+            let mut state = self.state.clone();
+            state
+                .set_agent_startup(agent_id, Some(startup.clone()))
+                .map_err(|e| e.to_string())?;
+            self.save(state)?;
+        }
+        Ok(())
+    }
+
+    fn report_failed_startup(
+        &mut self,
+        agent: &super::RoomAgent,
+        startup: &AgentStartup,
+        input_error: Option<&str>,
+        native_error: Option<&str>,
+        expired: bool,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let evidence = if input_error.is_some() && agent.runtime_identity.session_id.is_some() {
+            "> Conversation screen omitted".into()
+        } else {
+            self.startup_screen(agent.id)
+        };
+        let diagnostics = self.startup_diagnostics(agent);
+        let reason = if let Some(reason) = native_error {
+            reason
+        } else if expired {
+            "no provider session or interactive confirmation within 30 seconds"
+        } else {
+            "the native provider launch ended before startup was confirmed"
+        };
+        let failure = startup_failure(reason, &evidence);
+        let text = format!(
+            "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
+            failure.notice(), launch::provider_kind(agent.provider), startup.command
+        );
+        let mut startup = startup.clone();
+        startup.failure = Some(failure);
+        let mut state = self.state.clone();
+        state
+            .set_agent_error(agent.id, Some(text))
+            .map_err(|e| e.to_string())?;
+        tracing::warn!(
+            event = "bus.agent.startup_failed",
+            agent_id = agent.id.0,
+            provider = launch::provider_kind(agent.provider),
+            reason,
+            "Agent startup failed; identity retained and never-submitted queued requests closed"
+        );
+        startup.reported = true;
+        state
+            .set_agent_startup(agent.id, Some(startup))
+            .map_err(|e| e.to_string())?;
+        state.abandon_failed_startup_queue(agent.id, now_ms);
+        // The persisted marker deduplicates this blocker across restarts.
+        self.save(state)?;
         Ok(())
     }
 
