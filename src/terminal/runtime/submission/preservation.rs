@@ -98,8 +98,18 @@ impl ObservedSubmission {
                         );
                     }
                 }
+                let existing_stash = self.inspect.native_stash_visible(&screen);
                 let result = self.run(text, delay);
                 if result.is_ok() {
+                    // A previously stashed Claude draft pops after submit.
+                    // Its receipt, rather than the Enter write, releases user keys.
+                    if existing_stash {
+                        self.wait_transfer(|| {
+                            Ok(self
+                                .inspect
+                                .native_draft_restored(&self.terminal.active_ansi()))
+                        })?;
+                    }
                     lease.restored();
                 }
                 return result;

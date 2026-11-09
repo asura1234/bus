@@ -247,6 +247,83 @@ async fn fast_editor_swap_captures_before_replacement_and_restores_exact_drafts(
 }
 
 #[tokio::test]
+async fn existing_native_stash_restores_before_buffered_developer_keys_are_replayed() {
+    struct ExistingStash {
+        inspected: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+    impl SubmissionInspector for ExistingStash {
+        fn observe(&self, screen: &str) -> InputObservation {
+            if screen.contains("EMPTY") {
+                InputObservation::Empty
+            } else {
+                InputObservation::Other
+            }
+        }
+        fn native_stash_visible(&self, screen: &str) -> bool {
+            screen.contains("STASH")
+        }
+        fn native_draft_restored(&self, screen: &str) -> bool {
+            if let Some(signal) = self.inspected.lock().unwrap().take() {
+                let _ = signal.send(());
+            }
+            screen.contains("RESTORED")
+        }
+        fn preservation_budget(&self) -> Duration {
+            Duration::from_secs(20)
+        }
+    }
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let paste_receipt = clock.hold_next_write_completion();
+    let (inspected, receipt) = tokio::sync::oneshot::channel();
+    render(&runtime, "EMPTY STASH");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(PAYLOAD),
+            Bytes::from_static(b"\r"),
+            vec![],
+            Duration::ZERO,
+            None,
+            Box::new(ExistingStash {
+                inspected: std::sync::Mutex::new(Some(inspected)),
+            }),
+        )
+        .unwrap();
+    assert_eq!(next(&mut writes).await.as_ref(), PAYLOAD);
+    runtime
+        .try_send_developer_bytes(Bytes::from_static(b"developer key"))
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "developer key is buffered during delivery"
+    );
+    render(&runtime, "BUS_PAYLOAD STASH");
+    let enter_receipt = clock.hold_next_write_completion();
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next(&mut writes).await.as_ref(), b"\r");
+    enter_receipt.send(()).unwrap();
+    tokio::select! {
+        inspected = receipt => inspected.expect("native restoration receipt was abandoned"),
+        key = writes.recv() => panic!("developer key replayed before native stash restoration: {key:?}"),
+    }
+    assert!(
+        writes.try_recv().is_err(),
+        "restoration has not happened yet"
+    );
+    render(&runtime, "RESTORED");
+    assert_eq!(next(&mut writes).await.as_ref(), b"developer key");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "never submit the restored native draft"
+    );
+}
+
+#[tokio::test]
 async fn consumed_editor_submit_stays_ok_when_restoration_does_not_finish() {
     struct FastEditor {
         directory: PathBuf,
