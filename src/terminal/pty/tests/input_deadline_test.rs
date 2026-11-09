@@ -205,7 +205,9 @@ fn backpressured_legacy_text_expires_with_time_reserved_for_enter_delay() {
 fn committed_legacy_submission_finishes_after_backpressure_passes_admission_deadline() {
     let (actor, mut peer, _) = actor_with_socket_pair(false);
     let text_len = 4 * 1024 * 1024;
-    let delay = crate::protocol::api::submission::SUBMIT_DELAY;
+    // This case deliberately crosses the admission reserve while the bounded
+    // commit allowance is still open. Normal provider pacing may be zero.
+    let delay = Duration::from_millis(300);
     let deadline = Instant::now() + Duration::from_secs(1);
     let admission_deadline = deadline - delay;
     let completion = actor
