@@ -89,6 +89,9 @@ pub(crate) struct HandoffPlan {
     pub(crate) explicit_data_dir: bool,
     pub(crate) dev: bool,
     pub(crate) yolo: bool,
+    /// Set only by `bus --dev restart --clear-data`. Absent means keep dashboard history.
+    #[serde(default)]
+    pub(crate) clear_data: bool,
 }
 
 pub(crate) fn read_handoff(path: &Path) -> Result<Option<HandoffPlan>, String> {

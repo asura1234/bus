@@ -493,6 +493,7 @@ mod tests {
             explicit_data_dir: false,
             dev: true,
             yolo: false,
+            clear_data: false,
         }
     }
 
@@ -741,6 +742,7 @@ mod tests {
             &super::super::session_pick::RestartRequest {
                 binary: Some(refuse.display().to_string()),
                 confirm: true,
+                clear_data: false,
                 as_who: None,
             },
         )
@@ -770,6 +772,7 @@ mod tests {
             &super::super::session_pick::RestartRequest {
                 binary: Some("bus".into()),
                 confirm: true,
+                clear_data: false,
                 as_who: None,
             },
         )
@@ -796,6 +799,7 @@ mod tests {
             &RestartRequest {
                 binary: None,
                 confirm: true,
+                clear_data: false,
                 as_who: None,
             },
             || {
@@ -827,6 +831,7 @@ mod tests {
             &RestartRequest {
                 binary: Some("bus".into()),
                 confirm: true,
+                clear_data: false,
                 as_who: None,
             },
             || panic!("an explicit --binary must not build"),

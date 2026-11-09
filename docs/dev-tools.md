@@ -13,7 +13,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   ui hits      (dev variant only)
   ui hold-acks (dev variant only)
   ui release-acks (dev variant only)
-  restart [--binary PATH] --confirm
+  restart [--binary PATH] [--clear-data] --confirm
   dashboard
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
@@ -52,7 +52,10 @@ executable with `cargo build --locked --bin bus` (and `--features dev-tools` whe
 this build has it), then saves and quits the whole Bus and relaunches that binary
 in the same terminal with the recorded flags and session. A failed build aborts
 and leaves Bus running. `--binary PATH` remains for an install with no source
-checkout. Both the server and TUI/coordinator must run the replacement binary's
+checkout. `--clear-data` is off unless passed. Before the save and quit it drops
+settled requests and replies and every launch attempt, so Messaging, Agent and
+Errors open without that history. Queued and active requests stay.
+Both the server and TUI/coordinator must run the replacement binary's
 build SHA before success is recorded. An unhealthy replacement relaunches the
 saved previous binary instead. After a successful restart only the newest saved
 binary under `restarts/binaries` is kept. Agents resume their saved provider

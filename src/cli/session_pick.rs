@@ -4,7 +4,7 @@ use crate::messaging::storage::sessions::ResumeTarget;
 pub(super) const USAGE: &str = "Usage: bus [--dev] [--yolo] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id> [--yolo]\n       bus [--dev] resume --last [--yolo]\n       bus stop\n       bus perf [--since <minutes>m|<hours>h | --all]";
 
 const RESTART_USAGE: &str =
-    "Usage: bus --dev [--yolo] restart [--binary <path>] --confirm [--as <who>]";
+    "Usage: bus --dev [--yolo] restart [--binary <path>] [--clear-data] --confirm [--as <who>]";
 
 pub(super) const DEV_RESTART_REQUIRED: &str = "dev tool: run `bus --dev restart --confirm`";
 
@@ -12,6 +12,7 @@ pub(super) const DEV_RESTART_REQUIRED: &str = "dev tool: run `bus --dev restart 
 pub(super) struct RestartRequest {
     pub(super) binary: Option<String>,
     pub(super) confirm: bool,
+    pub(super) clear_data: bool,
     pub(super) as_who: Option<String>,
 }
 
@@ -128,6 +129,7 @@ fn parse_restart(
 ) -> Result<RestartRequest, String> {
     let mut binary = None;
     let mut confirm = false;
+    let mut clear_data = false;
     let mut as_who = None;
     while *index < args.len() {
         let arg = args[*index].as_str();
@@ -135,6 +137,7 @@ fn parse_restart(
             "--dev" if !*dev => *dev = true,
             "--yolo" if !*yolo => *yolo = true,
             "--confirm" => confirm = true,
+            "--clear-data" => clear_data = true,
             "--binary" => {
                 *index += 1;
                 let Some(value) = args.get(*index) else {
@@ -170,6 +173,7 @@ fn parse_restart(
     Ok(RestartRequest {
         binary,
         confirm,
+        clear_data,
         as_who,
     })
 }

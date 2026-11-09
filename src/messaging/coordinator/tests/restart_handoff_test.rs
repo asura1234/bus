@@ -33,6 +33,7 @@ fn non_dev_restart_quit_requires_the_published_plan_and_live_helper() {
         explicit_data_dir: true,
         dev: false,
         yolo: true,
+        clear_data: false,
     };
     let (events, received) = mpsc::channel();
     let request = |id: &str, params| Request {
@@ -106,6 +107,95 @@ fn non_dev_restart_quit_requires_the_published_plan_and_live_helper() {
     ));
     assert_eq!(take_restart_plan().unwrap(), plan);
     assert!(take_restart_plan().is_none());
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restart_clear_data_drops_settled_requests_and_launches_before_quit_and_keeps_the_queued_request()
+{
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let root = crate::utils::test_temp::unique_temp_path("restart-clear-data");
+    let mut worker = Worker::open(root.clone(), Box::new(NoTransport)).unwrap();
+    let mut state = worker.state.clone();
+    let room = state.create_room("work").unwrap();
+    let agent = state
+        .create_agent(
+            room,
+            "worker",
+            crate::messaging::model::Provider::Codex,
+            "/tmp".into(),
+            None,
+        )
+        .unwrap();
+    state.set_draft_text(room, "done already").unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let settled = state.submit_draft(room, 1).unwrap()[0];
+    state.finish_for_test(settled, "settled reply", 1);
+    state.set_draft_text(room, "still queued").unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let queued = state
+        .submit_draft_queued(room, crate::messaging::storage::io::now_ms())
+        .unwrap()[0];
+    let launch = state.begin_launch_attempt(
+        "worker",
+        crate::messaging::model::Provider::Codex,
+        room,
+        crate::messaging::model::LaunchKind::Create,
+        1,
+    );
+    worker.save(state).unwrap();
+    assert!(worker.state.request(settled).unwrap().settled());
+    assert_eq!(
+        worker.state.request(queued).unwrap().prompt.text,
+        "still queued"
+    );
+    assert!(worker.state.launch_attempt(launch).is_some());
+
+    let live = crate::platform::process_instance(std::process::id()).unwrap();
+    let owner = restart_record::LivePid {
+        pid: live.pid,
+        birth: live.birth,
+    };
+    let plan = HandoffPlan {
+        id: "clear-data".into(),
+        root: root.clone(),
+        old_binary: "/old".into(),
+        new_binary: "/new".into(),
+        old_sha: "a".repeat(40),
+        new_sha: "b".repeat(40),
+        who: "test".into(),
+        tui: owner.clone(),
+        session_id: None,
+        explicit_data_dir: true,
+        dev: false,
+        yolo: true,
+        clear_data: true,
+    };
+    restart_record::write_json(&restart_record::restart_lock_path(&root), &owner).unwrap();
+    restart_record::write_json(&restart_record::handoff_path(&root), &plan).unwrap();
+    let (events, received) = mpsc::channel();
+    let accepted = worker.control_response_with_events(
+        &Request {
+            id: "clear".into(),
+            method: "bus.quit".into(),
+            params: serde_json::json!({"restart":{"plan":plan,"helper_pid":live.pid}}),
+        },
+        Some(&events),
+    );
+    assert!(accepted.ok, "{accepted:?}");
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        BusEvent::DevQuitRequested
+    ));
+    let loaded = crate::messaging::storage::state_store::JsonStore::new(root.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.request(queued).unwrap().prompt.text, "still queued");
+    assert!(!loaded.request(queued).unwrap().settled());
+    assert!(loaded.request(settled).is_none());
+    assert!(loaded.launch_attempts().next().is_none());
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();
 }

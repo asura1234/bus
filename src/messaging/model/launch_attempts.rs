@@ -43,7 +43,8 @@ pub(crate) struct LaunchAttempt {
 
 impl BusState {
     /// Audit IDs are independent of roster IDs: rejected preflight must not alias
-    /// a subsequently created agent. No record is ever pruned or overwritten.
+    /// a subsequently created agent. Records are not pruned or overwritten,
+    /// except by an explicit `bus --dev restart --clear-data`.
     pub(crate) fn begin_launch_attempt(
         &mut self,
         name: &str,

@@ -96,6 +96,7 @@ pub(super) fn begin_handoff(
         explicit_data_dir: launch.explicit_data_dir,
         dev: launch.dev,
         yolo: launch.yolo,
+        clear_data: request.clear_data,
     };
     if let Err(error) = restart_record::write_json(&restart_record::handoff_path(root), &plan) {
         return Err(record_refused(
