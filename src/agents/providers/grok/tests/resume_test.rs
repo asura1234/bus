@@ -442,16 +442,97 @@ fn grok_resume_rejects_changed_or_obsolete_binary_stamps_without_discovery() {
             _ => {}
         }
         let spec = f.spec("", true);
-        assert_eq!(
-            capture_args(&spec.hooks, &f.project).is_ok(),
-            change == "unchanged",
-            "{change}"
+        let resumes = matches!(
+            change,
+            "size" | "mtime" | "replacement" | "target" | "unchanged"
         );
-        assert_eq!(
-            launch::environment(&spec.hooks).is_ok(),
-            change == "unchanged",
-            "{change}"
+        let captured = capture_args(&spec.hooks, &f.project);
+        assert_eq!(captured.is_ok(), resumes, "{change}: {captured:?}");
+        let environment = launch::environment(&spec.hooks);
+        assert_eq!(environment.is_ok(), resumes, "{change}: {environment:?}");
+        if !resumes {
+            let message = captured.unwrap_err();
+            assert!(
+                message.contains("missing or obsolete") || message.contains("Bus resume capture"),
+                "{change} must keep the current stamp rejection: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn grok_resume_revalidates_a_changed_executable_and_refreshes_its_stamp() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("");
+    let executable = f.bin.join("grok");
+    let armed = f.root.join("armed");
+    let queried = f.root.join("queried-by-upgrade");
+    let quote =
+        |path: &std::path::Path| crate::platform::remote_reattach_program(&path.to_string_lossy());
+    let script = std::fs::read_to_string(&executable).unwrap().replace(
+        "case \"$1\" in",
+        &format!(
+            "if [ -f {} ]; then /usr/bin/touch {}; fi\ncase \"$1\" in",
+            quote(&armed),
+            quote(&queried)
+        ),
+    );
+    std::fs::write(&executable, script).unwrap();
+    std::fs::write(&armed, b"probe").unwrap();
+    let spec = f.spec("", true);
+    capture_args(&spec.hooks, &f.project).unwrap();
+    launch::environment(&spec.hooks).unwrap();
+    assert!(
+        queried.exists(),
+        "a changed Grok executable must be probed before resume"
+    );
+    let stamp = spec.hooks.spool.join("grok-executable.json");
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&stamp).unwrap()).unwrap();
+    let metadata = std::fs::metadata(&executable).unwrap();
+    assert_eq!(saved["stamp"]["size"].as_u64(), Some(metadata.len()));
+    std::fs::remove_file(&queried).unwrap();
+    capture_args(&spec.hooks, &f.project).unwrap();
+    assert!(
+        !queried.exists(),
+        "the refreshed stamp must resume without probing again"
+    );
+}
+
+#[test]
+fn grok_resume_still_blocks_when_the_saved_executable_is_removed_or_not_executable() {
+    for change in ["removed", "not-executable"] {
+        let f = Fixture::new();
+        f.install();
+        f.prepare("");
+        let executable = f.bin.join("grok");
+        match change {
+            "removed" => std::fs::remove_file(&executable).unwrap(),
+            "not-executable" => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o644))
+                        .unwrap();
+                }
+            }
+            _ => unreachable!(),
+        }
+        let spec = f.spec("", true);
+        let error = capture_args(&spec.hooks, &f.project).unwrap_err();
+        assert!(
+            !error.contains("Saved Grok executable changed"),
+            "{change} must not use the upgrade path: {error}"
         );
+        if change == "not-executable" {
+            assert_eq!(error, "Saved Grok executable is not executable");
+        } else {
+            assert!(
+                error.contains("No such file") || error.contains("os error 2"),
+                "{error}"
+            );
+        }
+        assert!(launch::environment(&spec.hooks).is_err(), "{change}");
     }
 }
 
