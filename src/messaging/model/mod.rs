@@ -57,11 +57,14 @@ pub(crate) use request_outcomes::{
 };
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::BusState;
+
+#[cfg(test)]
+pub(crate) use latency::DispatchTimestamps;
 pub(crate) use {
     crate::messaging::model::{
         latency::{
-            DeliveryLatency, DialogNoticeDelivery, DispatchMark, DispatchTimestamps,
-            NativeSubmissionTimestamps, QueuedRejection,
+            DeliveryLatency, DialogNoticeDelivery, DispatchMark, NativeSubmissionTimestamps,
+            QueuedRejection,
         },
         types::RoomAgent,
     },
