@@ -6,42 +6,52 @@ const SAVED_TERMINAL: &str = "terminal";
 const SAVED_PANE: &str = "pane";
 const REPLACEMENT_TERMINAL: &str = "term-restart";
 
-/// What resume observes once it has attempted the guarded close.
-#[derive(Clone, Copy)]
-enum PaneAfterClose {
-    /// The saved terminal still matches and the guarded close succeeds.
-    SameAndClosed,
-    /// A whole-session restart recreated this pane on a new terminal.
-    Replaced,
-    /// The saved terminal still matches and still hosts the provider.
-    StillHosting,
-}
-
-struct ResumeClose {
-    mode: PaneAfterClose,
+/// Server rules for `pane.close_if_identity`, with the pane terminal fixed
+/// before resume starts. A dead session's terminal is absent, so closing that
+/// id succeeds and does not touch the replacement pane. A registered terminal
+/// that is not the pane's current terminal is refused. A pane that still hosts
+/// the provider is refused even when the terminal id matches, because
+/// `close_exited_shell` does not own a live provider.
+struct RelaunchServer {
+    current_terminal: &'static str,
+    saved_terminal_alive: bool,
+    hosts_provider: bool,
+    /// Reported only after the guarded close returns. Poll still sees
+    /// `current_terminal`, so this does not model a pane the relaunched TUI
+    /// had already recreated.
+    terminal_after_close: Option<&'static str>,
+    close_attempted: bool,
     closes: Arc<Mutex<Vec<PaneCloseIfIdentityParams>>>,
     starts: Arc<Mutex<u32>>,
-    /// Poll reads the pane before resume closes it. That read still reports the
-    /// saved terminal; otherwise poll detaches the pane and resume never reaches
-    /// the close guard. After the guarded close is attempted, a replaced pane
-    /// reports its new terminal id.
-    close_attempted: bool,
 }
 
-impl ResumeClose {
-    fn pane(pane_id: &str, terminal_id: &str, hosts_provider: bool) -> schema::PaneInfo {
-        serde_json::from_value(json!({
-            "pane_id": pane_id,
-            "terminal_id": terminal_id,
+impl RelaunchServer {
+    fn pane(&self) -> schema::PaneInfo {
+        let terminal = if self.close_attempted {
+            self.terminal_after_close.unwrap_or(self.current_terminal)
+        } else {
+            self.current_terminal
+        };
+        let mut value = json!({
+            "pane_id": SAVED_PANE,
+            "terminal_id": terminal,
             "workspace_id": "w1",
             "tab_id": "t1",
             "focused": false,
             "agent_status": "unknown",
             "revision": 1,
             "agent_process_exited": false,
-            "agent": hosts_provider.then_some("codex"),
-        }))
-        .unwrap()
+        });
+        if self.hosts_provider {
+            value["agent"] = json!("codex");
+            value["agent_session"] = json!({
+                "source": "herdr:codex",
+                "agent": "codex",
+                "kind": "id",
+                "value": "session"
+            });
+        }
+        serde_json::from_value(value).unwrap()
     }
 
     fn identity_changed() -> TransportError {
@@ -54,34 +64,28 @@ impl ResumeClose {
     }
 }
 
-impl Transport for ResumeClose {
+impl Transport for RelaunchServer {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
             Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
                 Ok(ResponseResult::AgentList { agents: vec![] })
             }
-            Method::PaneGet(target) => {
-                let replaced =
-                    self.close_attempted && matches!(self.mode, PaneAfterClose::Replaced);
-                let terminal = if replaced {
-                    REPLACEMENT_TERMINAL
-                } else {
-                    SAVED_TERMINAL
-                };
-                let hosts_provider = matches!(self.mode, PaneAfterClose::StillHosting) && !replaced;
-                Ok(ResponseResult::PaneInfo {
-                    pane: Self::pane(&target.pane_id, terminal, hosts_provider),
-                })
-            }
+            Method::PaneGet(_) => Ok(ResponseResult::PaneInfo { pane: self.pane() }),
             Method::PaneCloseIfIdentity(params) => {
-                self.closes.lock().unwrap().push(params);
+                self.closes.lock().unwrap().push(params.clone());
                 self.close_attempted = true;
-                match self.mode {
-                    PaneAfterClose::SameAndClosed => Ok(ResponseResult::Ok {}),
-                    PaneAfterClose::Replaced | PaneAfterClose::StillHosting => {
-                        Err(Self::identity_changed())
-                    }
+                if params.expected_terminal_id == SAVED_TERMINAL && !self.saved_terminal_alive {
+                    return Ok(ResponseResult::Ok {});
                 }
+                if params.expected_terminal_id != self.current_terminal
+                    || params.pane_id != SAVED_PANE
+                {
+                    return Err(Self::identity_changed());
+                }
+                if self.hosts_provider {
+                    return Err(Self::identity_changed());
+                }
+                Ok(ResponseResult::Ok {})
             }
             Method::TabCreate(_) => Ok(ResponseResult::TabCreated {
                 tab: serde_json::from_value(json!({
@@ -147,17 +151,25 @@ struct ResumeObs {
     dir: PathBuf,
 }
 
-fn resume_with(mode: PaneAfterClose) -> ResumeObs {
+fn resume_relaunched(
+    current_terminal: &'static str,
+    saved_terminal_alive: bool,
+    hosts_provider: bool,
+    terminal_after_close: Option<&'static str>,
+) -> ResumeObs {
     let _providers = provider_binaries();
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     arm_unavailable_resume(&mut worker, agent);
     let closes = Arc::new(Mutex::new(Vec::new()));
     let starts = Arc::new(Mutex::new(0));
-    worker.transport = Box::new(ResumeClose {
-        mode,
+    worker.transport = Box::new(RelaunchServer {
+        current_terminal,
+        saved_terminal_alive,
+        hosts_provider,
+        terminal_after_close,
+        close_attempted: false,
         closes: Arc::clone(&closes),
         starts: Arc::clone(&starts),
-        close_attempted: false,
     });
     let result = worker.resume_room(room).unwrap();
     let closes = closes.lock().unwrap().clone();
@@ -171,123 +183,142 @@ fn resume_with(mode: PaneAfterClose) -> ResumeObs {
     }
 }
 
-fn saved_close(closes: &[PaneCloseIfIdentityParams]) -> &PaneCloseIfIdentityParams {
-    let close = closes
-        .iter()
-        .find(|close| close.expected_terminal_id == SAVED_TERMINAL)
-        .expect("resume closes the saved terminal");
-    assert_eq!(close.pane_id, SAVED_PANE);
-    assert_eq!(close.expected_agent, "codex");
-    assert_eq!(close.expected_session_id.as_deref(), Some("session"));
-    assert!(close.close_exited_shell);
-    assert!(!close.allow_busy_shell);
-    close
-}
-
 fn agent_row(obs: &ResumeObs) -> &serde_json::Value {
     &obs.result["agents"][0]
 }
 
-#[test]
-fn resume_closes_the_saved_terminal_when_its_identity_still_matches() {
-    let obs = resume_with(PaneAfterClose::SameAndClosed);
-    let row = agent_row(&obs);
-    assert_eq!(
-        row["outcome"], "resuming",
-        "a matching saved terminal still has to be closed and verified: {row}"
-    );
-    let close = saved_close(&obs.closes);
-    assert_eq!(
-        obs.closes.len(),
-        1,
-        "only the saved terminal is closed: {close:?}"
-    );
-    assert_eq!(
-        obs.starts, 1,
-        "resume starts the provider after the close is verified"
-    );
-    let snapshot = obs
-        .worker
-        .state
-        .agents()
-        .find(|agent| agent.runtime_identity.session_id.as_deref() == Some("session"))
-        .and_then(|agent| agent.exit_snapshot.clone());
-    assert!(
-        snapshot
-            .as_ref()
-            .is_none_or(|snapshot| snapshot.terminal_closed != Some(true)),
-        "a verified close does not invent a restarted-terminal snapshot: {snapshot:?}"
-    );
+fn saved_terminal_marked_closed(obs: &ResumeObs) -> bool {
+    obs.worker.state.agents().any(|agent| {
+        agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.terminal_id == SAVED_TERMINAL && snapshot.terminal_closed == Some(true)
+        })
+    })
+}
+
+fn assert_saved_close(obs: &ResumeObs) {
+    assert_eq!(obs.closes.len(), 1, "the guard ran once: {:?}", obs.closes);
+    let close = &obs.closes[0];
+    assert_eq!(close.pane_id, SAVED_PANE);
+    assert_eq!(close.expected_terminal_id, SAVED_TERMINAL);
+    assert_eq!(close.expected_agent, "codex");
+    assert_eq!(close.expected_session_id.as_deref(), Some("session"));
+    assert!(close.close_exited_shell);
+    assert!(!close.allow_busy_shell);
+}
+
+fn finish(obs: ResumeObs) {
     drop(obs.worker);
     std::fs::remove_dir_all(obs.dir).unwrap();
 }
 
 #[test]
-fn resume_records_the_saved_terminal_closed_when_restart_recreated_the_pane() {
-    let obs = resume_with(PaneAfterClose::Replaced);
+fn resume_closes_the_saved_terminal_when_its_identity_still_matches() {
+    let obs = resume_relaunched(SAVED_TERMINAL, true, false, None);
     let row = agent_row(&obs);
     assert_eq!(
         row["outcome"], "resuming",
-        "a replaced terminal must not strand resume: {row}"
+        "a matching saved terminal still has to be closed and verified: {row}"
     );
-    let close = saved_close(&obs.closes);
-    assert!(
-        obs.closes
-            .iter()
-            .all(|close| close.expected_terminal_id == SAVED_TERMINAL),
-        "resume must not close the replacement pane: {close:?} all={:?}",
-        obs.closes
-    );
+    assert_saved_close(&obs);
     assert_eq!(
         obs.starts, 1,
-        "resume starts the provider after recording the saved terminal closed"
+        "resume starts the provider after the close is verified"
     );
+    assert!(
+        !saved_terminal_marked_closed(&obs),
+        "a verified close does not invent a restarted-terminal snapshot"
+    );
+    finish(obs);
+}
+
+/// Measured on base `9b219860e`: the first PaneGet already shows the new
+/// terminal, poll clears the saved pane, and `close_resume_terminal` returns
+/// before the guard. The close-guard error is not produced.
+#[test]
+fn dead_session_terminal_relaunch_does_not_strand_on_the_pane_close_guard() {
+    let obs = resume_relaunched(REPLACEMENT_TERMINAL, false, false, None);
+    assert_relaunch_resumes_without_reaching_the_guard(&obs);
+    finish(obs);
+}
+
+/// The saved terminal is still registered, and the pane already has the new
+/// id before resume. Poll still clears that pane on the first read, so the
+/// guard never sees the mismatch.
+#[test]
+fn recreated_pane_with_the_saved_terminal_still_registered_does_not_strand_on_the_pane_close_guard()
+{
+    let obs = resume_relaunched(REPLACEMENT_TERMINAL, true, false, None);
+    assert_relaunch_resumes_without_reaching_the_guard(&obs);
+    finish(obs);
+}
+
+fn assert_relaunch_resumes_without_reaching_the_guard(obs: &ResumeObs) {
+    let row = agent_row(obs);
+    assert_eq!(row["outcome"], "resuming", "{row}");
+    let reason = row["reason"].as_str().unwrap_or("");
+    assert!(
+        !reason.contains("Previous pane could not be safely closed"),
+        "{row}"
+    );
+    assert!(
+        obs.closes.is_empty(),
+        "poll detaches the recreated pane before the guard: {:?}",
+        obs.closes
+    );
+    assert_eq!(obs.starts, 1);
+    assert!(!saved_terminal_marked_closed(obs));
     let agent = obs
         .worker
         .state
         .agents()
         .find(|agent| agent.runtime_identity.session_id.as_deref() == Some("session"))
         .expect("resumed agent");
-    let snapshot = agent
-        .exit_snapshot
-        .as_ref()
-        .expect("saved terminal recorded closed");
-    assert_eq!(snapshot.terminal_id, SAVED_TERMINAL);
-    assert_eq!(snapshot.terminal_closed, Some(true));
-    drop(obs.worker);
-    std::fs::remove_dir_all(obs.dir).unwrap();
+    assert_eq!(agent.runtime_identity.pane_id.as_deref(), Some("pane-new"));
+    assert_eq!(
+        agent.runtime_identity.terminal_id.as_deref(),
+        Some("term-new")
+    );
 }
 
 #[test]
-fn resume_blocks_when_the_saved_terminal_still_hosts_the_provider() {
-    let obs = resume_with(PaneAfterClose::StillHosting);
-    let row = agent_row(&obs);
+fn live_provider_on_its_saved_terminal_blocks_when_close_is_unconfirmed() {
+    let obs = resume_relaunched(SAVED_TERMINAL, true, true, None);
+    assert_unconfirmed_host_blocks(&obs);
+    finish(obs);
+}
+
+/// The pane hosts the provider when the guard runs. A later read that shows a
+/// different terminal, still hosting that provider, must not turn the refusal
+/// into a resume.
+#[test]
+fn unconfirmed_close_keeps_blocking_when_a_later_read_still_hosts_the_provider() {
+    let obs = resume_relaunched(SAVED_TERMINAL, true, true, Some(REPLACEMENT_TERMINAL));
+    assert_unconfirmed_host_blocks(&obs);
+    finish(obs);
+}
+
+fn assert_unconfirmed_host_blocks(obs: &ResumeObs) {
+    let row = agent_row(obs);
     assert_eq!(
         row["outcome"], "blocked",
-        "a live provider pane must block resume: {row}"
+        "a pane hosting the provider must block resume: {row}"
     );
     let reason = row["reason"].as_str().unwrap_or("");
     assert!(
         reason.contains("Previous pane could not be safely closed"),
-        "the strict close failure stays visible: {reason}"
+        "the unconfirmed close stays visible: {reason}"
     );
-    let _close = saved_close(&obs.closes);
+    assert!(
+        reason.contains("Terminal or provider session changed; pane was not closed"),
+        "the refusal is the ownership failure: {reason}"
+    );
+    assert_saved_close(obs);
     assert_eq!(
         obs.starts, 0,
         "no provider starts while its pane is unconfirmed"
     );
-    let snapshot = obs
-        .worker
-        .state
-        .agents()
-        .find(|agent| agent.runtime_identity.session_id.as_deref() == Some("session"))
-        .and_then(|agent| agent.exit_snapshot.clone());
     assert!(
-        snapshot.as_ref().is_none_or(|snapshot| {
-            snapshot.terminal_id != SAVED_TERMINAL || snapshot.terminal_closed != Some(true)
-        }),
-        "a refused close must not record the live terminal closed: {snapshot:?}"
+        !saved_terminal_marked_closed(obs),
+        "an unconfirmed close must not record the live terminal closed"
     );
-    drop(obs.worker);
-    std::fs::remove_dir_all(obs.dir).unwrap();
 }

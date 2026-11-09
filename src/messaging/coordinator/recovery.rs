@@ -6,7 +6,7 @@ use super::{
 use crate::agents::providers::launch;
 use crate::agents::resume::catalog::{self, AgentSessionRefKind};
 use crate::messaging::identity;
-use crate::messaging::model::{ExitSnapshot, LaunchKind, LaunchOutcome, StartupRecovery};
+use crate::messaging::model::{LaunchKind, LaunchOutcome, StartupRecovery};
 use serde_json::{json, Value};
 
 /// Old snapshots may have confirmed hooks solely from file contents. Hold
@@ -365,84 +365,77 @@ impl Worker {
         ));
         match closed {
             Ok(ResponseResult::Ok {}) => Ok(()),
-            Ok(_) => Err("Previous pane close is unconfirmed; no provider was launched".into()),
+            Ok(_) => {
+                self.log_unconfirmed_pane_close(
+                    agent,
+                    &pane,
+                    &terminal,
+                    None,
+                    "close response was not Ok",
+                );
+                Err("Previous pane close is unconfirmed; no provider was launched".into())
+            }
             Err(error) => {
-                self.resume_after_replaced_terminal(agent.id, &pane, &terminal, &error.message)
+                self.log_unconfirmed_pane_close(
+                    agent,
+                    &pane,
+                    &terminal,
+                    error.code.as_deref(),
+                    &error.message,
+                );
+                Err(format!(
+                    "Previous pane could not be safely closed: {}",
+                    error.message
+                ))
             }
         }
     }
 
-    /// A restarted session keeps the pane id and puts a new terminal in it.
-    /// The saved terminal is already gone; closing this pane would close the
-    /// replacement. Record the saved terminal closed so the early return in
-    /// `close_resume_terminal` applies. A pane whose terminal still matches
-    /// stays blocked: it may still host the provider.
-    fn resume_after_replaced_terminal(
+    /// The read is diagnostic. It does not record a snapshot or continue resume.
+    fn log_unconfirmed_pane_close(
         &mut self,
-        id: AgentId,
-        pane: &str,
-        terminal: &str,
-        message: &str,
-    ) -> Result<(), String> {
-        if !self.saved_pane_has_replacement_terminal(pane, terminal) {
-            return Err(format!(
-                "Previous pane could not be safely closed: {message}"
-            ));
-        }
-        self.record_restarted_terminal_closed(id, terminal)?;
-        let refreshed = self
-            .state
-            .agent(id)
-            .cloned()
-            .ok_or("Saved agent disappeared")?;
-        self.close_resume_terminal(&refreshed)
-    }
-
-    /// The saved pane is still there, on a different non-empty terminal.
-    /// Anything else is not proof the saved terminal was replaced.
-    fn saved_pane_has_replacement_terminal(&mut self, pane_id: &str, saved_terminal: &str) -> bool {
-        match self.transport.request(Method::PaneGet(schema::PaneTarget {
+        agent: &RoomAgent,
+        pane_id: &str,
+        saved_terminal_id: &str,
+        close_code: Option<&str>,
+        close_detail: &str,
+    ) {
+        let current = match self.transport.request(Method::PaneGet(schema::PaneTarget {
             pane_id: pane_id.to_owned(),
         })) {
-            Ok(ResponseResult::PaneInfo { pane }) => {
-                pane.pane_id == pane_id
-                    && !pane.terminal_id.is_empty()
-                    && pane.terminal_id != saved_terminal
-            }
-            _ => false,
-        }
-    }
-
-    /// The dead session already dropped this terminal. Keep the pane id: the
-    /// replacement pane is the restarted session's, not something resume closed.
-    fn record_restarted_terminal_closed(
-        &mut self,
-        id: AgentId,
-        terminal: &str,
-    ) -> Result<(), String> {
-        let mut state = self.state.clone();
-        let snapshot = {
-            let agent = state.agent(id).ok_or("Saved agent disappeared")?;
-            let mut snapshot = agent
-                .exit_snapshot
-                .clone()
-                .filter(|snapshot| snapshot.terminal_id == terminal)
-                .unwrap_or_else(|| ExitSnapshot {
-                    launch_id: agent.runtime_identity.launch_id.clone(),
-                    terminal_id: terminal.to_owned(),
-                    path: None,
-                    error: Some("Saved terminal was closed when its session restarted".into()),
-                    tail: String::new(),
-                    at_ms: super::io::now_ms(),
-                    terminal_closed: Some(true),
-                });
-            snapshot.terminal_id = terminal.to_owned();
-            snapshot.terminal_closed = Some(true);
-            snapshot
+            Ok(ResponseResult::PaneInfo { pane }) => Some(pane),
+            _ => None,
         };
-        state
-            .record_exit_snapshot(id, snapshot)
-            .map_err(|error| error.to_string())?;
-        self.save(state)
+        let (current_pane_id, current_terminal_id, current_agent, current_session) =
+            match current.as_ref() {
+                Some(pane) => (
+                    pane.pane_id.as_str(),
+                    pane.terminal_id.as_str(),
+                    pane.agent.as_deref().unwrap_or(""),
+                    pane.agent_session
+                        .as_ref()
+                        .map(|session| session.value.as_str())
+                        .unwrap_or(""),
+                ),
+                None => ("unreadable", "unreadable", "unreadable", "unreadable"),
+            };
+        let expected_managed_name = identity::managed_name(agent.room_id, agent.id);
+        let expected_session_id = agent.runtime_identity.session_id.as_deref().unwrap_or("");
+        tracing::warn!(
+            event = "bus.resume.pane_close_unconfirmed",
+            pane_id,
+            saved_terminal_id,
+            current_identity_readable = current.is_some(),
+            current_pane_id,
+            current_terminal_id,
+            current_agent,
+            current_session,
+            expected_agent = identity::provider_kind(agent.provider).label(),
+            expected_managed_name = expected_managed_name.as_str(),
+            expected_session_id,
+            close_code = close_code.unwrap_or(""),
+            close_detail,
+            "Previous pane close is unconfirmed"
+        );
     }
 }
