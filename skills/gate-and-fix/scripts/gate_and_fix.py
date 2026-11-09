@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -63,6 +64,20 @@ def select_gates(
     return gates
 
 
+def _launch_env(gate: Gate) -> dict[str, str] | None:
+    if gate.env is not None:
+        return gate.env
+    if gate.scrub_session_env:
+        return scrubbed_env()
+    # The caller's LLVM profile file is not this round's run directory.
+    # Inheriting it makes a nested gate write an untracked file and fail
+    # the worktree-stability check.
+    env = dict(os.environ)
+    env.pop("LLVM_PROFILE_FILE", None)
+    env.pop("LLVM_PROFILE_FILE_NAME", None)
+    return env
+
+
 def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
     started = time.monotonic()
     try:
@@ -74,9 +89,7 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=gate.env if gate.env is not None else (
-                scrubbed_env() if gate.scrub_session_env else None
-            ),
+            env=_launch_env(gate),
         )
     except OSError as error:
         return GateResult(
@@ -109,7 +122,10 @@ def run_gates(gates: Sequence[Gate], *, cwd: Path, private_groups: bool = True) 
     if len({gate.name for gate in gates}) != len(gates):
         raise ValueError("duplicate gate name")
 
-    children = Children(private_groups=private_groups)
+    # A nested quality lane spends the default grace stopping its own children
+    # and deleting their profiles. SIGKILL before that leaves unit.profraw behind
+    # or an orphan holding the pipe. Outlive one nested grace period.
+    children = Children(private_groups=private_groups, stop_grace=6)
     with ThreadPoolExecutor(
         max_workers=min(MAX_PARALLEL_GATES, len(gates)), thread_name_prefix="gate-and-fix"
     ) as executor:
