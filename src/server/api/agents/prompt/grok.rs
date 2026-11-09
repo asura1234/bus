@@ -432,6 +432,213 @@ mod tests {
         );
     }
 
+    /// Request 719: Grok 4.7 was idle with `❯` on screen, but the bottom
+    /// border was `Weekly limit left: 6% · Grok 4.7 …` above
+    /// `Shift+Tab:mode │ Ctrl+.:shortcuts`. The synthetic provider draws
+    /// that frame. Bus must read the empty row and paste into it.
+    #[tokio::test]
+    async fn grok_weekly_limit_idle_composer_accepts_a_prompt() {
+        use bytes::Bytes;
+        use std::time::{Duration, Instant};
+
+        let screen = crate::agents::grok_surface::weekly_limit_idle_screen();
+        assert_eq!(input(&screen).as_deref(), Some(""));
+        assert_eq!(observe(&screen, "ready"), InputObservation::Empty);
+        let drafted = screen.replacen("│ ❯ ", "│ ❯ keep", 1);
+        assert_eq!(input(&drafted).as_deref(), Some("keep"));
+        assert_eq!(observe(&drafted, "ready"), InputObservation::Unavailable);
+        let foreign = screen.replacen("Weekly limit left: 6%", "Notes left: 6%", 1);
+        assert_eq!(input(&foreign), None);
+        assert_eq!(observe(&foreign, "ready"), InputObservation::Unavailable);
+
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        runtime.test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
+        );
+        assert_eq!(
+            observe(&runtime.visible_ansi(), "ready"),
+            InputObservation::Empty
+        );
+        let prompt = "Reply with the single word: ready.";
+        let completion = runtime
+            .queue_observed_input_with_inspector(
+                Bytes::copy_from_slice(prompt.as_bytes()),
+                Bytes::from_static(b"\r"),
+                vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+                Duration::ZERO,
+                Some(
+                    Instant::now()
+                        + crate::protocol::api::submission::maximum_budget(
+                            Duration::ZERO,
+                            prompt.as_bytes(),
+                        ),
+                ),
+                Box::new(super::super::composer::observer(
+                    crate::agents::AgentKind::Grok,
+                    prompt.into(),
+                )),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let pasted = loop {
+            if let Ok(bytes) = writes.try_recv() {
+                break bytes;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "weekly-limit composer received no paste"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(pasted, Bytes::copy_from_slice(prompt.as_bytes()));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        completion
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert!(writes.try_recv().is_err(), "one paste and one Enter");
+    }
+
+    /// The quota border is the captured label on a framed empty prompt.
+    /// Other text, a dialog, a login title, or a frame missing its prompt
+    /// row or top rule stays unavailable, so Bus does not paste or press Enter.
+    #[test]
+    fn weekly_limit_border_rejects_other_text_and_non_composer_screens() {
+        let screen = crate::agents::grok_surface::weekly_limit_idle_screen();
+        let with_label = |label: &str| {
+            screen.replacen(
+                "Weekly limit left: 6% · Grok 4.7 (high) · always-approve",
+                label,
+                1,
+            )
+        };
+
+        for percent in ["0", "100"] {
+            let label = format!("Weekly limit left: {percent}% · Grok 4.7 (high) · always-approve");
+            assert_eq!(
+                observe(&with_label(&label), "ready"),
+                InputObservation::Empty,
+                "{label}"
+            );
+        }
+
+        for other in [
+            "Weekly limit left: 101% · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 256% · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6.5% · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: % · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6 % · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: -1% · Grok 4.7 (high) · always-approve",
+            "weekly limit left: 6% · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6 percent · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6%. · Grok 4.7 (high) · always-approve",
+            "Notes left: 6% · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6% remaining · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6% Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6% . Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6% · grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6% · Grok 4.7 (high) / always-approve",
+            "Weekly limit left: 6% · Grok 4.7: high",
+            "Weekly limit left: 6% · Grok ",
+            "Weekly limit left: 6% · Grok 4.7 (high) · always-approve?",
+        ] {
+            assert_eq!(input(&with_label(other)), None, "{other}");
+            assert_eq!(
+                observe(&with_label(other), "ready"),
+                InputObservation::Unavailable,
+                "{other}"
+            );
+        }
+
+        let no_prompt = screen.replacen("❯", "x", 1);
+        assert_eq!(input(&no_prompt), None, "row without a prompt marker");
+        let no_top = screen.replacen("╭", "x", 1);
+        assert_eq!(input(&no_top), None, "frame without a top rule");
+        let quota_sentence = "Weekly limit left: 6% · Grok 4.7 (high) · always-approve\n";
+        assert_eq!(
+            input(quota_sentence),
+            None,
+            "quota sentence outside a frame"
+        );
+        assert_eq!(
+            observe(quota_sentence, "ready"),
+            InputObservation::Unavailable
+        );
+
+        let working = screen.replacen("Shift+Tab:mode  │  Ctrl+.:shortcuts", "Esc:cancel", 1);
+        assert_eq!(
+            input(&working),
+            None,
+            "cancel footer is not the composer hint"
+        );
+
+        let login = format!("Log in to Grok\n{screen}");
+        assert_eq!(input(&login), None, "login title above the quota frame");
+        assert_eq!(observe(&login, "ready"), InputObservation::Unavailable);
+
+        let welcome_only = screen
+            .replacen("\n\n  Shift+Tab:mode  │  Ctrl+.:shortcuts\n", "\n", 1)
+            .replacen(
+                "Weekly limit left: 6% · Grok 4.7 (high) · always-approve",
+                "Notes left: 6% · Grok 4.7 (high) · always-approve",
+                1,
+            );
+        assert_eq!(input(&welcome_only), None, "footer-less foreign label");
+
+        for dialog in [
+            include_str!("../../../../../tests/fixtures/grok-dialog/permission.txt"),
+            include_str!("../../../../../tests/fixtures/grok-dialog/trust.txt"),
+            include_str!("../../../../../tests/fixtures/grok-dialog/question.txt"),
+            include_str!(
+                "../../../../../tests/fixtures/grok-dialog/native-1.0.70-command-approval.txt"
+            ),
+        ] {
+            assert_eq!(
+                observe(dialog, "ready"),
+                InputObservation::Unavailable,
+                "dialog alone"
+            );
+            assert_eq!(
+                observe(&format!("{screen}\n{dialog}"), "ready"),
+                InputObservation::Unavailable,
+                "dialog after the quota composer"
+            );
+        }
+
+        let restored = "╭────────────╮\n│ ❯ [Bus message 9 from you] │\n╰───────────── Weekly limit left: 6% · Grok 4.7 (high) · always-approve ─╯";
+        let keys = crate::agents::grok_surface::restored_prompt_clear_keys(restored)
+            .expect("weekly frame");
+        assert_eq!(keys.len(), 3);
+        assert!(keys
+            .chunks(3)
+            .all(|chunk| chunk == ["ctrl+a", "ctrl+k", "ctrl+u"]));
+        let developer = restored.replacen("[Bus message", "developer note", 1);
+        assert!(crate::agents::grok_surface::restored_prompt_clear_keys(&developer).is_none());
+    }
+
+    /// Other text after the quota prefix is not the captured label.
+    #[test]
+    fn weekly_limit_border_rejects_prose_after_the_model_marker() {
+        let screen = crate::agents::grok_surface::weekly_limit_idle_screen().replacen(
+            "Weekly limit left: 6% · Grok 4.7 (high) · always-approve",
+            "Weekly limit left: 6% · Grok this is not a model",
+            1,
+        );
+        assert_eq!(input(&screen), None, "prose is not the quota label");
+        assert_eq!(
+            observe(&screen, "ready"),
+            InputObservation::Unavailable,
+            "prose is not the quota label"
+        );
+    }
+
     #[test]
     fn grok_1070_native_paste_chip_matches_only_its_summary() {
         let four_lines = "first\nsecond\nthird\nfourth";

@@ -43,32 +43,106 @@ fn framed_content(line: &str) -> Option<&str> {
 
 pub(crate) fn composer_border(line: &str) -> bool {
     let line = line.trim();
-    let rules = |text: &str| text.chars().count() >= 3 && text.chars().all(|c| c == '─');
-    if line.chars().filter(|c| *c == '─').count() >= 3
+    plain_box(line) || labeled_grok_border(line)
+}
+
+fn plain_box(line: &str) -> bool {
+    line.chars().filter(|c| *c == '─').count() >= 3
         && line
             .chars()
             .all(|c| matches!(c, '─' | '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘'))
-    {
-        return true;
-    }
+}
+
+/// A labelled bottom rule is a composer only for `Grok {model} ─` or the
+/// captured quota label `Weekly limit left: N% · Grok {model} ─`.
+/// Other text between the corners is not a composer.
+fn labeled_grok_border(line: &str) -> bool {
     let Some(inner) = line.strip_prefix('╰').and_then(|s| s.strip_suffix('╯')) else {
         return false;
     };
     let Some((rule, label)) = inner.split_once(' ') else {
         return false;
     };
-    let Some(model) = label
-        .strip_prefix("Grok ")
-        .and_then(|s| s.strip_suffix(" ─"))
+    let Some(label) = label.strip_suffix(" ─") else {
+        return false;
+    };
+    rule_run(rule) && grok_label(label)
+}
+
+fn grok_label(label: &str) -> bool {
+    if let Some(model) = label.strip_prefix("Grok ") {
+        return model_label(Some(model));
+    }
+    let Some((prefix, tail)) = label.rsplit_once(" · Grok ") else {
+        return false;
+    };
+    weekly_limit_prefix(prefix) && weekly_tail(tail)
+}
+
+/// The quota label's tail after `Grok`: one model token, an optional
+/// `(effort)` token, and an optional `· status` token. `4.7 (high) ·
+/// always-approve` passes; prose with spaces in the model slot does not.
+fn weekly_tail(text: &str) -> bool {
+    let Some(rest) = take_border_token(text) else {
+        return false;
+    };
+    let rest = match rest.strip_prefix(" (") {
+        Some(inner) => {
+            let Some(rest) = take_border_token(inner) else {
+                return false;
+            };
+            let Some(rest) = rest.strip_prefix(')') else {
+                return false;
+            };
+            rest
+        }
+        None => rest,
+    };
+    let rest = rest.strip_prefix(" · ").unwrap_or(rest);
+    rest.is_empty() || take_border_token(rest).is_some_and(str::is_empty)
+}
+
+/// One border-label token: ASCII alphanumeric plus `.` and `-`, never a space.
+fn take_border_token(text: &str) -> Option<&str> {
+    let end = text
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
+        .unwrap_or(text.len());
+    (end > 0).then(|| &text[end..])
+}
+
+fn weekly_limit_prefix(prefix: &str) -> bool {
+    let Some(percent) = prefix
+        .strip_prefix("Weekly limit left: ")
+        .and_then(|rest| rest.strip_suffix('%'))
     else {
         return false;
     };
-    rules(rule)
-        && !model.is_empty()
+    percent.bytes().all(|ch| ch.is_ascii_digit())
+        && percent.parse::<u8>().is_ok_and(|value| value <= 100)
+}
+
+fn rule_run(text: &str) -> bool {
+    text.chars().count() >= 3 && text.chars().all(|c| c == '─')
+}
+
+fn model_label(model: Option<&str>) -> bool {
+    let Some(model) = model else {
+        return false;
+    };
+    !model.is_empty()
         && model.len() <= 80
         && model
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '(' | ')' | ' ' | '-' | '·'))
+}
+
+/// Idle composer the synthetic Grok provider draws for the Grok 4.7 quota
+/// border captured on 2026-11-09. The `❯` row is empty. The bottom label
+/// starts with the weekly-limit prefix, and the footer is the live
+/// `Shift+Tab` / `Ctrl+.` hint.
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) fn weekly_limit_idle_screen() -> String {
+    "  ╭────────────────────────────────────────────────────────────────────────╮\n  │ ❯                                                                      │\n  ╰───────────── Weekly limit left: 6% · Grok 4.7 (high) · always-approve ─╯\n\n  Shift+Tab:mode  │  Ctrl+.:shortcuts\n".to_owned()
 }
 
 #[cfg(test)]
