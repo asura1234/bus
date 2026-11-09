@@ -56,3 +56,23 @@ def test_src_test_included_through_shared_container_selects_its_integration_bina
 @pytest.mark.parametrize("path", ["tools/__init__.py", "tools/quality/__init__.py"])
 def test_package_initializers_keep_cross_owner_import_consumers(path):
     assert selection.select([path], root=ROOT).full
+
+
+def test_production_logic_source_narrows_to_its_component_and_referrers():
+    plan = selection.select(["src/messaging/coordinator/agent_creation.rs"], root=ROOT)
+    assert not plan.full and not plan.coverage_floor
+    assert "(binary(bus) & test(/^messaging::/))" in plan.rust_filter
+    assert "(binary(bus) & test(/^client::/))" in plan.rust_filter
+
+
+@pytest.mark.parametrize("path", [
+    "src/main.rs",
+    "src/cli/control.rs",
+    "src/terminal/driver/blocker.rs",
+    "src/messaging/model/types.rs",
+    "src/messaging/coordinator/mod.rs",
+    "src/messaging/dashboard/page.html",
+])
+def test_invisible_or_shared_source_stays_on_the_full_suite(path):
+    plan = selection.select([path], root=ROOT)
+    assert plan.full and plan.rust_filter is None and not plan.coverage_floor

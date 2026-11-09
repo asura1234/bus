@@ -38,7 +38,7 @@ def test_nested_parallel_workers_stop_before_profiles_are_removed(tmp_path, sign
         'r.changed_paths=lambda *_:["run"];'
         'r.bootstrap=lambda *a,**kw:None;'
         'r.shutil.which=lambda _name:"fake-tool-no-cargo";'
-        f'r.commands=lambda _s:([],[r.Gate(stage,(sys.executable,"-c",{child!r},str(Path({str(ready)!r})/stage)),'
+        f'r.commands=lambda _s, **_k:([],[r.Gate(stage,(sys.executable,"-c",{child!r},str(Path({str(ready)!r})/stage)),'
         'env=r.quality.child_env(LLVM_PROFILE_FILE_NAME=r.quality.profile_file_name(stage))) for stage in ("unit","integration")]);'
         'sys.exit(r.main(["--full"]))'
     )

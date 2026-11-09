@@ -106,8 +106,10 @@ def signal_group(group: int, signum: int):
 
 
 class Children:
-    def __init__(self, *, private_groups: bool = True):
+    def __init__(self, *, private_groups: bool = True, stop_grace: float = 2):
         self.private_groups = private_groups
+        # Time a child gets to exit after SIGTERM, including its own cleanup.
+        self.stop_grace = stop_grace
         self.active: set[subprocess.Popen] = set()
         self.lock = threading.Lock()
         self.stopped = False
@@ -155,7 +157,7 @@ class Children:
             elif process.poll() is None:
                 process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=self.stop_grace)
             except subprocess.TimeoutExpired:
                 process.kill()
         except Exception as error:

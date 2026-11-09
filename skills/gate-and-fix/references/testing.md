@@ -1,7 +1,7 @@
 # Test entrypoint
 
-Use `./run test` during development and `./run test --full` for the final gate.
-Both execute the same Python scheduler that `just ci` and gate-and-fix call.
+Use `./run test --check` for iteration and pull-request checks, and `./run test --full` for release verification.
+`just ci` and gate-and-fix run `--check`. `just release` runs `--full`.
 Python 3.11+, cargo-nextest, cargo-llvm-cov and the Rust `llvm-tools-preview`
 component are the gate prerequisites. Put Cargo's plugin directory on PATH
 (usually `$HOME/.cargo/bin`). Actual scheduler and diagnostic invocations create
@@ -13,8 +13,9 @@ create an environment, install packages, or access the package index.
 
 ```sh
 ./run test --plan                 # explain affected selection without building
+./run test --check                # affected tests plus lint, docs, schema, and affected Python
 ./run test --base origin/master   # merge-base plus committed and local changes
-./run test --full                 # lint, docs, every applicable test and Rust coverage
+./run test --full                 # release gate: lint, docs, every applicable test, and Rust coverage
 ```
 
 Both modes read NUL-delimited Git paths, include staged, unstaged and untracked
@@ -57,10 +58,11 @@ Within eligible languages, affected ownership remains deliberately narrow:
 | Changed paths | Selection |
 | --- | --- |
 | Known Rust test module with only references inside its component | All binary unit tests in that component's Rust namespace |
+| Production Rust source whose graph is certain, in-owner, and not a serde/data shape, CLI surface, or TUI string | That component's binary unit tests, unit tests of transitive referrers, and integration binaries that include the file |
 | Integration source/helper | Cargo test targets reachable through source module/path references |
 | Dev-tools test source/target | Dev-tools binary tests and CLI/driver integration tests |
 | Python with only references inside its owner | That owner's actual `*_test.py` files |
-| Cross-owner references, embedded Markdown/data, build inputs, production Rust, unknown paths | Every applicable suite |
+| Cross-owner references, embedded Markdown/data, build inputs, serde/data shapes, CLI surface, TUI strings, uncertain graphs, unknown paths | Every applicable suite |
 
 The index resolves Rust modules and `#[path]` using the existing Rust syntax
 helpers, and resolves literal includes relative to the containing file. Python
@@ -76,17 +78,26 @@ to every applicable suite, covering each crate context that compiles and runs th
 The index also follows Python imports when selected tests need `BUS_TEST_BINARY`.
 Missing ownership and cross-owner references broaden eligible suites. Embedded
 skill resources include directory symlinks, with the collector's test exclusions;
-a Cargo rebuild watch alone is not a runtime consumer. Rust is one crate, so production modules do not
-receive a guessed unit-only scope. Extending narrow selection requires reference
+a Cargo rebuild watch alone is not a runtime consumer. A production source file
+narrows to its component namespace, transitive test referrers, and integration
+binaries that include it. Serde and `src/**/model/**` data shapes, `src/protocol`,
+`src/cli`, `src/main.rs`, and `src/terminal` stay on the full suite because the
+module graph cannot see those dependents. Direct cross-owner references still
+broaden, except an integration test that only includes the production file:
+that binary is selected. Extending narrow selection requires reference
 evidence and a failing regression test.
-An empty diff skips both test lanes; `--full` still runs lint and doc checks.
+An empty diff skips both test lanes. `--check` and `--full` still run lint and doc checks.
 
-Affected runs, including conservative fallback, skip the coverage floor and
-cannot produce a final merge gate verdict. Full mode runs every test within the
-eligible lanes. When Rust is eligible it enforces the unchanged production line
-floor after successful tests and nonempty unit profile evidence. When Rust is
-skipped, neither instrumentation nor the floor runs; the report records coverage
-as SKIPPED. A skipped lane never reports PASS.
+`--check` is the iteration and pull-request gate. It uses affected selection,
+including the conservative full-breadth fallback, and always runs lint, the
+documentation contract, and the affected Python lanes. A narrowed Rust batch
+also runs `generated_protocol_schema_artifact_is_current`. `--check` skips the
+coverage floor. `--full` is release verification: every test in the eligible
+lanes, the same static lanes, and the Rust coverage floor. When Rust is eligible
+the release gate enforces the unchanged production line floor after successful
+tests and nonempty unit profile evidence. When Rust is skipped, neither
+instrumentation nor the floor runs; the report records coverage as SKIPPED.
+A skipped lane never reports PASS.
 
 Full scheduling overlaps normal-target lint with an instrumented nextest
 preflight build. That preflight deliberately selects no tests and builds the CLI
@@ -126,8 +137,9 @@ execution owns its worker groups. Cleanup follows termination of every worker.
 
 Each invocation prints timings and writes complete per-task stdout/stderr and
 the head/base/selection/lane statuses to `temp/run-test/run-<id>.json`, following
-[the test run format](test-run-format.md). Gate-and-fix wraps the
-full entrypoint as `test-full`, alongside `diff-check`, and keeps its clean-tree,
-immutable-head checks and encoded artifact logs. The older `just unit-test`,
+[the test run format](test-run-format.md). Gate-and-fix records the pull-request
+entrypoint as `test-check` (`suite_run.py --check`), alongside `diff-check`, and
+keeps its clean-tree, immutable-head checks and encoded artifact logs. Release
+verification is `./run test --full` or `just release`. The older `just unit-test`,
 `integration-test`, `coverage`, and `lint` recipes remain diagnostic tools;
-they are not the final gate entrypoint.
+they are not the pull-request or release entrypoint.

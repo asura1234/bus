@@ -40,7 +40,7 @@ class GateAndFixTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Command argv"):
                     validate_round(artifact.replace(command_line, "- Command argv: " + bad), expected_base="base")
 
-    def test_every_diff_always_runs_full_entrypoint_and_diff(self) -> None:
+    def test_every_diff_runs_check_entrypoint_and_diff(self) -> None:
         for changed in (
             ["src/main.rs"],
             ["skills/pr/SKILL.md"],
@@ -53,9 +53,10 @@ class GateAndFixTest(unittest.TestCase):
                     )
                     self.assertEqual(
                         [g.name for g in gates],
-                        ["test-full", "diff-check"],
+                        ["test-check", "diff-check"],
                     )
-                    self.assertIn("--full", gates[0].argv)
+                    self.assertIn("--check", gates[0].argv)
+                    self.assertNotIn("--full", gates[0].argv)
                     self.assertEqual(
                         gates[-1].argv,
                         ("git", "diff", "--check", "baseline-sha...HEAD"),
@@ -66,7 +67,7 @@ class GateAndFixTest(unittest.TestCase):
         direct = select_gates(["src/main.rs"], base="base", available_tools=frozenset())
         wrapped = select_gates(["src/main.rs"], base="base", available_tools=_CI_TOOLS)
         self.assertEqual(direct[0].argv, wrapped[0].argv)
-        self.assertEqual(direct[0].argv, (sys.executable, str(repo / "skills/gate-and-fix/scripts/suite_run.py"), "--full", "--base", "base"))
+        self.assertEqual(direct[0].argv, (sys.executable, str(repo / "skills/gate-and-fix/scripts/suite_run.py"), "--check", "--base", "base"))
 
     def test_gate_wrapper_does_not_depend_on_optional_just(self) -> None:
         for available in (

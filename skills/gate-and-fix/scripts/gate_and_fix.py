@@ -4,18 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
 import uuid
-from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
-from coverage_run import Run
 from gate_process import Children, Interrupted, interrupt_signals, scrubbed_env
 from repo_gate import artifact_root, command_argv, gate_policy
 
@@ -58,11 +57,25 @@ def select_gates(
     available_tools: frozenset[str] | None = None,
     python: str = sys.executable,
 ) -> list[Gate]:
-    """Every committed diff gets the shared full entrypoint, never affected mode."""
+    """Every committed diff gets affected tests plus static lanes, not the release coverage floor."""
     _validate_paths(changed_files)
-    gates = [Gate("test-full", (python, TEST_SCRIPT, "--full", "--base", base))]
+    gates = [Gate("test-check", (python, TEST_SCRIPT, "--check", "--base", base))]
     gates.append(Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")))
     return gates
+
+
+def _launch_env(gate: Gate) -> dict[str, str] | None:
+    if gate.env is not None:
+        return gate.env
+    if gate.scrub_session_env:
+        return scrubbed_env()
+    # The caller's LLVM profile file is not this round's run directory.
+    # Inheriting it makes a nested gate write an untracked file and fail
+    # the worktree-stability check.
+    env = dict(os.environ)
+    env.pop("LLVM_PROFILE_FILE", None)
+    env.pop("LLVM_PROFILE_FILE_NAME", None)
+    return env
 
 
 def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
@@ -76,9 +89,7 @@ def _run_gate(gate: Gate, *, cwd: Path, children: Children) -> GateResult:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=gate.env if gate.env is not None else (
-                scrubbed_env() if gate.scrub_session_env else None
-            ),
+            env=_launch_env(gate),
         )
     except OSError as error:
         return GateResult(
@@ -111,7 +122,10 @@ def run_gates(gates: Sequence[Gate], *, cwd: Path, private_groups: bool = True) 
     if len({gate.name for gate in gates}) != len(gates):
         raise ValueError("duplicate gate name")
 
-    children = Children(private_groups=private_groups)
+    # A nested quality lane spends the default grace stopping its own children
+    # and deleting their profiles. SIGKILL before that leaves unit.profraw behind
+    # or an orphan holding the pipe. Outlive one nested grace period.
+    children = Children(private_groups=private_groups, stop_grace=6)
     with ThreadPoolExecutor(
         max_workers=min(MAX_PARALLEL_GATES, len(gates)), thread_name_prefix="gate-and-fix"
     ) as executor:
@@ -282,13 +296,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 Gate("repository-gate", command_argv(command), requires_exclusive_execution=True, scrub_session_env=True),
                 Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD"), scrub_session_env=True),
             ]
-        if is_bus:
-            from suite_selection import select
-            rust_coverage = select(changed_files, full=True, root=repo).coverage_floor
-        else:
-            rust_coverage = False
-        coverage = Run(repo, repo / "temp/gate-and-fix/coverage", "gate") if rust_coverage else nullcontext()
-        with interrupt_signals(), coverage:
+        # The pull-request adapter runs --check. The coverage floor stays inside
+        # ./run test --full, which owns its own profile run.
+        with interrupt_signals():
             results = run_gates(gates, cwd=repo)
         if (
             _git_output(repo, "rev-parse", "HEAD") != head

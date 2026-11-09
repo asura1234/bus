@@ -78,6 +78,46 @@ def test_affected_full_fallback_does_not_enable_a_coverage_verdict():
     assert not selection.select(["src/main.rs"]).coverage_floor
 
 
+def test_production_source_selects_owner_namespace_and_transitive_test_referrers(tmp_path):
+    put(tmp_path, "src/main.rs", "mod agents;\nmod client;")
+    put(tmp_path, "src/agents/mod.rs", 'mod worker;\n#[path="tests/worker_test.rs"] mod worker_tests;')
+    put(tmp_path, "src/agents/worker.rs", "pub fn work() {}")
+    put(tmp_path, "src/agents/tests/worker_test.rs", "#[test] fn case() {}")
+    put(tmp_path, "src/client/mod.rs", '#[path="tests/links_test.rs"] mod links;')
+    put(tmp_path, "src/client/tests/links_test.rs", '#[path="../../main.rs"] mod entry;\n#[test] fn case() {}')
+    plan = selection.select(["src/agents/worker.rs"], root=tmp_path)
+    assert not plan.full and not plan.coverage_floor
+    assert plan.rust_filter == "(binary(bus) & test(/^agents::/)) | (binary(bus) & test(/^client::/))"
+
+
+def test_integration_include_of_production_source_selects_that_binary(tmp_path):
+    put(tmp_path, "Cargo.toml", '[[test]]\nname="api"\npath="tests/api/root_test.rs"\n')
+    put(tmp_path, "src/utils/mod.rs", "mod paths;")
+    put(tmp_path, "src/utils/paths.rs", "pub fn launch() {}")
+    put(tmp_path, "tests/api/root_test.rs", '#[path="../../src/utils/paths.rs"] mod paths;\n#[test] fn case() {}')
+    plan = selection.select(["src/utils/paths.rs"], root=tmp_path)
+    assert not plan.full
+    assert "binary(api)" in plan.rust_filter
+    assert "(binary(bus) & test(/^utils::/))" in plan.rust_filter
+
+
+def test_serde_cli_tui_and_cross_owner_source_stay_full(tmp_path):
+    put(tmp_path, "src/main.rs", "mod agents;\nmod messaging;\nmod server;")
+    put(tmp_path, "src/agents/mod.rs", "mod row;")
+    put(tmp_path, "src/agents/row.rs", "#[derive(Serialize, Deserialize)] struct Row {}")
+    put(tmp_path, "src/cli/mod.rs", "mod args;")
+    put(tmp_path, "src/cli/args.rs", "pub fn flag() {}")
+    put(tmp_path, "src/terminal/mod.rs", "mod view;")
+    put(tmp_path, "src/terminal/view.rs", 'pub fn draw() -> &\'static str { "ready" }')
+    put(tmp_path, "src/messaging/mod.rs", "mod shape;")
+    put(tmp_path, "src/messaging/shape.rs", "pub fn shape() {}")
+    put(tmp_path, "src/server/mod.rs", '#[path="../messaging/shape.rs"] mod foreign;')
+    assert selection.select(["src/agents/row.rs"], root=tmp_path).full
+    assert selection.select(["src/cli/args.rs"], root=tmp_path).full
+    assert selection.select(["src/terminal/view.rs"], root=tmp_path).full
+    assert selection.select(["src/messaging/shape.rs"], root=tmp_path).full
+
+
 @pytest.mark.parametrize("path", ["/outside", "../outside", "src/../file", "./README.md"])
 def test_invalid_paths_are_rejected(path):
     with pytest.raises(ValueError, match="relative"):

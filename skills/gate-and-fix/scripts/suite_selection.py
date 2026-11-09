@@ -1,15 +1,45 @@
 """Conservative affected-suite selection for the Bus crate and tooling."""
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from suite_references import References
-from suite_lanes import PYTHON, SHARED_SKILLS, classify, kind
+from suite_references import References, owner
+from suite_lanes import PYTHON, SHARED_SKILLS, classify, consumers, kind, rust_test
 
 RUST_OWNERS = {"agents", "cli", "client", "messaging", "platform", "protocol",
                "server", "terminal", "utils", "devtools"}
+_SERDE = re.compile(r"#\[serde\b|\bserde::|\b(?:Serialize|Deserialize)\b")
+_TEMPLATE = re.compile(r"""include_str!\s*\(\s*"[^"]+\.(?:html|json)" """)
+
+
+def production_rust(name: str) -> bool:
+    path = PurePosixPath(name)
+    parts = path.parts
+    return (path.suffix == ".rs" and len(parts) > 2 and parts[0] == "src"
+            and parts[1] in RUST_OWNERS and "tests" not in parts[2:-1]
+            and not path.name.endswith("_test.rs"))
+
+
+def integration_foreign_only(references: References, name: str) -> bool:
+    """An integration crate that includes one production file is selected, not broadened."""
+    if not production_rust(name):
+        return False
+    foreign = [source for source in references.incoming(name) if owner(source) != owner(name)]
+    return bool(foreign) and all(
+        PurePosixPath(source).parts[:1] == ("tests",) and PurePosixPath(source).suffix == ".rs"
+        for source in foreign)
+
+
+def blind_surface(name: str, source: str, mask) -> bool:
+    """Serde shapes, CLI surfaces, and TUI strings have no module edge to their tests."""
+    if (name == "src/main.rs" or "/model/" in f"/{name}"
+            or name.startswith(("src/cli/", "src/terminal/", "src/protocol/"))):
+        return True
+    code = mask(source) if source else ""
+    return bool(_SERDE.search(code) or _TEMPLATE.search(source))
 
 
 @dataclass(frozen=True)
@@ -56,8 +86,7 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
         if path.suffix == '.py':
             return parts[0] in PYTHON and not (parts[0] == 'skills' and len(parts) > 1 and parts[1] in SHARED_SKILLS)
         return path.suffix == '.rs' and (parts[0] == 'tests' or (
-            len(parts) > 2 and parts[0] == 'src' and parts[1] in RUST_OWNERS and
-            ('tests' in parts[2:-1] or path.name.endswith('_test.rs'))))
+            len(parts) > 2 and parts[0] == 'src' and parts[1] in RUST_OWNERS))
     if full or any(not can_narrow(name) for name in paths):
         return finish(True, None, PYTHON, True, "explicit full mode or shared/unknown input")
     full |= bool(references and references.uncertain)
@@ -68,7 +97,9 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
         parts = path.parts
         if full:
             break
-        if name not in references.paths or references.cross_owner(name):
+        if name not in references.paths or (
+            references.cross_owner(name) and not integration_foreign_only(references, name)
+        ):
             full = True
         elif parts[0] == "src" and path.suffix == ".rs" and (
             "tests" in parts[2:-1] or path.name.endswith("_test.rs")
@@ -93,6 +124,44 @@ def select(paths: list[str], *, full: bool = False, root: Path | None = None) ->
             python.add("/".join(parts[:2]))
         elif parts[0] in {"tools", "scripts", "cli_extensions", "packaging"} and path.suffix == ".py":
             python.add(parts[0])
+        elif production_rust(name):
+            if blind_surface(name, references.sources.get(name, ""), references.mask_rust):
+                full = True
+                break
+            owner_name = parts[1]
+            if owner_name == "devtools":
+                dev_tools = True
+            else:
+                rust.add(f"(binary(bus) & test(/^{owner_name}::/))")
+            targets = references.integration_targets(name)
+            if integration_foreign_only(references, name) and not targets:
+                full = True
+                break
+            rust.update(f"binary({target})" for target in targets if target != "tui-driver")
+            dev_tools |= bool(targets.intersection({"cli", "tui-driver"}))
+            for consumer in consumers(references, [name]):
+                if not rust_test(consumer):
+                    continue
+                cparts = PurePosixPath(consumer).parts
+                if cparts[0] == "tests":
+                    found = references.integration_targets(consumer)
+                    if not found:
+                        full = True
+                        break
+                    rust.update(f"binary({target})" for target in found if target != "tui-driver")
+                    dev_tools |= bool(found.intersection({"cli", "tui-driver"}))
+                elif len(cparts) > 2 and cparts[0] == "src" and cparts[1] in RUST_OWNERS:
+                    # A source test compiled into another crate is not this component's unit filter.
+                    if references.integration_targets(consumer):
+                        full = True
+                        break
+                    if cparts[1] == "devtools":
+                        dev_tools = True
+                    else:
+                        rust.add(f"(binary(bus) & test(/^{cparts[1]}::/))")
+                else:
+                    full = True
+                    break
         else:
             full = True
     if full:

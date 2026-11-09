@@ -261,9 +261,13 @@ class ProfileLifecycleTest(unittest.TestCase):
             base = repository(root)
             script = (
                 "import os;from pathlib import Path;"
-                "p=Path(os.environ.get('BUS_GATE_PROFILE_DIR',os.environ.get('LLVM_PROFILE_FILE')));p.mkdir(parents=True,exist_ok=True);"
-                "(p/'fixture.profraw').write_bytes(b'counters');"
-                "(p/'fixture.profdata').write_bytes(b'merged')"
+                f"root=Path({str(root)!r});"
+                "raw=os.environ.get('BUS_GATE_PROFILE_DIR') or os.environ.get('LLVM_PROFILE_FILE');"
+                "root.joinpath('profile-seen').write_text('yes') if raw else None;"
+                "p=Path(raw) if raw else None;"
+                "p and p.mkdir(parents=True,exist_ok=True);"
+                "p and (p/'fixture.profraw').write_bytes(b'counters');"
+                "p and (p/'fixture.profdata').write_bytes(b'merged')"
             )
             gates = [gate.Gate(name, (sys.executable, "-c", script),
                                requires_exclusive_execution=True)
@@ -287,6 +291,7 @@ class ProfileLifecycleTest(unittest.TestCase):
             artifact = Path(stdout.getvalue().strip())
             self.assertEqual(gate.validate_round(artifact.read_text(), expected_base=base),
                              "FAIL" if failed else "PASS")
+            self.assertFalse((root / "profile-seen").exists())
             self.assertFalse(list((root / "target").rglob("*.profraw")))
             self.assertFalse(list((root / "target").rglob("*.profdata")))
 
@@ -308,8 +313,10 @@ class ProfileLifecycleTest(unittest.TestCase):
             ready = root / "ready.json"
             child = (
                 "import json,os,signal,time;from pathlib import Path;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-                "p=Path(os.environ.get('BUS_GATE_PROFILE_DIR',os.environ.get('LLVM_PROFILE_FILE')));p.mkdir(parents=True,exist_ok=True);"
-                "(p/'unit.profraw').write_bytes(b'counters');"
+                "raw=os.environ.get('BUS_GATE_PROFILE_DIR') or os.environ.get('LLVM_PROFILE_FILE');"
+                "p=Path(raw) if raw else None;"
+                "p and p.mkdir(parents=True,exist_ok=True);"
+                "p and (p/'unit.profraw').write_bytes(b'counters');"
                 f"Path({str(ready)!r}).write_text(json.dumps({{'pid':os.getpid(),'pgid':os.getpgrp()}}));"
                 "time.sleep(60)"
             )

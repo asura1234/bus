@@ -41,6 +41,6 @@ For example, a docs-only full run has:
 
 The example is a fragment; an actual report requires every field in the table.
 Missing or unknown statuses, and representing a skipped floor as PASS, are
-invalid. Gate-and-fix retains its separate schema-3 round artifact: `test-full`
-is the aggregate command result, whose captured stdout names skips and links
-the detailed JSON report.
+invalid. Gate-and-fix retains its separate schema-3 round artifact: `test-check`
+is the aggregate pull-request command result, whose captured stdout names skips and links
+the detailed JSON report. Release verification is `./run test --full`.
