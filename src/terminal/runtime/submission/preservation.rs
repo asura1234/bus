@@ -132,7 +132,7 @@ impl ObservedSubmission {
             // The Bus payload is already on screen. One Enter submits
             // that attempt; opening the editor would replace it.
             InputObservation::Pending => {
-                let submitted = self.swap_key(self.enter.clone(), true);
+                let submitted = self.swap_key(lease, self.enter.clone(), true);
                 lease.restored();
                 return submitted;
             }
@@ -148,7 +148,7 @@ impl ObservedSubmission {
             self.clock.remaining(self.hard_deadline),
         )
         .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-        self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true)
+        self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true, lease)
             .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
         lease.restored();
         Err(io::Error::other(PromptNotShown::ComposerBusy))
