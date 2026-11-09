@@ -280,6 +280,10 @@ impl TerminalState {
                 "claude",
                 Some("clear" | "resume" | "compact")
             ) | (
+                "herdr:claude-ds",
+                "claude-ds",
+                Some("clear" | "resume" | "compact")
+            ) | (
                 "herdr:codex",
                 "codex",
                 Some("startup" | "clear" | "resume" | "compact")
