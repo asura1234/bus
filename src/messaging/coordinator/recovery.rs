@@ -279,6 +279,9 @@ impl Worker {
             .clear_missing_binary(agent.id)
             .map_err(|e| e.to_string())?;
         state
+            .clear_session_restart_closed_terminal(agent.id)
+            .map_err(|e| e.to_string())?;
+        state
             .set_agent_error(agent.id, None)
             .map_err(|e| e.to_string())?;
         self.save(state)?;
@@ -337,6 +340,13 @@ impl Worker {
             .exit_snapshot
             .as_ref()
             .is_some_and(|s| s.terminal_closed == Some(true) && &s.terminal_id == terminal)
+        {
+            return Ok(());
+        }
+        if agent
+            .session_restart_closed_terminal
+            .as_deref()
+            .is_some_and(|closed| Some(closed) != agent.runtime_identity.terminal_id.as_deref())
         {
             return Ok(());
         }

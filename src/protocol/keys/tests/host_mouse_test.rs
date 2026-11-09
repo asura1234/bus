@@ -174,13 +174,17 @@ fn timed_out_split_sgr_mouse_tail_is_discarded_and_following_input_is_preserved(
 }
 
 #[test]
-fn timed_out_sgr_mouse_discard_state_clears_at_quiescence() {
+fn timed_out_sgr_mouse_tail_stays_discarded_across_the_second_idle_flush() {
     let mut framer = RawInputByteFramer::default();
 
     assert!(framer.push(b"\x1b[<3").is_empty());
     assert!(framer.flush_timeout().is_empty());
     assert!(framer.flush_timeout().is_empty());
-    assert_eq!(framer.push(b"M"), vec![b"M".to_vec()]);
+    assert!(
+        framer.push(b"M").is_empty(),
+        "the remainder of a timed-out SGR report is not a key"
+    );
+    assert_eq!(framer.push(b"x"), vec![b"x".to_vec()]);
 }
 
 #[test]

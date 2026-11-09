@@ -28,10 +28,10 @@ use super::geometry::should_query_host_terminal_theme;
 ///
 /// Returns a guard that restores the terminal when dropped.
 pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    ratatui::init();
     crate::client::host_terminal::modes::clear_host_mouse_reporting(
         &mut crate::client::host_terminal::output::stdout(),
     )?;
+    ratatui::init();
     let host_color_scheme_reports = should_enable_host_color_scheme_reports();
 
     #[cfg(windows)]
@@ -502,6 +502,24 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicU16;
     use std::time::Duration;
+
+    #[test]
+    fn startup_clears_inherited_mouse_reporting_before_drawing() {
+        let source = include_str!("setup.rs");
+        let setup = source
+            .split_once("fn setup_terminal")
+            .expect("setup_terminal")
+            .1;
+        let body = setup.split_once("\nfn ").expect("following function").0;
+        let draw = body.find("ratatui::init()").expect("first draw");
+        let clear = body
+            .find("clear_host_mouse_reporting")
+            .expect("mouse reporting is cleared during setup");
+        assert!(
+            clear < draw,
+            "startup must clear inherited mouse reporting before drawing"
+        );
+    }
 
     #[test]
     fn shutdown_drain_stays_open_while_palette_replies_advance() {

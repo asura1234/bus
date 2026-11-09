@@ -828,3 +828,180 @@ fn startup_launch_rejection_uncertain_resume_tab_retains_queued_work() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A whole-session restart lists the saved agent on a new terminal. Closing
+/// that recreated pane is refused, which must not block resume. A pane whose
+/// terminal id still matches keeps the close check.
+struct RestartedPanes {
+    recreated: bool,
+    managed_name: String,
+    closes: Arc<Mutex<Vec<schema::PaneCloseIfIdentityParams>>>,
+    starts: Arc<Mutex<usize>>,
+}
+impl Transport for RestartedPanes {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                let (terminal, pane) = if self.recreated {
+                    ("restored-terminal", "restored-pane")
+                } else {
+                    ("terminal", "pane")
+                };
+                Ok(ResponseResult::AgentList {
+                    agents: vec![serde_json::from_value(json!({
+                        "generation": 7,
+                        "terminal_id": terminal,
+                        "pane_id": pane,
+                        "name": self.managed_name,
+                        "agent": "codex",
+                        "agent_status": "unknown",
+                        "interactive_ready": false,
+                        "launch_pending": false,
+                        "agent_session": {
+                            "source": "herdr:codex",
+                            "agent": "codex",
+                            "kind": "id",
+                            "value": "session"
+                        },
+                        "workspace_id": "w1",
+                        "tab_id": "t1",
+                        "focused": false,
+                        "revision": 1
+                    }))
+                    .unwrap()],
+                })
+            }
+            Method::PaneGet(_) => {
+                let (terminal, pane) = if self.recreated {
+                    ("restored-terminal", "restored-pane")
+                } else {
+                    ("terminal", "pane")
+                };
+                Ok(ResponseResult::PaneInfo {
+                    pane: serde_json::from_value(json!({
+                        "pane_id": pane,
+                        "terminal_id": terminal,
+                        "workspace_id": "w1",
+                        "tab_id": "t1",
+                        "focused": false,
+                        "agent_status": "unknown",
+                        "revision": 1,
+                        "agent_process_exited": true
+                    }))
+                    .unwrap(),
+                })
+            }
+            Method::PaneRead(target) => Ok(ResponseResult::PaneRead {
+                read: serde_json::from_value(json!({
+                    "pane_id": target.pane_id,
+                    "workspace_id": "w1",
+                    "tab_id": "t1",
+                    "source": "recent",
+                    "format": "text",
+                    "revision": 1,
+                    "text": "scratch% ",
+                    "truncated": false
+                }))
+                .unwrap(),
+            }),
+            Method::PaneCloseIfIdentity(params) => {
+                self.closes.lock().unwrap().push(params);
+                Err(TransportError {
+                    timestamps: Default::default(),
+                    code: Some("terminal_identity_changed".into()),
+                    message: "Terminal or provider session changed; pane was not closed".into(),
+                    definitely_rejected: true,
+                })
+            }
+            Method::TabCreate(_) => Ok(ResponseResult::TabCreated {
+                tab: serde_json::from_value(json!({"tab_id":"new", "workspace_id":"w1", "number":2, "label":"resumed", "focused":false, "pane_count":1, "agent_status":"unknown"})).unwrap(),
+                root_pane: serde_json::from_value(json!({"pane_id":"new-pane", "terminal_id":"new-terminal", "workspace_id":"w1", "tab_id":"new", "focused":false, "agent_status":"unknown", "revision":1})).unwrap(),
+            }),
+            Method::AgentStart(params) => {
+                *self.starts.lock().unwrap() += 1;
+                let mut info = native_info("new-pane", "codex", "session");
+                info.terminal_id = "new-terminal".into();
+                info.name = Some(params.name);
+                info.launch_pending = true;
+                Ok(ResponseResult::AgentStarted {
+                    agent: info,
+                    argv: vec![],
+                })
+            }
+            Method::PaneReportAgentSession(_) => Ok(ResponseResult::Ok {}),
+            other => panic!("unexpected restart resume operation {other:?}"),
+        }
+    }
+}
+
+fn install_codex_hooks(dir: &std::path::Path) {
+    use crate::agents::providers::hook_json::{merge_hooks, HookContract};
+    let hooks = dir.join(".codex/hooks.json");
+    let document = merge_hooks(
+        json!({}),
+        HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+}
+
+#[test]
+fn whole_session_restart_resumes_when_panes_were_recreated() {
+    let _providers = provider_binaries();
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    install_codex_hooks(&dir);
+    let closes = Arc::new(Mutex::new(Vec::new()));
+    let starts = Arc::new(Mutex::new(0));
+    worker.transport = Box::new(RestartedPanes {
+        recreated: true,
+        managed_name: crate::messaging::identity::managed_name(room, agent),
+        closes: Arc::clone(&closes),
+        starts: Arc::clone(&starts),
+    });
+    let result = worker.resume_room(room).unwrap();
+    let reason = result["agents"][0]["reason"].as_str().unwrap_or("");
+    let closed = closes.lock().unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        result["agents"][0]["outcome"], "resuming",
+        "a recreated pane must not strand resume: {reason}; closes={closed:?}"
+    );
+    assert_eq!(*starts.lock().unwrap(), 1);
+    assert!(
+        closed
+            .iter()
+            .all(|params| params.expected_terminal_id != "restored-terminal"),
+        "resume must not require the recreated pane to pass close verification: {closed:?}"
+    );
+}
+
+#[test]
+fn resume_still_close_verifies_a_pane_whose_terminal_still_matches() {
+    let _providers = provider_binaries();
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    install_codex_hooks(&dir);
+    let closes = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(RestartedPanes {
+        recreated: false,
+        managed_name: crate::messaging::identity::managed_name(room, agent),
+        closes: Arc::clone(&closes),
+        starts: Arc::new(Mutex::new(0)),
+    });
+    let result = worker.resume_room(room).unwrap();
+    let closed = closes.lock().unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert!(
+        result["agents"][0]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Previous pane could not be safely closed"),
+        "{result}"
+    );
+    assert_eq!(closed.len(), 1, "{closed:?}");
+    assert_eq!(closed[0].expected_terminal_id, "terminal");
+}

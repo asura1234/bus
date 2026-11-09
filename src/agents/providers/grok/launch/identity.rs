@@ -55,12 +55,13 @@ pub(super) struct SavedExecutable {
     stamp: Stamp,
 }
 
+const CHANGED_EXECUTABLE: &str =
+    "Saved Grok executable changed; relaunch to validate this installation";
+
 impl SavedExecutable {
     pub(super) fn verify(&self) -> Result<(), String> {
         if Stamp::read(&self.alias)? != self.stamp {
-            return Err(
-                "Saved Grok executable changed; relaunch to validate this installation".into(),
-            );
+            return Err(CHANGED_EXECUTABLE.into());
         }
         super::driver_fixture(&self.alias)?;
         Ok(())
@@ -83,6 +84,32 @@ pub(super) fn load(hooks: &HookContext) -> Result<PathBuf, String> {
         &hooks.spool.join(super::EXECUTABLE_FILE),
     )?)
     .map_err(|_| "Saved Grok identity stamp is missing or obsolete; relaunch this agent")?;
-    saved.verify()?;
+    match saved.verify() {
+        Ok(()) => Ok(saved.alias),
+        Err(error) if error == CHANGED_EXECUTABLE => {
+            refresh_changed_executable(hooks, &saved.alias)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// A provider auto-update keeps the same `grok` alias and changes its bytes.
+/// Probe that alias, then replace the saved stamp. A missing or non-executable
+/// file still fails in `Stamp::read` with its existing message.
+fn refresh_changed_executable(hooks: &HookContext, alias: &Path) -> Result<PathBuf, String> {
+    super::validate_executable(alias)?;
+    super::driver_fixture(alias)?;
+    let saved = SavedExecutable {
+        alias: alias.to_owned(),
+        stamp: Stamp::read(alias)?,
+    };
+    let bytes = serde_json::to_vec(&saved).map_err(|error| error.to_string())?;
+    hook_json::atomic_write(&hooks.spool.join(super::EXECUTABLE_FILE), &bytes)
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        event = "bus.grok.executable_upgraded",
+        alias = %alias.display(),
+        "Saved Grok executable changed; revalidated and refreshed its stamp"
+    );
     Ok(saved.alias)
 }
