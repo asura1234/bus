@@ -53,6 +53,47 @@ impl From<crate::protocol::api::schema::NativeSubmissionTimestamps> for NativeSu
     }
 }
 
+/// One clock read for a step inside delivery selection.
+///
+/// Assigning `Some` records that the step finished. Leaving the field `None`
+/// means the step did not run. A finished step can still be `Some(0)` only
+/// when the clock itself is 0; callers must not use 0 as a missing-step sentinel.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DispatchMark {
+    Started,
+    Render,
+    Boundary,
+    Notice,
+    Save,
+    Diagnostics,
+    Method,
+}
+
+/// Clocks for the work around `record_picked` → `note_native_requested`.
+///
+/// `started` through `boundary` finish before the pick stamp, so those phases
+/// are outside `dispatch`. `notice` through `method` plus the native-request
+/// stamp partition `dispatch`. When every in-window stamp is present the
+/// durations sum to `dispatch` exactly; shared edges cancel, so the residual
+/// is 0. A missing later stamp stays `None` and that phase is omitted.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct DispatchTimestamps {
+    pub(crate) started_at_ms: Option<u64>,
+    pub(crate) render_at_ms: Option<u64>,
+    pub(crate) boundary_at_ms: Option<u64>,
+    pub(crate) notice_at_ms: Option<u64>,
+    pub(crate) save_at_ms: Option<u64>,
+    pub(crate) diagnostics_at_ms: Option<u64>,
+    pub(crate) method_at_ms: Option<u64>,
+}
+
+impl DispatchTimestamps {
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct DeliveryLatency {
@@ -60,6 +101,8 @@ pub(crate) struct DeliveryLatency {
     pub(crate) queued_at_ms: Option<u64>,
     pub(crate) picked_at_ms: Option<u64>,
     pub(crate) native_requested_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "DispatchTimestamps::is_empty")]
+    pub(crate) dispatch: DispatchTimestamps,
     pub(crate) native: NativeSubmissionTimestamps,
     pub(crate) provider_started_at_ms: Option<u64>,
     pub(crate) reply_captured_at_ms: Option<u64>,
@@ -75,8 +118,10 @@ impl DeliveryLatency {
 
     /// Drops one native attempt. Admission, pick, and room delivery stay,
     /// and the next attempt's first write still wins inside that attempt.
+    /// Dispatch sub-phase stamps belong to the attempt and clear with it.
     pub(crate) fn clear_attempt(&mut self) {
         self.native_requested_at_ms = None;
+        self.dispatch = DispatchTimestamps::default();
         self.native = NativeSubmissionTimestamps::default();
         self.provider_started_at_ms = None;
         self.reply_captured_at_ms = None;

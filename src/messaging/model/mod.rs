@@ -60,7 +60,8 @@ pub(crate) use state::BusState;
 pub(crate) use {
     crate::messaging::model::{
         latency::{
-            DeliveryLatency, DialogNoticeDelivery, NativeSubmissionTimestamps, QueuedRejection,
+            DeliveryLatency, DialogNoticeDelivery, DispatchMark, DispatchTimestamps,
+            NativeSubmissionTimestamps, QueuedRejection,
         },
         types::RoomAgent,
     },

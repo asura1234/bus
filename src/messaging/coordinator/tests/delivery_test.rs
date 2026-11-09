@@ -2454,6 +2454,117 @@ fn native_requested_is_journaled_after_the_transport_returns() {
     );
 }
 
+fn dispatch_stamps_of(
+    worker: &Worker,
+    request: RequestId,
+) -> (
+    u64,
+    crate::messaging::model::DispatchTimestamps,
+    Option<u64>,
+) {
+    let latency = &worker.state.request(request).unwrap().latency;
+    (
+        latency.picked_at_ms.unwrap_or(0),
+        latency.dispatch,
+        latency.native_requested_at_ms,
+    )
+}
+
+#[test]
+fn delivery_records_every_dispatch_subphase() {
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::Codex, vec![composer_available()]);
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "measure dispatch"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+    worker.submit_ready().unwrap();
+    let (picked, marks, native) = dispatch_stamps_of(&worker, request);
+    let native = native.expect("native request stamp");
+    let stamps = [
+        marks.started_at_ms.expect("started"),
+        marks.render_at_ms.expect("render"),
+        marks.boundary_at_ms.expect("boundary"),
+        picked,
+        marks.notice_at_ms.expect("notice"),
+        marks.save_at_ms.expect("save"),
+        marks.diagnostics_at_ms.expect("diagnostics"),
+        marks.method_at_ms.expect("method"),
+        native,
+    ];
+    assert!(
+        stamps.windows(2).all(|pair| pair[0] <= pair[1]),
+        "dispatch stamps must be ordered: {stamps:?}"
+    );
+    assert!(stamps.iter().all(|stamp| *stamp > 1_000_000));
+    let window = (stamps[4] - stamps[3])
+        + (stamps[5] - stamps[4])
+        + (stamps[6] - stamps[5])
+        + (stamps[7] - stamps[6])
+        + (stamps[8] - stamps[7]);
+    assert_eq!(
+        window,
+        native - picked,
+        "in-window sub-phases sum to dispatch with no residual"
+    );
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.contains("prompt")),
+        "the native submit is the last dispatch step"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delivery_failing_before_submit_leaves_later_dispatch_marks_unset() {
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::Codex, vec![composer_available()]);
+    let response = worker
+        .control_send(&json!({
+            "room": room.0.to_string(),
+            "to": [agent.0.to_string()],
+            "text": "fail before submit"
+        }))
+        .unwrap();
+    let request = RequestId(response["request_ids"][0].as_u64().unwrap());
+    let sequence = dir.join("callbacks/launch/sequence");
+    if sequence.is_file() {
+        std::fs::remove_file(&sequence).unwrap();
+    }
+    std::fs::create_dir(&sequence).expect("sequence path must be a directory so boundary fails");
+    let error = worker
+        .submit_ready()
+        .expect_err("boundary must fail before submit");
+    assert!(!error.is_empty());
+    let (_picked, marks, native) = dispatch_stamps_of(&worker, request);
+    assert!(marks.render_at_ms.is_some());
+    assert_ne!(marks.render_at_ms, Some(0));
+    assert_eq!(marks.boundary_at_ms, None);
+    assert_eq!(marks.notice_at_ms, None);
+    assert_eq!(marks.save_at_ms, None);
+    assert_eq!(marks.diagnostics_at_ms, None);
+    assert_eq!(marks.method_at_ms, None);
+    assert_eq!(native, None);
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|call| !call.contains("prompt")),
+        "a failure before submit must not call the native method"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn rejected_native_attempt_does_not_keep_the_request_stamp() {
     let (during, phase, after) = deliver_with_stamp_probe(true);

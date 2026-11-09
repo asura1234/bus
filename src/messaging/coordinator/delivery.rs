@@ -4,6 +4,7 @@ use super::{
     callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
     RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
+use crate::messaging::model::DispatchMark;
 use crate::messaging::native::TransportError;
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
@@ -446,6 +447,68 @@ impl Worker {
         }
     }
 
+    fn mark_open_dispatch(
+        &mut self,
+        draft: &mut crate::messaging::model::BusState,
+        request: RequestId,
+        mark: DispatchMark,
+    ) {
+        let at_ms = io::now_ms();
+        self.state.record_dispatch_mark(request, mark, at_ms);
+        draft.record_dispatch_mark(request, mark, at_ms);
+    }
+
+    fn mark_live_dispatch(&mut self, request: RequestId, mark: DispatchMark) {
+        self.state.record_dispatch_mark(request, mark, io::now_ms());
+    }
+
+    /// Builds the prompt and stamps every dispatch step that finishes before save.
+    ///
+    /// Render and the callback boundary run before `record_picked`, so they are
+    /// outside the dispatch interval. A failure before submit leaves the later
+    /// marks unset on the live request.
+    fn prepare_native_prompt(
+        &mut self,
+        request: RequestId,
+        waited: bool,
+        launch: &str,
+        terminal: &str,
+        pane: &str,
+    ) -> Result<(crate::messaging::model::BusState, String), String> {
+        let mut state = self.state.clone();
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Started);
+        // Messages that piled up while the agent was unavailable go as one prompt.
+        let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
+            Some(text) => text,
+            None => state
+                .render_request_payload(request)
+                .ok_or("Missing queued request")?,
+        };
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Render);
+        let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
+            .map_err(|e| e.to_string())?;
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Boundary);
+        state
+            .begin_submission(request, launch, boundary)
+            .map_err(|e| e.to_string())?;
+        state
+            .stamp_delivery_epoch(
+                request,
+                crate::messaging::model::DeliveryEpoch {
+                    generation: self.serving_generation,
+                    terminal_id: terminal.to_owned(),
+                    pane_id: pane.to_owned(),
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        state
+            .record_picked(request, io::now_ms(), waited)
+            .map_err(|e| e.to_string())?;
+        state.begin_dialog_notice_write(request, io::now_ms());
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Notice);
+        Ok((state, text))
+    }
+
     fn deliver_request(
         &mut self,
         agent: &RoomAgent,
@@ -473,34 +536,9 @@ impl Worker {
                 .request(request)
                 .is_some_and(super::Request::is_error_report),
         );
-        let mut state = self.state.clone();
-        // Messages that piled up while the agent was unavailable go as one prompt.
-        let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
-            Some(text) => text,
-            None => state
-                .render_request_payload(request)
-                .ok_or("Missing queued request")?,
-        };
-        let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
-            .map_err(|e| e.to_string())?;
-        state
-            .begin_submission(request, launch, boundary)
-            .map_err(|e| e.to_string())?;
-        state
-            .stamp_delivery_epoch(
-                request,
-                crate::messaging::model::DeliveryEpoch {
-                    generation: self.serving_generation,
-                    terminal_id: terminal.clone(),
-                    pane_id: pane.clone(),
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        state
-            .record_picked(request, io::now_ms(), waited)
-            .map_err(|e| e.to_string())?;
-        state.begin_dialog_notice_write(request, io::now_ms());
+        let (state, text) = self.prepare_native_prompt(request, waited, launch, terminal, pane)?;
         self.save(state)?;
+        self.mark_live_dispatch(request, DispatchMark::Save);
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
         self.trace_provider_retry(agent, request);
         let started = std::time::Instant::now();
@@ -516,7 +554,9 @@ impl Worker {
             payload_bytes = text.len(),
             "Bus payload metadata"
         );
+        self.mark_live_dispatch(request, DispatchMark::Diagnostics);
         let method = submission_method(agent, text, terminal, pane, steer, self.serving_generation);
+        self.mark_live_dispatch(request, DispatchMark::Method);
         let response = self.transport.request(method);
         self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
@@ -617,9 +657,11 @@ impl Worker {
             return Ok(());
         };
         let mut state = self.state.clone();
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Started);
         let text = state
             .render_request_payload(request)
             .ok_or("Missing queued request")?;
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Render);
         state
             .begin_steering(request, lead)
             .map_err(|e| e.to_string())?;
@@ -637,17 +679,15 @@ impl Worker {
             .record_picked(request, io::now_ms(), true)
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
+        self.mark_open_dispatch(&mut state, request, DispatchMark::Notice);
         self.save(state)?;
+        self.mark_live_dispatch(request, DispatchMark::Save);
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
+        self.mark_live_dispatch(request, DispatchMark::Diagnostics);
         let started = std::time::Instant::now();
-        let response = self.transport.request(submission_method(
-            agent,
-            text,
-            terminal,
-            pane,
-            true,
-            self.serving_generation,
-        ));
+        let method = submission_method(agent, text, terminal, pane, true, self.serving_generation);
+        self.mark_live_dispatch(request, DispatchMark::Method);
+        let response = self.transport.request(method);
         self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
         let outcome = match response {
