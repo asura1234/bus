@@ -33,7 +33,9 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     assert!(page.contains("no samples"));
     assert!(page.contains("accepted_to_picked"));
     assert!(page.contains("duration(e.mean)"));
-    assert!(!page.contains("series.end_to_end"));
+    assert!(!page.contains("end_to_end"));
+    assert!(!page.contains("reply_delivered_at"));
+    assert!(!page.contains("reply_captured_at"));
     assert!(page.contains("e.n?`n=${e.n}`:'no samples'"));
     assert!(!page.contains("mean??0"));
     assert!(!page.contains("p50??0"));
@@ -140,4 +142,25 @@ fn latency_duration_uses_human_units_at_each_boundary() {
     assert!(!page.contains("`${value} ms`"));
     assert!(!page.contains("`${e.mean} ms`"));
     assert!(!page.contains("toFixed"));
+}
+
+#[test]
+fn latency_series_and_page_do_not_reference_reply_timestamps() {
+    let page = include_str!("../page.html");
+    let latency = include_str!("../latency.rs");
+    let metrics = include_str!("../metrics.rs");
+    for (name, source) in [("page", page), ("latency", latency), ("metrics", metrics)] {
+        assert!(!source.contains("reply_delivered_at"), "{name}");
+        assert!(!source.contains("reply_captured_at"), "{name}");
+        assert!(!source.contains("end_to_end"), "{name}");
+    }
+    for phase in ["reply", "reply_delivery", "reply_capture"] {
+        assert!(
+            !latency.contains(&format!("\"{phase}\"")),
+            "latency phase {phase}"
+        );
+    }
+    assert!(latency.contains("accepted_to_picked"));
+    assert!(page.contains("accepted_to_picked"));
+    assert!(metrics.contains("accepted_to_picked"));
 }

@@ -19,7 +19,6 @@ const PHASES: &[&str] = &[
     "enter_write",
     "post_enter_confirmation",
     "native_total",
-    "end_to_end",
 ];
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -52,11 +51,6 @@ pub(super) fn percentiles(samples: &[u64]) -> Percentiles {
         max: samples.last().copied(),
         mean,
     }
-}
-
-/// End-to-end delay to room delivery. A missing or reversed pair contributes nothing.
-pub(super) fn end_to_end_ms(request: &Request) -> Option<u64> {
-    aggregate(request, "end_to_end")
 }
 
 /// Send accepted until the agent turn takes the message. A missing or reversed pair contributes nothing.
@@ -125,7 +119,6 @@ fn phase(request: &Request, name: &str) -> Option<u64> {
             native_at(native.native_confirmed_at_ms),
         ),
         "native_total" => pair(anchor, native_at(native.native_confirmed_at_ms)),
-        "end_to_end" => pair(latency.accepted_at_ms, latency.reply_delivered_at_ms),
         "queue_total" => pair(latency.queued_at_ms, latency.picked_at_ms),
         _ => None,
     }

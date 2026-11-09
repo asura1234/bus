@@ -49,10 +49,9 @@ fn add_request(
             native_confirmed_at_ms: Some(accepted + 80 * scale),
         },
         provider_started_at_ms: Some(accepted + 85 * scale),
-        reply_captured_at_ms: Some(accepted + 100 * scale),
-        reply_delivered_at_ms: Some(accepted + 110 * scale),
         ready_at_enqueue: ready,
         agent_waited: !ready,
+        ..DeliveryLatency::default()
     };
     let mut document = serde_json::to_value(&*state).unwrap();
     document["requests"][id.0.to_string()]["latency"] = serde_json::to_value(latency).unwrap();
@@ -93,11 +92,7 @@ fn snapshot_aggregates_ready_bus_phases_by_provider_recipient_and_hour() {
     assert_eq!(report.all.phases["ready_queue"].p50, Some(10));
     assert_eq!(report.all.phases["native_total"].n, 3);
     assert!(!report.all.phases.contains_key("reply_delivery"));
-    let end_to_end = &report.all.phases["end_to_end"];
-    assert_eq!(
-        (end_to_end.n, end_to_end.p50, end_to_end.p90, end_to_end.p99),
-        (3, Some(330), Some(1100), Some(1100))
-    );
+    assert!(!report.all.phases.contains_key("end_to_end"));
     let picked = &report.all.phases["accepted_to_picked"];
     assert_eq!(
         (picked.n, picked.p50, picked.p90, picked.p99, picked.mean),
@@ -184,9 +179,7 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
     let data = super::response_for(&root, "GET", "/data");
     assert_eq!(data.status, "200 OK");
     let body: serde_json::Value = serde_json::from_slice(&data.body).unwrap();
-    assert_eq!(body["metrics"]["all"]["end_to_end"]["n"], 0);
-    assert!(body["metrics"]["all"]["end_to_end"]["p50"].is_null());
-    assert!(body["metrics"]["all"]["end_to_end"]["mean"].is_null());
+    assert!(body["metrics"]["all"].get("end_to_end").is_none());
     assert_eq!(body["metrics"]["all"]["accepted_to_picked"]["n"], 0);
     assert!(body["metrics"]["all"]["accepted_to_picked"]["p50"].is_null());
     assert!(body["metrics"]["all"]["accepted_to_picked"]["mean"].is_null());
@@ -194,6 +187,9 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
     let raw = String::from_utf8(data.body).unwrap();
     assert!(!raw.contains("SENTINEL_LEGACY_CONTENT"));
     assert!(!raw.contains("/latency"));
+    assert!(!raw.contains("reply_delivered_at"));
+    assert!(!raw.contains("reply_captured_at"));
+    assert!(!raw.contains("end_to_end"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert!(!root.join("state.journal.json").exists());
     assert_eq!(
@@ -352,10 +348,9 @@ fn phases_pair_inside_one_native_attempt_and_drop_reversed_samples() {
             native_confirmed_at_ms: Some(accepted + 80),
         },
         provider_started_at_ms: Some(accepted + 90),
-        reply_captured_at_ms: Some(accepted + 100),
-        reply_delivered_at_ms: Some(anchor + 500),
         ready_at_enqueue: true,
         agent_waited: false,
+        ..DeliveryLatency::default()
     };
     let mut document = serde_json::to_value(&state).unwrap();
     document["requests"][id.0.to_string()]["latency"] = serde_json::to_value(latency).unwrap();
@@ -370,10 +365,7 @@ fn phases_pair_inside_one_native_attempt_and_drop_reversed_samples() {
         report.all.phases["accepted_to_box"].p50,
         Some(anchor + 20 - accepted)
     );
-    assert_eq!(
-        report.all.phases["end_to_end"].p50,
-        Some(anchor + 500 - accepted)
-    );
+    assert!(!report.all.phases.contains_key("end_to_end"));
     assert!(!report.all.phases.contains_key("reply_delivery"));
     assert!(report.slowest[0].phases.contains_key("text_write"));
     assert!(!report.slowest[0].phases.contains_key("writer_queue"));

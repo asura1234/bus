@@ -104,10 +104,8 @@ struct Series {
     hours: Vec<Hour>,
     rates: Rates,
     identity: String,
-    /// p50/p90/p99 and the mean of complete end-to-end pairs. Empty stays None.
-    end_to_end: super::latency::Percentiles,
-    /// Send accepted until agent pickup. This is the latency the delivery page shows.
-    /// Empty stays None. `end_to_end` stays the room-delivery span.
+    /// Send accepted until agent pickup. Empty stays None.
+    /// Not computed from reply capture or reply delivery.
     accepted_to_picked: super::latency::Percentiles,
 }
 #[derive(Default, Serialize)]
@@ -364,7 +362,6 @@ fn external(reason: &str) -> bool {
 struct SeriesBuilder {
     counts: Counts,
     hours: BTreeMap<i64, (String, Counts)>,
-    end_to_end: Vec<u64>,
     accepted_to_picked: Vec<u64>,
 }
 impl SeriesBuilder {
@@ -375,9 +372,6 @@ impl SeriesBuilder {
             .or_insert_with(|| (hour.label.clone(), Counts::default()))
             .1
             .add(request, outcome);
-        if let Some(ms) = super::latency::end_to_end_ms(request) {
-            self.end_to_end.push(ms);
-        }
         if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
             self.accepted_to_picked.push(ms);
         }
@@ -389,7 +383,6 @@ impl SeriesBuilder {
             counts: self.counts,
             rates,
             identity,
-            end_to_end: super::latency::percentiles(&self.end_to_end),
             accepted_to_picked: super::latency::percentiles(&self.accepted_to_picked),
             hours: self
                 .hours
