@@ -438,7 +438,7 @@ fn staffing_stale_id_refuses_both_room_orchestrator_and_same_name_replacement() 
     w.state.bind_orchestrator(orch, room).unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "merge notice");
     assert!(!response.ok, "{response:?}");
-    assert!(error_message(&response).contains("deleted"));
+    assert!(error_message(&response).contains("no longer exists"));
     assert_eq!(w.state.requests().count(), 0);
     assert!(w
         .state
@@ -450,7 +450,7 @@ fn staffing_stale_id_refuses_both_room_orchestrator_and_same_name_replacement() 
     w.state = state;
     let refused = send(&mut w, room, author, &old.0.to_string(), "next notice");
     assert!(!refused.ok);
-    assert!(error_message(&refused).contains("deleted"));
+    assert!(error_message(&refused).contains("no longer exists"));
     assert_eq!(w.state.requests().count(), 0);
     assert!(send(&mut w, room, author, "owner", "current name").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, replacement);
@@ -595,7 +595,7 @@ fn removed_orchestrator_id_is_refused_while_alias_resolves_the_current_orchestra
     w.state.bind_orchestrator(second, room).unwrap();
     let response = send(&mut w, room, author, &first.0.to_string(), "merge notice");
     assert!(!response.ok, "{response:?}");
-    assert!(error_message(&response).contains("deleted"));
+    assert!(error_message(&response).contains("no longer exists"));
     assert_eq!(w.state.requests().count(), 0);
     assert!(send(&mut w, room, author, "orchestrator", "current alias").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, second);
@@ -618,7 +618,7 @@ fn retired_orchestrator_id_is_refused_when_its_name_is_reused_elsewhere() {
     w.state = serde_json::from_value(serde_json::to_value(&w.state).unwrap()).unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "late room notice");
     assert!(!response.ok, "{response:?}");
-    assert!(error_message(&response).contains("deleted"));
+    assert!(error_message(&response).contains("no longer exists"));
     assert_eq!(w.state.requests().count(), 0);
     assert!(send(&mut w, room, author, "orchestrator", "current room alias").ok);
     assert_eq!(w.state.requests().last().unwrap().agent_id, current);
@@ -644,7 +644,7 @@ fn retired_numeric_id_is_refused_even_with_ambiguous_replacements_after_storage_
     w.state = w.store.load().unwrap().unwrap();
     let response = send(&mut w, room, author, &old.0.to_string(), "late notice");
     assert!(!response.ok);
-    assert!(error_message(&response).contains("deleted"));
+    assert!(error_message(&response).contains("no longer exists"));
     let response = send(&mut w, room, author, "owner", "live ambiguity");
     assert!(!response.ok);
     assert!(error_message(&response).contains("Ambiguous"));

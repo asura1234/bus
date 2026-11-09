@@ -253,7 +253,9 @@ fn sender_identity_reported_no_as_deleted_name_never_becomes_a_developer_send() 
     );
     let error = sent.unwrap_err();
     assert!(
-        error.contains("cu-rev") && error.contains("deleted"),
+        error.contains("cu-rev")
+            && error.contains("no longer exists")
+            && error.contains("the message was not sent"),
         "{error}"
     );
     drop(w);
@@ -279,7 +281,10 @@ fn sender_identity_deleted_and_unknown_recipients_never_reroute() {
         let error = sent.unwrap_err();
         assert!(error.contains(&selector), "{error}");
         if selector != "never-existed" {
-            assert!(error.contains("deleted"), "{error}");
+            assert!(
+                error.contains("no longer exists") && error.contains("the message was not sent"),
+                "{error}"
+            );
         }
     }
     drop(w);
@@ -309,7 +314,11 @@ fn sender_identity_deleted_numeric_id_cannot_be_rebound_by_a_numeric_name() {
         w.state, before,
         "deleted ID resolved to a numeric name: {sent:?}"
     );
-    assert!(sent.unwrap_err().contains("deleted"));
+    let refused = sent.unwrap_err();
+    assert!(
+        refused.contains("no longer exists") && refused.contains("the message was not sent"),
+        "{refused}"
+    );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

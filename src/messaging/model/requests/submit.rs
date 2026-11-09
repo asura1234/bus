@@ -130,13 +130,19 @@ impl BusState {
             return Err(ModelError::NoRecipients);
         }
         for agent_id in &draft.recipient_ids {
-            let agent = self
-                .agents
-                .get(agent_id)
-                .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            if agent.deletion_pending {
-                return Err(ModelError::DeletionPending);
+            if let Some(agent) = self.agents.get(agent_id) {
+                if agent.deletion_pending {
+                    return Err(ModelError::DeletionPending);
+                }
+                continue;
             }
+            if let Some(retired) = self.retired_agents.get(agent_id) {
+                return Err(ModelError::RecipientDeleted {
+                    agent: *agent_id,
+                    name: retired.name.clone(),
+                });
+            }
+            return Err(ModelError::UnknownAgent(*agent_id));
         }
 
         let prompt = Prompt {

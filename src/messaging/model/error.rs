@@ -2,6 +2,21 @@
 use super::types::DEVELOPER_RECIPIENT;
 use super::{AgentId, RequestId, RoomId, MASTER_ROOM_NAME};
 
+/// Shared sentence for a send that names a retired recipient. Callers must not
+/// record the refusal, and logs must not surface it as a failure.
+pub(crate) const RECIPIENT_DELETED_REFUSAL: &str = "no longer exists; the message was not sent";
+
+pub(crate) fn recipient_deleted_message(name: &str, agent: AgentId) -> String {
+    format!(
+        "Recipient {name} (agent {}) {RECIPIENT_DELETED_REFUSAL}",
+        agent.0
+    )
+}
+
+pub(crate) fn is_recipient_deleted_refusal(message: &str) -> bool {
+    message.contains(RECIPIENT_DELETED_REFUSAL)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ModelError {
     InvalidName,
@@ -31,6 +46,11 @@ pub(crate) enum ModelError {
         agent: AgentId,
     },
     OrchestratorAlreadyBound(AgentId),
+    /// The recipient was already deleted. Nothing was queued.
+    RecipientDeleted {
+        agent: AgentId,
+        name: String,
+    },
 }
 
 impl std::fmt::Display for ModelError {
@@ -75,6 +95,9 @@ impl std::fmt::Display for ModelError {
             Self::EmptyPrompt => write!(formatter, "The message has no text or files"),
             Self::NoRecipients => write!(formatter, "Choose at least one recipient"),
             Self::DeletionPending => write!(formatter, "That room or agent is being deleted"),
+            Self::RecipientDeleted { agent, name } => {
+                write!(formatter, "{}", recipient_deleted_message(name, *agent))
+            }
             _ => write!(formatter, "Bus model operation failed: {self:?}"),
         }
     }

@@ -114,6 +114,7 @@ impl Worker {
                 // Detailed domain diagnostics remain available via state and log IDs.
                 self.master_reserved_response(request)
                     .or_else(|| self.reply_conflict_response(request))
+                    .or_else(|| self.recipient_deleted_response(request))
                     .unwrap_or_else(|| {
                         Response::failure(
                             &request.id,
@@ -123,12 +124,27 @@ impl Worker {
                     })
             }
         };
-        tracing::info!(
-            event = "bus.control.command.result",
-            ok = response.ok,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "Bus control command finished"
-        );
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if response
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "recipient_deleted")
+        {
+            // A refused deleted recipient is not a failure record. Debug only.
+            tracing::debug!(
+                event = "bus.control.command.result",
+                ok = false,
+                elapsed_ms,
+                "Bus control command finished"
+            );
+        } else {
+            tracing::info!(
+                event = "bus.control.command.result",
+                ok = response.ok,
+                elapsed_ms,
+                "Bus control command finished"
+            );
+        }
         if mutation {
             self.control_receipt_bytes = self.control_receipt_bytes.saturating_add(reserve);
             self.control_receipt_order.push_back(request.id.clone());

@@ -230,6 +230,61 @@ impl Worker {
         ))
     }
 
+    /// Re-derive a deleted recipient from the same rules as resolution. The
+    /// public sentence names that recipient and says the message was not sent.
+    pub(super) fn recipient_deleted_response(
+        &mut self,
+        command: &ControlRequest,
+    ) -> Option<Response> {
+        if command.method != "message.send" || command.params.get("reply_to").is_some() {
+            return None;
+        }
+        let room = self
+            .control_room(required(&command.params, "room").ok()?)
+            .ok()?;
+        if attachment_files(&command.params).is_err() {
+            return None;
+        }
+        let selected = command.params.get("to")?.as_array()?;
+        if selected.iter().any(|value| value.as_str().is_none()) {
+            return None;
+        }
+        if selected.len() == 1 && selected.first()?.as_str() == Some("all") {
+            return None;
+        }
+        if selected.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(crate::messaging::model::is_developer_recipient)
+        }) {
+            return None;
+        }
+        let author = if command.params.get("as").is_some() {
+            let selector = command.params.get("as")?.as_str()?;
+            Some(self.control_author(room, selector).ok()?)
+        } else if command.params.get("caller").is_some() {
+            self.send_author(room, &command.params).ok()?
+        } else {
+            None
+        };
+        let sender_room = author
+            .and_then(|id| self.state.agent(id))
+            .map_or(room, |agent| agent.room_id);
+        for value in selected {
+            let selector = value.as_str()?;
+            if let Some(message) = self.retired_send_target(selector, true) {
+                return Some(Response::failure(&command.id, "recipient_deleted", message));
+            }
+            if self
+                .resolve_agent(Some(room), Some(sender_room), selector, true)
+                .is_err()
+            {
+                return None;
+            }
+        }
+        None
+    }
+
     /// Preserve the send refusal's structured code without parsing error text.
     pub(super) fn master_reserved_response(
         &mut self,
