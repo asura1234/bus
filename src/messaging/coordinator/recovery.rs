@@ -350,24 +350,92 @@ impl Worker {
         {
             return Ok(());
         }
-        let closed = self
-            .transport
-            .request(Method::PaneCloseIfIdentity(
-                schema::PaneCloseIfIdentityParams {
-                    pane_id: pane.clone(),
-                    expected_terminal_id: terminal.clone(),
-                    expected_agent: identity::provider_kind(agent.provider).label().into(),
-                    expected_managed_name: identity::managed_name(agent.room_id, agent.id),
-                    expected_session_id: agent.runtime_identity.session_id.clone(),
-                    close_exited_shell: true,
-                    allow_busy_shell: false,
-                },
-            ))
-            .map_err(|e| format!("Previous pane could not be safely closed: {}", e.message))?;
-        if matches!(closed, ResponseResult::Ok {}) {
-            Ok(())
-        } else {
-            Err("Previous pane close is unconfirmed; no provider was launched".into())
+        let pane = pane.clone();
+        let terminal = terminal.clone();
+        let closed = self.transport.request(Method::PaneCloseIfIdentity(
+            schema::PaneCloseIfIdentityParams {
+                pane_id: pane.clone(),
+                expected_terminal_id: terminal.clone(),
+                expected_agent: identity::provider_kind(agent.provider).label().into(),
+                expected_managed_name: identity::managed_name(agent.room_id, agent.id),
+                expected_session_id: agent.runtime_identity.session_id.clone(),
+                close_exited_shell: true,
+                allow_busy_shell: false,
+            },
+        ));
+        match closed {
+            Ok(ResponseResult::Ok {}) => Ok(()),
+            Ok(_) => {
+                self.log_unconfirmed_pane_close(
+                    agent,
+                    &pane,
+                    &terminal,
+                    None,
+                    "close response was not Ok",
+                );
+                Err("Previous pane close is unconfirmed; no provider was launched".into())
+            }
+            Err(error) => {
+                self.log_unconfirmed_pane_close(
+                    agent,
+                    &pane,
+                    &terminal,
+                    error.code.as_deref(),
+                    &error.message,
+                );
+                Err(format!(
+                    "Previous pane could not be safely closed: {}",
+                    error.message
+                ))
+            }
         }
+    }
+
+    /// The read is diagnostic. It does not record a snapshot or continue resume.
+    fn log_unconfirmed_pane_close(
+        &mut self,
+        agent: &RoomAgent,
+        pane_id: &str,
+        saved_terminal_id: &str,
+        close_code: Option<&str>,
+        close_detail: &str,
+    ) {
+        let current = match self.transport.request(Method::PaneGet(schema::PaneTarget {
+            pane_id: pane_id.to_owned(),
+        })) {
+            Ok(ResponseResult::PaneInfo { pane }) => Some(pane),
+            _ => None,
+        };
+        let (current_pane_id, current_terminal_id, current_agent, current_session) =
+            match current.as_ref() {
+                Some(pane) => (
+                    pane.pane_id.as_str(),
+                    pane.terminal_id.as_str(),
+                    pane.agent.as_deref().unwrap_or(""),
+                    pane.agent_session
+                        .as_ref()
+                        .map(|session| session.value.as_str())
+                        .unwrap_or(""),
+                ),
+                None => ("unreadable", "unreadable", "unreadable", "unreadable"),
+            };
+        let expected_managed_name = identity::managed_name(agent.room_id, agent.id);
+        let expected_session_id = agent.runtime_identity.session_id.as_deref().unwrap_or("");
+        tracing::warn!(
+            event = "bus.resume.pane_close_unconfirmed",
+            pane_id,
+            saved_terminal_id,
+            current_identity_readable = current.is_some(),
+            current_pane_id,
+            current_terminal_id,
+            current_agent,
+            current_session,
+            expected_agent = identity::provider_kind(agent.provider).label(),
+            expected_managed_name = expected_managed_name.as_str(),
+            expected_session_id,
+            close_code = close_code.unwrap_or(""),
+            close_detail,
+            "Previous pane close is unconfirmed"
+        );
     }
 }
