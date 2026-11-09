@@ -1,4 +1,6 @@
-use super::framer::{MAX_DISCARDED_CONTROL_TAIL_BYTES, MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES};
+use super::framer::{
+    log_unparsed_input, MAX_DISCARDED_CONTROL_TAIL_BYTES, MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES,
+};
 use super::sequence::{control_string_terminator_for_family, ControlStringFamily};
 use super::ESC;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -53,12 +55,23 @@ pub(super) fn discard_or_buffer_orphaned_sgr_mouse_tail(
     discard_until: &mut Option<ControlStringFamily>,
     discarded_tail_bytes: &mut usize,
 ) {
-    if !discard_complete_orphaned_sgr_mouse_tail(buffer) {
-        *discarded_tail_bytes = buffer.len();
-        *discard_until = (*discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES)
-            .then_some(ControlStringFamily::OrphanedSgrMouseTail);
-        buffer.clear();
+    let before = buffer.len();
+    if discard_complete_orphaned_sgr_mouse_tail(buffer) {
+        tracing::debug!(
+            event = "bus.client.input_sequence_completed",
+            len = before - buffer.len(),
+        );
+        return;
     }
+    log_unparsed_input(buffer, "orphaned_sgr_tail");
+    tracing::debug!(
+        event = "bus.client.input_sequence_discarded",
+        len = buffer.len(),
+    );
+    *discarded_tail_bytes = buffer.len();
+    *discard_until = (*discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES)
+        .then_some(ControlStringFamily::OrphanedSgrMouseTail);
+    buffer.clear();
 }
 
 pub(super) fn discard_orphaned_sgr_mouse_tail(

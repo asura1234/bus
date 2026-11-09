@@ -522,6 +522,24 @@ mod tests {
     }
 
     #[test]
+    fn startup_clear_logs_the_mouse_modes_it_disables() {
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| {
+            let mut output = Vec::new();
+            crate::client::host_terminal::modes::clear_host_mouse_reporting(&mut output).unwrap();
+            assert!(output.starts_with(b"\x1b[?1006l"));
+        });
+        let logs = capture.text();
+        assert!(
+            logs.contains("bus.client.inherited_reporting_cleared"),
+            "missing inherited-reporting clear: {logs}"
+        );
+        for mode in ["1006", "1016", "1015", "1005", "1003", "1002", "1000"] {
+            assert!(logs.contains(mode), "missing mode {mode}: {logs}");
+        }
+    }
+
+    #[test]
     fn shutdown_drain_stays_open_while_palette_replies_advance() {
         let pending = Arc::new(AtomicBool::new(true));
         let progress = Arc::new(AtomicU16::new(0));

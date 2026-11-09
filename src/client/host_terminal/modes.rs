@@ -12,7 +12,15 @@ const WINDOWS_SSH_MOUSE_REPORTING_DISABLE_SEQUENCE: &[u8] =
     b"\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 #[cfg(not(windows))]
+const DISABLED_HOST_MOUSE_MODES: &str = "1006,1016,1015,1005,1003,1002,1000";
+
+#[cfg(not(windows))]
 pub(crate) fn clear_host_mouse_reporting<W: Write>(writer: &mut W) -> io::Result<()> {
+    // This sequence disables mouse reporting. It does not write focus-off (1004).
+    tracing::debug!(
+        event = "bus.client.inherited_reporting_cleared",
+        modes = DISABLED_HOST_MOUSE_MODES,
+    );
     writer.write_all(DISABLE_HOST_MOUSE_REPORTING_SEQUENCE)?;
     writer.flush()
 }
