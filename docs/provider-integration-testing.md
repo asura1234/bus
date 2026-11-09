@@ -593,9 +593,14 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   saves/quits and relaunches the whole Bus and is not a step in this scratch test. Do not point
   it at the live session. Before any such live restart, commit and push, stop
   builds and tests, and release slot locks. The real-HOME section below is
-  that same private-root relaunch, not `bus resume`. Machine sleep or Bus
-  restart ends in-flight turns as `reply_not_captured`; rerun acceptance
-  from a fresh scratch instance, never resume the interrupted run as a pass.
+  that same private-root relaunch, not `bus resume`. A new server generation settles unfinished submitted requests from older
+  generations as `reply_not_captured` after reconciling durable callbacks and
+  provider records; an existing answer or transient-error retry hold wins.
+  Pending messages remain queued and deliver after restore. Restart receipts
+  are notices only, including delayed or replayed receipts. A coordinator
+  reconnect to the same serving generation preserves the live turn.
+  For unrelated acceptance interrupted by sleep or restart, rerun from a fresh
+  scratch instance instead of counting the interrupted scenario as a pass.
 - [ ] Test provider flags through `agent add --args`: Claude
   `--dangerously-skip-permissions`, Codex `--yolo`, Cursor `--force`, Grok
   `--always-approve`, Kimi `--yolo` (when supported). Check saved launch options
@@ -976,3 +981,13 @@ idle then deliver, and an approval card without `--yolo`.
   restored draft must remain for a person; do not clear it or type the queued
   message over it. Ordinary Cursor delivery and the other providers' quota
   fixtures are required neighbours.
+
+- **2026-11-03 — verify the coordinator as well as the server:** A server-only
+  upgrade to e68450ae left the TUI coordinator on 22dc11b7. The old coordinator
+  kept Active requests across native restore and expired their queued follow-ups
+  as `prior_request_active`, although master already retained those queues.
+  Record both client and server `run_start` SHA/PID pairs. For an explicitly
+  authorized whole-session scratch restart, require both processes to change;
+  for server-only restore, require the coordinator to stay and the serving
+  generation to advance, including when terminal identity stays unchanged. Test a running turn, its interrupted outcome,
+  retained queued messages and successful replies in the original session.
