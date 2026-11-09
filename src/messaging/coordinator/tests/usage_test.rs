@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::providers::usage::{ObservationManifest, FIVE_HOUR_MINUTES, WEEKLY_MINUTES};
+use crate::agents::providers::ProviderKind;
 
 #[test]
 fn claude_merge_uses_newest_observation_and_expires_without_claiming_unused_quota() {
