@@ -174,6 +174,10 @@ struct Grok {
     pending: Vec<u8>,
     card_pending: Vec<u8>,
     last: String,
+    /// Draw the captured Grok 4.7 weekly-limit composer instead of the
+    /// plain 1.0.5 box. Tests opt in; the default synthetic screen stays
+    /// the older frame.
+    weekly_limit: bool,
 }
 
 impl Grok {
@@ -224,6 +228,7 @@ impl Grok {
             pending: Vec::new(),
             card_pending: Vec::new(),
             last: String::new(),
+            weekly_limit: false,
         })
     }
 
@@ -640,17 +645,23 @@ impl Grok {
             // so one poll counts the episode, then the idle screen drops it.
             screen.push_str("Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n");
         }
-        screen.push_str(&format!(
-            "╭{}╮\r\n│ ❯ {} │\r\n╰{}╯\r\n{}Shift+Tab:mode │ Ctrl+x:shortcuts\r\n",
-            "─".repeat(58),
-            framed_draft(&self.draft),
-            "─".repeat(58),
-            if self.active.is_some() {
-                "Esc:cancel │ "
-            } else {
-                ""
-            }
-        ));
+        if self.weekly_limit && self.draft.is_empty() && self.active.is_none() {
+            screen.push_str(
+                &crate::agents::grok_surface::weekly_limit_idle_screen().replace('\n', "\r\n"),
+            );
+        } else {
+            screen.push_str(&format!(
+                "╭{}╮\r\n│ ❯ {} │\r\n╰{}╯\r\n{}Shift+Tab:mode │ Ctrl+x:shortcuts\r\n",
+                "─".repeat(58),
+                framed_draft(&self.draft),
+                "─".repeat(58),
+                if self.active.is_some() {
+                    "Esc:cancel │ "
+                } else {
+                    ""
+                }
+            ));
+        }
         screen
     }
 
@@ -736,6 +747,19 @@ mod scenario_tests {
     use serde_json::{json, Value};
     use std::path::Path;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn grok_weekly_limit_idle_screen_is_the_captured_composer() {
+        let root = Scratch::new();
+        let mut agent = agent(root.path());
+        agent.weekly_limit = true;
+        let screen = agent.screen().replace("\r\n", "\n");
+        let idle = crate::agents::grok_surface::weekly_limit_idle_screen();
+        assert!(
+            screen.contains(idle.trim_end()),
+            "synthetic provider did not draw the captured quota composer:\n{screen}"
+        );
+    }
 
     #[test]
     fn grok_question_shortcut_selects_and_finishes_the_card() {

@@ -432,6 +432,80 @@ mod tests {
         );
     }
 
+    /// Request 719: Grok 4.7 was idle with `❯` on screen, but the bottom
+    /// border was `Weekly limit left: 6% · Grok 4.7 …` above
+    /// `Shift+Tab:mode │ Ctrl+.:shortcuts`. The synthetic provider draws
+    /// that frame. Bus must read the empty row and paste into it.
+    #[tokio::test]
+    async fn grok_weekly_limit_idle_composer_accepts_a_prompt() {
+        use bytes::Bytes;
+        use std::time::{Duration, Instant};
+
+        let screen = crate::agents::grok_surface::weekly_limit_idle_screen();
+        assert_eq!(input(&screen).as_deref(), Some(""));
+        assert_eq!(observe(&screen, "ready"), InputObservation::Empty);
+        let drafted = screen.replacen("│ ❯ ", "│ ❯ keep", 1);
+        assert_eq!(input(&drafted).as_deref(), Some("keep"));
+        assert_eq!(observe(&drafted, "ready"), InputObservation::Unavailable);
+        let foreign = screen.replacen("Weekly limit left: 6%", "Notes left: 6%", 1);
+        assert_eq!(input(&foreign), None);
+        assert_eq!(observe(&foreign, "ready"), InputObservation::Unavailable);
+
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        runtime.test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H{}", screen.replace('\n', "\r\n")).as_bytes(),
+        );
+        assert_eq!(
+            observe(&runtime.visible_ansi(), "ready"),
+            InputObservation::Empty
+        );
+        let prompt = "Reply with the single word: ready.";
+        let completion = runtime
+            .queue_observed_input_with_inspector(
+                Bytes::copy_from_slice(prompt.as_bytes()),
+                Bytes::from_static(b"\r"),
+                vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+                Duration::ZERO,
+                Some(
+                    Instant::now()
+                        + crate::protocol::api::submission::maximum_budget(
+                            Duration::ZERO,
+                            prompt.as_bytes(),
+                        ),
+                ),
+                Box::new(super::super::composer::observer(
+                    crate::agents::AgentKind::Grok,
+                    prompt.into(),
+                )),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let pasted = loop {
+            if let Ok(bytes) = writes.try_recv() {
+                break bytes;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "weekly-limit composer received no paste"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(pasted, Bytes::copy_from_slice(prompt.as_bytes()));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        completion
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert!(writes.try_recv().is_err(), "one paste and one Enter");
+    }
+
     #[test]
     fn grok_1070_native_paste_chip_matches_only_its_summary() {
         let four_lines = "first\nsecond\nthird\nfourth";
