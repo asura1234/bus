@@ -167,9 +167,7 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     assert_ne!(caption.as_str(), "100%");
     assert!(!caption.ends_with('%'), "{caption}");
     assert_reply_capture_rate_is_absent(&report, "complete bus reliability");
-    for rate in [
-        &report.all.rates.bus_reliability,
-    ] {
+    for rate in [&report.all.rates.bus_reliability] {
         if rate.percent.is_some() {
             assert!(
                 rate.caption.contains("conclusive")
