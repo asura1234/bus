@@ -520,7 +520,13 @@ impl Worker {
         let response = self.transport.request(method);
         self.note_native_requested(request, io::now_ms());
         let native_timestamps = native_response_timestamps(&response);
-        let (outcome, outcome_name) = native_submit_outcome(response, &identity.session_id);
+        let outcome = Self::submission_outcome(response, &identity.session_id);
+        let outcome_name = match &outcome {
+            SubmissionOutcome::ComposerBusy => "composer_wait",
+            SubmissionOutcome::Confirmed { .. } => "confirmed",
+            SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
+            SubmissionOutcome::Uncertain { .. } => "uncertain",
+        };
         tracing::info!(
             event = "bus.delivery.result",
             request_id = request.0,
@@ -536,6 +542,35 @@ impl Worker {
         self.save(state)?;
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
+    }
+
+    fn submission_outcome(
+        result: Result<ResponseResult, TransportError>,
+        session_id: &Option<String>,
+    ) -> SubmissionOutcome {
+        match result {
+            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
+                provider_session_id: session_id.clone(),
+                provider_turn_id: None,
+            },
+            Ok(other) => SubmissionOutcome::Uncertain {
+                message: format!("Unexpected submit response; no automatic retry: {other:?}"),
+            },
+            Err(error)
+                if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) =>
+            {
+                SubmissionOutcome::ComposerBusy
+            }
+            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
+                message: error.message,
+            },
+            Err(error) => SubmissionOutcome::Uncertain {
+                message: format!(
+                    "Submit outcome unknown; no automatic retry: {}",
+                    error.message
+                ),
+            },
+        }
     }
 
     fn note_withdrawn(
@@ -647,40 +682,6 @@ impl Worker {
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }
-}
-
-fn native_submit_outcome(
-    response: Result<ResponseResult, TransportError>,
-    provider_session_id: &Option<String>,
-) -> (SubmissionOutcome, &'static str) {
-    let outcome = match response {
-        Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
-            provider_session_id: provider_session_id.clone(),
-            provider_turn_id: None,
-        },
-        Ok(other) => SubmissionOutcome::Uncertain {
-            message: format!("Unexpected submit response; no automatic retry: {other:?}"),
-        },
-        Err(error) if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) => {
-            SubmissionOutcome::ComposerBusy
-        }
-        Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
-            message: error.message,
-        },
-        Err(error) => SubmissionOutcome::Uncertain {
-            message: format!(
-                "Submit outcome unknown; no automatic retry: {}",
-                error.message
-            ),
-        },
-    };
-    let outcome_name = match &outcome {
-        SubmissionOutcome::ComposerBusy => "composer_wait",
-        SubmissionOutcome::Confirmed { .. } => "confirmed",
-        SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
-        SubmissionOutcome::Uncertain { .. } => "uncertain",
-    };
-    (outcome, outcome_name)
 }
 
 fn native_response_timestamps(

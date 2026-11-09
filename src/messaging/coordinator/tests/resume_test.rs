@@ -486,7 +486,7 @@ fn cold_resume_rebinds_unstarted_codex_and_delivers_its_first_prompt_once() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|method| **method == "agent.prompt_if_unbound")
+            .filter(|method| **method == "agent.prompt_if_unbound_at_generation")
             .count(),
         1
     );
@@ -576,7 +576,7 @@ fn cold_resume_after_startup_failure_accepts_explicitly_resent_work() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|method| **method == "agent.prompt_if_unbound")
+            .filter(|method| **method == "agent.prompt_if_unbound_at_generation")
             .count(),
         1
     );
@@ -710,7 +710,7 @@ fn cold_resume_preserves_uncertain_request_and_settles_its_original_reply_once()
             .lock()
             .unwrap()
             .iter()
-            .filter(|m| **m == "agent.prompt_if_idle")
+            .filter(|m| **m == "agent.prompt_if_idle_at_generation")
             .count(),
         1
     );
@@ -821,7 +821,7 @@ fn interactive_ready_releases_setup_gate_but_pending_deletion_stays_closed() {
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|m| **m == "agent.prompt_if_idle")
+                .filter(|m| **m == "agent.prompt_if_idle_at_generation")
                 .count(),
             1
         );
@@ -1104,7 +1104,7 @@ fn cold_resume_after_failed_startup_reopens_without_replaying_closed_work() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|method| **method == "agent.prompt_if_unbound")
+            .filter(|method| **method == "agent.prompt_if_unbound_at_generation")
             .count(),
         1
     );
@@ -1163,7 +1163,7 @@ fn startup_timeout_sessionless_resume_rebinds_every_provider() {
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|method| **method == "agent.prompt_if_unbound")
+                .filter(|method| **method == "agent.prompt_if_unbound_at_generation")
                 .count(),
             usize::from(matches!(provider, Provider::Codex | Provider::Kimi))
         );

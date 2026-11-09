@@ -46,7 +46,9 @@ fn startup_poll_timeout_retries_without_status_or_composer_error_then_recovers()
         RequestPhase::Queued
     );
     assert!(worker.snapshot().error.is_none());
-    assert!(!calls.lock().unwrap().contains(&"agent.prompt_if_idle"));
+    assert!(calls.lock().unwrap().iter().all(|call| {
+        *call != "agent.prompt_if_idle" && *call != "agent.prompt_if_idle_at_generation"
+    }));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -344,7 +346,7 @@ fn long_stall_recovery_delivers_queued_work_once() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|call| **call == "agent.prompt_if_idle")
+            .filter(|call| **call == "agent.prompt_if_idle_at_generation")
             .count(),
         1
     );

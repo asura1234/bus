@@ -96,7 +96,10 @@ fn orchestrator_idle_submission_selects_original_developer_and_saves_a_clean_bat
         .unwrap();
     worker.save(state).unwrap();
     worker.submit_ready().unwrap();
-    assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_idle"]);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["agent.prompt_if_idle_at_generation"]
+    );
     let saved = worker.store.load().unwrap().unwrap();
     assert_eq!(saved.agent(orch).unwrap().current_request, Some(h1));
     let text = saved

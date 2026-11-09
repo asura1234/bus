@@ -73,7 +73,10 @@ fn grok_login_keeps_work_queued_until_authenticated_idle() {
             .unwrap();
         worker.save(worker.state.clone()).unwrap();
         worker.submit_ready().unwrap();
-        assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_idle"]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["agent.prompt_if_idle_at_generation"]
+        );
         assert!(worker.state.queued_requests(agent).is_empty());
         assert_eq!(
             worker.state.agent(agent).unwrap().current_request,

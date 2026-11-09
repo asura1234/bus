@@ -1782,6 +1782,10 @@ fn provider_flake_reset_diagnostics_follow_successful_persistence_once() {
     }
 }
 
+#[cfg(unix)]
+#[path = "restart_epoch_test.rs"]
+mod restart_epoch_tests;
+
 #[test]
 fn restart_published_recovers_distinct_committed_steering_final() {
     for restored in [false, true] {
@@ -2099,3 +2103,7 @@ fn restart_generation_serving_change_without_rebind_or_receipt_releases_all_prov
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[cfg(unix)]
+#[path = "restart_hypotheses_test.rs"]
+mod restart_hypotheses_tests;

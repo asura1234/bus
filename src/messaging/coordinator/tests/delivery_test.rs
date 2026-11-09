@@ -655,7 +655,10 @@ fn codex_first_room_prompt_does_not_wait_for_its_deferred_session_start() {
     fresh_idle_poll(&mut worker, agent);
     queue(&mut worker, room, agent, "first real prompt");
     worker.submit_ready().unwrap();
-    assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_unbound"]);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["agent.prompt_if_unbound_at_generation"]
+    );
     // An uncertain first submit remains owned; it must not bootstrap twice.
     worker.submit_ready().unwrap();
     assert_eq!(calls.lock().unwrap().len(), 1);
@@ -720,7 +723,10 @@ fn codex_idle_under_a_visible_dialog_keeps_its_message_queued() {
         )
         .unwrap();
     worker.submit_ready().unwrap();
-    assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_unbound"]);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["agent.prompt_if_unbound_at_generation"]
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -782,7 +788,10 @@ fn deferred_codex_start_and_final_survive_background_sessions_without_rebinding(
     worker.submit_ready().unwrap();
     assert_eq!(
         *calls.lock().unwrap(),
-        vec!["agent.prompt_if_unbound", "pane.report_agent_session"]
+        vec![
+            "agent.prompt_if_unbound_at_generation",
+            "pane.report_agent_session"
+        ]
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -2385,7 +2394,8 @@ struct NativeStampProbe {
 
 impl Transport for NativeStampProbe {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        let Method::AgentPromptIfIdle(_) = &method else {
+        let (Method::AgentPromptIfIdle(_) | Method::AgentPromptIfIdleAtGeneration(_)) = &method
+        else {
             panic!("unexpected call during native stamp probe: {method:?}");
         };
         let loaded = JsonStore::new(self.state_path.clone())

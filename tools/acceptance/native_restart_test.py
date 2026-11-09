@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket as unix_socket
 import subprocess
 import sys
 import tempfile
@@ -230,11 +231,32 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
                                               stdout=native_log, stderr=subprocess.STDOUT,
                                               start_new_session=True)
             socket = bus.data / "herdr-config/sessions/bus/herdr.sock"
+            client_socket = socket.with_name("herdr-client.sock")
             stamp = bus.data / "restarts/build.json"
             deadline = time.monotonic() + 30
+
+            def client_accepts():
+                # The API socket and a leftover same-sha build stamp can both
+                # be true before herdr-client.sock is accepting. Attaching then
+                # spawns a second server. Connect the way the TUI does.
+                if not client_socket.exists():
+                    return False
+                try:
+                    with unix_socket.socket(unix_socket.AF_UNIX) as probe:
+                        probe.settimeout(0.2)
+                        probe.connect(str(client_socket))
+                except OSError:
+                    return False
+                return True
+
             while True:
                 assert native_process.poll() is None, (root / "native-replacement.log").read_text()
-                if socket.exists() and stamp.exists() and json.loads(stamp.read_text())["sha"] == replacement_sha:
+                if (
+                    socket.exists()
+                    and client_accepts()
+                    and stamp.exists()
+                    and json.loads(stamp.read_text())["sha"] == replacement_sha
+                ):
                     break
                 assert time.monotonic() < deadline, (root / "native-replacement.log").read_text()
                 time.sleep(0.05)

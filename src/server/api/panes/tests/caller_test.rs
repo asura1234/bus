@@ -153,11 +153,16 @@ async fn sender_identity_native_lookup_refuses_an_orphan_still_in_a_pane_session
     let root = runtime.child_process_instance().unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let orphan = loop {
-        if let Some(pid) = crate::platform::session_processes(root.pid)
+        // The launching subshell is in the session only until it exits. Skip a
+        // pid that is already gone instead of treating that race as a failure.
+        if let Some(orphan) = crate::platform::session_processes(root.pid)
             .into_iter()
-            .find(|pid| !crate::platform::process_ancestry(*pid).contains(&root))
+            .find_map(|pid| {
+                let instance = crate::platform::process_instance(pid)?;
+                (!crate::platform::process_ancestry(pid).contains(&root)).then_some(instance)
+            })
         {
-            break crate::platform::process_instance(pid).unwrap();
+            break orphan;
         }
         assert!(std::time::Instant::now() < deadline, "orphan did not start");
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;

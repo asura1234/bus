@@ -51,12 +51,14 @@ TOKEN = re.compile(rf"{IDENTIFIER}|::|[{{}},*]")
 
 # Audited at S12: id_type declares exactly its identifier argument; writer_handle
 # adds Clone/Drop impls to existing types; fallback/success contain literal paths
-# that the ordinary scanner checks. None constructs an import/module path.
+# that the ordinary scanner checks. epoch_case emits one test that calls
+# epoch_ordering with enum variants and a bool. None constructs an import path.
 AUDITED_MACROS = {
     ("src/messaging/model/types.rs", "id_type"): "dcab1820c082b997ca94a629b76d6fc979e2d4f7271df93b9ba2c53189753e04",
     ("src/server/clients/writer.rs", "writer_handle"): "aa905ca5628c1b0be4eb05fa8a923f7f278aaeedeac6275fa4c2b8f8e1bebfa4",
     ("src/server/rendering/incremental.rs", "fallback"): "82bc435eddd3faed430e2603761b9f8fb1b2c9b328c01d76e171c70388a73992",
     ("src/server/rendering/incremental.rs", "success"): "4d15be9a37a2c6b395627c54c7a8db08ffef7b2cd1cf2c8eab606bbb4300b561",
+    ("src/messaging/coordinator/tests/restart_epoch_test.rs", "epoch_case"): "25fe73f066feb2631bc950a1eb2f2fcb5289f995383e04232f4675f228a6af69",
 }
 
 
