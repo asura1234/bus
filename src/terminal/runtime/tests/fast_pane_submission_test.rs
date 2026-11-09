@@ -324,6 +324,143 @@ async fn existing_native_stash_restores_before_buffered_developer_keys_are_repla
 }
 
 #[tokio::test]
+async fn editor_swap_stops_after_explicit_submission_takes_native_input() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+
+    struct MarkerBoundary {
+        editor: Editor,
+        first: AtomicBool,
+        seen: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        resume: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl SubmissionInspector for MarkerBoundary {
+        fn observe(&self, screen: &str) -> InputObservation {
+            self.editor.observe(screen)
+        }
+        fn draft_preservation(&self, screen: &str) -> Option<DraftPreservation> {
+            self.editor.draft_preservation(screen)
+        }
+        fn editor_submission(&self) -> Option<EditorSubmission> {
+            self.editor.editor_submission()
+        }
+        fn preservation_budget(&self) -> Duration {
+            self.editor.preservation_budget()
+        }
+        fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
+            let visible = self.editor.restoration_marker_visible(screen, marker);
+            if visible && self.first.swap(false, Ordering::AcqRel) {
+                self.seen.lock().unwrap().take().unwrap().send(()).unwrap();
+                self.resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            }
+            visible
+        }
+    }
+
+    let root = crate::utils::test_temp::unique_temp_path("editor-explicit-submission");
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("native-editor.txt");
+    let directory = root.join("exchange");
+    let original = "saved developer draft\ntrailing \t \n\n";
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 32);
+    runtime.test_submission_clock().unwrap().pause();
+    let (seen, marker_seen) = tokio::sync::oneshot::channel();
+    let (resume, resumed) = std::sync::mpsc::channel();
+    render(&runtime, "DRAFT");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(PAYLOAD),
+            Bytes::from_static(b"\r"),
+            vec![],
+            Duration::ZERO,
+            None,
+            Box::new(MarkerBoundary {
+                editor: Editor {
+                    directory: directory.clone(),
+                },
+                first: AtomicBool::new(true),
+                seen: Mutex::new(Some(seen)),
+                resume: Mutex::new(resumed),
+            }),
+        )
+        .unwrap();
+    assert_eq!(next(&mut writes).await.as_ref(), b"\x07");
+    std::fs::write(&file, original).unwrap();
+    crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+    let installed = std::fs::read_to_string(&file).unwrap();
+    assert!(installed.starts_with("BUS_PAYLOAD__BUS_DRAFT_END_"));
+    render(&runtime, installed.trim_end());
+    tokio::time::timeout(Duration::from_secs(5), marker_seen)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // The same public runtime path used by agent.press --text ... --submit
+    // invalidates ownership and currently writes outside the draft lease.
+    let explicit = runtime
+        .queue_user_input_submission(
+            Bytes::from_static(b"explicit developer input"),
+            Bytes::from_static(b"\r"),
+            Duration::ZERO,
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        next(&mut writes).await.as_ref(),
+        b"explicit developer input"
+    );
+    assert_eq!(next(&mut writes).await.as_ref(), b"\r");
+    explicit
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    // A native submit consumes the composer. Its next complete frame is empty.
+    let mut draft = String::new();
+    render(&runtime, "EMPTY");
+    resume.send(()).unwrap();
+
+    let mut finished =
+        tokio::task::spawn_blocking(move || completion.recv_timeout(Duration::from_secs(5)));
+    let mut post_takeover = Vec::new();
+    loop {
+        tokio::select! {
+            result = &mut finished => {
+                let _result = result.unwrap().unwrap();
+                break;
+            }
+            key = writes.recv() => {
+                let key = key.unwrap();
+                post_takeover.push((key.len(), key[0]));
+                match key.as_ref() {
+                    b"\x07" => {
+                        std::fs::write(&file, &draft).unwrap();
+                        crate::platform::draft_editor::test_run_at(&directory, &file).unwrap();
+                        draft = std::fs::read_to_string(&file).unwrap().trim_end().to_owned();
+                    }
+                    b"\r" => draft.clear(),
+                    bytes if !bytes.is_empty() && bytes.iter().all(|b| *b == 0x7f) => {
+                        for _ in bytes { draft.pop(); }
+                    }
+                    bytes => panic!("unexpected input after explicit submission: {bytes:?}"),
+                }
+                render(&runtime, if draft.is_empty() { "EMPTY" } else { &draft });
+            }
+        }
+    }
+    while let Ok(key) = writes.try_recv() {
+        post_takeover.push((key.len(), key[0]));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(post_takeover.is_empty(),
+        "editor automation must stop after explicit submission invalidates its input lease; received (length, first byte): {post_takeover:?}");
+}
+#[tokio::test]
 async fn consumed_editor_submit_stays_ok_when_restoration_does_not_finish() {
     struct FastEditor {
         directory: PathBuf,
