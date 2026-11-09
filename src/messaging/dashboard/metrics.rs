@@ -104,6 +104,8 @@ struct Series {
     hours: Vec<Hour>,
     rates: Rates,
     identity: String,
+    /// p50/p90/p99 and the mean of complete end-to-end pairs. Empty stays None.
+    end_to_end: super::latency::Percentiles,
 }
 #[derive(Default, Serialize)]
 struct Rates {
@@ -359,6 +361,7 @@ fn external(reason: &str) -> bool {
 struct SeriesBuilder {
     counts: Counts,
     hours: BTreeMap<i64, (String, Counts)>,
+    end_to_end: Vec<u64>,
 }
 impl SeriesBuilder {
     fn add(&mut self, hour: &HourKey, request: &Request, outcome: &Outcome) {
@@ -368,6 +371,9 @@ impl SeriesBuilder {
             .or_insert_with(|| (hour.label.clone(), Counts::default()))
             .1
             .add(request, outcome);
+        if let Some(ms) = super::latency::end_to_end_ms(request) {
+            self.end_to_end.push(ms);
+        }
     }
     fn finish(self) -> Series {
         let rates = Rates::from(&self.counts);
@@ -376,6 +382,7 @@ impl SeriesBuilder {
             counts: self.counts,
             rates,
             identity,
+            end_to_end: super::latency::percentiles(&self.end_to_end),
             hours: self
                 .hours
                 .into_iter()

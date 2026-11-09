@@ -14,6 +14,7 @@ fn nearest_rank_and_backward_clocks_are_safe() {
     assert_eq!(values.p90, Some(9));
     assert_eq!(values.p99, Some(10));
     assert_eq!(values.max, Some(10));
+    assert_eq!(values.mean, Some(6));
     assert_eq!(elapsed(Some(100), Some(90)), None);
     assert_eq!(elapsed(Some(100), Some(100)), Some(0));
     assert_eq!(elapsed(Some(100), None), None);
@@ -167,21 +168,27 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
         .unwrap();
     let before = std::fs::read(&path).unwrap();
 
-    let page = super::response_for(&root, "GET", "/latency");
-    assert_eq!(page.status, "200 OK");
-    assert!(String::from_utf8(page.body)
-        .unwrap()
-        .contains("color-scheme:dark"));
-    let data = super::response_for(&root, "GET", "/latency/data");
+    assert_eq!(
+        super::response_for(&root, "GET", "/latency").status,
+        "404 Not Found"
+    );
+    assert_eq!(
+        super::response_for(&root, "GET", "/latency/data").status,
+        "404 Not Found"
+    );
+    let data = super::response_for(&root, "GET", "/data");
     assert_eq!(data.status, "200 OK");
     let body: serde_json::Value = serde_json::from_slice(&data.body).unwrap();
-    assert_eq!(body["metrics"]["all"]["phases"]["accepted_to_box"]["n"], 0);
+    assert_eq!(body["metrics"]["all"]["end_to_end"]["n"], 0);
+    assert!(body["metrics"]["all"]["end_to_end"]["p50"].is_null());
+    assert!(body["metrics"]["all"]["end_to_end"]["mean"].is_null());
     let raw = String::from_utf8(data.body).unwrap();
     assert!(!raw.contains("SENTINEL_LEGACY_CONTENT"));
+    assert!(!raw.contains("/latency"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert!(!root.join("state.journal.json").exists());
     assert_eq!(
-        super::response_for(&root, "POST", "/latency/data").status,
+        super::response_for(&root, "POST", "/data").status,
         "405 Method Not Allowed"
     );
 }

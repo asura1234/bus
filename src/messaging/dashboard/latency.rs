@@ -28,9 +28,16 @@ pub(super) struct Percentiles {
     pub(super) p90: Option<u64>,
     pub(super) p99: Option<u64>,
     pub(super) max: Option<u64>,
+    /// Nearest millisecond. Absent when `n` is 0, so an empty group is not 0.
+    pub(super) mean: Option<u64>,
 }
 
 pub(super) fn percentiles(samples: &[u64]) -> Percentiles {
+    let mean = (!samples.is_empty()).then(|| {
+        let sum: u128 = samples.iter().map(|sample| u128::from(*sample)).sum();
+        let count = samples.len() as u128;
+        ((sum + count / 2) / count) as u64
+    });
     let mut samples = samples.to_vec();
     samples.sort_unstable();
     let at = |percent: f64| {
@@ -42,7 +49,13 @@ pub(super) fn percentiles(samples: &[u64]) -> Percentiles {
         p90: at(0.90),
         p99: at(0.99),
         max: samples.last().copied(),
+        mean,
     }
+}
+
+/// End-to-end delay to room delivery. A missing or reversed pair contributes nothing.
+pub(super) fn end_to_end_ms(request: &Request) -> Option<u64> {
+    aggregate(request, "end_to_end")
 }
 
 pub(super) fn elapsed(start: Option<u64>, end: Option<u64>) -> Option<u64> {
@@ -235,7 +248,7 @@ impl GroupBuilder {
 
 #[cfg(test)]
 pub(super) use super::clock::hour_with_offset;
-pub(super) use super::clock::{local_hour, HourKey};
+pub(super) use super::clock::HourKey;
 
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
     let mut all = SeriesBuilder::default();
