@@ -123,27 +123,7 @@ impl BusState {
             return Err(ModelError::DeletionPending);
         }
         let draft = room_state.draft.clone();
-        if draft.text.is_empty() && draft.files.is_empty() {
-            return Err(ModelError::EmptyPrompt);
-        }
-        if draft.recipient_ids.is_empty() {
-            return Err(ModelError::NoRecipients);
-        }
-        for agent_id in &draft.recipient_ids {
-            if let Some(agent) = self.agents.get(agent_id) {
-                if agent.deletion_pending {
-                    return Err(ModelError::DeletionPending);
-                }
-                continue;
-            }
-            if let Some(retired) = self.retired_agents.get(agent_id) {
-                return Err(ModelError::RecipientDeleted {
-                    agent: *agent_id,
-                    name: retired.name.clone(),
-                });
-            }
-            return Err(ModelError::UnknownAgent(*agent_id));
-        }
+        self.check_submit_recipients(&draft)?;
 
         let prompt = Prompt {
             id: PromptId(self.allocate_id()),
@@ -220,6 +200,36 @@ impl BusState {
             request_ids.push(request_id);
             self.abandon_failed_startup_queue(agent_id, now_ms);
         }
+        self.accept_submitted_prompt(room, prompt)?;
+        Ok(request_ids)
+    }
+
+    fn check_submit_recipients(&self, draft: &Draft) -> Result<(), ModelError> {
+        if draft.text.is_empty() && draft.files.is_empty() {
+            return Err(ModelError::EmptyPrompt);
+        }
+        if draft.recipient_ids.is_empty() {
+            return Err(ModelError::NoRecipients);
+        }
+        for agent_id in &draft.recipient_ids {
+            if let Some(agent) = self.agents.get(agent_id) {
+                if agent.deletion_pending {
+                    return Err(ModelError::DeletionPending);
+                }
+                continue;
+            }
+            if let Some(retired) = self.retired_agents.get(agent_id) {
+                return Err(ModelError::RecipientDeleted {
+                    agent: *agent_id,
+                    name: retired.name.clone(),
+                });
+            }
+            return Err(ModelError::UnknownAgent(*agent_id));
+        }
+        Ok(())
+    }
+
+    fn accept_submitted_prompt(&mut self, room: RoomId, prompt: Prompt) -> Result<(), ModelError> {
         let room_state = self
             .rooms
             .get_mut(&room)
@@ -232,6 +242,6 @@ impl BusState {
         room_state.latest_prompt = Some(prompt);
         room_state.draft.text.clear();
         room_state.draft.files.clear();
-        Ok(request_ids)
+        Ok(())
     }
 }
