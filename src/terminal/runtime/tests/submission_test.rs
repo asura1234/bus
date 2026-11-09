@@ -3,6 +3,9 @@ use super::*;
 #[path = "draft_preservation_test.rs"]
 mod draft_preservation;
 
+#[path = "fast_pane_submission_test.rs"]
+mod fast_pane_submission;
+
 #[path = "codex_clipped_composer_test.rs"]
 pub(crate) mod codex_clipped_composer;
 

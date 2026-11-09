@@ -1,5 +1,5 @@
 use super::*;
-use crate::terminal::runtime::draft_input::{DraftInput, DRAFT_QUIET_WINDOW};
+use crate::terminal::runtime::draft_input::DraftInput;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -45,6 +45,15 @@ impl SubmissionInspector for Preserver {
     }
     fn preservation_budget(&self) -> Duration {
         Duration::from_secs(20)
+    }
+    fn editor_submission(&self) -> Option<EditorSubmission> {
+        (!self.native).then(|| EditorSubmission {
+            text: "BUS_PAYLOAD".into(),
+            directory: self.directory.clone(),
+            key: Bytes::from_static(b"\x07"),
+            backspace: Bytes::from_static(b"\x7f"),
+            verification_error: None,
+        })
     }
 }
 
@@ -116,7 +125,7 @@ async fn native_stash_restored_at_submit_is_acceptance_without_a_second_enter() 
 }
 
 #[tokio::test]
-async fn recent_developer_keys_defer_all_draft_mutations_until_three_seconds_of_quiet() {
+async fn recent_developer_keys_allow_native_stash_delivery_without_a_quiet_window() {
     let directory = crate::utils::test_temp::unique_temp_path("quiet-draft-runtime");
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let clock = runtime.test_submission_clock().unwrap();
@@ -126,26 +135,6 @@ async fn recent_developer_keys_defer_all_draft_mutations_until_three_seconds_of_
         .try_send_developer_bytes(Bytes::from_static(b"x"))
         .unwrap();
     assert_eq!(next(&mut writes).await.as_ref(), b"x");
-    for advance in [
-        Duration::ZERO,
-        DRAFT_QUIET_WINDOW - Duration::from_millis(1),
-    ] {
-        clock.advance(advance);
-        let error = queue(&runtime, directory.clone(), true)
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .unwrap_err();
-        assert!(PromptNotShown::composer_busy(&error), "{error}");
-        assert!(
-            writes.try_recv().is_err(),
-            "typing must prohibit stash, clear, paste and Enter"
-        );
-        assert!(
-            !directory.exists(),
-            "a deferred attempt must not start draft exchange"
-        );
-    }
-    clock.advance(Duration::from_millis(1));
     let completion = queue(&runtime, directory.clone(), true);
     assert_eq!(next(&mut writes).await.as_ref(), b"\x13");
     render(&runtime, "EMPTY");
@@ -196,7 +185,7 @@ async fn editor_roundtrip_preserves_exact_codex_and_cursor_drafts_before_replayi
                     };
                     render(&runtime, if draft.is_empty() { "EMPTY" } else { &draft });
                     if editors == 1 {
-                        assert!(draft.is_empty());
+                        assert!(draft.starts_with("BUS_PAYLOAD__BUS_DRAFT_END_"));
                         runtime
                             .try_send_developer_bytes(Bytes::from_static(b"typed meanwhile"))
                             .unwrap();
@@ -227,7 +216,12 @@ async fn editor_roundtrip_preserves_exact_codex_and_cursor_drafts_before_replayi
                         assert!(draft.pop().unwrap().is_ascii());
                     }
                     assert_eq!(
-                        draft, original,
+                        draft,
+                        if deletes == 1 {
+                            "BUS_PAYLOAD"
+                        } else {
+                            &original
+                        },
                         "remove only the sentinel, preserving all whitespace"
                     );
                     render(&runtime, &draft);
@@ -239,7 +233,7 @@ async fn editor_roundtrip_preserves_exact_codex_and_cursor_drafts_before_replayi
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .unwrap();
-        assert_eq!((editors, pastes, enters, deletes), (3, 1, 1, 2));
+        assert_eq!((editors, pastes, enters, deletes), (3, 0, 1, 3));
         assert_eq!(draft, format!("{original}typed meanwhile"));
         assert!(writes.try_recv().is_err());
         assert!(recovery_files(&exchange).is_empty());
@@ -371,7 +365,7 @@ async fn buffered_developer_byte_discarded_by_the_lease_keeps_the_placeholder_de
     {
         // recover_input writes under data_dir(). Hold the shared env lock only
         // around that drop so a parallel test cannot redirect the recovery file
-        // onto the live Bus, and so this sleep does not block other tests.
+        // onto the live Bus.
         let _env = crate::utils::test_env::mutex()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -384,7 +378,6 @@ async fn buffered_developer_byte_discarded_by_the_lease_keeps_the_placeholder_de
         writes.try_recv().is_err(),
         "a lease that is not replay-safe must not write the buffered byte"
     );
-    std::thread::sleep(DRAFT_QUIET_WINDOW + Duration::from_millis(200));
     let open = runtime
         .startup_suggestion_open
         .load(std::sync::atomic::Ordering::Acquire);

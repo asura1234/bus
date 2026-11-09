@@ -1475,6 +1475,55 @@ async fn cursor_background_composer_receives_paste_then_enter() {
         .is_ok());
 }
 
+#[tokio::test]
+async fn cursor_submit_waits_through_a_blank_redraw_before_enter() {
+    let (runtime, mut writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_capacity(131, 45, 32);
+    let show = |screen: &str| {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        runtime.test_process_pty_bytes(
+            screen
+                .replace("\r\n", "\n")
+                .replace('\n', "\r\n")
+                .as_bytes(),
+        );
+    };
+    show(include_str!("fixtures/cursor_20261014_empty.ansi"));
+    let text = "first line\n\nGPT-6 and Claude\nlast line";
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    // Hold the paste receipt so the clear lands before the submit guard runs.
+    let release = clock.hold_next_write_completion();
+    let completion = super::super::queue_prompt_input(
+        &runtime,
+        AgentKind::Cursor,
+        text.into(),
+        true,
+        std::time::Duration::ZERO,
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(2)),
+        None,
+        false,
+    )
+    .unwrap();
+    let paste = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(paste.as_ref(), text.as_bytes());
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    release.send(()).unwrap();
+    show(include_str!("fixtures/cursor_20261014_draft.ansi"));
+    let enter = tokio::time::timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT, writes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(enter.as_ref(), b"\r");
+    assert!(completion
+        .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+        .unwrap()
+        .is_ok());
+}
+
 #[test]
 fn cursor_background_composer_keeps_directory_tree_lines_in_the_draft() {
     let screen =
@@ -1999,6 +2048,7 @@ fn grok_reply_quoting_a_login_heading_does_not_hide_the_live_composer() {
 
 #[test]
 fn claude_composer_keeps_literal_yes_no_hint_as_owned_input() {
+    use crate::terminal::runtime::SubmissionInspector;
     let rule = "─".repeat(20);
     let text = "Please print [y/n]";
     let screen = format!("● done\n\n{rule}\n❯\u{a0}{text}\n{rule}\n  ? for shortcuts");
@@ -2007,15 +2057,24 @@ fn claude_composer_keeps_literal_yes_no_hint_as_owned_input() {
         InputObservation::Pending,
         "a literal yes/no hint in the owned composer is message text: {screen}"
     );
+    assert!(
+        observer(AgentKind::Claude, text.into()).submission_available(&screen),
+        "literal message text must not become an input-control blocker"
+    );
 }
 
 #[test]
 fn codex_composer_keeps_literal_yes_no_hint_as_owned_input() {
+    use crate::terminal::runtime::SubmissionInspector;
     let text = "Please print [y/n]";
     let screen = format!("history\n› {text}\n\n  gpt-5.6-sol · /repo\n  ? for shortcuts");
     assert_eq!(
         observe(AgentKind::Codex, &screen, text),
         InputObservation::Pending,
         "a literal yes/no hint in the owned composer is message text: {screen}"
+    );
+    assert!(
+        observer(AgentKind::Codex, text.into()).submission_available(&screen),
+        "literal message text must not become an input-control blocker"
     );
 }

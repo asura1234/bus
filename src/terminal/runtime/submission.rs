@@ -1,4 +1,4 @@
-//! Observe the composer between writes; retry only Enter for the owned draft.
+//! Save the native draft, submit once behind a blocker guard, then restore it.
 mod diagnostics;
 mod preservation;
 mod recovery;
@@ -87,6 +87,17 @@ pub(crate) trait SubmissionInspector: Send {
         _pristine: bool,
     ) -> InputObservation {
         self.observe_with_cursor(screen, cursor)
+    }
+    /// Input availability is independent of the contents of Bus's paste.
+    fn submission_available(&self, screen: &str) -> bool {
+        self.observe(screen) != InputObservation::Unavailable
+            && !crate::terminal::driver::has_input_controls(screen)
+    }
+    fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
+        self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
+    }
+    fn always_use_editor(&self) -> bool {
+        false
     }
     /// Called once when this attempt is refused, outside the render lock.
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
@@ -599,12 +610,62 @@ impl ObservedSubmission {
             })
     }
 
+    /// One Enter after a submittable frame. An incomplete or blank redraw is
+    /// waited out; a complete frame that still cannot take input is refused.
+    fn await_submit_key(&self) -> io::Result<()> {
+        let blocked = || {
+            Self::before_enter_failure(
+                io::Error::other("Native input is blocked"),
+                "Saved input is retained; no submission key was sent",
+            )
+        };
+        loop {
+            let generation = self.clock.generation();
+            let queued = {
+                let _guard = self
+                    .content_lock
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+                match self.terminal.active_ansi_if_complete() {
+                    Some(screen) if self.inspect.submission_available(&screen) => {
+                        self.check_deadline()?;
+                        let key = self.inspect.editor_submit_key(&screen, &self.enter);
+                        self.diagnostics.enter(&key, self.clock.now());
+                        Some(self.io.queue_input_write_scoped(
+                            Bytes::new(),
+                            key,
+                            Duration::ZERO,
+                            Some(self.deadline.get()),
+                            &self.scope,
+                        ))
+                    }
+                    Some(screen) if screen.trim().is_empty() => None,
+                    Some(_) => return Err(blocked()),
+                    None => None,
+                }
+            };
+            if let Some(queued) = queued {
+                // The content lock is released before the write is awaited.
+                return self.finish_enter(queued);
+            }
+            if let Err(error) = self.check_deadline() {
+                return Err(Self::before_enter_failure(
+                    error,
+                    "Saved input is retained; no submission key was sent",
+                ));
+            }
+            #[cfg(test)]
+            self.clock.waiting_for_draft();
+            self.clock.sleep(Duration::from_millis(20), generation);
+        }
+    }
+
     fn run(
         &self,
         text: Bytes,
         delay: Duration,
         lease: Option<&super::draft_input::DraftInputLease>,
-        exchange: Option<&crate::platform::draft_editor::Exchange>,
+        _exchange: Option<&crate::platform::draft_editor::Exchange>,
     ) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
@@ -626,29 +687,19 @@ impl ObservedSubmission {
                 self.withdraw_before_enter(error)
             };
         }
-        // Paste may be buffered by the provider after the PTY flush. Wait for
-        // the owned draft to render before attempting the first Enter.
-        let mut verified_lease = None;
-        loop {
-            let generation = self.clock.generation();
-            let observation = self.observe("await_paste");
-            if observation == InputObservation::Pending {
-                break;
-            }
-            if observation == InputObservation::Other {
-                verified_lease = self.verified_paste_lease(delay, lease, exchange)?;
-                if verified_lease.is_some() {
-                    break;
-                }
-            }
-            if let Err(error) = self.check_deadline() {
-                return self.withdraw_before_enter(error);
-            }
-            #[cfg(test)]
-            self.clock.waiting_for_draft();
-            self.clock.sleep(Duration::from_millis(20), generation);
-        }
-        let mut last_enter = None;
+        // Do not read back or attribute the pasted text. The pane lease keeps
+        // developer input buffered; only a fresh complete blocker reading may
+        // refuse the one submission key. A blank redraw is not that reading.
+        self.await_submit_key()?;
+        let _ = lease;
+        #[cfg(test)]
+        self.clock.entered();
+        // Native Started/Steered callbacks settle delivery asynchronously.
+        // An unchanged empty frame here is not proof of provider acceptance.
+        Ok(())
+    }
+
+    pub(super) fn wait_for_consumption(&self, withdraw: bool) -> io::Result<()> {
         loop {
             let generation = self.clock.generation();
             let guard = self
@@ -657,55 +708,30 @@ impl ObservedSubmission {
                 .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
             // Claude restores its native stash synchronously at submit. That
             // is acceptance evidence even though the composer is nonempty.
-            if last_enter.is_some()
-                && self
-                    .inspect
-                    .native_draft_restored(&self.terminal.active_ansi())
+            if self
+                .inspect
+                .native_draft_restored(&self.terminal.active_ansi())
             {
                 return Ok(());
             }
             let observation = self.observe("confirm");
-            if last_enter.is_some()
-                && matches!(
-                    observation,
-                    InputObservation::Empty | InputObservation::Accepted
-                )
-            {
+            if matches!(
+                observation,
+                InputObservation::Empty | InputObservation::Accepted
+            ) {
                 return Ok(());
             }
             // An observation can cross the deadline while waiting for the
             // content lock. Confirm acceptance first; only further input expires.
             if let Err(error) = self.check_deadline() {
                 drop(guard);
-                return if last_enter.is_some() {
+                return if withdraw {
                     self.withdraw_pending(error)
                 } else {
-                    self.withdraw_before_enter(error)
+                    Err(error)
                 };
             }
-            let retry = observation == InputObservation::Pending
-                && last_enter.is_none_or(|at: Instant| {
-                    self.clock.now().saturating_duration_since(at) >= Duration::from_millis(250)
-                });
-            let completion = if retry {
-                // Inspect and enqueue under the same lock as PTY rendering.
-                // No paste retry: a lost response must never duplicate text.
-                Some(match verified_lease {
-                    Some(lease) => lease.with_unedited(|| self.enqueue_enter()),
-                    None => self.enqueue_enter(),
-                })
-            } else {
-                None
-            };
             drop(guard);
-            if let Some(completion) = completion {
-                if let Err(error) = self.finish_enter(completion) {
-                    return self.withdraw_pending(error);
-                }
-                last_enter = Some(self.clock.now());
-                #[cfg(test)]
-                self.clock.entered();
-            }
             #[cfg(test)]
             self.clock.submission_checked(generation);
             self.clock.sleep(Duration::from_millis(20), generation);
