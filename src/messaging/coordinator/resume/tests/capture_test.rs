@@ -1385,3 +1385,19 @@ fn startup_timeout_sessionless_capture_retains_provider_ownership() {
         );
     }
 }
+
+#[test]
+fn claude_ds_resume_matches_the_managed_agent_label_the_server_restores() {
+    let fixture = Fixture::new(Provider::ClaudeDs);
+    assert!(
+        fixture.load().is_ok(),
+        "control fixture must resume with the provider label"
+    );
+    // The server builds NativeResumeFacts from the terminal's AgentKind, and
+    // claude-ds is managed as AgentKind::Claude, so managed_agent is "claude"
+    // while the saved session keeps the provider namespace "claude-ds".
+    let mut facts = fixture.facts.clone();
+    facts.managed_agent = Some("claude".into());
+    let loaded = load(&fixture.context(), &facts, &fixture.plan);
+    assert!(loaded.is_ok(), "{loaded:?}");
+}

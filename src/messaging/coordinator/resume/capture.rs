@@ -206,8 +206,18 @@ fn saved_session<'a>(
         .session
         .as_ref()
         .ok_or("Bus resume has no saved provider session")?;
+    // The server labels a managed terminal by AgentKind, which folds claude-ds
+    // into Claude, while the saved session keeps the provider namespace. Compare
+    // the parsed kind so one harness matches, and keep the official pair and
+    // plan comparison below exact.
+    let saved_kind = crate::agents::parse_agent_label(&session.agent);
+    let managed_kind = facts
+        .managed_agent
+        .as_deref()
+        .and_then(crate::agents::parse_agent_label);
     if session.session_ref.kind != AgentSessionRefKind::Id
-        || facts.managed_agent.as_deref() != Some(session.agent.as_str())
+        || saved_kind.is_none()
+        || managed_kind != saved_kind
         || crate::agents::resume::catalog::plan(
             &session.source,
             &session.agent,
