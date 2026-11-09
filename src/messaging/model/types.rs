@@ -397,6 +397,10 @@ pub(crate) struct RoomAgent {
     /// What the agent's terminal showed when its provider last exited on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) exit_snapshot: Option<ExitSnapshot>,
+    /// Terminal id replaced when a whole-session restart recreated this pane.
+    /// Resume treats that previous pane as closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_restart_closed_terminal: Option<String>,
 }
 
 /// Inventory at the current request's boundary. Shells already present there

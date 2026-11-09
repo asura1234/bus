@@ -13,34 +13,9 @@ impl Worker {
             .request(super::Method::AgentListWithDetectionContext(
                 detection_contexts(&self.state, io::now_ms()),
             ));
-        let infos = match result {
-            Ok(ResponseResult::AgentList { agents }) => agents,
-            other => {
-                self.poll_failures = self.poll_failures.saturating_add(1);
-                tracing::warn!(event = "bus.coordinator.poll_retry",
-                    failures = self.poll_failures,
-                    retry_ms = self.poll_interval().as_millis() as u64,
-                    error = ?other, "Native poll failed; delivery paused, queues and active requests retained");
-                // WouldBlock is the macOS read timeout. Inconclusive polls
-                // retain the last status; only connection loss or explicit
-                // server unavailability supports the mass transition.
-                if self.poll_failures >= 3
-                    && matches!(&other, Err(error) if matches!(error.code.as_deref(),
-                        Some(crate::messaging::native::NATIVE_SERVER_UNAVAILABLE | "server_unavailable")))
-                {
-                    self.observe_native_unavailable()?;
-                }
-                return Ok(None);
-            }
+        let Some(infos) = self.accept_agent_list(result)? else {
+            return Ok(None);
         };
-        if self.poll_failures > 0 {
-            tracing::info!(
-                event = "bus.coordinator.poll_recovered",
-                failures = self.poll_failures,
-                "Native poll recovered"
-            );
-            self.poll_failures = 0;
-        }
         let mut state = self.state.clone();
         // Retain the previous observation as legacy evidence until this poll's
         // migrated state is durable; a failed save must not erase that boundary.
@@ -51,13 +26,12 @@ impl Worker {
         for agent in &observed_agents {
             let previous_agent = agent;
             let info = polled_agent(&self.state, agent, &infos);
-            if let Some(info) = info {
-                if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
-                    || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
-                {
-                    rebound.push(rebind_agent(&mut state, agent, info)?);
-                }
-            }
+            rebound.extend(note_rebind(
+                &mut state,
+                agent,
+                info,
+                self.serving_generation,
+            )?);
             if let Some(info) = info {
                 super::startup::watch_native_resume(&mut state, agent, info)?;
             }
@@ -162,6 +136,42 @@ impl Worker {
         Ok(())
     }
 
+    fn accept_agent_list(
+        &mut self,
+        result: Result<ResponseResult, crate::messaging::native::TransportError>,
+    ) -> Result<Option<Vec<schema::AgentInfo>>, String> {
+        match result {
+            Ok(ResponseResult::AgentList { agents }) => {
+                if self.poll_failures > 0 {
+                    tracing::info!(
+                        event = "bus.coordinator.poll_recovered",
+                        failures = self.poll_failures,
+                        "Native poll recovered"
+                    );
+                    self.poll_failures = 0;
+                }
+                Ok(Some(agents))
+            }
+            other => {
+                self.poll_failures = self.poll_failures.saturating_add(1);
+                tracing::warn!(event = "bus.coordinator.poll_retry",
+                    failures = self.poll_failures,
+                    retry_ms = self.poll_interval().as_millis() as u64,
+                    error = ?other, "Native poll failed; delivery paused, queues and active requests retained");
+                // WouldBlock is the macOS read timeout. Inconclusive polls
+                // retain the last status; only connection loss or explicit
+                // server unavailability supports the mass transition.
+                if self.poll_failures >= 3
+                    && matches!(&other, Err(error) if matches!(error.code.as_deref(),
+                        Some(crate::messaging::native::NATIVE_SERVER_UNAVAILABLE | "server_unavailable")))
+                {
+                    self.observe_native_unavailable()?;
+                }
+                Ok(None)
+            }
+        }
+    }
+
     pub(super) fn poll_interval(&self) -> Duration {
         // Do not sleep inside the transport or replay any mutating request.
         // The coordinator can still accept commands between failed polls.
@@ -243,17 +253,46 @@ fn migrate_legacy_requests(
     Ok(())
 }
 
+fn note_rebind(
+    state: &mut BusState,
+    agent: &RoomAgent,
+    info: Option<&schema::AgentInfo>,
+    serving_generation: u64,
+) -> Result<Vec<(AgentId, Option<String>, String)>, String> {
+    let Some(info) = info else {
+        return Ok(Vec::new());
+    };
+    if agent.runtime_identity.terminal_id.as_deref() == Some(info.terminal_id.as_str())
+        && agent.runtime_identity.pane_id.as_deref() == Some(info.pane_id.as_str())
+    {
+        return Ok(Vec::new());
+    }
+    Ok(vec![rebind_agent(state, agent, info, serving_generation)?])
+}
+
 fn rebind_agent(
     state: &mut BusState,
     agent: &RoomAgent,
     info: &schema::AgentInfo,
+    serving_generation: u64,
 ) -> Result<(AgentId, Option<String>, String), String> {
+    let previous = agent.runtime_identity.terminal_id.clone();
     let mut identity = agent.runtime_identity.clone();
     identity.terminal_id = Some(info.terminal_id.clone());
     identity.pane_id = Some(info.pane_id.clone());
     state
         .set_agent_runtime_identity(agent.id, identity)
         .map_err(|error| error.to_string())?;
+    // A generation advance with a new terminal id is a whole-session restart:
+    // the saved pane died with the previous server. The same terminal still
+    // has to be close-verified, including on the first poll from generation 0.
+    if info.generation > serving_generation {
+        if let Some(previous) = previous.filter(|previous| previous != &info.terminal_id) {
+            state
+                .record_session_restart_closed_terminal(agent.id, previous)
+                .map_err(|error| error.to_string())?;
+        }
+    }
     Ok((
         agent.id,
         agent.runtime_identity.terminal_id.clone(),

@@ -83,6 +83,7 @@ impl BusState {
                 observed_at_ms: 0,
                 delivery_rejection: None,
                 exit_snapshot: None,
+                session_restart_closed_terminal: None,
             },
         );
         self.queues.insert(id, Vec::new());
@@ -237,6 +238,31 @@ impl BusState {
             agent.claude_shells = None;
         }
         agent.runtime_identity = identity;
+        Ok(())
+    }
+
+    /// The previous server's pane is gone. Resume must not ask the replacement
+    /// pane to pass the close guard that protects a still-live terminal.
+    pub(crate) fn record_session_restart_closed_terminal(
+        &mut self,
+        id: AgentId,
+        terminal_id: String,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .session_restart_closed_terminal = Some(terminal_id);
+        Ok(())
+    }
+
+    pub(crate) fn clear_session_restart_closed_terminal(
+        &mut self,
+        id: AgentId,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .session_restart_closed_terminal = None;
         Ok(())
     }
 
