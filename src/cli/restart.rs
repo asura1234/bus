@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use super::session_pick::RestartRequest;
 use crate::utils::restart_record::{self, Identity, RestartLog, RestartMarker, MIN_FREE_BYTES};
 
+#[path = "restart_build.rs"]
+mod build;
 #[path = "restart_prep.rs"]
 mod prep;
 #[path = "restart_session.rs"]
@@ -39,20 +41,37 @@ pub(super) fn run(
     yolo: bool,
     request: &RestartRequest,
 ) -> io::Result<()> {
+    run_resolving(
+        root,
+        session_id,
+        explicit_data_dir,
+        dev,
+        yolo,
+        request,
+        build::default_source_build,
+    )
+}
+
+fn run_resolving(
+    root: &Path,
+    session_id: Option<&str>,
+    explicit_data_dir: bool,
+    dev: bool,
+    yolo: bool,
+    request: &RestartRequest,
+    build_source: impl FnOnce() -> io::Result<PathBuf>,
+) -> io::Result<()> {
     if !dev {
-        return Err(io::Error::other(
-            "dev tool: run `bus --dev restart --binary PATH --confirm`",
-        ));
+        return Err(io::Error::other(super::session_pick::DEV_RESTART_REQUIRED));
     }
     if !request.confirm {
         return Err(io::Error::other(CONFIRM));
     }
-    let Some(binary) = request.binary.as_deref() else {
-        return Err(io::Error::other(
-            "Usage: bus --dev [--yolo] restart --binary <path> --confirm [--as <who>]",
-        ));
+    // Build before the lock. A failed build must not stop or record a restart.
+    let new_binary = match request.binary.as_deref() {
+        Some(binary) => PathBuf::from(binary),
+        None => build_source()?,
     };
-    let new_binary = PathBuf::from(binary);
     let owner = crate::platform::process_instance(std::process::id())
         .ok_or_else(|| io::Error::other("could not read this process"))?;
     if let Err(error) = prep::acquire_restart_lock(
@@ -256,6 +275,12 @@ fn finish(
     serving: &Path,
     mut reason: String,
 ) -> RestartLog {
+    // The saved copy is the rollback binary until the new build is healthy.
+    if outcome == "restarted" {
+        if let Err(error) = prune_saved_binaries(&plan.root) {
+            tracing::error!(%error, "could not prune saved restart binaries");
+        }
+    }
     match outcome {
         "restarted" => {}
         "rolled_back" => reason.push_str("; the previous build is healthy; no additional TUI launch is needed"),
@@ -313,6 +338,53 @@ fn persist_restart_record(root: &Path, record: &RestartLog) -> Result<(), String
             path.display()
         )),
     }
+}
+
+/// Keep the newest file under `restarts/binaries`. Dotfiles are leftovers of
+/// the copy into that directory, so they are removed and cannot win.
+fn prune_saved_binaries(root: &Path) -> io::Result<()> {
+    let directory = restart_record::restarts_dir(root).join("binaries");
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut saved = Vec::new();
+    for entry in entries {
+        classify_saved_binary(&entry?, &mut saved)?;
+    }
+    saved.sort_by(newest_saved_first);
+    for (_, path) in saved.into_iter().skip(1) {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn classify_saved_binary(
+    entry: &std::fs::DirEntry,
+    saved: &mut Vec<(std::time::SystemTime, PathBuf)>,
+) -> io::Result<()> {
+    let path = entry.path();
+    let dotted = entry.file_name().to_string_lossy().starts_with('.');
+    if dotted && path.is_file() {
+        std::fs::remove_file(&path)?;
+    }
+    if dotted {
+        return Ok(());
+    }
+    let meta = entry.metadata()?;
+    if meta.is_file() {
+        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        saved.push((modified, path));
+    }
+    Ok(())
+}
+
+fn newest_saved_first(
+    left: &(std::time::SystemTime, PathBuf),
+    right: &(std::time::SystemTime, PathBuf),
+) -> std::cmp::Ordering {
+    right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1))
 }
 
 fn marker_for(plan: &HandoffPlan, binary: &Path) -> RestartMarker {
@@ -706,6 +778,131 @@ mod tests {
         assert!(text.contains("absolute"), "{text}");
         assert!(text.contains("log.jsonl"), "{text}");
         assert!(!restart_record::restart_lock_path(&root).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_source_build_leaves_the_running_bus_untouched() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-build-abort");
+        std::fs::create_dir_all(&root).unwrap();
+        let marker = root.join("untouched");
+        std::fs::write(&marker, b"stay").unwrap();
+        let error = run_resolving(
+            &root,
+            None,
+            true,
+            true,
+            false,
+            &RestartRequest {
+                binary: None,
+                confirm: true,
+                as_who: None,
+            },
+            || {
+                Err(io::Error::other(
+                    "cargo build failed; the running Bus was not restarted:\nrustc exploded",
+                ))
+            },
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("cargo build failed"), "{text}");
+        assert!(text.contains("was not restarted"), "{text}");
+        assert!(text.contains("rustc exploded"), "{text}");
+        assert_eq!(std::fs::read(&marker).unwrap(), b"stay");
+        assert!(!root.join("restarts").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_explicit_binary_does_not_build_the_source_checkout() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-skip-build");
+        std::fs::create_dir_all(&root).unwrap();
+        let error = run_resolving(
+            &root,
+            None,
+            true,
+            true,
+            false,
+            &RestartRequest {
+                binary: Some("bus".into()),
+                confirm: true,
+                as_who: None,
+            },
+            || panic!("an explicit --binary must not build"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("absolute"), "{error}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn write_saved(path: &Path, secs: u64) {
+        std::fs::write(path, b"bin").unwrap();
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_successful_restart_keeps_only_the_newest_saved_binary() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-prune");
+        let directory = restart_record::restarts_dir(&root).join("binaries");
+        std::fs::create_dir_all(&directory).unwrap();
+        let older = directory.join("aaaaaaaa");
+        let earlier_name = directory.join("bbbbbbbb");
+        let kept = directory.join("cccccccc");
+        let leftover = directory.join(".123.tmp");
+        write_saved(&older, 10);
+        write_saved(&earlier_name, 30);
+        write_saved(&kept, 30);
+        write_saved(&leftover, 40);
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Ok(7));
+        effects.healthy_shas.push(plan.new_sha.clone());
+        let record = execute_handoff(&plan, &mut effects);
+        assert_eq!(record.outcome, "restarted");
+        assert!(kept.exists(), "equal mtimes keep the greater path");
+        assert!(!older.exists());
+        assert!(!earlier_name.exists());
+        assert!(!leftover.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_rolled_back_restart_keeps_every_saved_binary() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-prune-rollback");
+        let directory = restart_record::restarts_dir(&root).join("binaries");
+        std::fs::create_dir_all(&directory).unwrap();
+        let older = directory.join("older");
+        let newer = directory.join("newer");
+        write_saved(&older, 10);
+        write_saved(&newer, 20);
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Ok(7));
+        effects.starts.push_back(Ok(8));
+        effects.healthy_shas.push(plan.old_sha.clone());
+        let record = execute_handoff(&plan, &mut effects);
+        assert_eq!(record.outcome, "rolled_back");
+        assert!(older.exists());
+        assert!(newer.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_prune_failure_still_records_restarted() {
+        let root = crate::utils::test_temp::unique_temp_path("restart-prune-fail");
+        let binaries = restart_record::restarts_dir(&root).join("binaries");
+        std::fs::create_dir_all(binaries.parent().unwrap()).unwrap();
+        std::fs::write(&binaries, b"not a directory").unwrap();
+        let plan = plan(&root);
+        let mut effects = fake();
+        effects.starts.push_back(Ok(7));
+        effects.healthy_shas.push(plan.new_sha.clone());
+        let record = execute_handoff(&plan, &mut effects);
+        assert_eq!(record.outcome, "restarted");
+        assert!(binaries.is_file());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

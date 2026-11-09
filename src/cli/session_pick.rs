@@ -4,10 +4,9 @@ use crate::messaging::storage::sessions::ResumeTarget;
 pub(super) const USAGE: &str = "Usage: bus [--dev] [--yolo] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id> [--yolo]\n       bus [--dev] resume --last [--yolo]\n       bus stop\n       bus perf [--since <minutes>m|<hours>h | --all]";
 
 const RESTART_USAGE: &str =
-    "Usage: bus --dev [--yolo] restart --binary <path> --confirm [--as <who>]";
+    "Usage: bus --dev [--yolo] restart [--binary <path>] --confirm [--as <who>]";
 
-pub(super) const DEV_RESTART_REQUIRED: &str =
-    "dev tool: run `bus --dev restart --binary PATH --confirm`";
+pub(super) const DEV_RESTART_REQUIRED: &str = "dev tool: run `bus --dev restart --confirm`";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RestartRequest {
