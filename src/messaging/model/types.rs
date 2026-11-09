@@ -543,8 +543,8 @@ pub(crate) struct Request {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bus_generated: bool,
     /// The lead request of the group this one joined, by being typed into the
-    /// lead's running turn or coalesced into its prompt. Outstanding requests
-    /// share the eventual final; completed replies remain independent.
+    /// lead's running turn or coalesced into its prompt. Kept for turn
+    /// ordering. History does not show it as a reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group: Option<RequestId>,
     /// Typed into a running turn; its submit hook may arrive or not.
@@ -563,7 +563,8 @@ pub(crate) struct Request {
     /// Recovery deadlines counts idle time from here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) progress_at_ms: Option<u64>,
-    /// First settled observation after this turn, while reply capture catches up.
+    /// When the provider turn ended. Settlement waits `TURN_SETTLE_MS` so a
+    /// late error or final hook can still land, then closes the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) turn_ended_at_ms: Option<u64>,
     /// A provider paused without an answer for background work that will resume it.

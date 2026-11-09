@@ -23,24 +23,20 @@ impl History {
         let block = self
             .markdown
             .entry(key)
-            .or_insert_with(|| MarkdownBlock::new(key, text));
+            .or_insert_with(|| MarkdownBlock::new(text));
         if block.source.as_ref() != text {
-            *block = MarkdownBlock::new(key, text);
+            *block = MarkdownBlock::new(text);
         }
         block
     }
 }
 
 impl MarkdownBlock {
-    fn new(key: MarkdownSource, source: &str) -> Self {
+    fn new(source: &str) -> Self {
         let _timer = super::phases::PARSE.start();
         let raw: Arc<str> = Arc::from(source);
-        // People type prompts like chat messages, so every newline they enter
-        // is a line break. Agent replies keep standard Markdown paragraphs.
-        let rendered = match key {
-            MarkdownSource::Prompt(_) => std::borrow::Cow::Owned(source.replace('\n', "  \n")),
-            MarkdownSource::Reply(_) => std::borrow::Cow::Borrowed(source),
-        };
+        // People type messages like chat, so every newline they enter is a line break.
+        let rendered = std::borrow::Cow::Owned(source.replace('\n', "  \n"));
         let view = match MarkdownView::new(&rendered) {
             Ok(mut view) => {
                 view.set_options(LayoutOptions {

@@ -179,8 +179,8 @@ fn author_names_match_and_master_is_searchable() {
     room_screen(&mut ui, 100, 30);
     assert_eq!(
         ui.view.search_matches.len(),
-        4,
-        "each exchange names the agent as recipient and on its reply"
+        2,
+        "each exchange names the agent on its message"
     );
 
     let mut snapshot = (*ui.snapshot).clone();

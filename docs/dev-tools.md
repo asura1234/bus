@@ -95,17 +95,15 @@ counts. Pending is still open, with the oldest pending age. Failed messages
 are split into Bus-caused and external, with causes. The order is the delivery
 headline, provider table, room table, hourly delivery graph, then a delay
 note. End-to-end delay (p50 and p99) ends at room delivery and is shown on
-the delivery latency page; this section shows no delay number. Reply capture comes after that,
-labelled as applying only to messages that expect a reply, so a missing reply
-is not presented as a delivery failure. Bus reliability sits below delivery as
-a note: of conclusive replies, how many succeeded. The caption is that success
-share. When that denominator is 0 the note and the counts line use an em dash
-and do not
-print 0/0. Provider and room rows show Delivered, Attempted, Pending,
-Delivery %, Bus failures and External. Attempted = Delivered + Pending + Bus
-failures + External. There is no per-recipient breakdown and no per-row cause
-list. Bus failure and external counts open undelivered request metadata and a
-copyable `bus message status MESSAGE_ID` command. The full classification is
+the delivery latency page; this section shows no delay number. Bus reliability sits below
+delivery as a note: of conclusive deliveries, how many succeeded. The caption
+is that success share. When that denominator is 0 the note and the counts line
+use an em dash and do not print 0/0.
+Provider and room rows show Delivered, Attempted, Pending, Delivery %, Bus
+failures and External. Attempted = Delivered + Pending + Bus failures +
+External. There is no per-recipient breakdown and no per-row cause list. Bus
+failure and external counts open undelivered request metadata and a copyable
+`bus message status MESSAGE_ID` command. The full classification is
 printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.
 

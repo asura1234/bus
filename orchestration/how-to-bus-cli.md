@@ -108,15 +108,12 @@ side effects explicit in the task. There is no `send --wait`; use send then wait
 For independent investigation, send to a comma-separated recipient list and
 wait on the shared message ID; inspect each request separately. Use `all` only
 for intentional room broadcasts. A worker's ordinary messages use `--as`.
-When answering work, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID
---text ANSWER` in the foreground and check success before claiming delivery.
+If you want an answer, say in the message whom to reply to and in which room (for example: report to @orchestrator in #build when complete). To settle the original request before the turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check success before claiming that settlement. If the target agent no longer exists on Bus when you reply, ignore it. Do not retry and do not treat it as an error.
 See `bus send --help` for first-answer conflicts and uncertain retry handling.
 
 ### Async waits and settlement
 
-`send --async` sends and follows without a deadline, waiting through dialogs.
-`wait --async` follows an existing ID but stops for a dialog. Bounded waits
-need replies; async waits also accept abandonment specifically as reply_not_captured.
+`send --async` sends and follows without a deadline, waiting through dialogs. `wait --async` follows an existing ID but stops for a dialog. A turn that ends settles its request, so both waits finish at `complete: true` without a reply. An abandoned `reply_not_captured` (steering the turn never claimed) fails a bounded wait and is accepted by an async wait. Interrupt and provider-error abandonment fail both.
 Read `bus wait --help` and `bus message status --help` for polling, stages,
 outcome windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain
@@ -132,14 +129,13 @@ Worker events wake the work-room orchestrator through ordinary agent messages.
 A wake is only the one real notice: an explicit result not already delivered, or
 an actionable final outcome (startup failure, session limit, unsent submission).
 Working means the request is in progress; a stuck screen is Blocked; a dead launch
-is Unavailable; an Idle agent without a captured reply gets one final outcome.
+is Unavailable. A turn that ends settles its request; nothing waits for a reply.
 Agents are only Idle, Working, Blocked or Unavailable. Results already in the room
 are not repeated. Bus does not post process-exit messages to MASTER.
-Worker-to-worker replies reach their author only. Interrupt/delete outcomes
-do not generate notices. There are no idle-worker/request nudges or room monitors.
+Interrupt/delete outcomes do not generate notices. There are no idle-worker/request
+nudges or room monitors.
 
-Reply routes, captured-final exceptions and Bus wrappers follow
-[Replies and turn finals](bus-communication-guide.md#replies-and-turn-finals).
+Replies follow [Replies](bus-communication-guide.md#replies).
 Waiters defer only their own wakes and mark only flushed output seen; use `message seen` only after reading.
 A killed waiter's lease expires, resuming delivery with composer guards. Deleted requesters are not replaced.
 stdout and native injection can expose an already-delivered wake.

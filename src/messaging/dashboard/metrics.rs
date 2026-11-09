@@ -12,6 +12,8 @@ struct Counts {
     failed: u64,
     open: u64,
     replied: u64,
+    /// Turns that ended with no explicit reply. Delivered success, not a missing reply.
+    ended: u64,
     reply_not_captured: u64,
     reply_pending: u64,
     bus_failures: u64,
@@ -62,6 +64,7 @@ impl Counts {
             "replied" => self.replied += 1,
             "missing" => self.reply_not_captured += 1,
             "pending" if outcome.delivery == "delivered" => self.reply_pending += 1,
+            "none" if outcome.cause == "success" => self.ended += 1,
             _ => {}
         }
         match outcome.cause {
@@ -107,7 +110,6 @@ struct Rates {
     delivery: Metric,
     /// Same rate as `delivery`: delivered ÷ (delivered + Bus-caused delivery failures).
     delivery_share: Metric,
-    reply_capture: Metric,
     bus_reliability: Metric,
 }
 #[derive(Default, Serialize)]
@@ -161,9 +163,12 @@ fn delivery_rate(counts: &Counts) -> Metric {
     }
 }
 fn bus_reliability(counts: &Counts) -> Metric {
+    // Explicit replies and turns that ended with no reply are both successful
+    // terminal deliveries. Captured finals are not replies.
+    let successes = counts.replied + counts.ended;
     conclusive_metric(
-        counts.replied,
-        counts.replied + counts.bus_failures,
+        successes,
+        successes + counts.bus_failures,
         &[
             ("pending", pending_attempts(counts)),
             ("external", counts.external),
@@ -172,10 +177,10 @@ fn bus_reliability(counts: &Counts) -> Metric {
 }
 fn attempt_identity(counts: &Counts) -> String {
     let caption = bus_reliability(counts).caption;
-    let bus_rate = if counts.replied + counts.bus_failures == 0 {
+    let bus_rate = if counts.replied + counts.ended + counts.bus_failures == 0 {
         format!("Bus reliability is {caption}.")
     } else {
-        format!("Of conclusive replies, {caption}.")
+        format!("Of conclusive deliveries, {caption}.")
     };
     format!(
         "{attempts} attempted = {delivered} delivered + {pending} pending + {bus} Bus failures + {external} external. Delivery is {share}. {bus_rate}",
@@ -223,15 +228,6 @@ impl From<&Counts> for Rates {
         Self {
             delivery: delivery_rate(counts),
             delivery_share: delivery_rate(counts),
-            reply_capture: conclusive_metric(
-                counts.replied,
-                counts.replied + counts.reply_not_captured,
-                &[
-                    ("reply pending", counts.reply_pending),
-                    ("still open", counts.open),
-                    ("failed before delivery", counts.failed),
-                ],
-            ),
             bus_reliability: bus_reliability(counts),
         }
     }
@@ -303,11 +299,26 @@ fn pre_start_failure(request: &Request) -> bool {
 fn bound(state: &BusState, request: &Request) -> bool {
     crate::messaging::model::request_start_bound(state, request)
 }
+fn explicit_reply(request: &Request) -> bool {
+    request
+        .reply()
+        .is_some_and(|reply| reply.callback_id.starts_with("reply-to:"))
+}
+
 fn classify(state: &BusState, request: &Request) -> Outcome {
-    if request.reply().is_some() || request.phase == RequestPhase::Completed {
+    // Only an explicit `bus send --reply-to` counts as a reply. A turn that
+    // ends without one is delivered success, not a missing reply.
+    if explicit_reply(request) {
         return Outcome {
             delivery: "delivered",
             capture: "replied",
+            cause: "success",
+        };
+    }
+    if request.phase == RequestPhase::Completed {
+        return Outcome {
+            delivery: "delivered",
+            capture: "none",
             cause: "success",
         };
     }

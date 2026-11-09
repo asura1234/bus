@@ -86,31 +86,6 @@ impl BusState {
         )
     }
 
-    /// A grouped late final is a second copy only when this request already has
-    /// its own worker message. An ungrouped final still yields to any earlier
-    /// copy of the same text in the room.
-    pub(super) fn final_text_already_posted(
-        &self,
-        late: Option<&Request>,
-        room: RoomId,
-        worker: AgentId,
-        text: &str,
-    ) -> bool {
-        let Some(request) = late else {
-            return self.result_already_in_room(room, worker, text);
-        };
-        self.assigned_result_at(
-            request.room_id,
-            request.agent_id,
-            request.prompt.submitted_at_ms,
-            request.id,
-            text.trim(),
-            None,
-            None,
-        )
-        .is_some()
-    }
-
     /// A grouped final is withdrawn when this request still receives a worker
     /// copy of its body after earlier same-text replies have taken theirs.
     /// An ungrouped final is withdrawn when any other worker copy exists.
@@ -305,37 +280,6 @@ impl BusState {
             .collect();
         claimants.sort_unstable();
         claimants
-    }
-
-    /// The worker's own earlier message already carries `text`. A task prompt
-    /// is not that copy, even when the task and the reply use the same words.
-    pub(super) fn result_already_in_room(&self, room: RoomId, worker: AgentId, text: &str) -> bool {
-        let text = text.trim();
-        if text.is_empty() {
-            return false;
-        }
-        let matches = |stored: &str| same_result_text(stored, text);
-        let from_worker = |author: &Author| author == &Author::Agent(worker);
-        self.notices(room)
-            .any(|prompt| from_worker(&prompt.author) && matches(&prompt.text))
-            || self.requests().any(|request| {
-                request.room_id == room
-                    && from_worker(&request.prompt.author)
-                    && matches(&request.prompt.text)
-            })
-    }
-
-    /// The worker message that already carries `text`, when one is assigned.
-    pub(super) fn explicit_copy_message(
-        &self,
-        room: RoomId,
-        worker: AgentId,
-        text: &str,
-    ) -> Option<PromptId> {
-        self.worker_copies(room, worker, text.trim(), None, None)
-            .into_iter()
-            .next()
-            .map(|(_, id)| id)
     }
 }
 

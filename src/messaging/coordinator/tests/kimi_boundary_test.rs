@@ -15,7 +15,9 @@ fn kimi_delayed_follow_up_keeps_nested_guidance_and_its_own_final() {
         stop(&f);
         f.status(RuntimeStatus::Idle);
         f.consume();
-        assert_eq!(f.reply(lead).as_deref(), Some("lead final"));
+        super::settled_without_reply(&f, lead);
+        super::final_text_absent(&f, "lead final");
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         assert!(
             !f.request(follow).settled(),
             "idle is not rejection of queued input"
@@ -49,11 +51,15 @@ fn kimi_delayed_follow_up_keeps_nested_guidance_and_its_own_final() {
         f.status(RuntimeStatus::Idle);
         stop(&f);
         f.consume();
+        super::final_text_absent(&f, "follow final");
+        super::final_text_absent(&f, "lead final");
         for id in [follow, nested] {
-            assert_eq!(f.reply(id).as_deref(), Some("follow final"));
+            super::settled_without_reply(&f, id);
             assert_eq!(f.request(id).provider_turn_id.as_deref(), Some("2"));
         }
-        assert_eq!(f.reply(lead).as_deref(), Some("lead final"));
+        assert_eq!(f.request(nested).group, Some(follow));
+        super::settled_without_reply(&f, lead);
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
         let fresh = f.send("fresh task", false);
         f.deliver();
@@ -90,13 +96,13 @@ fn kimi_silent_synchronous_turn_and_guidance_do_not_strand_the_inbox() {
         f.status(RuntimeStatus::Idle);
         stop(&f);
         f.consume();
-        assert!(f.request(lead).settled());
-        assert_eq!(
-            f.reply(lead).as_deref(),
-            Some(if guidance { "STEER" } else { "" })
-        );
+        super::settled_without_reply(&f, lead);
+        super::final_text_absent(&f, "STEER");
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         if let Some(id) = steer {
-            assert_eq!(f.reply(id).as_deref(), Some("STEER"));
+            super::settled_without_reply(&f, id);
+            assert_eq!(f.request(id).provider_turn_id.as_deref(), Some("1"));
+            assert_eq!(f.request(id).group, Some(lead));
         }
         assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
         let fresh = f.send("next marker", false);
@@ -155,7 +161,9 @@ fn kimi_missing_stop_poll_retains_a_follow_up_after_answered_or_silent_completio
         std::fs::write(&wire, &old).unwrap();
         f.status(RuntimeStatus::Idle);
         f.consume(); // no Stop: only the periodic wire read sees completion
-        assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+        super::settled_without_reply(&f, lead);
+        super::final_text_absent(&f, answer);
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         assert!(
             !f.request(follow).settled(),
             "{answer:?}: later turn has not started"
@@ -168,8 +176,12 @@ fn kimi_missing_stop_poll_retains_a_follow_up_after_answered_or_silent_completio
         f.started("2", "later task");
         f.consume();
         f.worker.settle_requests().unwrap();
-        assert_eq!(f.reply(follow).as_deref(), Some("later final"));
-        assert_eq!(f.reply(lead).as_deref(), Some(answer));
+        super::settled_without_reply(&f, follow);
+        super::final_text_absent(&f, "later final");
+        super::final_text_absent(&f, answer);
+        assert_eq!(f.request(follow).provider_turn_id.as_deref(), Some("2"));
+        super::settled_without_reply(&f, lead);
+        assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
     }
 }
 
@@ -185,7 +197,9 @@ fn kimi_unclaimed_input_expires_without_replay_after_its_retention_window() {
     f.status(RuntimeStatus::Idle);
     f.consume();
     assert!(!f.request(follow).settled());
-    assert_eq!(f.reply(lead).as_deref(), Some("old final"));
+    super::settled_without_reply(&f, lead);
+    super::final_text_absent(&f, "old final");
+    assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
     f.now = f
         .request(lead)
         .completed_at_ms

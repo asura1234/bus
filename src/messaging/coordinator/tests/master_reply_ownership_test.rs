@@ -13,7 +13,7 @@ fn inherited_work_notification_folded_into_a_bound_turn_keeps_its_reply() {
     f.deliver();
     f.started("turn-2", "new question");
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("Build running."));
+    super::assert_turn_final(&f, lead);
     assert!(f.request(second).trusted_start_bound);
     f.started("turn-2", &notification("build"));
     f.consume();
@@ -22,7 +22,7 @@ fn inherited_work_notification_folded_into_a_bound_turn_keeps_its_reply() {
     f.status(RuntimeStatus::Idle);
     f.now += crate::messaging::model::TURN_SETTLE_MS + 1;
     f.consume();
-    assert_eq!(f.reply(second).as_deref(), Some("New answer."));
+    super::assert_turn_final(&f, second);
     assert_eq!(f.request(second).failure_reason, None);
     assert_eq!(f.error(), None);
 }
@@ -48,7 +48,7 @@ fn real_work_wake_under_the_held_prompt_id_still_delivers_its_result() {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("Running the suite."));
+    super::assert_turn_final(&f, lead);
 }
 
 // A dispatch shell beside real work: neither wake can replace the already
@@ -89,7 +89,7 @@ fn dispatch_beside_real_work_still_delivers_the_work_result() {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("Dispatched; suite running."));
+    super::assert_turn_final(&f, lead);
 }
 
 // Claude may submit the finished shell's notification into the next turn
@@ -121,10 +121,7 @@ fn inherited_notification_submitted_before_the_bound_prompt_keeps_its_reply() {
     f.now += crate::messaging::model::TURN_SETTLE_MS + 1;
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("Given to worktree-closer."));
-    assert_eq!(
-        f.reply(second).as_deref(),
-        Some("You're right. I'm desktop master.")
-    );
+    super::assert_turn_final(&f, lead);
+    super::assert_turn_final(&f, second);
     assert_eq!(f.request(second).failure_reason, None);
 }

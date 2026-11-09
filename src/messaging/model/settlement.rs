@@ -363,15 +363,12 @@ impl BusState {
 
     /// Run after callback consumption, so a final spooled at the deadline wins.
     /// `recorded_end` reads how the provider's own record says the turn ended.
-    /// A final answer it attributes to this request is the reply (live,
-    /// 2026-10-20: a Codex worker removed its own cwd, after which Codex ran
-    /// no `Stop` hook, and two finished answers were lost). Otherwise no reply
-    /// is invented; the sender sees `abandoned` with a reason:
-    /// `provider_error: ...` when the record names the error that ended the
-    /// turn, else `reply_not_captured`, or `agent_unavailable` when the agent
-    /// is unavailable. An unavailable agent gets the window again from when it
-    /// went unavailable, so one that only reattaches (a Bus restart) and is
-    /// Idle again settles as usual.
+    /// A recorded final settles the request without storing that text as a
+    /// reply. A provider error abandons it as `provider_error: ...`. An
+    /// unavailable agent closes as `agent_unavailable`. Anything else closes
+    /// as completed with no reply, so the queue can advance. An unavailable
+    /// agent gets the window again from when it went unavailable, so one that
+    /// only reattaches (a Bus restart) and is Idle again settles as usual.
     pub(crate) fn settle_ended_request(
         &mut self,
         agent: AgentId,
@@ -399,8 +396,8 @@ impl BusState {
             recorded_end(request),
             "rollout",
             unavailable,
-            "Agent became unavailable after its turn ended without a captured reply; request closed. Inspect its terminal and resume it.",
-            "Provider turn ended without a captured reply; request closed. Inspect its terminal for the result.",
+            "Agent became unavailable after its turn ended; request closed. Inspect its terminal and resume it.",
+            None,
         )
     }
 
@@ -477,8 +474,8 @@ impl BusState {
             recorded,
             "kimi-wire",
             exited,
-            "Kimi process exited without a captured reply; inspect its terminal.",
-            "Kimi completed without a captured reply; inspect its terminal.",
+            "Kimi process exited after its turn ended; inspect its terminal.",
+            None,
         )
     }
 
@@ -491,7 +488,7 @@ impl BusState {
         callback_prefix: &str,
         unavailable: bool,
         unavailable_error: &str,
-        no_reply_error: &str,
+        no_reply_error: Option<&str>,
     ) -> Option<RequestId> {
         if let Some(RecordedTurnEnd::Error(message)) = &recorded {
             if self.hold_provider_error(id, message, now_ms) {
@@ -523,7 +520,13 @@ impl BusState {
         let (reason, error) = match provider_error {
             Some(message) => provider_error_outcome(&message),
             None if unavailable => (AGENT_UNAVAILABLE.to_owned(), unavailable_error.to_owned()),
-            None => ("reply_not_captured".to_owned(), no_reply_error.to_owned()),
+            // A generation restart has no recorded end. That interrupted
+            // delivery is still reply_not_captured. A turn that actually ended
+            // completes silently so the queue moves without a stored reply.
+            None => match no_reply_error {
+                Some(message) => ("reply_not_captured".to_owned(), message.to_owned()),
+                None => return self.complete_silent_turn(agent, id, now_ms),
+            },
         };
         let closed = self.close_turn_with_reason(id, now_ms, reason).ok()?;
         let error = closed
@@ -627,7 +630,7 @@ impl BusState {
             request_id = id.0,
             agent_id = agent.0,
             reason = "provider_recorded_final",
-            "Reply recovered from the provider's record of the turn"
+            "Request settled from the provider's record of the turn"
         );
         Some(id)
     }

@@ -274,9 +274,11 @@ mod orchestrator_turn_routing {
         assert!(bus.notices(master).is_empty(), "{:?}", bus.notices(master));
         let request = bus.worker.state.request(request).unwrap();
         assert_eq!(
-            request.reply().map(|f| f.text.as_str()),
-            Some("All green; merging."),
+            request.phase,
+            crate::messaging::model::RequestPhase::Completed,
             "{request:?}"
         );
+        assert!(request.reply().is_none(), "{request:?}");
+        assert!(request.failure_reason.is_none(), "{request:?}");
     }
 }

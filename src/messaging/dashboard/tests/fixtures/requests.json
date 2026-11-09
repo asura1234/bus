@@ -1,5 +1,6 @@
 {
-  "note": "Synthetic edge cases overlay this complete request. Recorded request fixtures remain unmodified in recorded.json.",
+  "note": "Synthetic edge cases overlay this complete request. capture is the classifier label, not a dashboard rate. omitted_rates names JSON rate fields the report built from these cases must not publish. Recorded request fixtures remain unmodified in recorded.json.",
+  "omitted_rates": ["reply_capture"],
   "base": {
     "id": 100,
     "room_id": 1,
@@ -354,7 +355,7 @@
         "phase": "completed"
       },
       "delivery": "delivered",
-      "capture": "replied",
+      "capture": "none",
       "cause": "success"
     },
     {
@@ -367,7 +368,7 @@
         "phase": "active",
         "completed_reply": {
           "content": {
-            "callback_id": "redacted",
+            "callback_id": "reply-to:124",
             "text": "[redacted reply]",
             "received_at_ms": 1793581205000,
             "provider_session_id": null,
@@ -391,7 +392,7 @@
         "phase": "abandoned",
         "completed_reply": {
           "content": {
-            "callback_id": "redacted",
+            "callback_id": "reply-to:125",
             "text": "[redacted reply]",
             "received_at_ms": 1793581205000,
             "provider_session_id": null,

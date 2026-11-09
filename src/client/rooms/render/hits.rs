@@ -79,7 +79,6 @@ impl BusUi {
             Action::RemoveFile(path) => format!("remove-file:{}", file(path)),
             Action::OpenFile(path) => format!("file:{}", file(path)),
             Action::Details(id) => format!("details:{}", self.agent_name(*id)),
-            Action::Quote(id) => format!("quote:{}", id.0),
             Action::Field(index) => format!("field:{index}"),
             // The names `agent add --provider` takes.
             Action::Provider(Provider::ClaudeCode) => "provider:claude".into(),

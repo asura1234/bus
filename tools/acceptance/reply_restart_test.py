@@ -116,19 +116,20 @@ def scenario(binary, root, provider, master, retain_failure=False):
                 return None
 
         status = until(delivered)
-        assert status["requests"][0]["stage"] == "replied", status
-        assert status["requests"][0]["reply"]["text"] == "restart-proof", status
+        assert status["requests"][0]["reply"] is None, status
+        assert status["requests"][0]["stage"] == "ended", status
         history = bus.cli("history", "--room", room)
         rows = [row for row in history["messages"] if str(row["prompt"]["id"]) == message]
         assert len(rows) == 1, history
         assert len(rows[0]["delivery"]["requests"]) == 1, history
-        assert rows[0]["delivery"]["requests"][0]["reply"]["text"] == "restart-proof", history
-        # A history map cannot reveal duplicate publication. Unviewed room
-        # counters and standalone notices are independent visible side effects.
+        delivered_request = rows[0]["delivery"]["requests"][0]
+        assert delivered_request["reply"] is None, history
+        assert delivered_request["stage"] == "ended", history
+        # A turn that ends without --reply-to stores no reply, so the unviewed
+        # source room gains no unread mark. Repeated reads must not add one.
         state = durable()
         assert state["visible_room"] != source, state["visible_room"]
         expected = dict(before)
-        expected[str(source)] += 1
         assert {key: value["unread_count"] for key, value in state["rooms"].items()} == expected, state
         for target in ["master", "reply-work"]:
             other = bus.cli("history", "--room", target)

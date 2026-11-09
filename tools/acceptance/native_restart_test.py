@@ -186,7 +186,8 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
         evidence["bootstrap"] = first
         before = bus.cli("wait", "--message", str(first["message_id"]), "--timeout", "30")
         old = before["requests"][0]
-        assert old["stage"] == "replied", before
+        assert old["reply"] is None, before
+        assert old["stage"] == "ended", before
         evidence["before"] = before
         agent = next(agent for agent in bus.cli("state")["agents"] if agent["name"] == "restart-agent")
         native_target = agent["runtime_identity"]["pane_id"]
@@ -269,14 +270,14 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
         after = bus.cli("wait", "--message", str(sent["message_id"]), "--timeout", "30")
         evidence["after"] = after
         new = after["requests"][0]
-        assert new["stage"] == "replied", after
-        assert new["reply"]["text"] == "fake reply: immediate-after-restart", after
-        assert new["reply"]["provider_session_id"] == old["reply"]["provider_session_id"], (before, after)
-        assert new["reply"]["provider_turn_id"] != old["reply"]["provider_turn_id"], (before, after)
+        assert new["reply"] is None, after
+        assert new["stage"] == "ended", after
+        assert new["session_id"] == old["session_id"], (before, after)
+        assert new["turn_id"] != old["turn_id"], (before, after)
         ready = bus.wait_native_ready(native_target)
         evidence["native_ready"] = ready
         assert ready["pane_id"] == original_native["pane_id"], evidence
-        assert ready["agent_session"]["value"] == old["reply"]["provider_session_id"], evidence
+        assert ready["agent_session"]["value"] == old["session_id"], evidence
         perf = root / "data/herdr-config/sessions/bus/perf/server.jsonl"
         boots = [record for line in perf.read_text().splitlines()
                  if (record := json.loads(line)).get("kind") == "run_start"]
@@ -292,7 +293,7 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
             assert final_build["client"]["binary"] == str(binary), final_build
             assert final_build["server"]["binary"] == str(replacement), final_build
         evidence["final_build"] = final_build
-        print(json.dumps({"result": "PASS", "before": old["reply"], "after": new["reply"]}), flush=True)
+        print(json.dumps({"result": "PASS", "before": old["session_id"], "after": new["session_id"]}), flush=True)
     except BaseException as error:
         original_error = error
         evidence["error"] = str(error)

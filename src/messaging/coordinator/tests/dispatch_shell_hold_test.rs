@@ -44,11 +44,11 @@ fn master_reply(author_is_agent: bool, command: &str) {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(
-        f.reply(id).as_deref(),
-        Some("Dispatched; available for your next message."),
+    assert!(
+        f.reply(id).is_none(),
         "agent sender={author_is_agent}, command={command}"
     );
+    assert_eq!(f.request(id).delivery_stage(), "ended");
     let response = f.worker.control_response_with_events(
         &crate::messaging::control::Request {
             id: "history-proof".into(),
@@ -59,10 +59,9 @@ fn master_reply(author_is_agent: bool, command: &str) {
     );
     assert!(response.ok, "{response:?}");
     let history = response.result;
-    assert_eq!(
-        history["messages"][0]["delivery"]["requests"][0]["reply"]["text"],
-        "Dispatched; available for your next message."
-    );
+    let request = &history["messages"][0]["delivery"]["requests"][0];
+    assert!(request["reply"].is_null(), "{request}");
+    assert_eq!(request["stage"], "ended");
     assert_eq!(history["room_id"], 0);
 }
 

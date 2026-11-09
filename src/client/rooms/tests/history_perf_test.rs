@@ -25,11 +25,26 @@ fn large_room() -> (BusState, RoomId) {
         .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
         .unwrap();
     for index in 0..2500 {
-        let id = state.submit_message_from(room, Draft {
-            text: format!("**Prompt {index}**\nRead src/client/rooms/history/exchange.rs and https://example.com/long/path/to/documentation\nKeep output identical."),
-            files: vec![], recipient_ids: [agent].into(),
-        }, Author::Developer, 1_800_000_000_000 + index).unwrap()[0];
-        state.finish_for_test(id, "## Result\n\n- **First** implementation detail\n- Second detail with `code`\n- Third detail\n\nSee https://example.com/long/path/to/documentation and src/client/rooms/history/exchange.rs.\n\n```rust\nlet answer = 42;\n```", 1_800_000_003_000 + index);
+        let body = format!(
+            "**Prompt {index}**\nRead src/client/rooms/history/exchange.rs and https://example.com/long/path/to/documentation\nKeep output identical.\n\n## Result\n\n- **First** implementation detail\n- Second detail with `code`\n- Third detail\n\nSee https://example.com/long/path/to/documentation and src/client/rooms/history/exchange.rs.\n\n```rust\nlet answer = 42;\n```\n{}",
+            (0..4)
+                .map(|line| format!("detail line {line} keeps the history large"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let id = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: body,
+                    files: vec![],
+                    recipient_ids: [agent].into(),
+                },
+                Author::Developer,
+                1_800_000_000_000 + index,
+            )
+            .unwrap()[0];
+        state.finish_for_test(id, "settled", 1_800_000_003_000 + index);
     }
     (state, room)
 }
@@ -291,10 +306,10 @@ fn background_layout_matches_every_row_of_the_synchronous_renderer() {
             )
             .unwrap();
         let id = state.submit_message_from(room, Draft {
-            text: "**Hello** 中文 👩‍💻\nA long https://example.com/a/b/c/d/e/f/g/h/i/j/k link\n[waiting-on-you]".into(),
+            text: "**Hello** 中文 👩‍💻\nA long https://example.com/a/b/c/d/e/f/g/h/i/j/k link\n[waiting-on-you]\n\n# Result\n\n> quoted **text**\n\n- one\n- two\n\n| a | b |\n|---|---|\n| alpha | beta |\n\n```rust\nlet n = 1;\n```\n\n[docs](https://example.com)".into(),
             files: vec!["/missing/notes.md".into()], recipient_ids: [agent].into(),
         }, Author::Developer, 1_800_000_000_000).unwrap()[0];
-        state.finish_for_test(id, "# Result\n\n> quoted **text**\n\n- one\n- two\n\n| a | b |\n|---|---|\n| alpha | beta |\n\n```rust\nlet n = 1;\n```\n\n[docs](https://example.com)", 1_800_000_001_000);
+        state.finish_for_test(id, "settled", 1_800_000_001_000);
         ids.push(agent);
     }
     let mut history = History::default();
@@ -685,19 +700,18 @@ fn append_only_projects_links_for_the_new_message() {
     let agent = state
         .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
         .unwrap();
-    let draft = || Draft {
-        text: "https://example.com/a/b/c/d/e/f/g/h/i/j/k/l/m".into(),
+    let draft = || {
+        Draft {
+        text: "https://example.com/a/b/c/d/e/f/g/h/i/j/k/l/m\nRead src/client/rooms/history/exchange.rs"
+            .into(),
         files: vec![],
         recipient_ids: [agent].into(),
+    }
     };
     let request = state
         .submit_message_from(room, draft(), Author::Developer, 1_800_000_000_000)
         .unwrap()[0];
-    state.finish_for_test(
-        request,
-        "Read src/client/rooms/history/exchange.rs",
-        1_800_000_001_000,
-    );
+    state.finish_for_test(request, "settled", 1_800_000_001_000);
     let mut history = History::default();
     let mut thumbnails = Thumbnails::default();
     history.lines(
@@ -708,7 +722,7 @@ fn append_only_projects_links_for_the_new_message() {
         1_800_000_010_000,
         &mut thumbnails,
     );
-    assert_eq!(history.projected, 2);
+    assert_eq!(history.projected, 1);
     state
         .submit_message_from(room, draft(), Author::Developer, 1_800_000_002_000)
         .unwrap();
@@ -1324,20 +1338,17 @@ fn filtered_large_request_archive_projects_only_recent_bodies() {
     let agent = state
         .create_agent(room, "worker", Provider::Codex, "/project".into(), None)
         .unwrap();
+    // The body under test is the message itself. A stored reply is not a row.
     for index in 0..50_000 {
-        let id = state
-            .submit_message_from(
+        state
+            .post_to_developer(
                 room,
-                Draft {
-                    text: format!("archived prompt {index}"),
-                    files: vec![],
-                    recipient_ids: [agent].into(),
-                },
-                Author::Developer,
+                agent,
+                format!("archived answer {index}"),
+                vec![],
                 1000 + index,
             )
-            .unwrap()[0];
-        state.finish_for_test(id, &format!("archived answer {index}"), 100_000);
+            .unwrap();
     }
     state.archive(1_000_000);
     assert_eq!(state.history().len(), 50_000);

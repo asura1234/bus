@@ -67,13 +67,14 @@ fn deleted_worker_keeps_the_orchestrators_master_decision() {
     state.delete_agent(worker, 12).unwrap();
     assert!(state.agent(worker).is_none());
     finish_decision(&mut state, orch, request);
-    assert_eq!(
-        state.request(request).unwrap().reply().unwrap().text,
-        DECISION
-    );
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
-        1
+        0,
+        "a captured turn final is not copied into MASTER"
     );
 }
 
@@ -85,13 +86,16 @@ fn an_individual_answer_keeps_its_reply_and_the_later_decision_reaches_master() 
         .answer_message(message, orch, "Use the fallback".into(), 12)
         .unwrap();
     finish_decision(&mut state, orch, request);
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
     assert_eq!(
-        state.request(request).unwrap().reply().unwrap().text,
-        "Use the fallback"
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("Use the fallback")
     );
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
-        1
+        0,
+        "a later captured final is not published over the explicit answer"
     );
     state
         .route_worker_replies(100_000, &std::collections::BTreeSet::new())
@@ -100,9 +104,14 @@ fn an_individual_answer_keeps_its_reply_and_the_later_decision_reaches_master() 
         .requests()
         .filter(|r| r.agent_id == worker && r.prompt.author == Author::Agent(orch))
         .collect();
-    assert_eq!(instructions.len(), 1);
-    assert!(instructions[0].prompt.text.contains("Use the fallback"));
-    assert!(!instructions[0].prompt.text.contains(DECISION));
+    assert!(
+        instructions.is_empty(),
+        "neither the explicit answer nor the captured final is forwarded: {:?}",
+        instructions
+            .iter()
+            .map(|r| r.prompt.text.as_str())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -112,13 +121,16 @@ fn an_explicit_master_post_is_not_repeated_by_the_captured_final() {
         .post_to_developer(master, orch, DECISION.into(), vec![], 12)
         .unwrap();
     finish_decision(&mut state, orch, request);
-    assert_eq!(
-        state.request(request).unwrap().reply().unwrap().text,
-        DECISION
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(
+        settled.reply().is_none(),
+        "an explicit master post is not stored as the turn reply"
     );
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
-        1
+        1,
+        "the explicit post stays once and the captured final does not repeat it"
     );
 }
 
@@ -171,14 +183,16 @@ fn a_new_decision_after_answering_a_master_worker_wake_is_published() {
         .answer_message(message, orch, "Use the fallback".into(), 12)
         .unwrap();
     finish_decision(&mut state, orch, request);
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
     assert_eq!(
-        state.request(request).unwrap().reply().unwrap().text,
-        "Use the fallback"
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("Use the fallback")
     );
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
-        1,
-        "the independently useful later decision must reach MASTER exactly once"
+        0,
+        "a captured final after an explicit answer is not published to MASTER"
     );
 }
 
@@ -272,10 +286,17 @@ fn worker_woken_decision_with_unclaimed_notification_is_published_after_turn_pro
             prompts: vec![prompt.clone(), worker_prompt.clone()],
         })
     }));
+    let lead_settled = state.request(lead).unwrap();
+    assert_eq!(lead_settled.phase, RequestPhase::Completed);
+    assert!(lead_settled.reply().is_none());
+    let worker_settled = state.request(worker_request).unwrap();
+    assert_eq!(worker_settled.phase, RequestPhase::Completed);
+    assert!(worker_settled.reply().is_none());
+    assert!(worker_settled.failure_reason.is_none());
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
-        1,
-        "the worker provenance established after settlement must publish the decision"
+        0,
+        "turn proof completes the steered request without publishing the captured final"
     );
 }
 
@@ -366,9 +387,22 @@ fn independently_submitted_worker_turns_keep_decisions(first_reply: &str, explic
         )),
         CallbackDisposition::AcceptedCompleted
     );
-    assert_eq!(
-        state.notices(master).filter(|p| p.text == DECISION).count(),
-        2,
-        "identical decisions from separate turns remain separate publications"
-    );
+    for id in [first, second] {
+        let settled = state.request(id).unwrap();
+        assert_eq!(settled.phase, RequestPhase::Completed);
+        assert!(settled.reply().is_none());
+        assert!(settled.failure_reason.is_none());
+    }
+    let published = state.notices(master).filter(|p| p.text == DECISION).count();
+    if explicit_first {
+        assert_eq!(
+            published, 1,
+            "the explicit post stays once; captured finals do not copy or repeat it"
+        );
+    } else {
+        assert_eq!(
+            published, 0,
+            "captured finals from separate turns are not published"
+        );
+    }
 }

@@ -41,9 +41,8 @@ fn delivered_status_has_no_outcome_ack_or_orchestrator_wake() {
     );
 }
 
-/// A coordinator tick reconciles outcomes in `expire_queued_now` before
-/// `settle_requests` closes a turn that ended without a reply. The orchestrator
-/// gets the one outcome, not an extra notice for the idle open request.
+/// Idle plus the settle grace, with no recorded end, completes the turn and
+/// does not post a no-reply outcome. The agent is spare again.
 #[test]
 fn reply_not_captured_settlement_sends_one_outcome() {
     let mut f = Fixture::new();
@@ -60,9 +59,19 @@ fn reply_not_captured_settlement_sends_one_outcome() {
         state.settle_ended_request(f.agent, io::now_ms(), |_| None),
         Some(source)
     );
+    let settled = state.request(source).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none(), "{settled:?}");
+    assert!(settled.failure_reason.is_none(), "{settled:?}");
+    assert_eq!(settled.delivery_stage(), "ended");
+    assert_eq!(state.agent(f.agent).unwrap().current_request, None);
     f.worker.save(state).unwrap();
     collect(&mut f);
     let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains("reply_not_captured"), "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("reply_not_captured") && !call.contains("No reply")),
+        "{calls:?}"
+    );
 }

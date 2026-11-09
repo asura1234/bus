@@ -11,6 +11,19 @@ struct Case {
     cause: String,
 }
 
+fn assert_reply_capture_rate_is_absent(report: &Dashboard, label: &str) {
+    let encoded = serde_json::to_value(report).unwrap();
+    assert!(
+        encoded["all"]["rates"].get("reply_capture").is_none(),
+        "{label} still publishes reply_capture: {}",
+        encoded["all"]["rates"]
+    );
+    assert!(
+        !encoded.to_string().contains("\"reply_capture\""),
+        "{label} JSON still names reply_capture"
+    );
+}
+
 fn cases() -> Vec<Case> {
     {
         let mut cases: Vec<Case> =
@@ -56,6 +69,16 @@ fn recorded_outcomes_classify_every_phase_and_preserve_reply_precedence() {
         assert_eq!(actual.capture, case.capture, "{} capture", case.name);
         assert_eq!(actual.cause, case.cause, "{} cause", case.name);
     }
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/requests.json")).unwrap();
+    let omitted = document["omitted_rates"]
+        .as_array()
+        .expect("requests fixture names dashboard rates that are gone");
+    assert!(
+        omitted.iter().any(|rate| rate == "reply_capture"),
+        "requests fixture still re-semanticises reply capture instead of dropping it"
+    );
+    assert_reply_capture_rate_is_absent(&snapshot(&state, singapore_hour), "requests fixture");
 }
 
 // Each recipient is counted even when two requests share the same prompt.
@@ -77,8 +100,8 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
     let c = &report.all.counts;
     assert_eq!((c.attempts, c.delivered, c.failed, c.open), (5, 3, 2, 0));
     assert_eq!(
-        (c.replied, c.reply_not_captured, c.reply_pending),
-        (1, 1, 1)
+        (c.replied, c.ended, c.reply_not_captured, c.reply_pending),
+        (0, 1, 1, 1)
     );
     assert_eq!((c.bus_failures, c.external), (2, 1));
     assert_eq!((c.delivery_bus, c.delivery_external), (1, 1));
@@ -87,7 +110,7 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
         report.all.rates.delivery.denominator,
         c.delivered + c.delivery_bus
     );
-    assert_eq!(report.all.rates.reply_capture.percent, Some(50.0));
+    assert_reply_capture_rate_is_absent(&report, "hourly denominators");
     assert!((report.all.rates.bus_reliability.percent.unwrap() - 100.0 / 3.0).abs() < 0.001);
     assert_eq!(c.failure_reasons["submission_unconfirmed"], 1);
     assert_eq!(c.bus_reasons["reply_not_captured"], 1);
@@ -103,8 +126,9 @@ fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators()
     assert_eq!(report.providers["cursor"].counts.attempts, 0);
 }
 
-// A conclusive 100% must name the attempts left out of that rate. The definition
-// stays replied / (replied + bus failures); pending and external stay outside it.
+// A conclusive 100% must name the attempts left out of that rate. Successful
+// terminal deliveries are explicit replies plus turns that ended with no reply.
+// Pending and external stay outside that rate.
 #[test]
 fn complete_bus_reliability_names_every_excluded_attempt() {
     let mut records: Vec<_> = cases()
@@ -120,21 +144,19 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     let report = snapshot(&fixture_state(records), singapore_hour);
     let counts = &report.all.counts;
     let pending = counts.open + counts.reply_pending;
+    let successes = counts.replied + counts.ended;
     assert_eq!(
         counts.attempts,
-        counts.replied + counts.bus_failures + counts.external + pending
+        successes + counts.bus_failures + counts.external + pending
     );
     assert!(counts.external > 0 && counts.open > 0 && counts.reply_pending > 0);
     assert_eq!(counts.bus_failures, 0);
     assert_eq!(report.all.rates.bus_reliability.percent, Some(100.0));
-    assert_eq!(report.all.rates.bus_reliability.denominator, counts.replied);
+    assert_eq!(report.all.rates.bus_reliability.denominator, successes);
     let caption = &report.all.rates.bus_reliability.caption;
     assert!(caption.starts_with("100% of "), "{caption}");
     assert!(
-        caption.contains(&format!(
-            "of {}/{} conclusive",
-            counts.replied, counts.replied
-        )),
+        caption.contains(&format!("of {successes}/{successes} conclusive")),
         "{caption}"
     );
     assert!(caption.contains(&format!("{pending} pending")), "{caption}");
@@ -144,8 +166,8 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     );
     assert_ne!(caption.as_str(), "100%");
     assert!(!caption.ends_with('%'), "{caption}");
+    assert_reply_capture_rate_is_absent(&report, "complete bus reliability");
     for rate in [
-        &report.all.rates.reply_capture,
         &report.all.rates.bus_reliability,
     ] {
         if rate.percent.is_some() {
@@ -191,7 +213,8 @@ fn assert_reliability_row(series: &Series, label: &str) {
         )),
         "{label}: {identity}"
     );
-    let bus_denominator = counts.replied + counts.bus_failures;
+    let successes = counts.replied + counts.ended;
+    let bus_denominator = successes + counts.bus_failures;
     if bus_denominator == 0 {
         assert!(!identity.contains("0/0"), "{label}: {identity}");
         assert!(
@@ -201,7 +224,7 @@ fn assert_reliability_row(series: &Series, label: &str) {
     } else {
         assert!(
             identity.contains(&format!(
-                "Of conclusive replies, {}",
+                "Of conclusive deliveries, {}",
                 series.rates.bus_reliability.caption
             )),
             "{label}: {identity}"
@@ -212,13 +235,11 @@ fn assert_reliability_row(series: &Series, label: &str) {
             caption = series.rates.bus_reliability.caption
         );
     }
-    assert_eq!(
-        series.rates.bus_reliability.numerator, counts.replied,
-        "{label}"
-    );
+    let successes = counts.replied + counts.ended;
+    assert_eq!(series.rates.bus_reliability.numerator, successes, "{label}");
     assert_eq!(
         series.rates.bus_reliability.denominator,
-        counts.replied + counts.bus_failures,
+        successes + counts.bus_failures,
         "{label}"
     );
     let caption = &series.rates.bus_reliability.caption;
@@ -231,7 +252,7 @@ fn assert_reliability_row(series: &Series, label: &str) {
         "{label}: {caption}"
     );
     assert_ne!(caption.as_str(), "100%", "{label}");
-    if counts.replied + counts.bus_failures == 0 {
+    if counts.replied + counts.ended + counts.bus_failures == 0 {
         assert!(caption.starts_with('—'), "{label}: {caption}");
         assert!(!caption.contains('%'), "{label}: {caption}");
     } else {
@@ -284,7 +305,8 @@ fn group_rows_reconcile_attempted_with_delivered_failed_external_and_pending() {
 
     let failed = &report.providers["codex"];
     assert!(failed.counts.bus_failures > 0, "failures");
-    assert_eq!(failed.counts.replied, 1);
+    assert_eq!(failed.counts.replied, 0);
+    assert_eq!(failed.counts.ended, 1);
     assert_eq!(failed.counts.bus_failures, 1);
     assert_reliability_row(failed, "failures");
 
@@ -345,7 +367,7 @@ fn local_hour_boundary_and_repeated_dst_hours_stay_distinct() {
 fn empty_denominators_are_absent_and_missing_reasons_are_bus_caused() {
     let report = snapshot(&BusState::new(), singapore_hour);
     assert_eq!(report.all.rates.delivery.percent, None);
-    assert_eq!(report.all.rates.reply_capture.percent, None);
+    assert_reply_capture_rate_is_absent(&report, "empty denominators");
     assert_eq!(report.all.rates.bus_reliability.percent, None);
     assert!(report.all.hours.is_empty());
     let state = fixture_state(
@@ -367,7 +389,7 @@ fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
     assert_eq!(
         snapshot(&state, singapore_hour).providers["claude"]
             .counts
-            .replied,
+            .ended,
         1
     );
     let mut document = serde_json::to_value(state).unwrap();
@@ -379,7 +401,7 @@ fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
     assert_eq!(
         snapshot(&state, singapore_hour).providers["unknown"]
             .counts
-            .replied,
+            .ended,
         1
     );
     assert!(state.request(RequestId(100)).is_some());
@@ -645,7 +667,7 @@ fn dashboard_provider_hold_and_retry_remain_pending_without_failure_counters() {
             }
         );
         assert!(report.failures.is_empty());
-        assert_eq!(report.all.rates.reply_capture.denominator, 0);
+        assert_reply_capture_rate_is_absent(&report, "retry stays pending");
         assert_eq!(report.all.rates.bus_reliability.denominator, 0);
         if phase <= 1 {
             assert_eq!(
@@ -667,7 +689,7 @@ fn named_case(name: &str) -> super::Request {
 fn assert_absent_bus_rate(series: &super::Series, label: &str) {
     assert_eq!(
         series.rates.bus_reliability.denominator, 0,
-        "{label} has no conclusive replies"
+        "{label} has no conclusive deliveries"
     );
     assert!(
         series.rates.bus_reliability.caption.starts_with('—'),
@@ -687,7 +709,7 @@ fn assert_absent_bus_rate(series: &super::Series, label: &str) {
 }
 
 // An empty session, an all-pending session, and an all-external session have
-// no conclusive reply rate. The counts line must say so with the card's em dash.
+// no conclusive delivery rate. The counts line must say so with the card's em dash.
 #[test]
 fn dashboard_wording_absent_rate_for_empty_all_pending_and_all_external() {
     let empty = snapshot(&fixture_state(std::iter::empty()), singapore_hour);
@@ -731,7 +753,8 @@ fn dashboard_wording_identity_matches_delivery_counters() {
     let counts = &report.all.counts;
     assert_eq!(counts.delivered, 2);
     assert_eq!(counts.failed, 0);
-    assert_eq!(counts.replied, 1);
+    assert_eq!(counts.replied, 0);
+    assert_eq!(counts.ended, 1);
     assert_eq!(counts.reply_not_captured, 1);
     assert_eq!(counts.bus_failures, 1);
     let card = &report.all.rates.delivery_share.caption;
@@ -754,7 +777,7 @@ fn dashboard_wording_identity_matches_delivery_counters() {
 }
 
 // Zero Bus failures is a 100% success caption. The counts line must repeat
-// that caption, not ask how many replies failed.
+// that caption, not ask how many failed.
 #[test]
 fn dashboard_wording_zero_bus_failures_match_the_success_caption() {
     let report = snapshot(
@@ -763,20 +786,21 @@ fn dashboard_wording_zero_bus_failures_match_the_success_caption() {
     );
     let counts = &report.all.counts;
     assert_eq!(counts.bus_failures, 0);
-    assert!(counts.replied > 0, "conclusive replies");
+    assert_eq!(counts.replied, 0);
+    assert!(
+        counts.ended > 0,
+        "a completed turn is a conclusive delivery"
+    );
     let caption = &report.all.rates.bus_reliability.caption;
     assert_eq!(report.all.rates.bus_reliability.percent, Some(100.0));
     assert!(caption.starts_with("100%"), "{caption}");
     assert!(
-        caption.contains(&format!(
-            "of {}/{} conclusive",
-            counts.replied, counts.replied
-        )),
+        caption.contains(&format!("of {}/{} conclusive", counts.ended, counts.ended)),
         "{caption}"
     );
     let identity = &report.all.identity;
     assert!(
-        identity.contains(&format!("Of conclusive replies, {caption}")),
+        identity.contains(&format!("Of conclusive deliveries, {caption}")),
         "{identity}"
     );
     assert!(!identity.contains("how many failed"), "{identity}");

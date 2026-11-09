@@ -702,21 +702,26 @@ fn notify_you_forwarded_worker_reply_and_ack_do_not_repeat_the_alert() {
     let mut value = serde_json::to_value(&before).unwrap();
     let item = &mut value["requests"][request.0.to_string()];
     item["phase"] = serde_json::json!("completed");
-    item["completed_reply"] = serde_json::json!({"group":request.0, "content":{"callback_id":"done", "text":"[waiting-on-you] Decide release", "received_at_ms":2, "provider_session_id":null, "provider_turn_id":null}});
     item["completed_at_ms"] = serde_json::json!(2);
     let mut next: BusState = serde_json::from_value(value).unwrap();
+    assert!(next.request(request).unwrap().reply().is_none());
     let mut policy = enabled();
     policy.observe(&before, &next, 1000);
-    assert!(policy.take(3000).is_some());
-    let completed = next.clone();
-    assert!(next
+    assert!(
+        policy.take(3000).is_none(),
+        "a captured turn final is not forwarded and does not alert"
+    );
+    let settled = next.clone();
+    assert!(!next
         .route_worker_replies(5000, &std::collections::BTreeSet::new())
         .unwrap());
-    policy.observe(&completed, &next, 5000);
-    assert!(policy.take(8000).is_none());
-    let forwarded = next.clone();
-    next.see_worker_reply(request, orchestrator, 9000).unwrap();
-    policy.observe(&forwarded, &next, 9000);
+    policy.observe(&settled, &next, 5000);
+    assert!(
+        policy.take(8000).is_none(),
+        "nothing was forwarded, so the alert does not repeat"
+    );
+    assert!(next.see_worker_reply(request, orchestrator, 9000).is_err());
+    policy.observe(&settled, &next, 9000);
     assert!(policy.take(12000).is_none());
 }
 

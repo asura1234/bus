@@ -24,7 +24,7 @@ pub(super) struct Point {
 
 /// Orders a history selection. It is never widened: a drag selects exactly
 /// the characters from press to release, inside rendered Markdown too, the
-/// way a text view does. Whole replies are copied through `Quote` instead.
+/// way a text view does.
 pub(super) fn normalize_history_selection(
     _lines: &[super::history::Line],
     selection: Option<(Point, Point)>,
@@ -33,9 +33,9 @@ pub(super) fn normalize_history_selection(
     Some((anchor.min(head), anchor.max(head)))
 }
 
-/// The text of `lines` between `start` and `end`, as shown: layout indents,
-/// thumbnails and the `Quote` buttons are not message text, soft-wrapped rows
-/// rejoin, and every real line end stays a line end.
+/// The text of `lines` between `start` and `end`, as shown: layout indents
+/// and thumbnails are not message text, soft-wrapped rows rejoin, and every
+/// real line end stays a line end.
 pub(super) fn history_text(lines: &[super::history::Line], start: Point, end: Point) -> String {
     let mut text = String::new();
     let mut first = true;
@@ -45,7 +45,7 @@ pub(super) fn history_text(lines: &[super::history::Line], start: Point, end: Po
         .take(end.line.saturating_add(1))
         .skip(start.line)
     {
-        if line.thumbnail.is_some() || matches!(line.action, Some(Action::Quote(_))) {
+        if line.thumbnail.is_some() {
             continue;
         }
         let from = if index == start.line { start.offset } else { 0 }.max(line.copy_from);
@@ -99,10 +99,6 @@ impl BusUi {
                         Region::Composer
                     }
                     None | Some(Action::OpenFile(_)) if self.view.history_text.contains(point) => {
-                        // Quote-row padding is inert, including for selection.
-                        if self.quote_row(row) {
-                            return true;
-                        }
                         Region::History
                     }
                     _ => return false,
@@ -174,16 +170,6 @@ impl BusUi {
             }
             _ => false,
         }
-    }
-
-    fn quote_row(&self, row: u16) -> bool {
-        row.checked_sub(self.view.history_text.y)
-            .and_then(|index| {
-                self.history
-                    .cached()
-                    .get(self.main_scroll + usize::from(index))
-            })
-            .is_some_and(|line| matches!(line.action, Some(Action::Quote(_))))
     }
 
     /// Any motion makes the gesture a drag, even where it selects no text,

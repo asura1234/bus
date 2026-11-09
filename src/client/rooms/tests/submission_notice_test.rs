@@ -1077,34 +1077,6 @@ fn tui_error_text_hidden_envelopes_and_cache_never_enter_composer_recall() {
 }
 
 #[test]
-fn tui_error_text_hidden_report_replies_cannot_be_quoted_into_the_composer() {
-    let (mut ui, room, agent) = fixture();
-    let mut snapshot = (*ui.snapshot).clone();
-    let report = snapshot
-        .state
-        .submit_message_with(
-            room,
-            Draft {
-                text: "Bus error: original.failure".into(),
-                files: vec![],
-                recipient_ids: [agent].into(),
-            },
-            Author::Bus,
-            1000,
-            true,
-        )
-        .unwrap()[0];
-    snapshot
-        .state
-        .finish_for_test(report, "QUOTED_REPORT_DIAGNOSTIC_SENTINEL", 1001);
-    snapshot.revision += 1;
-    ui.receive_snapshot(Arc::new(snapshot));
-    ui.quote(report);
-    assert!(ui.locals[&room].text.text.is_empty());
-    assert_no_diagnostics(&mut ui, &["QUOTED_REPORT_DIAGNOSTIC_SENTINEL"]);
-}
-
-#[test]
 fn tui_error_text_uncertain_steering_retains_native_detail_in_log_only() {
     const CAUSE: &str = "STEERING_NATIVE_FAILURE_DETAIL_SENTINEL";
     let (mut ui, room, agent, lead) = submitting();

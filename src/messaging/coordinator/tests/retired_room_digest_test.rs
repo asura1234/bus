@@ -26,10 +26,11 @@ async fn retired_room_digest_does_not_repackage_a_seen_worker_reply_as_another_t
     );
     f.elapse(6_000);
     f.assert_reply(request, "READY FOR VERIFY #42\nhead 1234567");
-    f.call(
-        "message.seen",
-        json!({"request":request.0.to_string(),"as":orch.0.to_string()}),
-    );
+    assert!(f.state().request(request).unwrap().reply().is_none());
+    assert!(!f
+        .typed(orch)
+        .iter()
+        .any(|text| { text.contains("READY FOR VERIFY") || text.contains("Reply to message") }));
     f.status(orch, AgentState::Idle);
     f.tick();
     assert!(!f

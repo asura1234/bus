@@ -1,15 +1,12 @@
 //! Durable request grouping, history caching, headers and age labels.
-use super::super::render::{display, provider, wrap, wrap_ranges, Action};
+use super::super::render::{display, wrap, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::groups::ReplyGroups;
-use super::source::{visible_request, Direction, Exchange};
+use super::source::Direction;
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
 };
-use crate::messaging::model::{
-    AgentId, Author, BusState, Prompt, Request, RequestId, Room, RoomId,
-};
+use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -100,7 +97,13 @@ impl History {
         }
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
-        let (groups, exchanges) = ReplyGroups::for_projection(state, room, recent);
+        let exchanges = {
+            let _timer = super::phases::GROUPING.start();
+            recent.map_or_else(
+                || super::source::exchanges(state, room),
+                |(entries, _)| entries,
+            )
+        };
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
         let mut age_valid = 0..u64::MAX;
@@ -142,18 +145,6 @@ impl History {
                 );
             }
 
-            if !filtered || filters.to_you {
-                self.push_reply_lines(
-                    &mut lines,
-                    &mut active_markdown,
-                    state,
-                    room,
-                    &exchange,
-                    &groups,
-                    width,
-                    filters,
-                );
-            }
             lines.push(blank_row(RowAnchor::new(prompt.id, None, RowKind::Gap)));
         }
         self.retain_window_markdown(state, room.id, active_markdown, filtered);
@@ -284,116 +275,6 @@ impl History {
             line.from_developer = direction.from_you;
         }
     }
-
-    fn push_reply_lines(
-        &mut self,
-        lines: &mut Vec<Line>,
-        active_markdown: &mut BTreeSet<MarkdownSource>,
-        state: &BusState,
-        room: &Room,
-        exchange: &Exchange<'_>,
-        groups: &ReplyGroups,
-        width: u16,
-        filters: crate::messaging::model::RoomHistoryFilters,
-    ) {
-        let prompt = exchange.prompt;
-        let mut replied = false;
-        for agent_id in &prompt.recipient_ids {
-            let provider_kind = state
-                .agent(*agent_id)
-                .map(|a| a.provider)
-                .or_else(|| state.retired_agent(*agent_id).and_then(|a| a.provider));
-            let request = exchange.requests.get(agent_id).copied();
-            // Pending groups keep one waiting row under their newest visible
-            // member. Completed groups show the body under the first visible
-            // exchange and leave an answer reference under every other member.
-            if request.is_some_and(|request| groups.waiting_elsewhere(state, room.id, request)) {
-                continue;
-            }
-            let reference = request.and_then(|request| groups.reference(state, request));
-            let (text, quote) = reference
-                .as_deref()
-                .map_or_else(|| exchange_reply(request), |text| (text, None));
-            let direction = Direction {
-                to_you: quote.is_some()
-                    && request
-                        .is_some_and(|request| groups.shared_to_developer(state, request, text)),
-                from_you: false,
-            };
-            if !direction.accepts(filters) {
-                continue;
-            }
-            // One blank row between replies, as at every other block
-            // boundary; the exchange's own Gap row follows the last one.
-            if replied {
-                lines.push(blank_row(RowAnchor::new(
-                    prompt.id,
-                    Some(*agent_id),
-                    RowKind::Gap,
-                )));
-            }
-            replied = true;
-            let start = lines.len();
-            let header_timer = super::phases::HEADER.start();
-            let attention = state
-                .is_developer_attention_author(room.id, &Author::Agent(*agent_id))
-                .then(|| crate::messaging::attention::text(text))
-                .flatten();
-            let mut reply_header = vec![(state.agent_label(*agent_id), Tone::Agent(*agent_id))];
-            if let Some(kind) = provider_kind {
-                reply_header.push((format!("  {}", provider(kind)), Tone::Muted));
-            }
-            if attention.is_some() {
-                reply_header.push(("  [Needs developer]".into(), Tone::Text));
-            }
-            let text = attention.unwrap_or(text);
-            lines.extend(wrap_header(
-                reply_header,
-                width,
-                "    ",
-                RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyHeader),
-            ));
-            drop(header_timer);
-            let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
-            if let Some(request) = quote {
-                let source = MarkdownSource::Reply(request);
-                active_markdown.insert(source);
-                let scope = link_scope(state, &Author::Agent(*agent_id));
-                let block = self.markdown_block(source, text);
-                let cold = !block.is_laid_out(width);
-                let projected = !block.is_scoped(width, &scope);
-                lines.extend(
-                    block
-                        .lines(width, source, "    ", reply_anchor, scope)
-                        .iter()
-                        .cloned(),
-                );
-                self.rendered += usize::from(cold);
-                self.projected += usize::from(projected);
-                lines.push(Line {
-                    text: "    Quote".into(),
-                    action: Some(Action::Quote(request)),
-                    tone: Tone::Muted,
-                    spans: Vec::new(),
-                    styles: Vec::new(),
-                    links: None,
-                    thumbnail: None,
-                    raw_markdown: None,
-                    to_developer: false,
-                    from_developer: false,
-                    continued: false,
-                    rejoin_space: false,
-                    copy_from: 0,
-                    anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
-                });
-            } else {
-                push_body(lines, text, width, "    ", reply_anchor);
-            }
-            for line in &mut lines[start..] {
-                line.to_developer = direction.to_you;
-            }
-        }
-    }
 }
 
 fn update_age_validity(valid: &mut std::ops::Range<u64>, submitted_at_ms: u64, now: u64) {
@@ -406,29 +287,6 @@ fn update_age_validity(valid: &mut std::ops::Range<u64>, submitted_at_ms: u64, n
             valid.end = valid.end.min(expires);
         }
     }
-}
-
-fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor: RowAnchor) {
-    let rows = wrap_ranges(text, width.saturating_sub(indent.len() as u16));
-    lines.extend(rows.iter().enumerate().map(|(index, row)| Line {
-        text: format!("{indent}{}", display(&text[row.clone()])),
-        action: None,
-        tone: Tone::Text,
-        spans: Vec::new(),
-        styles: Vec::new(),
-        links: None,
-        thumbnail: None,
-        raw_markdown: None,
-        to_developer: false,
-        from_developer: false,
-        continued: index > 0 && rows[index - 1].end == row.start,
-        rejoin_space: false,
-        copy_from: indent.len(),
-        anchor: RowAnchor {
-            position: row.start,
-            ..anchor
-        },
-    }));
 }
 
 fn wrap_header(
@@ -539,16 +397,7 @@ fn participant_tone(participant: &Author) -> Tone {
     }
 }
 
-fn exchange_reply(request: Option<&Request>) -> (&str, Option<RequestId>) {
-    if let Some(request) = request {
-        if let Some(reply) = request.reply() {
-            return (&reply.text, Some(request.id));
-        }
-    }
-    ("…", None)
-}
-
-// Prompts and completed finals are immutable after creation. Check their
+// Prompts are immutable after creation. Check their
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
@@ -618,19 +467,6 @@ fn signature(
             .hash(&mut hash);
     }
     hash.finish()
-}
-
-pub(in crate::client::rooms) fn reply(
-    state: &BusState,
-    room: RoomId,
-    id: RequestId,
-) -> Option<(AgentId, &str)> {
-    let request = state
-        .request(id)
-        .filter(|request| request.room_id == room && visible_request(request))?;
-    request
-        .reply()
-        .map(|reply| (request.agent_id, reply.text.as_str()))
 }
 
 pub(in crate::client::rooms) fn timestamp(at: u64, now: u64) -> String {

@@ -26,17 +26,25 @@ fn identical_steered_input_in_a_later_turn_does_not_take_the_lead_turn_answer() 
         fixture.now += 5_000;
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
-        assert_eq!(fixture.reply(lead).as_deref(), Some("FIRST STATUS"));
+        super::settled_without_reply(&fixture, lead);
+        super::final_text_absent(&fixture, "FIRST STATUS");
+        super::final_text_absent(&fixture, "SECOND STATUS");
+        assert_eq!(
+            fixture.request(lead).provider_turn_id.as_deref(),
+            Some("turn-1")
+        );
         assert_ne!(
             fixture.reply(follow).as_deref(),
             Some("FIRST STATUS"),
             "follow-up {follow_text:?} ran as turn-2, so turn-1's original prompt is not evidence it shares turn-1's answer"
         );
+        assert!(fixture.reply(follow).is_none());
         assert_eq!(fixture.request(follow).phase, RequestPhase::Abandoned);
         assert_eq!(
             fixture.request(follow).failure_reason.as_deref(),
             Some("reply_not_captured")
         );
+        assert_eq!(fixture.request(follow).group, None);
     }
 }
 
@@ -67,7 +75,13 @@ fn identical_steered_input_recorded_twice_in_the_lead_turn_shares_its_answer() {
     fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
+    super::final_text_absent(&fixture, "STATUS");
     for id in [lead, follow] {
-        assert_eq!(fixture.reply(id).as_deref(), Some("STATUS"));
+        super::settled_without_reply(&fixture, id);
+        assert_eq!(
+            fixture.request(id).provider_turn_id.as_deref(),
+            Some("turn-1")
+        );
     }
+    assert_eq!(fixture.request(follow).group, Some(lead));
 }

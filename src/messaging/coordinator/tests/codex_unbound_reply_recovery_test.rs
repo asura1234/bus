@@ -42,6 +42,42 @@ fn idle_past_settle(fixture: &mut Fixture) {
     fixture.consume();
 }
 
+fn settled_without_reply(fixture: &Fixture, id: RequestId) {
+    assert_eq!(fixture.request(id).phase, RequestPhase::Completed, "{id:?}");
+    assert!(
+        fixture.request(id).failure_reason.is_none(),
+        "{id:?} {:?}",
+        fixture.request(id).failure_reason
+    );
+    assert!(
+        fixture.reply(id).is_none(),
+        "{id:?} {:?}",
+        fixture.reply(id)
+    );
+}
+
+fn final_text_absent(fixture: &Fixture, text: &str) {
+    assert!(
+        fixture
+            .worker
+            .state
+            .requests()
+            .all(|request| { request.reply().is_none_or(|reply| reply.text != text) }),
+        "{text} stored on a request"
+    );
+    assert!(
+        fixture
+            .worker
+            .state
+            .room(fixture.room)
+            .unwrap()
+            .latest_replies
+            .values()
+            .all(|reply| reply.text != text),
+        "{text} published"
+    );
+}
+
 fn with_session_rollout() -> (Fixture, PathBuf) {
     let mut fixture = Fixture::new(Provider::Codex);
     let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
@@ -66,7 +102,8 @@ fn a_late_stop_for_a_recovered_unbound_turn_is_not_the_next_request_reply() {
         &recorded_turn(fixture.now + 1, "turn-2", &typed, "Copied 374 files."),
     );
     idle_past_settle(&mut fixture);
-    assert_eq!(fixture.reply(first).as_deref(), Some("Copied 374 files."));
+    settled_without_reply(&fixture, first);
+    final_text_absent(&fixture, "Copied 374 files.");
 
     let next = fixture.send("now summarize", false);
     fixture.deliver();
@@ -75,10 +112,13 @@ fn a_late_stop_for_a_recovered_unbound_turn_is_not_the_next_request_reply() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_ne!(
-        fixture.reply(next).as_deref(),
-        Some("Copied 374 files."),
-        "the recovered turn's late Stop was delivered to the next request"
+        fixture.request(next).phase,
+        RequestPhase::Completed,
+        "the recovered turn's late Stop completed the next request"
     );
+    assert!(fixture.reply(next).is_none());
+    final_text_absent(&fixture, "Copied 374 files.");
+    settled_without_reply(&fixture, first);
 }
 
 /// Steered input that Codex ran as a turn of its own (its rollout shows the
@@ -114,17 +154,25 @@ fn steered_input_run_as_its_own_turn_does_not_take_the_lead_turn_recorded_answer
     fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    assert_eq!(fixture.reply(lead).as_deref(), Some("Merged."));
+    settled_without_reply(&fixture, lead);
+    final_text_absent(&fixture, "Merged.");
+    final_text_absent(&fixture, "Closed the worktree.");
+    assert_eq!(
+        fixture.request(lead).provider_turn_id.as_deref(),
+        Some("turn-1")
+    );
     assert_ne!(
         fixture.reply(follow).as_deref(),
         Some("Merged."),
         "steered input that ran as turn-2 took turn-1's recorded answer"
     );
+    assert!(fixture.reply(follow).is_none());
     assert_eq!(fixture.request(follow).phase, RequestPhase::Abandoned);
     assert_eq!(
         fixture.request(follow).failure_reason.as_deref(),
         Some("reply_not_captured")
     );
+    assert_eq!(fixture.request(follow).group, None);
 }
 
 /// Steered input that Codex took into the running turn (its rollout records
@@ -164,9 +212,15 @@ fn steered_input_recorded_in_the_lead_turn_shares_its_recorded_answer() {
     fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
+    final_text_absent(&fixture, "Merged and closed.");
     for id in [lead, follow] {
-        assert_eq!(fixture.reply(id).as_deref(), Some("Merged and closed."));
+        settled_without_reply(&fixture, id);
+        assert_eq!(
+            fixture.request(id).provider_turn_id.as_deref(),
+            Some("turn-1")
+        );
     }
+    assert_eq!(fixture.request(follow).group, Some(lead));
 }
 
 #[path = "codex_identical_steering_test.rs"]
@@ -213,6 +267,11 @@ fn assert_follower_recovery_names_the_lead(
     follow: crate::messaging::model::RequestId,
     fixture: &Fixture,
 ) {
+    settled_without_reply(fixture, lead);
+    final_text_absent(fixture, "Merged.");
+    final_text_absent(fixture, "Closed the worktree.");
+    assert!(fixture.reply(follow).is_none());
+    assert_eq!(fixture.request(follow).group, None);
     assert_eq!(
         fixture.request(follow).failure_reason.as_deref(),
         Some("reply_not_captured")

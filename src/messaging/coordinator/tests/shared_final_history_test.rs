@@ -1,4 +1,4 @@
-//! Shared reply display is a history projection; individual status remains lossless.
+//! History lists the messages. It does not project one shared final body.
 use super::*;
 
 fn batch_history_fixture() -> (Fixture, Vec<RequestId>) {
@@ -17,27 +17,29 @@ fn batch_history_fixture() -> (Fixture, Vec<RequestId>) {
 }
 
 fn batch_history_assert_projection(f: &mut Fixture, requests: &[RequestId]) {
-    let lead_message = f.worker.state.request(requests[0]).unwrap().prompt.id;
     let response = f.call("room.history", json!({"room":f.room.0.to_string()}));
     assert!(response.ok, "{response:?}");
+    let rendered = response.result.to_string();
+    assert!(
+        !rendered.contains("SHARED_BATCH_ANSWER"),
+        "history contains the shared final: {rendered}"
+    );
     let messages = response.result["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
     for (index, message) in messages.iter().enumerate() {
+        assert_eq!(
+            message["prompt"]["text"],
+            ["first task", "second task", "third task"][index]
+        );
         assert_eq!(message["delivery"]["complete"], true);
         let request = &message["delivery"]["requests"][0];
-        assert_eq!(request["stage"], "replied");
-        if index == 0 {
-            assert_eq!(request["reply"]["text"], "SHARED_BATCH_ANSWER");
-            assert!(request["answered_with_message"].is_null());
-        } else {
-            assert!(
-                request["reply"].is_null(),
-                "shared body repeated: {request}"
-            );
-            assert_eq!(request["answered_with_message"], json!(lead_message));
-        }
+        assert_eq!(request["stage"], "ended");
+        assert!(request["reply"].is_null(), "{request}");
+        assert!(request["group"].is_null(), "{request}");
+        assert!(request.get("answered_with_message").is_none());
+        assert_ne!(request["reply_ack"], true, "{request}");
     }
-    // Deduplication is a history projection, not a loss of a request's answer.
+    // Status stays lossless for whatever body the test helper stored.
     for id in requests {
         let message = f.worker.state.request(*id).unwrap().prompt.id;
         let status = f.worker.control_message_at(message, io::now_ms()).unwrap();
@@ -87,11 +89,13 @@ fn batch_history_page_without_the_lead_keeps_a_stable_answer_reference() {
         assert_eq!(page["messages"].as_array().unwrap().len(), 1);
         assert_eq!(page["messages"][0]["prompt"]["id"], json!(expected));
         let request = &page["messages"][0]["delivery"]["requests"][0];
+        assert!(request["reply"].is_null(), "{request}");
+        assert!(request.get("answered_with_message").is_none(), "{request}");
+        assert_eq!(request["stage"], "ended");
         assert!(
-            request["reply"].is_null(),
-            "off-page lead must not duplicate body"
+            !page.to_string().contains("SHARED_BATCH_ANSWER"),
+            "history page contains the shared final: {page}"
         );
-        assert_eq!(request["answered_with_message"], json!(messages[0]));
         assert_eq!(page["next_before"], json!(expected));
     }
 }
@@ -103,19 +107,18 @@ fn batch_history_equal_text_in_an_independent_turn_keeps_its_own_body() {
     f.finish(next, "SHARED_BATCH_ANSWER");
     let response = f.call("room.history", json!({"room":f.room.0.to_string()}));
     assert!(response.ok, "{response:?}");
+    let rendered = response.result.to_string();
+    assert!(
+        !rendered.contains("SHARED_BATCH_ANSWER"),
+        "history contains the final text: {rendered}"
+    );
     let messages = response.result["messages"].as_array().unwrap();
-    let bodies: Vec<_> = messages
+    let ids: Vec<_> = messages
         .iter()
-        .filter(|message| {
-            message["delivery"]["requests"][0]["reply"]["text"] == "SHARED_BATCH_ANSWER"
-        })
         .map(|message| message["prompt"]["id"].clone())
         .collect();
-    assert_eq!(
-        bodies,
-        [
-            json!(f.worker.state.request(requests[0]).unwrap().prompt.id),
-            json!(f.worker.state.request(next).unwrap().prompt.id),
-        ]
-    );
+    assert!(ids.contains(&json!(
+        f.worker.state.request(requests[0]).unwrap().prompt.id
+    )));
+    assert!(ids.contains(&json!(f.worker.state.request(next).unwrap().prompt.id)));
 }

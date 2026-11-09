@@ -37,6 +37,25 @@ fn master() -> Fixture {
     f
 }
 
+fn assert_turn_final(f: &Fixture, id: RequestId) {
+    let request = f.request(id);
+    assert_eq!(
+        request.phase,
+        RequestPhase::Completed,
+        "{id:?} did not settle: {request:?}"
+    );
+    assert!(
+        request.reply().is_none(),
+        "{id:?} stored a turn final as a reply: {:?}",
+        request.reply()
+    );
+    assert!(
+        request.failure_reason.is_none(),
+        "{id:?}: {:?}",
+        request.failure_reason
+    );
+}
+
 fn diag(f: &Fixture, label: &str, id: RequestId) {
     let r = f.request(id);
     eprintln!(
@@ -69,11 +88,7 @@ fn bug_a_master_answer_with_async_dispatch_shell_is_delivered_at_turn_end() {
     f.status(RuntimeStatus::Idle);
     f.consume();
     diag(&f, "A lead after Idle", lead);
-    assert_eq!(
-        f.reply(lead).as_deref(),
-        Some("Mobile cleanup dispatched to wt-close."),
-        "the orchestrator's answer must reach MASTER when its turn ends"
-    );
+    assert_turn_final(&f, lead);
 }
 
 /// Bug C: the answer to a prompt (and the message folded into it) is replaced
@@ -125,11 +140,7 @@ fn bug_c_dispatch_answer_is_not_replaced_by_the_wake_turn_answer() {
     diag(&f, "C joined after next prompt", joined);
     diag(&f, "C next", next);
     for id in [lead, joined] {
-        assert_eq!(
-            f.reply(id).as_deref(),
-            Some("Both fixes are dispatched."),
-            "request {id:?} must keep the answer to its own prompt"
-        );
+        assert_turn_final(&f, id);
     }
 }
 
@@ -177,11 +188,7 @@ fn bug_b_task_notification_absorbed_mid_turn_does_not_lose_the_reply() {
     f.status(RuntimeStatus::Idle);
     f.consume();
     diag(&f, "B second request final", second);
-    assert_eq!(
-        f.reply(second).as_deref(),
-        Some("You're right. I'm desktop master."),
-        "the second request's own turn carried its reply"
-    );
+    assert_turn_final(&f, second);
     assert_eq!(f.request(second).failure_reason, None);
 }
 
@@ -235,10 +242,7 @@ fn verify_worker_stop_answer_is_not_replaced_by_a_background_result() {
     diag(&f, "V worker after wake turn", lead);
     eprintln!("V worker held phase after turn-1: {held_phase:?}");
     eprintln!("V worker room notices: {:?}", notice_texts(&f, f.room));
-    assert_eq!(
-        f.reply(lead).as_deref(),
-        Some("Running the suite in the background.")
-    );
+    assert_turn_final(&f, lead);
 }
 
 /// Same in MASTER: the developer's MASTER message waits on a real shell.
@@ -249,10 +253,7 @@ fn verify_master_stop_answer_is_not_replaced_by_a_background_result() {
     diag(&f, "V master after wake turn", lead);
     eprintln!("V master held phase after turn-1: {held_phase:?}");
     eprintln!("V master room notices: {:?}", notice_texts(&f, f.room));
-    assert_eq!(
-        f.reply(lead).as_deref(),
-        Some("Running the suite in the background.")
-    );
+    assert_turn_final(&f, lead);
 }
 
 /// A folded task notification cannot change a final already delivered.
@@ -264,18 +265,15 @@ fn a_folded_task_notification_preserves_an_already_captured_final() {
     stop(&f, "turn-1", "The build passed.", &[]);
     f.consume();
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
-    assert!(f.request(lead).reply().is_some());
+    assert!(f.request(lead).reply().is_none());
 
     f.started("turn-1", &notification("older-dispatch"));
     f.consume();
-    assert_eq!(
-        f.request(lead).reply().map(|reply| reply.text.as_str()),
-        Some("The build passed.")
-    );
+    assert!(f.request(lead).reply().is_none());
     assert_eq!(f.error(), None);
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(f.reply(lead).as_deref(), Some("The build passed."));
+    assert_turn_final(&f, lead);
 }
 
 #[test]
@@ -299,10 +297,7 @@ fn opaque_shell_syntax_cannot_delay_or_replace_the_stop_answer() {
         RequestPhase::Completed,
         "opaque shell syntax must not delay a captured answer"
     );
-    assert_eq!(
-        f.reply(lead).as_deref(),
-        Some("Running the tests in the background.")
-    );
+    assert_turn_final(&f, lead);
 
     f.status(RuntimeStatus::Working);
     f.started("turn-2", &notification("tests-and-dispatch"));
@@ -311,8 +306,5 @@ fn opaque_shell_syntax_cannot_delay_or_replace_the_stop_answer() {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert_eq!(
-        f.reply(lead).as_deref(),
-        Some("Running the tests in the background.")
-    );
+    assert_turn_final(&f, lead);
 }

@@ -82,9 +82,14 @@ impl BusState {
         }
         if !self.requests.get(&id)?.settled() {
             self.consume_recorded_end(
-                agent, id, now_ms, recorded_end(&request), "restart", false,
+                agent,
+                id,
+                now_ms,
+                recorded_end(&request),
+                "restart",
+                false,
                 "Bus restarted before the request completed; inspect its terminal.",
-                "Bus restarted before a reply was captured; the in-flight turn was interrupted. Inspect its terminal and resend if needed.",
+                Some("Bus restarted before a reply was captured; the in-flight turn was interrupted. Inspect its terminal and resend if needed."),
             )?;
         }
         if let Some(mut answered) = self

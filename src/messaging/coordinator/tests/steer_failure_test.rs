@@ -223,7 +223,8 @@ fn steer_failure_lead_text_is_unchanged_and_queued_work_gets_its_own_turn() {
         f.started("turn-2", "independent next task");
         f.stopped("turn-2", "next task done");
         f.consume();
-        assert_eq!(f.reply(queued).as_deref(), Some("next task done"));
+        assert!(f.reply(queued).is_none());
+        assert_eq!(f.request(queued).delivery_stage(), "ended");
         assert_eq!(
             message_status(&f, queued)["requests"][0]["detail"],
             Value::Null
@@ -240,7 +241,8 @@ fn steer_failure_successful_steers_still_share_the_answer_without_error_guidance
         f.stopped("turn-1", "done");
         f.consume();
         for id in [lead, joined] {
-            assert_eq!(f.reply(id).as_deref(), Some("done"));
+            assert!(f.reply(id).is_none(), "{id:?}");
+            assert_eq!(f.request(id).delivery_stage(), "ended");
             assert_eq!(message_status(&f, id)["requests"][0]["detail"], Value::Null);
             assert_eq!(message_status(&f, id)["requests"][0]["reason"], Value::Null);
         }

@@ -166,15 +166,12 @@ fn callback_prompt_matching_normalizes_terminal_line_endings_and_releases_queue(
         .observe_status(agent, RuntimeStatus::Idle, 13)
         .expect("settled");
 
-    assert_eq!(
-        state.request(request).expect("request").phase,
-        RequestPhase::Completed
-    );
+    let settled = state.request(request).expect("request");
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
     assert_eq!(state.next_queued_request(agent), Some(queued));
-    assert_eq!(
-        state.room(room).expect("room").latest_replies[&agent].text,
-        "finished"
-    );
+    assert!(state.room(room).expect("room").latest_replies.is_empty());
 }
 
 #[test]
@@ -391,24 +388,20 @@ fn final_is_joined_with_settled_status_and_routes_by_stable_ids_not_visible_room
         },
     });
     assert_eq!(disposition, CallbackDisposition::AcceptedCompleted);
-    assert_eq!(
-        state.room(room).expect("room").latest_replies[&agent].text,
-        "finished"
-    );
+    assert!(state.room(room).expect("room").latest_replies.is_empty());
 
     state
         .observe_status(agent, RuntimeStatus::Idle, 30)
         .expect("idle");
 
-    let reply = &state.room(room).expect("room").latest_replies[&agent];
-    assert_eq!(reply.text, "finished");
-    assert_eq!(reply.request_id, request);
-    assert_eq!(state.room(room).expect("room").unread_count, 1);
+    let settled = state.request(request).expect("request");
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
+    assert_eq!(settled.room_id, room);
+    assert_eq!(settled.agent_id, agent);
+    assert_eq!(state.room(room).expect("room").unread_count, 0);
     assert_eq!(state.room(other).expect("other").unread_count, 0);
-    assert_eq!(
-        state.request(request).expect("request").phase,
-        RequestPhase::Completed
-    );
     assert_eq!(state.next_queued_request(agent), None);
     state.select_room(room).expect("read room");
     assert_eq!(state.room(room).expect("room").unread_count, 0);
@@ -466,10 +459,10 @@ fn previous_reply_remains_until_correlated_final_and_visible_room_does_not_accru
         .observe_status(agent, RuntimeStatus::Blocked, 11)
         .expect("blocked");
 
-    assert_eq!(
-        state.room(room).expect("room").latest_replies[&agent].text,
-        "old reply"
-    );
+    let old_settled = state.request(old).expect("old");
+    assert_eq!(old_settled.phase, RequestPhase::Completed);
+    assert!(old_settled.reply().is_none());
+    assert!(state.room(room).expect("room").latest_replies.is_empty());
     assert_eq!(state.room(room).expect("room").unread_count, 0);
 
     state.accept_callback(ProviderCallback::final_event(
@@ -485,10 +478,15 @@ fn previous_reply_remains_until_correlated_final_and_visible_room_does_not_accru
     state
         .observe_status(agent, RuntimeStatus::Idle, 12)
         .expect("settled");
+    let new_settled = state.request(new_request).expect("new");
+    assert_eq!(new_settled.phase, RequestPhase::Completed);
+    assert!(new_settled.reply().is_none());
+    assert!(new_settled.failure_reason.is_none());
     assert_eq!(
-        state.room(room).expect("room").latest_replies[&agent].text,
-        "new reply"
+        state.request(old).expect("old").phase,
+        RequestPhase::Completed
     );
+    assert!(state.room(room).expect("room").latest_replies.is_empty());
     assert_eq!(state.room(room).expect("room").unread_count, 0);
 }
 
@@ -772,14 +770,11 @@ fn background_progress_and_same_session_continuation_wait_for_the_later_final() 
         )),
         CallbackDisposition::AcceptedCompleted
     );
-    assert_eq!(
-        state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
-    assert_eq!(
-        state.room(room).unwrap().latest_replies[&agent].text,
-        "Ready"
-    );
+    let settled = state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
+    assert!(state.room(room).unwrap().latest_replies.is_empty());
 }
 
 #[test]
@@ -873,26 +868,24 @@ fn developer_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
     state
         .observe_status(agent, RuntimeStatus::Idle, 13)
         .unwrap();
-    let reply = state
-        .room(room)
-        .unwrap()
-        .latest_replies
-        .get(&agent)
-        .map(|reply| reply.text.as_str());
+    let settled = state.request(request).unwrap();
     assert_eq!(
         (
             started,
             finished,
-            state.request(request).unwrap().phase,
-            reply
+            settled.phase,
+            settled.reply().map(|reply| reply.text.as_str()),
+            settled.failure_reason.as_deref(),
         ),
         (
             CallbackDisposition::AcceptedBinding,
             CallbackDisposition::AcceptedCompleted,
             RequestPhase::Completed,
-            Some("explained"),
+            None,
+            None,
         )
     );
+    assert!(state.room(room).unwrap().latest_replies.is_empty());
 }
 
 #[test]

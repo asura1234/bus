@@ -67,39 +67,6 @@ fn dragging_the_draft_copies_and_typing_replaces_the_selection() {
         BusCommand::SetDraftText(id, text) if *id == room && text == "hello bold world")));
 }
 
-#[test]
-fn quote_preserves_newer_local_text_recipients_and_escaped_multiline_content() {
-    let (mut ui, room, agent) = fixture();
-    // Quote a durable request reply, rather than an obsolete latest-only cache.
-    let mut snapshot = (*ui.snapshot).clone();
-    let request = snapshot
-        .state
-        .submit_message_with(
-            room,
-            Draft {
-                text: "question".into(),
-                files: vec![],
-                recipient_ids: [agent].into(),
-            },
-            Author::Developer,
-            1000,
-            true,
-        )
-        .unwrap()[0];
-    snapshot
-        .state
-        .finish_for_test(request, "a\n\"quoted\" \\ @author", 5000);
-    ui.receive_snapshot(Arc::new(snapshot));
-    ui.locals.get_mut(&room).unwrap().text.insert("new local");
-    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
-    ui.quote(request);
-    assert_eq!(
-        ui.locals[&room].text.text,
-        "new local\nauthor: \"a\n\\\"quoted\\\" \\\\ @author\"\n"
-    );
-    assert!(ui.locals[&room].recipients.contains(&agent));
-}
-
 /// Typed text in every input sits on the box's own background: the grey
 /// highlight is for selections and selected rows only, and the cursor still
 /// shows where typing goes.

@@ -187,25 +187,44 @@ impl Drop for Fixture {
     }
 }
 
+fn assert_no_reply_wake(f: &Fixture, text: &str) {
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls.iter().all(|call| {
+            !call.contains(text)
+                && !call.contains("Reply to message")
+                && !call.contains("Late reply")
+                && !call.contains("Turn final")
+        }),
+        "{calls:?}"
+    );
+    drop(calls);
+    assert!(
+        f.notices().iter().all(|notice| {
+            !notice.prompt.text.contains(text)
+                && !notice.prompt.text.contains("Reply to message")
+                && !notice.prompt.text.contains("Late reply")
+                && !notice.prompt.text.contains("Turn final")
+        }),
+        "{:?}",
+        f.notices()
+            .iter()
+            .map(|notice| notice.prompt.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn reply_routing_delivers_to_the_orchestrator_without_any_waiter() {
     let mut f = Fixture::new();
     let source = f.send(Author::Agent(f.orch), "build this");
     f.finish(source, "Built and tested.");
     f.worker.submit_ready().unwrap();
-    let calls = f.calls.lock().unwrap();
     assert_eq!(
-        calls.len(),
-        1,
-        "a captured reply must wake the terminal without a waiter"
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
-    assert!(calls[0].contains("builder"));
-    assert!(calls[0].contains("Built and tested."));
-    assert!(calls[0].contains(&format!(
-        "message {}",
-        f.worker.state.request(source).unwrap().prompt.id.0
-    )));
-    assert_eq!(f.notices().len(), 1);
+    assert_no_reply_wake(&f, "Built and tested.");
 }
 
 #[test]
@@ -217,8 +236,11 @@ fn reply_routing_recovers_pending_and_queued_replies_once_after_restart() {
     f.worker.submit_ready().unwrap();
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "Finished while waiter was gone.");
 }
 
 #[test]
@@ -286,7 +308,11 @@ fn reply_routing_a_plain_status_reader_cannot_suppress_delivery() {
         .ok
     );
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "Still needs delivery");
 }
 
 #[test]
@@ -310,7 +336,15 @@ fn reply_routing_group_members_share_one_notice_and_one_acknowledgement() {
             );
         }
         f.worker.submit_ready().unwrap();
-        assert_eq!(f.notices().len(), usize::from(!acknowledge));
+        assert_eq!(
+            f.worker.state.request(lead).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            f.worker.state.request(member).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_no_reply_wake(&f, "One shared reply");
     }
 }
 
@@ -325,8 +359,6 @@ fn reply_routing_keeps_undelivered_notices_across_expiry_and_restart() {
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    let notice = f.notices()[0].id;
     f.worker
         .expire_queued_requests(io::now_ms() + 3_600_000)
         .unwrap();
@@ -335,16 +367,15 @@ fn reply_routing_keeps_undelivered_notices_across_expiry_and_restart() {
         .unwrap();
     assert!(
         f.worker.state.request(source).is_some(),
-        "pending delivery pins its full reply beyond ordinary retention"
-    );
-    assert_eq!(
-        f.worker.state.request(notice).unwrap().phase,
-        RequestPhase::Queued
+        "the settled request remains after archive"
     );
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "Never lose this reply");
 }
 
 #[test]
@@ -364,14 +395,14 @@ fn reply_waiter_lease_keeps_the_reply_until_exactly_three_seconds() {
     f.finish(source, "One reply after the waiter expires");
     f.worker.test_reply_waiter_now = Some(now + Duration::from_millis(2_999));
     f.worker.submit_ready().unwrap();
-    assert!(f.notices().is_empty(), "the waiter still owns the reply");
+    assert_no_reply_wake(&f, "One reply after the waiter expires");
     f.worker.test_reply_waiter_now = Some(now + Duration::from_secs(3));
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.notices()[0]
-        .prompt
-        .text
-        .contains("One reply after the waiter expires"));
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "One reply after the waiter expires");
 }
 
 #[test]
@@ -384,7 +415,11 @@ fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
         .reply_waiters
         .insert(message, std::time::Instant::now() - Duration::from_secs(4));
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "No live waiter");
 }
 
 #[test]
@@ -395,12 +430,17 @@ fn reply_routing_save_failure_does_not_record_a_delivery_or_contact_the_terminal
     let invalid = f.dir.join("not-a-state-file");
     std::fs::create_dir(&invalid).unwrap();
     f.worker.store = JsonStore::new(invalid);
-    assert!(f.worker.submit_ready().is_err());
+    // A settled turn has no reply to route, so a broken store is not contacted.
+    assert!(f.worker.submit_ready().is_ok());
     assert!(f.notices().is_empty());
     assert!(f.calls.lock().unwrap().is_empty());
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "Durable reply");
 }
 
 #[test]
@@ -507,13 +547,14 @@ fn reply_routing_consumes_a_final_spooled_while_bus_was_down() {
         state.request(source).unwrap().phase,
         RequestPhase::Completed
     );
-    assert!(state
+    assert!(state.request(source).unwrap().reply().is_none());
+    assert!(state.request(source).unwrap().failure_reason.is_none());
+    state
         .route_worker_replies(io::now_ms() + 6_000, &BTreeSet::new())
-        .unwrap());
+        .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Recovered from disk spool"));
+    assert_no_reply_wake(&f, "Recovered from disk spool");
 }
 
 #[test]
@@ -538,7 +579,11 @@ fn reply_routing_restart_keeps_an_old_full_reply_behind_its_pending_pointer() {
         "loading must preserve the full reply while its notification is pending"
     );
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "full reply");
 }
 
 #[test]
@@ -552,7 +597,7 @@ fn reply_routing_ack_cancels_an_untyped_notification() {
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert!(f.notices().is_empty());
     assert!(
         f.call(
             "message.seen",
@@ -562,8 +607,11 @@ fn reply_routing_ack_cancels_an_untyped_notification() {
     );
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices()[0].phase, RequestPhase::Abandoned);
-    assert!(f.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "Printed just after queuing");
 }
 
 #[test]
@@ -578,11 +626,8 @@ fn reply_routing_archived_replies_and_unicode_pointers_are_recovered_once() {
     f.worker.submit_ready().unwrap();
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    let text = &f.notices()[0].prompt.text;
-    assert!(text.contains("回复🚌"));
-    assert!(text.contains("bus message status"));
-    assert!(text.chars().count() < 4_500);
+    assert!(f.worker.state.request(source).is_some());
+    assert_no_reply_wake(&f, "回复🚌");
 }
 
 #[test]
@@ -661,16 +706,36 @@ fn fresh_eyes_identical_text_from_a_distinct_request_still_wakes() {
     f.finish(second, "Done.");
     f.worker.submit_ready().unwrap();
 
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls.iter().any(|call| call.contains("Done.")),
+        "the plain send is still a message: {calls:?}"
+    );
+    assert!(
+        calls.iter().all(|call| !call.contains("Reply to message")),
+        "a later captured final is not a reply wake: {calls:?}"
+    );
+    drop(calls);
     let notices = f.notices();
     assert!(
-        notices.iter().any(|notice| {
-            notice.prompt.text.contains("Reply to message")
-                && notice
-                    .prompt
-                    .text
-                    .contains(&format!("request {}", second.0))
-        }),
-        "the earlier request's explicit copy must not consume this request's reply: {notices:?}"
+        notices
+            .iter()
+            .any(|notice| notice.prompt.text == "Done." && !notice.bus_generated),
+        "the plain send stays an ordinary message: {notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("Reply to message")),
+        "{notices:?}"
+    );
+    assert_eq!(
+        f.worker.state.request(first).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        f.worker.state.request(second).unwrap().phase,
+        RequestPhase::Completed
     );
 }
 
@@ -789,6 +854,13 @@ fn fresh_eyes_pending_reply_not_captured_is_withdrawn_by_restart() {
         state.settle_ended_request(f.agent, now, |_| None),
         Some(source)
     );
+    assert_eq!(
+        state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(state.request(source).unwrap().reply().is_none());
+    assert!(state.request(source).unwrap().failure_reason.is_none());
+    assert_eq!(state.agent(f.agent).unwrap().current_request, None);
     state.route_worker_replies(now, &BTreeSet::new()).unwrap();
     assert!(state
         .announce_restart(
@@ -851,14 +923,15 @@ fn reply_routing_developer_lead_group_routes_its_orchestrator_member_once() {
         }
         f.worker.submit_ready().unwrap();
         f.worker.submit_ready().unwrap();
-        assert_eq!(f.notices().len(), usize::from(!acknowledge));
-        if !acknowledge {
-            let message = f.worker.state.request(member).unwrap().prompt.id;
-            assert!(f.notices()[0]
-                .prompt
-                .text
-                .contains(&format!("Reply to message {} ", message.0)));
-        }
+        assert_eq!(
+            f.worker.state.request(lead).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            f.worker.state.request(member).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_no_reply_wake(&f, "One shared reply");
     }
 }
 
@@ -889,13 +962,12 @@ fn reply_routing_preserves_an_old_recovered_reply_before_first_routing() {
     f.worker.archive_history(io::now_ms()).unwrap();
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "an old spooled reply still owes a wake"
-    );
-    assert!(f.calls.lock().unwrap()[0].contains("Recovered from the spool"));
     assert!(f.worker.state.request(source).is_some());
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_no_reply_wake(&f, "Recovered from the spool");
 }
 
 struct NeverShown(Arc<Mutex<Vec<String>>>);
@@ -924,10 +996,11 @@ fn reply_routing_notice_stops_pasting_after_the_queued_stall_window() {
     let source = f.send(Author::Agent(f.orch), "build this");
     f.finish(source, "Reply the composer never shows");
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(pasted.lock().unwrap().len(), 1, "first paste attempt");
-    // Every later tick past the queued stall window, after each 20-second
-    // prompt-not-shown pause, would paste and clear the composer again.
+    assert_eq!(
+        pasted.lock().unwrap().len(),
+        0,
+        "a captured final is not pasted"
+    );
     for minutes in [3, 30, 300] {
         f.worker
             .expire_queued_requests(io::now_ms() + minutes * 60_000)
@@ -935,12 +1008,12 @@ fn reply_routing_notice_stops_pasting_after_the_queued_stall_window() {
         f.worker.withdrawn_at.clear();
         f.worker.submit_ready().unwrap();
     }
+    assert_eq!(pasted.lock().unwrap().len(), 0);
     assert_eq!(
-        pasted.lock().unwrap().len(),
-        1,
-        "an ordinary queued request closes after QUEUED_STALL_MS; the exempt notice keeps pasting into and clearing the orchestrator composer"
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
-    assert_eq!(f.notices()[0].phase, RequestPhase::Queued);
+    assert_no_reply_wake(&f, "Reply the composer never shows");
 }
 
 #[test]
@@ -952,13 +1025,17 @@ fn reply_routing_stalled_delivery_resumes_on_fresh_evidence_or_restart() {
         let source = f.send(Author::Agent(f.orch), "build this");
         f.finish(source, "A retained reply");
         f.worker.submit_ready().unwrap();
-        let notice = f.notices()[0].id;
+        assert_eq!(
+            pasted.lock().unwrap().len(),
+            0,
+            "a captured final is not pasted: {recovery}"
+        );
         f.worker
             .expire_queued_requests(io::now_ms() + 3 * 60_000)
             .unwrap();
         f.worker.withdrawn_at.clear();
         f.worker.submit_ready().unwrap();
-        assert_eq!(pasted.lock().unwrap().len(), 1, "paused: {recovery}");
+        assert_eq!(pasted.lock().unwrap().len(), 0, "paused: {recovery}");
         if recovery == "restart" {
             f.reopen();
         } else {
@@ -990,12 +1067,17 @@ fn reply_routing_stalled_delivery_resumes_on_fresh_evidence_or_restart() {
         f.worker.transport = Box::new(Accepting(f.calls.clone()));
         f.worker.submit_ready().unwrap();
         f.worker.submit_ready().unwrap();
-        assert_eq!(f.calls.lock().unwrap().len(), 1, "resumed: {recovery}");
-        assert_eq!(f.notices().len(), 1);
-        assert_eq!(
-            f.worker.state.request(notice).unwrap().phase,
-            RequestPhase::Active
+        let calls = f.calls.lock().unwrap();
+        assert!(
+            calls.is_empty(),
+            "recovery must not paste a captured final: {recovery} {calls:?}"
         );
+        drop(calls);
+        assert_eq!(
+            f.worker.state.request(source).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_no_reply_wake(&f, "A retained reply");
     }
 }
 
@@ -1049,8 +1131,8 @@ fn reply_routing_paused_notice_does_not_hold_later_messages_to_the_orchestrator(
     f.worker.submit_ready().unwrap();
     assert_eq!(
         pasted.lock().unwrap().len(),
-        1,
-        "the reply notice is paused"
+        0,
+        "a captured final is not a paused reply notice"
     );
     // The composer accepts again without any status change, and a worker's
     // Blocked notice arrives for the orchestrator.
@@ -1074,10 +1156,24 @@ fn reply_routing_paused_notice_does_not_hold_later_messages_to_the_orchestrator(
     f.worker
         .expire_queued_requests(io::now_ms() + 3 * 60_000)
         .unwrap();
+    let calls = f.calls.lock().unwrap();
     assert!(
-        !f.calls.lock().unwrap().is_empty(),
-        "a later message to the orchestrator was never attempted; it ended {:?}",
+        calls
+            .iter()
+            .any(|call| call.contains("Blocked: approve a command")),
+        "a later message to the orchestrator was never attempted; it ended {:?}; calls={calls:?}",
         f.worker.state.request(blocked).unwrap().phase
+    );
+    assert!(
+        calls.iter().all(|call| {
+            !call.contains("A reply the composer rejected") && !call.contains("Reply to message")
+        }),
+        "{calls:?}"
+    );
+    drop(calls);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
 }
 
@@ -1101,18 +1197,18 @@ fn reply_routing_old_recovered_reply_is_released_once_delivered() {
     f.worker.save(state).unwrap();
     f.worker.archive_history(io::now_ms()).unwrap();
     f.worker.submit_ready().unwrap();
-    let notice = f.notices()[0].id;
-    let mut state = f.worker.state.clone();
-    state.finish_for_test(notice, "Read it", io::now_ms());
-    f.worker.save(state).unwrap();
-    f.worker.archive_history(io::now_ms()).unwrap();
     f.reopen();
     f.worker.submit_ready().unwrap();
     assert!(
         f.worker.state.request(source).is_some(),
-        "a delivered reply stays in the permanent audit archive"
+        "the archived request stays in the permanent audit archive"
     );
-    assert_eq!(f.calls.lock().unwrap().len(), 1, "no second wake");
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(f.calls.lock().unwrap().is_empty(), "no reply wake");
+    assert_no_reply_wake(&f, "Recovered");
 }
 
 #[test]
@@ -1189,9 +1285,19 @@ fn reply_routing_pending_group_survives_after_its_developer_lead_expires() {
     f.reopen();
     f.worker.submit_ready().unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Shared reply recovered"));
-    assert_eq!(f.notices().len(), 1);
+    assert!(f.worker.state.request(lead).is_some());
+    assert!(f.worker.state.request(member).is_some());
+    assert_eq!(
+        f.worker.state.request(lead).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        f.worker.state.request(member).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert!(f.notices().is_empty());
+    assert_no_reply_wake(&f, "Shared reply recovered");
 }
 
 #[test]
@@ -1199,8 +1305,8 @@ fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
     let mut f = Fixture::new();
     let pasted = Arc::new(Mutex::new(Vec::new()));
     f.worker.transport = Box::new(NeverShown(pasted.clone()));
-    let source = f.send(Author::Agent(f.orch), "first reply");
-    f.finish(source, "first reply");
+    let first = f.send(Author::Agent(f.orch), "first reply");
+    f.finish(first, "first reply");
     let mut state = f.worker.state.clone();
     state
         .observe_status(f.orch, RuntimeStatus::Unavailable, io::now_ms())
@@ -1208,22 +1314,22 @@ fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
     // Two collection windows still exercise native queue coalescing; a
-    // same-window pair now intentionally becomes one worker-event batch.
-    let source = f.send(Author::Agent(f.orch), "second reply");
-    f.finish(source, "second reply");
+    // captured final is not a reply wake in either window.
+    let second = f.send(Author::Agent(f.orch), "second reply");
+    f.finish(second, "second reply");
     let mut state = f.worker.state.clone();
     state
         .route_worker_replies(io::now_ms() + 3_000, &BTreeSet::new())
         .unwrap();
     f.worker.save(state).unwrap();
-    assert_eq!(f.notices().len(), 2);
+    assert!(f.notices().is_empty());
     let mut state = f.worker.state.clone();
     state
         .observe_status(f.orch, RuntimeStatus::Idle, io::now_ms())
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(pasted.lock().unwrap().len(), 1);
+    assert_eq!(pasted.lock().unwrap().len(), 0);
     for minutes in [3, 30, 300] {
         f.worker
             .expire_queued_requests(io::now_ms() + minutes * 60_000)
@@ -1233,15 +1339,21 @@ fn reply_routing_coalesced_rejection_does_not_rearm_without_a_new_arrival() {
     }
     assert_eq!(
         pasted.lock().unwrap().len(),
-        1,
-        "restoring a rejected group is not a new arrival"
+        0,
+        "restoring availability does not paste a captured final"
     );
-    assert!(f.notices().iter().all(|r| r.phase == RequestPhase::Queued));
+    for id in [first, second] {
+        assert_eq!(
+            f.worker.state.request(id).unwrap().phase,
+            RequestPhase::Completed
+        );
+    }
+    assert_no_reply_wake(&f, "first reply");
+    assert_no_reply_wake(&f, "second reply");
 }
 
 #[test]
 fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() {
-    let mut missing = Vec::new();
     for provider in [Provider::ClaudeCode, Provider::Codex] {
         let mut f = Fixture::with_provider(provider);
         let mut state = f.worker.state.clone();
@@ -1309,10 +1421,11 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             state.request(member).unwrap().phase,
             RequestPhase::Completed
         );
-        state
-            .see_worker_reply(member, f.orch, io::now_ms())
-            .unwrap();
-        let original = state.request(member).unwrap().reply().cloned();
+        assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Completed);
+        assert!(state.request(member).unwrap().reply().is_none());
+        assert!(state.request(lead).unwrap().reply().is_none());
+        assert!(state.request(member).unwrap().failure_reason.is_none());
+        assert!(state.request(lead).unwrap().failure_reason.is_none());
         for (index, mut invalid) in [
             callback(
                 0,
@@ -1361,33 +1474,33 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             },
             None,
         ));
-        assert_eq!(state.request(member).unwrap().reply().cloned(), original);
-        assert_eq!(state.request(lead).unwrap().reply().cloned(), original);
+        assert!(state.request(member).unwrap().reply().is_none());
+        assert!(state.request(lead).unwrap().reply().is_none());
+        assert_eq!(
+            state.request(member).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Completed);
         state
             .route_worker_replies(io::now_ms() + 10_000, &BTreeSet::new())
             .unwrap();
         f.worker.save(state).unwrap();
         f.worker.submit_ready().unwrap();
         let calls = f.calls.lock().unwrap();
-        assert!(!calls
-            .iter()
-            .any(|text| text.contains("Stale result") || text.contains("Foreign")));
-        if !calls.iter().any(|text| {
-            text.contains("Late reply") && text.contains("Shared work actually finished.")
-        }) {
-            missing.push(provider);
-        } else {
-            assert_eq!(
-                calls.len(),
-                1,
-                "late result must wake the sender exactly once"
-            );
-        }
+        assert!(
+            calls.iter().all(|text| {
+                !text.contains("Stale result")
+                    && !text.contains("Foreign")
+                    && !text.contains("Late reply")
+                    && !text.contains("Shared work actually finished.")
+                    && !text.contains("Shared work still running.")
+                    && !text.contains("Reply to message")
+            }),
+            "{provider:?}: {calls:?}"
+        );
+        drop(calls);
+        assert_no_reply_wake(&f, "Shared work actually finished.");
     }
-    assert!(
-        missing.is_empty(),
-        "an orchestrator's coalesced message still owes the changed late final: {missing:?}"
-    );
 }
 
 #[test]
@@ -1549,8 +1662,8 @@ fn identity_batched_worker_notification_has_exactly_one_sender_line() {
         .state
         .route_worker_replies(io::now_ms(), &BTreeSet::new())
         .unwrap();
-    let lead = f.notices()[0].id;
-    // A second worker contributes another notification in the same queue.
+    // A second worker finishes another request. Neither captured final is a
+    // reply wake, so there is no batch to coalesce.
     let peer = f
         .worker
         .state
@@ -1583,42 +1696,17 @@ fn identity_batched_worker_notification_has_exactly_one_sender_line() {
         .state
         .route_worker_replies(io::now_ms(), &BTreeSet::new())
         .unwrap();
-    let payload = f.worker.state.coalesce_queue(lead).unwrap();
-    let builder_header = format!("builder (room {}):", f.room.0);
-    let peer_header = format!("rev-claude8 (room {}):", f.room.0);
     assert_eq!(
-        payload
-            .lines()
-            .filter(|line| *line == builder_header)
-            .count(),
-        1,
-        "{payload}"
+        f.worker.state.request(first).unwrap().phase,
+        RequestPhase::Completed
     );
     assert_eq!(
-        payload.lines().filter(|line| *line == peer_header).count(),
-        1,
-        "{payload}"
+        f.worker.state.request(id).unwrap().phase,
+        RequestPhase::Completed
     );
-    assert_eq!(
-        payload
-            .lines()
-            .filter(|line| line.starts_with("[Bus message ") && line.ends_with("from builder]"))
-            .count(),
-        1,
-        "{payload}"
-    );
-    assert_eq!(
-        payload
-            .lines()
-            .filter(|line| {
-                line.starts_with("[Bus message ") && line.ends_with("from rev-claude8]")
-            })
-            .count(),
-        1,
-        "{payload}"
-    );
-    assert!(!payload.contains("(agent "), "{payload}");
-    assert!(!payload.contains("answer with bus send"), "{payload}");
+    assert!(f.notices().is_empty());
+    assert_no_reply_wake(&f, "READY FOR VERIFY first");
+    assert_no_reply_wake(&f, "REVIEW READY second");
 }
 
 #[test]
@@ -1640,25 +1728,59 @@ fn reply_to_each_request_routes_once_and_reading_one_does_not_spend_the_other() 
     state
         .answer_message(second_message, f.agent, "second answer".into(), now)
         .unwrap();
+    assert_eq!(
+        state.request(first).unwrap().reply().unwrap().text,
+        "first answer"
+    );
+    assert_eq!(
+        state.request(second).unwrap().reply().unwrap().text,
+        "second answer"
+    );
+    assert_eq!(state.request(first).unwrap().delivery_stage(), "replied");
+    assert_eq!(state.request(second).unwrap().delivery_stage(), "replied");
     state.see_worker_reply(first, f.orch, now).unwrap();
     state
         .route_worker_replies(io::now_ms(), &BTreeSet::new())
         .unwrap();
     f.worker.save(state).unwrap();
-    let notices = f.notices();
-    assert_eq!(notices.len(), 1);
-    assert!(notices[0].prompt.text.contains("second answer"));
-    assert!(!notices[0].prompt.text.contains("first answer"));
+    assert!(
+        f.notices().is_empty(),
+        "an explicit reply is stored and does not wake: {:?}",
+        f.notices()
+    );
     let mut state = f.worker.state.clone();
     state
         .route_worker_replies(io::now_ms() + 4000, &BTreeSet::new())
         .unwrap();
     f.worker.save(state).unwrap();
-    assert_eq!(
-        f.notices().len(),
-        1,
-        "a repeated routing pass must not duplicate the answer"
+    assert!(
+        f.notices().is_empty(),
+        "a repeated routing pass must not create a reply wake: {:?}",
+        f.notices()
     );
+    assert_eq!(
+        f.worker.state.request(first).unwrap().reply().unwrap().text,
+        "first answer"
+    );
+    assert_eq!(
+        f.worker
+            .state
+            .request(second)
+            .unwrap()
+            .reply()
+            .unwrap()
+            .text,
+        "second answer"
+    );
+    assert!(f
+        .worker
+        .state
+        .room(f.room)
+        .unwrap()
+        .latest_replies
+        .values()
+        .any(|reply| reply.text == "second answer"));
+    assert_no_reply_wake(&f, "Reply to message");
 }
 
 #[test]
@@ -1689,35 +1811,26 @@ fn reply_routing_keeps_worker_reply_through_orchestrator_startup_failure() {
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    let notice = f.notices()[0].id;
-    assert_eq!(
-        f.worker.state.request(notice).unwrap().phase,
-        RequestPhase::Queued
-    );
+    assert!(f.notices().is_empty());
     assert!(f.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
     f.worker.expire_queued_requests(u64::MAX).unwrap();
     f.reopen();
     assert_eq!(
-        f.worker.state.request(notice).unwrap().phase,
-        RequestPhase::Queued
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
+    assert!(f.notices().is_empty());
     // The orchestrator is repaired and its startup confirmed.
     let mut state = f.worker.state.clone();
     state.set_agent_startup(f.orch, None).unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    let calls = f.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1, "deliver the retained reply exactly once");
-    assert!(
-        calls
-            .iter()
-            .any(|call| call.contains("Reply while orchestrator startup failed.")),
-        "worker reply never reached the recovered orchestrator; notices: {:?}",
-        f.notices()
-            .iter()
-            .map(|r| (r.phase, r.failure_reason.clone()))
-            .collect::<Vec<_>>()
-    );
+    assert!(f.notices().is_empty());
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert_no_reply_wake(&f, "Reply while orchestrator startup failed.");
 }

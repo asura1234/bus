@@ -1,8 +1,8 @@
 //! Durable worker facts that the room orchestrator must not have to poll for.
 use super::{
     reply_routing::{reply_key, ReplyRoute},
-    AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, PromptId,
-    ProviderCallback, Request, RequestId, RequestPhase, RoomId, RoomKind,
+    AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, PromptId, ProviderCallback,
+    Request, RequestId, RequestPhase, RoomId, RoomKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -49,161 +49,12 @@ impl BusState {
             .then_some(orchestrator.id)
     }
 
-    /// Called only after correlation. Reject duplicate/foreign callbacks and
-    /// retain the full text before the coordinator can acknowledge its spool.
+    /// Turn finals are not replies and are not posted onward.
     pub(super) fn record_worker_final(
         &mut self,
-        callback: &ProviderCallback,
-        disposition: &CallbackDisposition,
+        _callback: &ProviderCallback,
+        _disposition: &CallbackDisposition,
     ) {
-        if !matches!(
-            disposition,
-            CallbackDisposition::Rejected(
-                CallbackRejection::NoActiveRequest
-                    | CallbackRejection::UnrelatedTurn
-                    | CallbackRejection::WrongTurn
-                    | CallbackRejection::WrongPrompt
-                    | CallbackRejection::UnboundFinal
-                    | CallbackRejection::BeforeSubmissionBoundary
-                    | CallbackRejection::DuplicateFinal
-            )
-        ) {
-            return;
-        }
-        let CallbackEventKind::Final { text } = &callback.kind else {
-            return;
-        };
-        let Some(agent) = self.agent(callback.agent_id) else {
-            return;
-        };
-        if text.trim().is_empty()
-            || self.worker_orchestrator(agent.id).is_none()
-            || agent.session_binding_invalidated
-            || agent.runtime_identity.launch_id.as_deref() != Some(&callback.launch_id)
-            || agent.runtime_identity.session_id != callback.provider_session_id
-        {
-            return;
-        }
-        let Some(turn) = super::callbacks::provider_turn_key(
-            &callback.launch_id,
-            callback.provider_session_id.as_deref(),
-            callback.provider_turn_id.as_deref(),
-        ) else {
-            return;
-        };
-        let owned = self.requests().any(|r| {
-            r.agent_id == agent.id
-                && r.expected_launch_id.as_deref() == Some(&callback.launch_id)
-                && r.provider_session_id == callback.provider_session_id
-                && r.provider_turn_id == callback.provider_turn_id
-        });
-        let late = self.late_worker_request(callback);
-        // A later request adopting this turn cannot change a final's identity.
-        // Text keys deduplicate autonomous replays and preserve each changed
-        // final of a closed turn, including across coordinator restarts.
-        let key = format!(
-            "final:{turn}:{}",
-            crate::utils::time::digest(text.as_bytes())
-        );
-        let orphan = matches!(
-            disposition,
-            CallbackDisposition::Rejected(
-                CallbackRejection::NoActiveRequest | CallbackRejection::UnrelatedTurn
-            )
-        );
-        if self.worker_events.contains_key(&key)
-            || late.is_none() && (!orphan || owned || self.consumed_provider_turns.contains(&turn))
-        {
-            return;
-        }
-        let group = late.map(reply_key);
-        let label = late.map_or_else(
-            || "Turn final".to_owned(),
-            |r| {
-                format!(
-                    "Late reply to message {} (request {})",
-                    r.prompt.id.0, r.id.0
-                )
-            },
-        );
-        let (room, worker) = (agent.room_id, agent.id);
-        // This request's own copy suppresses its late final. An ungrouped
-        // final still yields to any earlier copy, so an explicit send is not
-        // posted again as Turn final.
-        if self.final_text_already_posted(late, room, worker, text) {
-            self.note_explicit_copy(group, room, worker, turn, text, callback.occurred_at_ms);
-            return;
-        }
-        let Ok(message) =
-            self.post_to_developer(room, worker, text.clone(), vec![], callback.occurred_at_ms)
-        else {
-            return;
-        };
-        let summary = format!(
-            "{label}; message {}.\n{}",
-            message.0,
-            preview(text, &format!("bus history --room {}", room.0))
-        );
-        self.worker_events.insert(
-            key,
-            WorkerEvent {
-                agent: worker,
-                room,
-                group,
-                message,
-                at_ms: callback.occurred_at_ms,
-                episode: None,
-                kind: WorkerEventKind::Final,
-                text: summary,
-                route: ReplyRoute::Pending,
-            },
-        );
-        self.note_result_posted(turn, callback.occurred_at_ms);
-    }
-
-    /// The worker already sent this turn's text. That send is the one delivery.
-    /// Remember a grouped final as seen so the quiet no-reply stays withdrawn,
-    /// without posting the body a second time.
-    fn note_explicit_copy(
-        &mut self,
-        group: Option<RequestId>,
-        room: RoomId,
-        worker: AgentId,
-        turn: String,
-        text: &str,
-        now_ms: u64,
-    ) {
-        if let Some(group) = group {
-            if let Some(message) = self.explicit_copy_message(room, worker, text) {
-                let key = format!(
-                    "final:{turn}:{}",
-                    crate::utils::time::digest(text.as_bytes())
-                );
-                self.worker_events
-                    .entry(key)
-                    .or_insert_with(|| WorkerEvent {
-                        agent: worker,
-                        room,
-                        group: Some(group),
-                        message,
-                        at_ms: now_ms,
-                        episode: None,
-                        kind: WorkerEventKind::Final,
-                        text: text.trim().to_owned(),
-                        route: ReplyRoute::Seen,
-                    });
-            }
-        }
-        self.note_result_posted(turn, now_ms);
-    }
-
-    /// The body is already the result. Remember the turn and drop a quiet
-    /// no-reply that this result replaces.
-    fn note_result_posted(&mut self, turn: String, now_ms: u64) {
-        self.consumed_provider_turns.insert(turn);
-        let _changed = self
-            .retract_suppressed_quiet_outcomes(now_ms)
-            .unwrap_or(true);
     }
 
     /// A final for a closed owned turn must not wait behind newer unbound work.
@@ -230,7 +81,7 @@ impl BusState {
                     || r.phase == RequestPhase::Completed
                         && lead.trusted_start_bound
                         && matches!(&callback.kind, CallbackEventKind::Final { text }
-                            if r.reply().is_some_and(|reply| reply.text != *text)))
+                            if r.reply().is_none_or(|reply| reply.text != *text)))
                 && self.reply_orchestrator(r).is_some()
                 && lead.expected_launch_id.as_deref() == Some(&callback.launch_id)
                 && lead.provider_session_id == callback.provider_session_id

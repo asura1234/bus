@@ -66,11 +66,17 @@ fn shortcuts_filter_history_directly_and_combine_with_text_search() {
             key(&mut ui, KeyCode::Char(c), KeyModifiers::NONE);
         }
         room_screen(&mut ui, 100, 60);
-        assert_eq!(ui.view.search_matches.len(), 6, "master: {master}");
+        assert!(
+            !incoming.contains("ordinary peer answer")
+                && !incoming.contains("Needle developer answer")
+                && !incoming.contains("Needle @you reply mention"),
+            "stored replies are not history rows: {incoming}"
+        );
+        assert_eq!(ui.view.search_matches.len(), 4, "master: {master}");
         key(&mut ui, KeyCode::Char('o'), KeyModifiers::ALT);
         apply_filter_commands(&mut ui);
         room_screen(&mut ui, 100, 60);
-        assert_eq!(ui.view.search_matches.len(), 7, "union: master {master}");
+        assert_eq!(ui.view.search_matches.len(), 5, "union: master {master}");
         assert_visible_directions(&ui, true, true);
 
         key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
@@ -315,19 +321,30 @@ fn incoming_filter_preserves_a_shared_answer_to_a_developer_member() {
     ui.receive_snapshot(Arc::new(snapshot));
     ui.open_room(room);
     let before = room_screen(&mut ui, 100, 60);
+    let worker = before
+        .find("ordinary worker prompt")
+        .expect("worker prompt");
+    let follow = before.find("developer followup").expect("developer prompt");
+    assert!(worker < follow, "{before}");
     assert_eq!(
         before.matches("SHARED ANSWER FOR DEVELOPER").count(),
-        1,
+        0,
         "{before}"
     );
+    assert!(!before.contains("answered with message"), "{before}");
     key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);
     apply_filter_commands(&mut ui);
     let after = room_screen(&mut ui, 100, 60);
     assert_eq!(
         after.matches("SHARED ANSWER FOR DEVELOPER").count(),
-        1,
-        "incoming filter must retain exactly one developer reply: {after}"
+        0,
+        "{after}"
     );
+    assert!(
+        !after.contains("developer followup") && !after.contains("ordinary worker prompt"),
+        "incoming filter keeps only messages to you, not the stored reply: {after}"
+    );
+    assert_visible_directions(&ui, true, false);
 }
 
 #[test]
@@ -912,7 +929,7 @@ fn filtered_pagination_find_keeps_the_selected_match() {
 }
 
 #[test]
-fn filtered_pagination_shared_reply_keeps_developer_context() {
+fn filtered_pagination_omits_the_shared_reply_and_keeps_messages_to_you() {
     let (mut ui, room, receiver) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let peer = snapshot
@@ -983,30 +1000,57 @@ fn filtered_pagination_shared_reply_keeps_developer_context() {
     ui.receive_snapshot(Arc::new(snapshot));
     ui.open_room(room);
     room_screen(&mut ui, 100, 32);
-    let first_count = ui
-        .history
-        .cached()
-        .iter()
-        .filter(|line| line.text.contains("WINDOW SHARED ANSWER FOR DEVELOPER"))
-        .count();
+    let shows = |ui: &BusUi, text: &str| {
+        ui.history
+            .cached()
+            .iter()
+            .any(|line| line.text.contains(text))
+    };
+    let times = |ui: &BusUi, text: &str| {
+        ui.history
+            .cached()
+            .iter()
+            .filter(|line| line.text.contains(text))
+            .count()
+    };
+    assert!(
+        shows(&ui, "direct filler 299"),
+        "the newest message to you stays on the first filtered page"
+    );
+    assert!(
+        !shows(&ui, "direct filler 0"),
+        "an older message stays outside the first page"
+    );
+    assert_eq!(
+        times(&ui, "WINDOW SHARED ANSWER FOR DEVELOPER"),
+        0,
+        "a stored reply is not a history row"
+    );
     assert!(ui.history.load_older());
     room_screen(&mut ui, 100, 32);
-    let expanded_count = ui
+    assert_eq!(
+        times(&ui, "direct filler 299"),
+        1,
+        "loading older pages must not duplicate the newest message"
+    );
+    assert!(
+        shows(&ui, "direct filler 0"),
+        "the older message arrives with the next page"
+    );
+    assert_eq!(times(&ui, "WINDOW SHARED ANSWER FOR DEVELOPER"), 0);
+    let text = ui
         .history
         .cached()
         .iter()
-        .filter(|line| line.text.contains("WINDOW SHARED ANSWER FOR DEVELOPER"))
-        .count();
-    assert_eq!(
-        expanded_count, 1,
-        "full group context must establish the existing incoming-answer contract"
-    );
-    assert_eq!(first_count, 1,
-        "the bounded window lost the shared answer because its Developer member was outside the page (expanded count={expanded_count})");
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.contains("Reply to message"), "{text}");
+    assert!(!text.contains("answered with message"), "{text}");
 }
 
 #[test]
-fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() {
+fn filtered_find_keeps_a_message_to_you_without_a_shared_reply() {
     let (mut ui, room, receiver) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let other = snapshot.state.create_room("other").unwrap();
@@ -1052,12 +1096,18 @@ fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() 
             2000,
         )
         .unwrap()[0];
+    snapshot
+        .state
+        .post_to_developer(room, receiver, "Ωmessage to you".into(), vec![], 2500)
+        .unwrap();
     snapshot.state.coalesce_queue(lead).unwrap();
     for id in [lead, developer, latest] {
-        snapshot.state.finish_for_test(id, "Ωshared answer", 3000);
+        snapshot
+            .state
+            .finish_for_test(id, "STORED_REPLY_NOT_A_ROW", 3000);
     }
-    // Persisted cross-room groups already occur for orchestrator turns. Reload
-    // that durable shape so both live and archived indexes must retain context.
+    // A grouped developer request can persist in another room. Reloading that
+    // shape must not turn the stored reply into a history row.
     let mut json = serde_json::to_value(&snapshot.state).unwrap();
     json["requests"][developer.0.to_string()]["room_id"] = other.0.into();
     snapshot.state = serde_json::from_value(json).unwrap();
@@ -1079,10 +1129,15 @@ fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() 
         ui.history
             .cached()
             .iter()
-            .filter(|line| line.text.contains("Ωshared answer"))
+            .filter(|line| line.text.contains("Ωmessage to you"))
             .count(),
         1
     );
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .all(|line| !line.text.contains("STORED_REPLY_NOT_A_ROW")));
     key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Char('Ω'), KeyModifiers::NONE);
     room_screen(&mut ui, 100, 32);
@@ -1091,7 +1146,7 @@ fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() 
         room_screen(&mut ui, 100, 32);
     }
     let row = ui.view.search_matches[ui.chat_search.as_ref().unwrap().current].0;
-    assert!(ui.history.cached()[row].text.contains("Ωshared answer"));
+    assert!(ui.history.cached()[row].text.contains("Ωmessage to you"));
     assert!((ui.main_scroll..ui.main_scroll + usize::from(ui.view.history.height)).contains(&row));
     let mut archived = (*ui.snapshot).clone();
     archived.state.archive(1_000_000);
@@ -1103,10 +1158,16 @@ fn filtered_shared_answer_keeps_find_identity_and_cross_room_archived_context() 
         ui.history
             .cached()
             .iter()
-            .filter(|line| line.text.contains("Ωshared answer"))
+            .filter(|line| line.text.contains("Ωmessage to you"))
             .count(),
         1
     );
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .all(|line| !line.text.contains("STORED_REPLY_NOT_A_ROW")
+            && !line.text.contains("Reply to message")));
 }
 
 #[test]

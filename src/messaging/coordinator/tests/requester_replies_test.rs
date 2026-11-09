@@ -1,4 +1,5 @@
-//! Replies use the existing durable wake queue for every requester.
+//! A captured final is not forwarded to the requester. An explicit
+//! `--reply-to` is stored on the request and stays out of history and wakes.
 use super::*;
 
 fn requester(provider: Provider, cross_room: bool) -> Fixture {
@@ -105,11 +106,48 @@ fn assert_requester_delivery(provider: Provider, captured: bool) {
         }
         f.worker.submit_ready().unwrap();
         let calls = f.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "{provider:?}, captured={captured}");
-        assert!(calls[0].contains("GO requester"));
+        assert!(
+            calls.iter().all(|call| {
+                !call.contains("GO requester") && !call.contains("Reply to message")
+            }),
+            "{provider:?}, captured={captured}: {calls:?}"
+        );
         drop(calls);
+        assert!(
+            f.notices().iter().all(|notice| {
+                !notice.prompt.text.contains("GO requester")
+                    && !notice.prompt.text.contains("Reply to message")
+            }),
+            "{provider:?}, captured={captured}: {:?}",
+            f.notices()
+        );
+        let request = f.worker.state.request(source).unwrap();
+        if captured {
+            assert_eq!(request.phase, RequestPhase::Completed);
+        } else {
+            assert_eq!(request.reply().unwrap().text, "GO requester");
+            assert_eq!(request.delivery_stage(), "replied");
+            assert_ne!(request.phase, RequestPhase::Completed);
+            assert_eq!(
+                f.worker.state.agent(f.agent).unwrap().current_request,
+                Some(source)
+            );
+            assert!(f
+                .worker
+                .state
+                .room(request.room_id)
+                .unwrap()
+                .latest_replies
+                .values()
+                .any(|reply| reply.text == "GO requester"));
+        }
         let history = f.call("room.history", json!({"room":f.room.0.to_string()}));
         assert!(history.ok, "{history:?}");
+        let rendered = history.result.to_string();
+        assert!(
+            !rendered.contains("GO requester") && !rendered.contains("Reply to message"),
+            "{rendered}"
+        );
         let rows: Vec<_> = history.result["messages"]
             .as_array()
             .unwrap()
@@ -119,8 +157,12 @@ fn assert_requester_delivery(provider: Provider, captured: bool) {
                     && row["prompt"]["recipient_ids"] == json!([f.orch.0])
             })
             .collect();
-        assert_eq!(rows.len(), 1, "{history:?}");
-        assert_eq!(rows[0]["recipient_names"], json!(["requester"]));
+        assert!(rows.is_empty(), "{history:?}");
+        assert!(history.result["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["prompt"]["text"] == "request"));
     }
 }
 
@@ -272,7 +314,7 @@ fn requester_ack_cancels_queued_wake_without_a_false_outcome_to_the_orchestrator
         .observe_status(f.orch, RuntimeStatus::Working, io::now_ms())
         .unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
+    assert!(f.notices().is_empty());
     assert!(
         f.call(
             "message.seen",
@@ -280,7 +322,7 @@ fn requester_ack_cancels_queued_wake_without_a_false_outcome_to_the_orchestrator
         )
         .ok
     );
-    assert_eq!(f.notices()[0].phase, RequestPhase::Abandoned);
+    assert!(f.notices().is_empty());
     let mut state = f.worker.state.clone();
     state
         .route_worker_replies(io::now_ms() + 3_000, &BTreeSet::new())
@@ -289,8 +331,12 @@ fn requester_ack_cancels_queued_wake_without_a_false_outcome_to_the_orchestrator
     f.worker.submit_ready().unwrap();
     assert_eq!(
         f.worker.state.requests().count(),
-        2,
-        "a consumed reply must not become new work for the room orchestrator"
+        1,
+        "a captured final must not become new work for the room orchestrator"
+    );
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
     );
     assert!(f.calls.lock().unwrap().is_empty());
 }
@@ -334,8 +380,19 @@ fn explicit_orchestrator_answer_still_reaches_the_worker_requester() {
     let source = f.send(Author::Agent(f.orch), "question for orchestrator");
     explicit(&mut f, source, "Use the fallback");
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("Use the fallback"));
+    let request = f.worker.state.request(source).unwrap();
+    assert_eq!(request.reply().unwrap().text, "Use the fallback");
+    assert_eq!(request.delivery_stage(), "replied");
+    assert_ne!(request.phase, RequestPhase::Completed);
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(source)
+    );
+    assert!(f.notices().is_empty());
+    assert!(f.calls.lock().unwrap().is_empty());
+    let history = f.call("room.history", json!({"room":f.room.0.to_string()}));
+    assert!(history.ok, "{history:?}");
+    assert!(!history.result.to_string().contains("Use the fallback"));
 }
 
 #[test]
@@ -358,8 +415,17 @@ fn requester_exited_async_waiter_releases_reply_at_lease_expiry() {
     assert!(f.notices().is_empty());
     f.worker.test_reply_waiter_now = Some(now + Duration::from_secs(3));
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("RELEASE requester"));
+    assert!(f.notices().is_empty());
+    assert!(f
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|call| !call.contains("RELEASE requester") && !call.contains("Reply to message")));
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
 }
 
 #[test]
@@ -372,8 +438,15 @@ fn requester_replies_survive_restart_between_request_and_answer_once() {
     f.worker.submit_ready().unwrap();
     f.reopen();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    assert!(f.notices().is_empty());
+    assert!(f.calls.lock().unwrap().is_empty());
+    let request = f.worker.state.request(source).unwrap();
+    assert_eq!(request.reply().unwrap().text, "Changed build spec");
+    assert_eq!(request.delivery_stage(), "replied");
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(source)
+    );
 }
 
 #[test]
@@ -393,8 +466,10 @@ fn requester_rename_uses_stable_id_and_deletion_does_not_retarget_replacement() 
         f.worker.save(state).unwrap();
         f.finish(source, "Stable recipient");
         f.worker.submit_ready().unwrap();
-        assert_eq!(f.notices().len(), usize::from(!deleted));
-        assert_eq!(f.calls.lock().unwrap().len(), usize::from(!deleted));
+        assert!(f.notices().is_empty(), "deleted={deleted}");
+        let calls = f.calls.lock().unwrap();
+        assert!(calls.is_empty(), "deleted={deleted}: {calls:?}");
+        drop(calls);
         assert_eq!(
             f.worker
                 .state
@@ -404,6 +479,10 @@ fn requester_rename_uses_stable_id_and_deletion_does_not_retarget_replacement() 
                 .unwrap()
                 .text,
             "Stable recipient"
+        );
+        assert_eq!(
+            f.worker.state.request(source).unwrap().phase,
+            RequestPhase::Completed
         );
     }
 }
@@ -431,36 +510,31 @@ fn several_recipients_reply_to_requester_without_waking_room_orchestrator() {
     state.finish_for_test(ids[1], "second answer", io::now_ms() - 3_000);
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    let notices: Vec<_> = f
-        .worker
-        .state
-        .requests()
-        .filter(|r| r.bus_generated)
-        .collect();
-    assert_eq!(notices.len(), 2);
-    assert!(notices.iter().all(|r| r.agent_id == f.orch));
-    // A fresh idle recipient takes the first prompt alone; the other answer
-    // follows through the same queue after that turn finishes.
-    let first_delivery = f
-        .worker
-        .state
-        .agent(f.orch)
-        .unwrap()
-        .current_request
-        .unwrap();
-    f.finish(first_delivery, "First reply consumed");
-    f.worker.submit_ready().unwrap();
     assert_eq!(
         f.worker
             .state
             .requests()
             .filter(|r| r.bus_generated)
             .count(),
-        2
+        0
     );
+    assert!(f
+        .worker
+        .state
+        .agent(f.orch)
+        .unwrap()
+        .current_request
+        .is_none());
+    for id in ids {
+        assert_eq!(
+            f.worker.state.request(id).unwrap().phase,
+            RequestPhase::Completed
+        );
+    }
     let calls = f.calls.lock().unwrap().join("\n");
-    assert!(calls.contains("first answer"));
-    assert!(calls.contains("second answer"));
+    assert!(!calls.contains("first answer"));
+    assert!(!calls.contains("second answer"));
+    assert!(!calls.contains("Reply to message"));
 }
 
 struct BusyDraft(Arc<Mutex<Vec<String>>>);
@@ -491,8 +565,7 @@ fn requester_busy_and_draft_replies_wait_in_normal_queue_until_idle() {
         .observe_status(f.orch, RuntimeStatus::Working, io::now_ms())
         .unwrap();
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.notices()[0].phase, RequestPhase::Queued);
+    assert!(f.notices().is_empty());
     assert!(f.calls.lock().unwrap().is_empty());
     f.worker
         .state
@@ -500,12 +573,15 @@ fn requester_busy_and_draft_replies_wait_in_normal_queue_until_idle() {
         .unwrap();
     f.worker.transport = Box::new(BusyDraft(f.calls.clone()));
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices()[0].phase, RequestPhase::Queued);
+    assert!(f.notices().is_empty());
     f.worker.transport = Box::new(Accepting(f.calls.clone()));
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.calls.lock().unwrap().len(), 2);
-    assert_eq!(f.notices().len(), 1);
-    assert_eq!(f.notices()[0].phase, RequestPhase::Active);
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert!(f.notices().is_empty());
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
 }
 
 #[test]
@@ -514,11 +590,18 @@ fn reply_wake_turn_final_does_not_start_a_reply_ping_pong() {
     let source = f.send(Author::Agent(f.orch), "request");
     f.finish(source, "GO");
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    let notice = f.notices()[0].id;
-    f.finish(notice, "Used the GO");
-    f.worker.submit_ready().unwrap();
-    assert_eq!(f.worker.state.requests().count(), 2);
+    assert!(f.notices().is_empty());
+    assert_eq!(f.worker.state.requests().count(), 1);
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(f
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|call| { !call.contains("Reply to message") && !call.contains("GO") }));
 }
 
 #[test]
@@ -527,23 +610,25 @@ fn intentional_reply_to_a_reply_notification_still_reaches_its_author() {
     let source = f.send(Author::Agent(f.orch), "request");
     f.finish(source, "GO");
     f.worker.submit_ready().unwrap();
-    assert_eq!(f.notices().len(), 1);
-    let message = f.notices()[0].prompt.id;
-    let reply = f.call("message.send", json!({"reply_to":message.0.to_string(),"as":f.orch.0.to_string(),"text":"Need a revised GO"}));
-    assert!(reply.ok, "{reply:?}");
-    let mut state = f.worker.state.clone();
-    state
-        .route_worker_replies(io::now_ms() + 3_000, &BTreeSet::new())
-        .unwrap();
-    assert_eq!(
-        state
-            .requests()
-            .filter(|r| r.agent_id == f.agent
-                && r.prompt.author == Author::Agent(f.orch)
-                && r.prompt.text.contains("Need a revised GO"))
-            .count(),
-        1
+    assert!(
+        f.notices().is_empty(),
+        "a captured final leaves no reply notification to answer"
     );
+    assert_eq!(
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(f.worker.state.requests().count(), 1);
+    assert!(f
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|call| { !call.contains("Reply to message") && !call.contains("Need a revised GO") }));
+    assert!(f
+        .notices()
+        .iter()
+        .all(|notice| !notice.prompt.text.contains("Reply to message")));
 }
 
 #[test]
@@ -568,14 +653,23 @@ fn shared_captured_final_reaches_each_author_and_waiter_ack_is_author_scoped() {
             );
         }
         f.worker.submit_ready().unwrap();
-        assert_eq!(f.notices().len(), usize::from(!acknowledge));
+        assert!(f.notices().is_empty(), "acknowledge={acknowledge}");
+        assert!(f.calls.lock().unwrap().is_empty());
         assert_eq!(
             f.worker
                 .state
                 .requests()
                 .filter(|r| r.bus_generated && r.agent_id == orchestrator)
                 .count(),
-            1
+            0
+        );
+        assert_eq!(
+            f.worker.state.request(first).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            f.worker.state.request(second).unwrap().phase,
+            RequestPhase::Completed
         );
     }
 }
@@ -601,10 +695,36 @@ fn copy_sent_to_someone_else_does_not_consume_requesters_reply() {
         .unwrap();
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
+    assert!(
+        f.notices()
+            .iter()
+            .all(|notice| !notice.prompt.text.contains("Reply to message")),
+        "a copy addressed elsewhere is not a reply wake: {:?}",
+        f.notices()
+    );
+    let calls = f.calls.lock().unwrap();
+    assert!(
+        calls.iter().any(|call| call.contains("Same result")),
+        "the plain send is still delivered: {calls:?}"
+    );
+    assert!(
+        calls.iter().all(|call| !call.contains("Reply to message")),
+        "{calls:?}"
+    );
+    drop(calls);
     assert_eq!(
-        f.notices().len(),
-        1,
-        "a copy addressed elsewhere cannot reach this requester"
+        f.worker.state.request(source).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        f.worker
+            .state
+            .request(source)
+            .unwrap()
+            .reply()
+            .unwrap()
+            .text,
+        "Same result"
     );
 }
 
@@ -632,8 +752,24 @@ fn legacy_orchestrator_group_routes_keep_their_seen_or_pending_state_on_upgrade(
         f.worker.submit_ready().unwrap();
         f.reopen();
         f.worker.submit_ready().unwrap();
-        assert_eq!(f.notices().len(), usize::from(!seen));
-        assert_eq!(f.calls.lock().unwrap().len(), usize::from(!seen));
+        assert!(f.notices().is_empty(), "seen={seen}");
+        let calls = f.calls.lock().unwrap();
+        assert!(calls.is_empty(), "seen={seen}: {calls:?}");
+        drop(calls);
+        assert_eq!(
+            f.worker.state.request(lead).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            f.worker.state.request(member).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert!(f
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|call| !call.contains("Legacy final") && !call.contains("Reply to message")));
     }
 }
 

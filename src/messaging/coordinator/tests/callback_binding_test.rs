@@ -53,7 +53,7 @@ fn empty_stop_settles_without_sender_errors_or_orchestrator_notices() {
                 .unwrap();
             let result = worker.state.request(request).unwrap();
             assert_eq!(result.phase, RequestPhase::Completed);
-            assert_eq!(result.reply().unwrap().text, "");
+            assert!(result.reply().is_none());
             assert!(result.failure_reason.is_none());
             assert!(worker
                 .state
@@ -116,21 +116,11 @@ fn empty_stop_preexisting_retained_record_recovers_after_restart_by_turn_id() {
         .state
         .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
         .unwrap();
-    assert_eq!(
-        worker.state.request(request).unwrap().phase,
-        RequestPhase::Completed
-    );
-    assert_eq!(
-        worker
-            .state
-            .request(request)
-            .unwrap()
-            .reply()
-            .unwrap()
-            .provider_turn_id
-            .as_deref(),
-        Some("owned")
-    );
+    let recovered = worker.state.request(request).unwrap();
+    assert_eq!(recovered.phase, RequestPhase::Completed);
+    assert!(recovered.reply().is_none());
+    assert!(recovered.failure_reason.is_none());
+    assert_eq!(recovered.provider_turn_id.as_deref(), Some("owned"));
     assert!(worker
         .state
         .agent(agent)
@@ -200,10 +190,10 @@ fn empty_stop_retained_abandoned_turn_is_consumed_after_restart_without_rebindin
         ),
         Some(old)
     );
-    assert_eq!(
-        worker.state.request(old).unwrap().failure_reason.as_deref(),
-        Some("reply_not_captured")
-    );
+    let closed = worker.state.request(old).unwrap();
+    assert_eq!(closed.phase, RequestPhase::Completed);
+    assert!(closed.reply().is_none());
+    assert!(closed.failure_reason.is_none());
     let next = queue(&mut worker, room, agent, "new task");
     worker.submit_ready().unwrap();
     record(
@@ -381,10 +371,9 @@ fn same_turn_claude_input_is_progress_without_exposing_content() {
             claude_start("turn", "PRIVATE_LATE_INPUT"),
         );
         consume(&mut worker, agent, &dir);
-        assert_eq!(
-            worker.state.request(request).unwrap().reply().unwrap().text,
-            "PRIVATE_REPLY"
-        );
+        let held = worker.state.request(request).unwrap();
+        assert_eq!(held.phase, RequestPhase::Completed);
+        assert!(held.reply().is_none());
         assert!(worker
             .state
             .agent(agent)
@@ -395,14 +384,11 @@ fn same_turn_claude_input_is_progress_without_exposing_content() {
             .state
             .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
             .unwrap();
-        assert_eq!(
-            worker.state.request(request).unwrap().phase,
-            RequestPhase::Completed
-        );
-        assert_eq!(
-            worker.state.room(room).unwrap().latest_replies[&agent].text,
-            "PRIVATE_REPLY"
-        );
+        let settled = worker.state.request(request).unwrap();
+        assert_eq!(settled.phase, RequestPhase::Completed);
+        assert!(settled.reply().is_none());
+        assert!(settled.failure_reason.is_none());
+        assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     });
@@ -436,8 +422,11 @@ fn claude_compaction_and_delayed_submit_preserve_request_binding() {
                 consume(&mut worker, agent, &dir);
             }
             worker.state.observe_status(agent, RuntimeStatus::Idle, io::now_ms()).unwrap();
-            assert_eq!(worker.state.request(request).unwrap().phase, RequestPhase::Completed);
-            assert_eq!(worker.state.room(room).unwrap().latest_replies[&agent].text, "reply");
+            let settled = worker.state.request(request).unwrap();
+            assert_eq!(settled.phase, RequestPhase::Completed);
+            assert!(settled.reply().is_none());
+            assert!(settled.failure_reason.is_none());
+            assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
             assert!(worker.state.agent(agent).unwrap().actionable_error.is_none());
             assert_eq!(worker.state.agent(agent).unwrap().compactions.count, 3);
             assert!(callbacks::records(&dir.join("callbacks/launch")).unwrap().is_empty());
@@ -630,13 +619,10 @@ fn completed_on_interim(
         .state
         .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
         .unwrap();
-    assert_eq!(
-        worker.state.request(source).unwrap().phase,
-        RequestPhase::Completed
-    );
-    let mut state = worker.state.clone();
-    state.see_worker_reply(source, orch, io::now_ms()).unwrap();
-    worker.save(state).unwrap();
+    let settled = worker.state.request(source).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
     source
 }
 
@@ -691,12 +677,15 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
         assert!(worker.state.request(next).unwrap().pending_final.is_none());
         route_at(&mut worker, io::now_ms() + 10_000);
         let notices = orchestrator_notices(&worker, orch, agent);
-        assert_eq!(notices.len(), 1, "next_started={next_started}: {notices:?}");
-        assert!(notices[0].contains(&format!(
-            "Late reply to message {}",
-            worker.state.request(source).unwrap().prompt.id.0
-        )));
-        assert!(notices[0].contains("CI passed: real result."));
+        assert!(
+            notices.iter().all(|notice| {
+                !notice.contains("Late reply")
+                    && !notice.contains("Reply to message")
+                    && !notice.contains("CI passed")
+            }),
+            "next_started={next_started}: captured late final was forwarded: {notices:?}"
+        );
+        assert!(worker.state.request(source).unwrap().reply().is_none());
         // The newer request still binds and answers with its own turn.
         if !next_started {
             record(
@@ -722,11 +711,14 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
             RequestPhase::Completed,
             "next_started={next_started}"
         );
-        assert_eq!(next_request.reply().unwrap().text, "Second reply.");
-        assert_eq!(
-            worker.state.request(source).unwrap().reply().unwrap().text,
-            "Waiting for CI."
+        assert!(
+            next_request.reply().is_none(),
+            "next_started={next_started}"
         );
+        assert!(next_request.failure_reason.is_none());
+        let source_request = worker.state.request(source).unwrap();
+        assert_eq!(source_request.phase, RequestPhase::Completed);
+        assert!(source_request.reply().is_none());
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -744,7 +736,10 @@ fn successive_late_finals_after_completion_each_wake_the_sender_once() {
     );
     consume(&mut worker, agent, &dir);
     route_at(&mut worker, now + 10_000);
-    assert_eq!(orchestrator_notices(&worker, orch, agent).len(), 1);
+    assert!(
+        orchestrator_notices(&worker, orch, agent).is_empty(),
+        "the first captured late final must not wake the sender"
+    );
     record(
         &dir,
         Provider::ClaudeCode,
@@ -764,9 +759,15 @@ fn successive_late_finals_after_completion_each_wake_the_sender_once() {
     consume(&mut worker, agent, &dir);
     route_at(&mut worker, now + 30_000);
     let notices = orchestrator_notices(&worker, orch, agent);
-    assert_eq!(notices.len(), 2, "{notices:?}");
-    assert!(notices[1].contains("Reviewer approved."));
-    assert!(!notices[1].contains("Still waiting") && !notices[1].contains("Waiting for CI."));
+    assert!(
+        notices.iter().all(|notice| {
+            !notice.contains("Late reply")
+                && !notice.contains("Reply to message")
+                && !notice.contains("Turn final")
+                && !notice.contains("Reviewer approved")
+        }),
+        "changed captured finals were forwarded: {notices:?}"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -797,10 +798,10 @@ fn abandoned_request_does_not_spend_its_turn_on_a_first_interim_late_final() {
         Some(source)
     );
     worker.save(state).unwrap();
-    assert_eq!(
-        worker.state.request(source).unwrap().phase,
-        RequestPhase::Abandoned
-    );
+    let settled = worker.state.request(source).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert!(settled.reply().is_none());
+    assert!(settled.failure_reason.is_none());
     record(
         &dir,
         Provider::ClaudeCode,
@@ -817,8 +818,13 @@ fn abandoned_request_does_not_spend_its_turn_on_a_first_interim_late_final() {
     route_at(&mut worker, now + 30_000);
     let notices = orchestrator_notices(&worker, orch, agent);
     assert!(
-        notices.iter().any(|n| n.contains("Reviewer approved.")),
-        "the later changed final of an abandoned turn was dropped: {notices:?}"
+        notices.iter().all(|notice| {
+            !notice.contains("Reviewer approved")
+                && !notice.contains("Late reply")
+                && !notice.contains("Reply to message")
+                && !notice.contains("Turn final")
+        }),
+        "a captured final was forwarded: {notices:?}"
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -871,7 +877,7 @@ fn noise_cursor_empty_response_requires_its_own_completed_stop_and_survives_relo
         let mut worker = reopen_saved(&dir);
         let reply = worker.state.request(request).unwrap();
         assert_eq!(reply.phase, RequestPhase::Completed);
-        assert_eq!(reply.reply().unwrap().text, text);
+        assert!(reply.reply().is_none(), "{text:?}");
         assert!(reply.failure_reason.is_none());
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
         assert_eq!(worker.state.agent(agent).unwrap().current_request, None);

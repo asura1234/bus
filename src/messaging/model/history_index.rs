@@ -61,14 +61,6 @@ impl HistoryIndex {
             }
         }
     }
-
-    pub(super) fn has_developer(&self, key: RequestId) -> bool {
-        self.developers.contains_key(&key)
-    }
-
-    pub(super) fn latest_follower(&self, room: RoomId, key: RequestId) -> Option<RequestId> {
-        self.followers.get(&(room, key))?.last().copied()
-    }
 }
 
 impl Request {

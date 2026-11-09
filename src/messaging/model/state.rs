@@ -271,24 +271,6 @@ impl BusState {
         }
     }
 
-    pub(crate) fn history_group_has_developer(&self, key: RequestId) -> bool {
-        self.request(key)
-            .is_some_and(|request| request.prompt.author == super::Author::Developer)
-            || self.requests.history_index().has_developer(key)
-            || self.history.groups.has_developer(key)
-    }
-
-    pub(crate) fn history_latest_group_member(
-        &self,
-        room: RoomId,
-        key: RequestId,
-    ) -> Option<RequestId> {
-        self.requests
-            .history_index()
-            .latest_follower(room, key)
-            .max(self.history.groups.latest_follower(room, key))
-    }
-
     /// Live obligations only; reconciliation and save diagnostics must not
     /// traverse permanent archived history to find unfinished native turns.
     pub(crate) fn unsettled_requests(&self) -> impl Iterator<Item = &Request> {
@@ -323,30 +305,7 @@ impl BusState {
         &self.history
     }
 
-    /// Shared answers are displayed once per room, including the group's anchor.
-    /// Individual explicit replies retain their own body even inside a turn group.
-    pub(crate) fn shared_reply_sources(
-        &self,
-        room: RoomId,
-        visible: impl Fn(&Request) -> bool,
-    ) -> BTreeMap<RequestId, RequestId> {
-        let mut sources = BTreeMap::new();
-        for request in self
-            .requests()
-            .filter(|request| request.room_id == room && visible(request))
-        {
-            if let Some(group) = request
-                .completed_reply
-                .as_ref()
-                .and_then(|reply| reply.group)
-            {
-                sources.entry(group).or_insert(request.id);
-            }
-        }
-        sources
-    }
-
-    /// Settles `id` with `reply`, as a final callback does, and releases its agent.
+    /// Settles `id` with `reply` for tests that still store an explicit answer.
     #[cfg(test)]
     pub(crate) fn finish_for_test(&mut self, id: RequestId, reply: &str, at_ms: u64) {
         let request = self.requests.get_mut(&id).expect("request");

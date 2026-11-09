@@ -584,7 +584,6 @@ impl BusUi {
                     );
                 }
             }
-            Action::Quote(agent) => self.quote(agent),
             Action::Field(index) => {
                 if let Some(Form::Agent { field, .. }) = &mut self.form {
                     *field = index;

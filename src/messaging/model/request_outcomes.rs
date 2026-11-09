@@ -85,7 +85,7 @@ impl Request {
             RequestPhase::Active if self.group.is_some() => "joined",
             RequestPhase::Active if self.trusted_start_bound => "delivered",
             RequestPhase::Active => "awaiting_start",
-            RequestPhase::Completed => "replied",
+            RequestPhase::Completed => "ended",
             RequestPhase::Abandoned => "abandoned",
         }
     }

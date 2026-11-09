@@ -1,7 +1,7 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase,
+    PendingFinal, ProviderCallback, Request, RequestId, RequestPhase,
 };
 
 #[path = "callback_latency.rs"]
@@ -464,10 +464,11 @@ impl BusState {
         ));
     }
 
-    /// Settles the agent's current request, and every request in its group,
-    /// with its captured final reply. Confirmed members publish immediately.
-    /// Unconfirmed steering needs turn proof, with the completed lead retained
-    /// as an anchor while the provider can still claim those inputs.
+    /// Settles the agent's current request, and every confirmed member of its
+    /// group, when the turn ends. The final text is not a reply. An explicit
+    /// `--reply-to` already stored on a request stays. Unconfirmed steering
+    /// needs turn proof, with the completed lead retained as an anchor while
+    /// the provider can still claim those inputs.
     pub(super) fn complete_pending_final(
         &mut self,
         agent_id: AgentId,
@@ -495,19 +496,8 @@ impl BusState {
                 .get(member)
                 .is_none_or(|m| !m.steered || m.trusted_start_bound || m.settled())
         });
-        // Already answered requests own their reply keys. The shared final gets
-        // an outstanding representative, so it cannot overwrite or spend those replies.
-        let reply_group = request
-            .completed_reply
-            .as_ref()
-            .filter(|reply| reply.content == pending)
-            .and_then(|reply| reply.group)
-            .or_else(|| {
-                std::iter::once(request_id)
-                    .chain(members.iter().copied())
-                    .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
-            })
-            .unwrap_or(request_id);
+        // A turn final is not a reply. An explicit --reply-to already stored
+        // on the request stays; everyone else just becomes terminal.
         let turn_key = pending_turn_key(request, &pending);
         for member in &unresolved {
             if let Some(member) = self.requests.get_mut(member) {
@@ -519,21 +509,10 @@ impl BusState {
                 });
             }
         }
-        self.publish_group_reply(request_id, &members, &pending)?;
         for member in members {
             if let Some(member) = self.requests.get_mut(&member) {
-                if !member.settled() {
-                    member
-                        .latency
-                        .reply_captured_at_ms
-                        .get_or_insert(pending.received_at_ms);
-                    member.completed_at_ms = Some(completed_at_ms);
-                    member.completed_reply = Some(super::types::CompletedReply {
-                        content: pending.clone(),
-                        group: Some(reply_group),
-                    });
-                }
                 if member.phase != RequestPhase::Abandoned {
+                    member.completed_at_ms.get_or_insert(completed_at_ms);
                     member.phase = RequestPhase::Completed;
                 }
                 member.pending_final = None;
@@ -543,19 +522,10 @@ impl BusState {
             .requests
             .get_mut(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
-        if !request.settled() {
-            request
-                .latency
-                .reply_captured_at_ms
-                .get_or_insert(pending.received_at_ms);
-            request.completed_at_ms = Some(completed_at_ms);
-            request.completed_reply = Some(super::types::CompletedReply {
-                content: pending,
-                group: Some(reply_group),
-            });
+        if request.phase != RequestPhase::Abandoned {
+            request.completed_at_ms.get_or_insert(completed_at_ms);
+            request.phase = RequestPhase::Completed;
         }
-        request.phase = RequestPhase::Completed;
-        request.completed_at_ms.get_or_insert(completed_at_ms);
         if unresolved.is_empty() {
             request.pending_final = None;
         }
@@ -587,56 +557,6 @@ impl BusState {
             }
         }
         agent.actionable_error = None;
-        Ok(())
-    }
-
-    /// One shared turn can answer messages in a work room and MASTER. Publish
-    /// once per visible room, under that room's newest participating request.
-    fn publish_group_reply(
-        &mut self,
-        lead: RequestId,
-        members: &[RequestId],
-        pending: &PendingFinal,
-    ) -> Result<(), ModelError> {
-        self.publish_orchestrator_final(lead, members, pending)?;
-        // A silent completed turn has a durable result but no room message or ding.
-        if pending.text.trim().is_empty() {
-            return Ok(());
-        }
-        let published_rooms: std::collections::BTreeSet<_> = std::iter::once(&lead)
-            .chain(members)
-            .filter_map(|id| self.requests.get(id))
-            .filter(|request| {
-                request.phase == RequestPhase::Completed && request.reply() == Some(pending)
-            })
-            .map(|request| request.room_id)
-            .collect();
-        let mut replies = std::collections::BTreeMap::new();
-        for id in std::iter::once(&lead).chain(members) {
-            let request = self
-                .requests
-                .get(id)
-                .ok_or(ModelError::UnknownRequest(*id))?;
-            if request.settled() || published_rooms.contains(&request.room_id) {
-                continue;
-            }
-            replies.insert(
-                request.room_id,
-                Reply {
-                    request_id: *id,
-                    agent_id: request.agent_id,
-                    text: pending.text.clone(),
-                    received_at_ms: pending.received_at_ms,
-                },
-            );
-        }
-        for (id, reply) in replies {
-            let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
-            room.latest_replies.insert(reply.agent_id, reply);
-            if self.visible_room != Some(id) {
-                room.unread_count = room.unread_count.saturating_add(1);
-            }
-        }
         Ok(())
     }
 }

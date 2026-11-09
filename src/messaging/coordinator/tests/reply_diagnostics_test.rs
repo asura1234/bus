@@ -29,11 +29,22 @@ fn reply_diagnostics_captured_final_explains_the_failed_corrected_reply() {
         "a rejected hybrid must not fill the reply slot"
     );
 
+    assert!(reply(&mut f, message, agent, "VERIFIED; App pending.").ok);
+    let captured_at = f.request(lead).reply().unwrap().received_at_ms;
     f.stopped("infinite-turn", "I verified the change; App pending.");
     f.consume();
-    let captured_at = f.request(lead).reply().unwrap().received_at_ms;
+    assert_eq!(
+        f.request(lead).reply().unwrap().text,
+        "VERIFIED; App pending."
+    );
+    assert_eq!(f.request(lead).reply().unwrap().received_at_ms, captured_at);
+    assert!(f.worker.state.requests().all(|request| {
+        request
+            .reply()
+            .is_none_or(|reply| reply.text != "I verified the change; App pending.")
+    }));
     let before = f.worker.state.clone();
-    let response = reply(&mut f, message, agent, "VERIFIED; App pending.");
+    let response = reply(&mut f, message, agent, "a different correction");
     assert!(!response.ok);
     let error = response.error.unwrap();
     assert_eq!(error.code, "request_already_replied");
@@ -56,7 +67,7 @@ fn reply_diagnostics_captured_final_explains_the_failed_corrected_reply() {
     assert_eq!(response.result["new_text_sent"], false);
     assert_eq!(
         response.result["existing_reply"]["source"],
-        "captured_turn_final"
+        "recipient_reply"
     );
     assert_eq!(
         response.result["existing_reply"]["received_at_ms"],
@@ -64,24 +75,16 @@ fn reply_diagnostics_captured_final_explains_the_failed_corrected_reply() {
     );
     assert_eq!(
         response.result["existing_reply"]["preview"],
-        "I verified the change; App pending."
+        "VERIFIED; App pending."
     );
     assert_eq!(
         f.worker.state, before,
         "diagnostics must preserve the first answer"
     );
-    assert!(
-        reply(
-            &mut f,
-            message,
-            agent,
-            "I verified the change; App pending."
-        )
-        .ok
-    );
+    assert!(reply(&mut f, message, agent, "VERIFIED; App pending.").ok);
     assert_eq!(
         f.worker.state, before,
-        "the captured answer's exact-text retry stays idempotent"
+        "the explicit answer's exact-text retry stays idempotent"
     );
 }
 
@@ -96,6 +99,7 @@ fn reply_diagnostics_recipient_reply_survives_stop_and_bounds_unicode_preview() 
     let received_at = f.request(lead).reply().unwrap().received_at_ms;
     f.stopped("infinite-turn", "Later final must not replace the answer");
     f.consume();
+    assert_eq!(f.request(lead).reply().unwrap().text, text);
     let before = f.worker.state.clone();
     let response = reply(&mut f, message, agent, "different answer");
     assert_eq!(response.error.unwrap().code, "request_already_replied");
@@ -123,8 +127,10 @@ fn reply_diagnostics_do_not_disclose_existing_answers_to_other_agents() {
     let lead = start(&mut f, "verify");
     let message = f.request(lead).prompt.id;
     let agent = f.agent;
-    f.stopped("infinite-turn", "private answer");
+    assert!(reply(&mut f, message, agent, "private answer").ok);
+    f.stopped("infinite-turn", "later final stays off the stored answer");
     f.consume();
+    assert_eq!(f.request(lead).reply().unwrap().text, "private answer");
     let other = f
         .worker
         .state
@@ -164,21 +170,44 @@ fn reply_diagnostics_joined_request_answered_by_group_final_reports_captured_sou
     assert_eq!(f.request(next).group, Some(lead));
     let message = f.request(next).prompt.id;
     let agent = f.agent;
+    assert!(reply(&mut f, message, agent, "corrected member answer").ok);
+    let received_at = f.request(next).reply().unwrap().received_at_ms;
     f.stopped("infinite-turn", "group final");
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.worker.settle_requests().unwrap();
+    assert_eq!(
+        f.request(next).reply().unwrap().text,
+        "corrected member answer"
+    );
+    assert_eq!(f.request(next).reply().unwrap().received_at_ms, received_at);
+    assert_eq!(f.request(next).group, Some(lead));
+    assert_eq!(f.request(next).phase, RequestPhase::Completed);
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert!(f.request(lead).reply().is_none());
+    assert!(f.worker.state.requests().all(|request| {
+        request
+            .reply()
+            .is_none_or(|reply| reply.text != "group final")
+    }));
     let before = f.worker.state.clone();
     let response = reply(&mut f, message, agent, "late corrected answer");
     assert_eq!(response.error.unwrap().code, "request_already_replied");
     assert_eq!(response.result["request_ids"], json!([next.0]));
     assert_eq!(
         response.result["existing_reply"]["source"],
-        "captured_turn_final"
+        "recipient_reply"
     );
-    assert_eq!(response.result["existing_reply"]["preview"], "group final");
+    assert_eq!(
+        response.result["existing_reply"]["preview"],
+        "corrected member answer"
+    );
+    assert_eq!(
+        response.result["existing_reply"]["received_at_ms"],
+        received_at
+    );
     assert_eq!(f.worker.state, before);
-    assert!(reply(&mut f, message, agent, "group final").ok);
+    assert!(reply(&mut f, message, agent, "corrected member answer").ok);
     assert_eq!(f.worker.state, before);
 }
 
@@ -235,6 +264,7 @@ fn reply_diagnostics_short_header_and_first_answer_work_for_each_provider() {
         assert!(reply(&mut f, message, agent, "first answer").ok);
         f.stopped("infinite-turn", "later final");
         f.consume();
+        assert_eq!(f.request(lead).reply().unwrap().text, "first answer");
         let before = f.worker.state.clone();
         let response = reply(&mut f, message, agent, "correction");
         assert_eq!(

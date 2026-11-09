@@ -898,15 +898,15 @@ impl Delivery {
         self.worker = Some(worker);
         self.tick();
     }
-    /// A reply group contributes one publication per source room. The unread
-    /// counters are independent observable effects, unlike map-key uniqueness.
+    /// Unread counts explicit replies, agent/bus sends, and notices. A captured
+    /// turn final is not a reply and does not add a publication.
     pub(crate) fn assert_publications(&self) {
         use std::collections::BTreeSet;
         for room in self.state().rooms() {
             let replies: BTreeSet<_> = self
                 .state()
                 .requests()
-                .filter(|r| r.room_id == room.id && r.phase == RequestPhase::Completed)
+                .filter(|r| r.room_id == room.id && r.reply().is_some())
                 .filter_map(|r| r.reply().map(|p| p.callback_id.clone()))
                 .collect();
             let sends: BTreeSet<_> = self
@@ -922,7 +922,7 @@ impl Delivery {
             assert_eq!(
                 room.unread_count as usize,
                 replies.len() + sends.len() + notices,
-                "publication count in room {}: {} reply groups, {} agent messages, {} notices",
+                "publication count in room {}: {} explicit replies, {} agent messages, {} notices",
                 room.name,
                 replies.len(),
                 sends.len(),
@@ -930,6 +930,8 @@ impl Delivery {
             );
         }
     }
+    /// A settled turn final has no stored reply. An explicit `--reply-to`
+    /// still stores `text` and is not overwritten by a later final.
     pub(crate) fn assert_reply(&mut self, request: RequestId, text: &str) {
         let r = self.state().request(request).unwrap().clone();
         assert_eq!(
@@ -937,39 +939,36 @@ impl Delivery {
             RequestPhase::Completed,
             "request {request:?}: {r:?}"
         );
-        assert_eq!(r.reply().unwrap().text, text);
-        self.assert_publications();
-        let captured = r
-            .completed_reply
-            .as_ref()
-            .is_some_and(|reply| reply.group.is_some());
-        let worker_woke_orchestrator = self
-            .state()
-            .agent(r.agent_id)
-            .is_some_and(|a| a.orchestrates.is_some())
-            && matches!(r.prompt.author, Author::Agent(id) if self.state().agent(id).is_some_and(|a| a.orchestrates.is_none()));
-        let shared_in_master = self
-            .state()
-            .requests()
-            .any(|other| other.room_id == self.master && other.reply() == r.reply());
-        for room in self.state().rooms() {
-            let expected = usize::from(
-                captured
-                    && worker_woke_orchestrator
-                    && !shared_in_master
-                    && room.id == self.master
-                    && !text.trim().is_empty(),
+        assert!(r.failure_reason.is_none(), "request {request:?}: {r:?}");
+        if let Some(reply) = r.reply() {
+            assert_eq!(reply.text, text, "explicit reply {request:?}");
+            assert!(
+                r.completed_reply
+                    .as_ref()
+                    .is_some_and(|stored| stored.group.is_none()),
+                "explicit --reply-to is not a captured group reply"
             );
-            assert_eq!(
+        } else {
+            assert!(
                 self.state()
-                    .notices(room.id)
-                    .filter(|n| n.author == Author::Agent(r.agent_id) && n.text == text)
-                    .count(),
-                expected,
-                "orchestrator decision publication in {}",
-                room.name
+                    .room(r.room_id)
+                    .and_then(|room| room.latest_replies.get(&r.agent_id))
+                    .is_none_or(|reply| reply.text != text),
+                "captured final was stored as a reply"
             );
+            for room in self.state().rooms() {
+                assert_eq!(
+                    self.state()
+                        .notices(room.id)
+                        .filter(|n| n.author == Author::Agent(r.agent_id) && n.text == text)
+                        .count(),
+                    0,
+                    "captured final published in {}",
+                    room.name
+                );
+            }
         }
+        self.assert_publications();
         let before: Vec<_> = self
             .state()
             .rooms()
@@ -997,26 +996,15 @@ impl Delivery {
             .iter()
             .filter(|row| row["request_id"].as_u64() == Some(request.0))
             .collect();
-        assert_eq!(replies.len(), 1, "reply missing/duplicated: {history}");
-        let source = r
-            .completed_reply
-            .as_ref()
-            .and_then(|reply| reply.group)
-            .and_then(|group| {
-                self.state()
-                    .shared_reply_sources(r.room_id, |_| true)
-                    .get(&group)
-                    .copied()
-            });
-        if let Some(source) = source.filter(|source| *source != request) {
-            assert!(replies[0]["reply"].is_null());
-            assert_eq!(
-                replies[0]["answered_with_message"],
-                json!(self.state().request(source).unwrap().prompt.id)
-            );
-        } else {
-            assert_eq!(replies[0]["reply"]["text"], text);
-        }
+        assert_eq!(replies.len(), 1, "request missing/duplicated: {history}");
+        assert!(
+            replies[0]["reply"].is_null(),
+            "history must not show a reply body: {history}"
+        );
+        assert!(replies[0].get("answered_with_message").is_none());
+        assert_eq!(replies[0]["reply_ack"], json!(false));
+        assert!(replies[0]["group"].is_null());
+        assert_eq!(replies[0]["stage"], "ended");
     }
 }
 impl Drop for Delivery {
