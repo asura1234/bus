@@ -30,6 +30,7 @@ impl BusState {
     }
 
     /// A numeric historical identity cannot be rebound to a replacement.
+    #[cfg(test)]
     pub(crate) fn is_retired_selector(&self, selector: &str) -> bool {
         selector
             .parse::<u64>()

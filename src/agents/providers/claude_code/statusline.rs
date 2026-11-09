@@ -10,12 +10,8 @@ use std::{
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::agents::providers::{
-    usage::{
-        Observation, ObservationManifest, UsageWindow, UsageWindows, FIVE_HOUR_MINUTES,
-        WEEKLY_MINUTES,
-    },
-    ProviderKind,
+use crate::agents::providers::usage::{
+    Observation, ObservationManifest, UsageWindow, UsageWindows, FIVE_HOUR_MINUTES, WEEKLY_MINUTES,
 };
 use crate::utils::time as bus_io;
 

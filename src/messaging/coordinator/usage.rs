@@ -11,7 +11,6 @@ use serde_json::{json, Value};
 use crate::agents::providers::{
     claude_code::statusline as claude_statusline,
     usage::{Observation, UsageWindow, UsageWindows},
-    ProviderKind,
 };
 use crate::messaging::model::{AgentId, BusState, Provider, RequestId, RoomAgent};
 use crate::utils::time as bus_io;
