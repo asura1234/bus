@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 const PHASES: &[&str] = &[
     "accepted_to_box",
+    "accepted_to_picked",
     "enqueue",
     "ready_queue",
     "dispatch",
@@ -58,6 +59,11 @@ pub(super) fn end_to_end_ms(request: &Request) -> Option<u64> {
     aggregate(request, "end_to_end")
 }
 
+/// Send accepted until the agent turn takes the message. A missing or reversed pair contributes nothing.
+pub(super) fn accepted_to_picked_ms(request: &Request) -> Option<u64> {
+    aggregate(request, "accepted_to_picked")
+}
+
 pub(super) fn elapsed(start: Option<u64>, end: Option<u64>) -> Option<u64> {
     end?.checked_sub(start?)
 }
@@ -81,6 +87,7 @@ fn phase(request: &Request, name: &str) -> Option<u64> {
     let pair = |start, end| elapsed(start, end);
     match name {
         "accepted_to_box" => pair(latency.accepted_at_ms, native_at(native.text_written_at_ms)),
+        "accepted_to_picked" => pair(latency.accepted_at_ms, latency.picked_at_ms),
         "enqueue" => pair(latency.accepted_at_ms, latency.queued_at_ms),
         "ready_queue" => pair(latency.queued_at_ms, latency.picked_at_ms),
         "dispatch" => pair(latency.picked_at_ms, anchor),

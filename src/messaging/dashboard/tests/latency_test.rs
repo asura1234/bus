@@ -98,6 +98,11 @@ fn snapshot_aggregates_ready_bus_phases_by_provider_recipient_and_hour() {
         (end_to_end.n, end_to_end.p50, end_to_end.p90, end_to_end.p99),
         (3, Some(330), Some(1100), Some(1100))
     );
+    let picked = &report.all.phases["accepted_to_picked"];
+    assert_eq!(
+        (picked.n, picked.p50, picked.p90, picked.p99, picked.mean),
+        (3, Some(60), Some(200), Some(200), Some(93))
+    );
     assert_eq!(
         report.providers["claude"].phases["accepted_to_box"].p50,
         Some(150)
@@ -182,6 +187,10 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
     assert_eq!(body["metrics"]["all"]["end_to_end"]["n"], 0);
     assert!(body["metrics"]["all"]["end_to_end"]["p50"].is_null());
     assert!(body["metrics"]["all"]["end_to_end"]["mean"].is_null());
+    assert_eq!(body["metrics"]["all"]["accepted_to_picked"]["n"], 0);
+    assert!(body["metrics"]["all"]["accepted_to_picked"]["p50"].is_null());
+    assert!(body["metrics"]["all"]["accepted_to_picked"]["mean"].is_null());
+    assert!(body["metrics"]["providers"]["claude"]["accepted_to_picked"]["p99"].is_null());
     let raw = String::from_utf8(data.body).unwrap();
     assert!(!raw.contains("SENTINEL_LEGACY_CONTENT"));
     assert!(!raw.contains("/latency"));

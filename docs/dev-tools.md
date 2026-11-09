@@ -94,17 +94,18 @@ delivered ÷ attempted and names that fraction plus the pending and failed
 counts. Pending is still open, with the oldest pending age. Failed messages
 are split into Bus-caused and external, with causes. The order is the delivery
 headline, provider table, room table, then the hourly delivery graph. The
-headline shows delivery success beside the mean end-to-end delay to room
-delivery. Provider and room rows include p50, p90, p99 and the sample count
-for that same delay. An empty group renders an em dash, not zero. There is
-no separate latency page. Bus reliability sits below delivery as a note: of
-conclusive deliveries, how many succeeded. The caption is that success
-share. When that denominator is 0 the note and the counts line use an em
-dash and do not print 0/0. Provider and room rows show Delivered, Attempted,
-Pending, Delivery %, Bus failures, External, p50, p90, p99 and n.
-Attempted = Delivered + Pending + Bus failures + External. There is no
-per-recipient breakdown and no per-row cause list. Bus failure and external
-counts open undelivered request metadata and a copyable
+headline shows delivery success beside the mean delay from send accepted
+until the agent turn takes the message. Provider and room rows include p50,
+p90, p99 and the sample count for that same delay, in human units. Pending
+and failed share one card. The hourly graph stays; the hourly table does not.
+An empty group renders an em dash, not zero. There is no separate latency page.
+Bus reliability sits below delivery as a note: of conclusive deliveries, how
+many succeeded. The caption is that success share. When that denominator is 0
+the note and the counts line use an em dash and do not print 0/0. Provider and
+room rows show Delivered, Attempted, Pending, Delivery %, Bus failures,
+External, p50, p90, p99 and n. Attempted = Delivered + Pending + Bus failures +
+External. There is no per-recipient breakdown and no per-row cause list. Bus
+failure and external counts open undelivered request metadata and a copyable
 `bus message status MESSAGE_ID` command. The full classification is
 printed on the page. Read/HTTP errors go only to `dashboard.log` in the session's
 logs directory; unavailable data appears as “No data”.

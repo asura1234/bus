@@ -106,6 +106,9 @@ struct Series {
     identity: String,
     /// p50/p90/p99 and the mean of complete end-to-end pairs. Empty stays None.
     end_to_end: super::latency::Percentiles,
+    /// Send accepted until agent pickup. This is the latency the delivery page shows.
+    /// Empty stays None. `end_to_end` stays the room-delivery span.
+    accepted_to_picked: super::latency::Percentiles,
 }
 #[derive(Default, Serialize)]
 struct Rates {
@@ -362,6 +365,7 @@ struct SeriesBuilder {
     counts: Counts,
     hours: BTreeMap<i64, (String, Counts)>,
     end_to_end: Vec<u64>,
+    accepted_to_picked: Vec<u64>,
 }
 impl SeriesBuilder {
     fn add(&mut self, hour: &HourKey, request: &Request, outcome: &Outcome) {
@@ -374,6 +378,9 @@ impl SeriesBuilder {
         if let Some(ms) = super::latency::end_to_end_ms(request) {
             self.end_to_end.push(ms);
         }
+        if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
+            self.accepted_to_picked.push(ms);
+        }
     }
     fn finish(self) -> Series {
         let rates = Rates::from(&self.counts);
@@ -383,6 +390,7 @@ impl SeriesBuilder {
             rates,
             identity,
             end_to_end: super::latency::percentiles(&self.end_to_end),
+            accepted_to_picked: super::latency::percentiles(&self.accepted_to_picked),
             hours: self
                 .hours
                 .into_iter()

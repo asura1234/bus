@@ -1034,7 +1034,13 @@ fn delivery_table_end_to_end_keeps_provider_and_room_percentiles() {
     let beta = state.create_room("beta").unwrap();
     let gamma = state.create_room("gamma").unwrap();
     let claude = state
-        .create_agent(alpha, "claude", Provider::ClaudeCode, "/scratch".into(), None)
+        .create_agent(
+            alpha,
+            "claude",
+            Provider::ClaudeCode,
+            "/scratch".into(),
+            None,
+        )
         .unwrap();
     let codex = state
         .create_agent(beta, "codex", Provider::Codex, "/scratch".into(), None)
@@ -1065,14 +1071,28 @@ fn delivery_table_end_to_end_keeps_provider_and_room_percentiles() {
         ),
         (3, Some(200), Some(300), Some(300), Some(200))
     );
+    assert_eq!(report.all.accepted_to_picked.n, 0);
+    assert_eq!(report.all.accepted_to_picked.p50, None);
+    assert_eq!(report.all.accepted_to_picked.mean, None);
     let claude_rate = &report.providers["claude"].end_to_end;
     assert_eq!(
-        (claude_rate.n, claude_rate.p50, claude_rate.p90, claude_rate.p99, claude_rate.mean),
+        (
+            claude_rate.n,
+            claude_rate.p50,
+            claude_rate.p90,
+            claude_rate.p99,
+            claude_rate.mean
+        ),
         (2, Some(100), Some(300), Some(300), Some(200))
     );
     let codex_rate = &report.providers["codex"].end_to_end;
     assert_eq!(
-        (codex_rate.n, codex_rate.p50, codex_rate.p99, codex_rate.mean),
+        (
+            codex_rate.n,
+            codex_rate.p50,
+            codex_rate.p99,
+            codex_rate.mean
+        ),
         (1, Some(200), Some(200), Some(200))
     );
     for provider in ["kimi", "grok", "cursor"] {
@@ -1085,7 +1105,12 @@ fn delivery_table_end_to_end_keeps_provider_and_room_percentiles() {
     }
     let alpha_rate = &report.rooms[&alpha.0.to_string()].series.end_to_end;
     assert_eq!(
-        (alpha_rate.n, alpha_rate.p50, alpha_rate.p99, alpha_rate.mean),
+        (
+            alpha_rate.n,
+            alpha_rate.p50,
+            alpha_rate.p99,
+            alpha_rate.mean
+        ),
         (2, Some(100), Some(300), Some(200))
     );
     let beta_rate = &report.rooms[&beta.0.to_string()].series.end_to_end;
@@ -1099,4 +1124,120 @@ fn delivery_table_end_to_end_keeps_provider_and_room_percentiles() {
     assert_eq!(gamma_rate.p90, None);
     assert_eq!(gamma_rate.p99, None);
     assert_eq!(gamma_rate.mean, None);
+}
+
+fn stamp_pickup(
+    state: &mut BusState,
+    id: RequestId,
+    accepted: u64,
+    picked: Option<u64>,
+    delivered: Option<u64>,
+) {
+    let mut document = serde_json::to_value(&*state).unwrap();
+    document["requests"][id.0.to_string()]["latency"] = serde_json::json!({
+        "accepted_at_ms": accepted,
+        "picked_at_ms": picked,
+        "reply_delivered_at_ms": delivered,
+    });
+    *state = serde_json::from_value(document).unwrap();
+}
+
+#[test]
+fn delivery_table_accepted_to_picked_keeps_provider_and_room_percentiles() {
+    let mut state = BusState::new();
+    let alpha = state.create_room("alpha").unwrap();
+    let beta = state.create_room("beta").unwrap();
+    let gamma = state.create_room("gamma").unwrap();
+    let claude = state
+        .create_agent(
+            alpha,
+            "claude",
+            Provider::ClaudeCode,
+            "/scratch".into(),
+            None,
+        )
+        .unwrap();
+    let codex = state
+        .create_agent(beta, "codex", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    let kimi = state
+        .create_agent(gamma, "kimi", Provider::Kimi, "/scratch".into(), None)
+        .unwrap();
+    let base = 1_793_577_600_000;
+    let fast = submit_latency(&mut state, alpha, claude, base);
+    let slow = submit_latency(&mut state, alpha, claude, base + 1_000);
+    let middle = submit_latency(&mut state, beta, codex, base + 2_000);
+    let reversed = submit_latency(&mut state, gamma, kimi, base + 3_000);
+    let incomplete = submit_latency(&mut state, alpha, claude, base + 4_000);
+    stamp_pickup(&mut state, fast, base, Some(base + 100), Some(base + 5_000));
+    stamp_pickup(
+        &mut state,
+        slow,
+        base + 1_000,
+        Some(base + 1_300),
+        Some(base + 10_000),
+    );
+    stamp_pickup(
+        &mut state,
+        middle,
+        base + 2_000,
+        Some(base + 2_200),
+        Some(base + 10_000),
+    );
+    stamp_pickup(
+        &mut state,
+        reversed,
+        base + 3_000,
+        Some(base + 2_950),
+        Some(base + 4_000),
+    );
+    stamp_pickup(&mut state, incomplete, base + 4_000, None, None);
+
+    let report = snapshot(&state, singapore_hour);
+    let picked = &report.all.accepted_to_picked;
+    assert_eq!(
+        (picked.n, picked.p50, picked.p90, picked.p99, picked.mean),
+        (3, Some(200), Some(300), Some(300), Some(200))
+    );
+    let claude_rate = &report.providers["claude"].accepted_to_picked;
+    assert_eq!(
+        (
+            claude_rate.n,
+            claude_rate.p50,
+            claude_rate.p90,
+            claude_rate.p99,
+            claude_rate.mean
+        ),
+        (2, Some(100), Some(300), Some(300), Some(200))
+    );
+    let codex_rate = &report.providers["codex"].accepted_to_picked;
+    assert_eq!(
+        (
+            codex_rate.n,
+            codex_rate.p50,
+            codex_rate.p99,
+            codex_rate.mean
+        ),
+        (1, Some(200), Some(200), Some(200))
+    );
+    for provider in ["kimi", "grok", "cursor"] {
+        let empty = &report.providers[provider].accepted_to_picked;
+        assert_eq!(empty.n, 0, "{provider}");
+        assert_eq!(empty.p50, None, "{provider}");
+        assert_eq!(empty.mean, None, "{provider}");
+    }
+    let alpha_rate = &report.rooms[&alpha.0.to_string()].series.accepted_to_picked;
+    assert_eq!(
+        (alpha_rate.n, alpha_rate.p50, alpha_rate.p99),
+        (2, Some(100), Some(300))
+    );
+    let beta_rate = &report.rooms[&beta.0.to_string()].series.accepted_to_picked;
+    assert_eq!((beta_rate.n, beta_rate.p50), (1, Some(200)));
+    let gamma_rate = &report.rooms[&gamma.0.to_string()].series.accepted_to_picked;
+    assert_eq!(gamma_rate.n, 0);
+    assert_eq!(gamma_rate.p50, None);
+    assert_eq!(gamma_rate.mean, None);
+    assert_eq!(report.all.end_to_end.n, 4);
+    assert_eq!(report.providers["kimi"].end_to_end.n, 1);
+    assert_eq!(report.providers["kimi"].accepted_to_picked.n, 0);
 }
