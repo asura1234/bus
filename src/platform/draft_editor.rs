@@ -4,7 +4,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
@@ -12,16 +11,22 @@ use std::{
     time::Duration,
 };
 
+mod manual;
+
 const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
 const REQUEST: &str = "request.json";
 const ACK: &str = "ack.json";
+const PRESERVED: &str = "preserved.json";
 pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024;
+// JSON may encode a single input byte as six bytes (for example, \u0000).
+const MAX_RECORD_BYTES: u64 = MAX_BYTES * 6 + 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Operation {
     Idle,
     Capture,
+    Swap,
     Restore,
     Verify,
     Recover,
@@ -44,6 +49,12 @@ struct Request {
 struct Acknowledgement {
     request: Request,
     error: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PreservedDraft {
+    token: String,
+    attempt: String,
 }
 
 pub(crate) struct Exchange {
@@ -131,6 +142,64 @@ impl Exchange {
         Self::begin_inner(dir, timeout, true)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn begin_preserving(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        let mut exchange = Self::begin(dir, timeout)?;
+        exchange.recovery = preserved_recovery(
+            &exchange.dir,
+            &exchange
+                .request
+                .lock()
+                .map_err(|_| io::Error::other("Draft exchange lock poisoned"))?
+                .token,
+        );
+        Ok(exchange)
+    }
+
+    pub(crate) fn has_preserved_draft(dir: &Path) -> bool {
+        dir.join(PRESERVED).exists()
+    }
+
+    /// Resume a durable developer backup, never a Bus-paste withdrawal proof.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn begin_restoration(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        private_dir(&dir)?;
+        let _lock = lock(&dir)?;
+        let saved: PreservedDraft =
+            serde_json::from_slice(&read_regular(&dir.join(PRESERVED), MAX_RECORD_BYTES)?)?;
+        if !valid_token(&saved.token) || saved.attempt.len() as u64 > MAX_BYTES {
+            return Err(io::Error::other("Invalid preserved draft record"));
+        }
+        let recovery = preserved_recovery(&dir, &saved.token);
+        read_regular(&recovery, MAX_BYTES)?;
+        let previous = read_request(&dir)?;
+        if previous.as_ref().is_some_and(|request| {
+            request.operation != Operation::Cancelled
+                && request.expires_ms > crate::utils::time::now_ms()
+                && !has_ack(&dir, request)
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Editor handoff is still active",
+            ));
+        }
+        let request = Request {
+            token: saved.token.clone(),
+            sequence: previous.map_or(0, |request| request.sequence.saturating_add(1)),
+            expires_ms: crate::utils::time::now_ms()
+                .saturating_add(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+            operation: Operation::Restore,
+            verify_text: Some(saved.attempt),
+        };
+        write_json(&dir.join(REQUEST), &request)?;
+        Ok(Self {
+            dir,
+            recovery,
+            marker: marker(&saved.token),
+            request: Mutex::new(request),
+        })
+    }
+
     fn begin_inner(dir: PathBuf, timeout: Duration, recovering: bool) -> io::Result<Self> {
         private_dir(&dir)?;
         #[cfg(unix)]
@@ -139,11 +208,18 @@ impl Exchange {
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
         }
         let _lock = lock(&dir)?;
+        if Self::has_preserved_draft(&dir) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "A developer draft needs restoration",
+            ));
+        }
         let orphaned = fs::read_dir(&dir)?.any(|entry| {
             entry.is_ok_and(|entry| {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                name.starts_with("draft-") && name.ends_with(".txt")
+                (name.starts_with("draft-") || name.starts_with("preserved-"))
+                    && name.ends_with(".txt")
             })
         });
         let reclaim_cancelled = recovering && !recovery_candidates(&dir)?.is_empty();
@@ -162,7 +238,9 @@ impl Exchange {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("draft-") && name.ends_with(".txt") {
+            if (name.starts_with("draft-") || name.starts_with("preserved-"))
+                && name.ends_with(".txt")
+            {
                 let recovered = entry.path().with_extension("recovered");
                 if recovered.exists() {
                     return Err(io::Error::new(
@@ -212,6 +290,17 @@ impl Exchange {
     }
     pub(crate) fn request_capture(&self) -> io::Result<()> {
         self.request(Operation::Capture)
+    }
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn request_swap(&self, text: &str) -> io::Result<()> {
+        if text.len() as u64 > MAX_BYTES {
+            return Err(io::Error::other("Prompt exceeds 2 MiB"));
+        }
+        self.request_with_text(Operation::Swap, Some(text.to_owned()))
+    }
+    #[allow(dead_code)]
+    pub(crate) fn request_restore_after_attempt(&self, text: &str) -> io::Result<()> {
+        self.request_with_text(Operation::Restore, Some(text.to_owned()))
     }
     pub(crate) fn request_restore(&self) -> io::Result<()> {
         self.request(Operation::Restore)
@@ -300,6 +389,26 @@ impl Exchange {
     /// The caller must prove restoration before releasing the recovery copy.
     pub(crate) fn remove_recovery(&self) -> io::Result<()> {
         let _lock = lock(&self.dir)?;
+        if self
+            .recovery
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("preserved-"))
+        {
+            let saved: PreservedDraft = serde_json::from_slice(&read_regular(
+                &self.dir.join(PRESERVED),
+                MAX_RECORD_BYTES,
+            )?)?;
+            if saved.token
+                != self
+                    .request
+                    .lock()
+                    .map_err(|_| io::Error::other("Draft exchange lock poisoned"))?
+                    .token
+            {
+                return Err(io::Error::other("Preserved draft ownership changed"));
+            }
+            fs::remove_file(self.dir.join(PRESERVED))?;
+        }
         fs::remove_file(&self.recovery)?;
         crate::platform::sync_parent_directory(&self.dir)
     }
@@ -334,6 +443,17 @@ impl Drop for Exchange {
 
 fn recovery(dir: &Path, token: &str) -> PathBuf {
     dir.join(format!("draft-{token}.txt"))
+}
+fn preserved_recovery(dir: &Path, token: &str) -> PathBuf {
+    dir.join(format!("preserved-{token}.txt"))
+}
+
+fn read_regular(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > maximum {
+        return Err(io::Error::other("Invalid draft recovery file"));
+    }
+    fs::read(path)
 }
 fn marker(token: &str) -> String {
     format!("__BUS_DRAFT_END_{token}__")
@@ -374,16 +494,18 @@ fn read_request(dir: &Path) -> io::Result<Option<Request>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if request.token.is_empty()
-        || request.token.len() > 128
-        || !request
-            .token
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-    {
+    if !valid_token(&request.token) {
         return Err(io::Error::other("Invalid draft exchange token"));
     }
     Ok(Some(request))
+}
+
+fn valid_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 128
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
@@ -437,15 +559,15 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
 
 fn run_at(dir: Option<&Path>, file: &Path, fallback: &str) -> io::Result<()> {
     let Some(dir) = dir else {
-        return manual_editor(file, fallback);
+        return manual::manual_editor(file, fallback);
     };
     if !dir.exists() {
-        return manual_editor(file, fallback);
+        return manual::manual_editor(file, fallback);
     }
     let guard = lock(dir)?;
     let Some(request) = read_request(dir)? else {
         drop(guard);
-        return manual_editor(file, fallback);
+        return manual::manual_editor(file, fallback);
     };
     if request.operation == Operation::Cancelled {
         fs::remove_file(dir.join(REQUEST))?;
@@ -497,16 +619,16 @@ fn recovery_candidates(dir: &Path) -> io::Result<Vec<PathBuf>> {
         .collect()
 }
 
-fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
-    if fs::metadata(file)?.len() > MAX_BYTES {
-        return Err(io::Error::other("Draft exceeds 2 MiB"));
-    }
-    let bytes = fs::read(file)?;
-    let saved = recovery(dir, &request.token);
-    let mut recovered = None;
-    let replacement = match request.operation {
+fn exchange_replacement(
+    dir: &Path,
+    request: &Request,
+    bytes: &[u8],
+    saved: &Path,
+    recovered: &mut Option<PathBuf>,
+) -> io::Result<Vec<u8>> {
+    match request.operation {
         Operation::Recover => {
-            recovered = recovery_candidates(dir)?
+            *recovered = recovery_candidates(dir)?
                 .into_iter()
                 .find(|path| fs::read(path).is_ok_and(|saved| !saved.is_empty() && saved == bytes));
             if recovered.is_none() {
@@ -514,10 +636,10 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
                     "Composer differs from the saved Bus draft; preserved",
                 ));
             }
-            marker(&request.token).into_bytes()
+            Ok(marker(&request.token).into_bytes())
         }
         Operation::Capture => {
-            let text = std::str::from_utf8(&bytes)
+            let text = std::str::from_utf8(bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             if ["[Image #", "[Pasted text #", "[Pasted Content "]
                 .iter()
@@ -531,31 +653,83 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
                     "Draft recovery already exists",
                 ));
             }
-            crate::platform::atomic_write(&saved, &bytes)?;
-            Vec::new()
+            crate::platform::atomic_write(saved, bytes)?;
+            Ok(Vec::new())
+        }
+        Operation::Swap => {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            if ["[Image #", "[Pasted text #", "[Pasted Content "]
+                .iter()
+                .any(|marker| text.contains(marker))
+            {
+                return Err(io::Error::other("Opaque draft content was preserved"));
+            }
+            let attempt = request
+                .verify_text
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Missing swap input"))?;
+            if attempt.len() as u64 > MAX_BYTES || saved.exists() || dir.join(PRESERVED).exists() {
+                return Err(io::Error::other("Draft swap is unavailable"));
+            }
+            crate::platform::atomic_write(saved, bytes)?;
+            write_json(
+                &dir.join(PRESERVED),
+                &PreservedDraft {
+                    token: request.token.clone(),
+                    attempt: attempt.clone(),
+                },
+            )?;
+            let mut replacement = attempt.as_bytes().to_vec();
+            replacement.extend_from_slice(marker(&request.token).as_bytes());
+            Ok(replacement)
         }
         Operation::Restore | Operation::Verify => {
             let mut original = match &request.verify_text {
                 Some(text) if request.operation == Operation::Verify => text.as_bytes().to_vec(),
-                _ => fs::read(&saved)?,
+                _ => read_regular(saved, MAX_BYTES)?,
             };
-            let expected = if request.operation == Operation::Restore {
-                &[][..]
+            let matches = if request.operation == Operation::Restore {
+                bytes.is_empty()
+                    || request.verify_text.as_ref().is_some_and(|attempt| {
+                        let marker = marker(&request.token);
+                        bytes == attempt.as_bytes()
+                            || bytes == format!("{attempt}{marker}").as_bytes()
+                            || bytes == original
+                            || bytes == [original.as_slice(), marker.as_bytes()].concat()
+                    })
             } else {
-                original.as_slice()
+                bytes == original
             };
-            if bytes != expected {
+            if !matches {
                 return Err(io::Error::other(
                     "Composer changed; recovery draft was not written",
                 ));
             }
             original.extend_from_slice(marker(&request.token).as_bytes());
-            original
+            Ok(original)
         }
         Operation::Idle | Operation::Cancelled => {
-            return Err(io::Error::other("No draft operation requested"))
+            Err(io::Error::other("No draft operation requested"))
         }
+    }
+}
+
+fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
+    let bytes = read_regular(file, MAX_BYTES + marker(&request.token).len() as u64)?;
+    if matches!(request.operation, Operation::Swap | Operation::Capture)
+        && bytes.len() as u64 > MAX_BYTES
+    {
+        return Err(io::Error::other("Draft exceeds 2 MiB"));
+    }
+    let preserved = preserved_recovery(dir, &request.token);
+    let saved = if request.operation == Operation::Swap || preserved.exists() {
+        preserved
+    } else {
+        recovery(dir, &request.token)
     };
+    let mut recovered = None;
+    let replacement = exchange_replacement(dir, request, &bytes, &saved, &mut recovered)?;
     // Cancellation shares our lock. Recheck expiry and the actual file before
     // each mutation, including after the recovery copy has reached disk.
     check_expiry(request)?;
@@ -580,64 +754,6 @@ fn exchange_file(dir: &Path, file: &Path, request: &Request) -> io::Result<()> {
         crate::platform::sync_parent_directory(dir)?;
     }
     Ok(())
-}
-
-#[cfg(not(windows))]
-fn manual_editor(file: &Path, editor: &str) -> io::Result<()> {
-    if wrapper(editor) {
-        return Err(io::Error::other("Recursive Bus editor configuration"));
-    }
-    let status = Command::new("/bin/sh")
-        .args(["-c", &format!("exec {editor} \"$@\""), "bus-draft-editor"])
-        .arg(file)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other("The developer's editor failed"))
-    }
-}
-
-#[cfg(windows)]
-fn manual_editor(file: &Path, editor: &str) -> io::Result<()> {
-    use windows_sys::Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW};
-    if wrapper(editor) {
-        return Err(io::Error::other("Recursive Bus editor configuration"));
-    }
-    let command: Vec<_> = editor.encode_utf16().chain(Some(0)).collect();
-    let mut count = 0;
-    let argv = unsafe { CommandLineToArgvW(command.as_ptr(), &mut count) };
-    if argv.is_null() || count <= 0 {
-        return Err(io::Error::other("Invalid editor command"));
-    }
-    let mut words = Vec::new();
-    for &word in unsafe { std::slice::from_raw_parts(argv, count as usize) } {
-        let mut length = 0;
-        unsafe {
-            while *word.add(length) != 0 {
-                length += 1;
-            }
-        }
-        words.push(String::from_utf16_lossy(unsafe {
-            std::slice::from_raw_parts(word, length)
-        }));
-    }
-    unsafe {
-        LocalFree(argv.cast());
-    }
-    let (program, args) = words
-        .split_first()
-        .ok_or_else(|| io::Error::other("Empty editor command"))?;
-    if Command::new(program)
-        .args(args)
-        .arg(file)
-        .status()?
-        .success()
-    {
-        Ok(())
-    } else {
-        Err(io::Error::other("The developer's editor failed"))
-    }
 }
 
 #[cfg(test)]
