@@ -1,10 +1,12 @@
 use super::*;
+use crate::terminal::runtime::NATIVE_TEST_TIMEOUT;
 
-async fn failed_write_withdraws_owned_draft(enter: bool) {
+#[tokio::test]
+async fn a_paste_ack_timeout_withdraws_the_visible_draft_without_enter() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
-    let mut release = (!enter).then(|| clock.fail_next_write_completion(io::ErrorKind::TimedOut));
+    let release = clock.fail_next_write_completion(io::ErrorKind::TimedOut);
     let completion = runtime
         .queue_observed_input_submission(
             Bytes::from_static(b"owned brief"),
@@ -25,36 +27,21 @@ async fn failed_write_withdraws_owned_draft(enter: bool) {
         writes.recv().await.unwrap(),
         Bytes::from_static(b"owned brief")
     );
-    if enter {
-        release = Some(clock.fail_next_write_completion(io::ErrorKind::TimedOut));
-    }
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned brief");
-    if enter {
-        assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\r"));
-    }
     clock.advance(Duration::from_millis(2100));
-    release.unwrap().send(()).unwrap();
-    let mut response = tokio::task::spawn_blocking(move || {
-        completion
-            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
-            .unwrap()
-    });
+    release.send(()).unwrap();
+    let mut response =
+        tokio::task::spawn_blocking(move || completion.recv_timeout(NATIVE_TEST_TIMEOUT).unwrap());
     let key = tokio::select! {
-        key=writes.recv()=>key.unwrap(),
-        result=&mut response=>panic!("write failure returned before withdrawing the visible owned draft: {result:?}"),
+        key = writes.recv() => key.unwrap(),
+        result = &mut response => panic!("write failure returned before withdrawing the visible owned draft: {result:?}"),
     };
     assert_eq!(key, Bytes::from_static(b"\x01"));
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned brief");
     assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x0b"));
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
     let error = response.await.unwrap().unwrap_err();
-    assert_eq!(PromptNotShown::is(&error), !enter, "{error}");
-    if enter {
-        assert!(
-            error.to_string().contains("remaining draft was cleared"),
-            "{error}"
-        );
-    }
+    assert!(PromptNotShown::is(&error), "{error}");
     assert!(
         writes.try_recv().is_err(),
         "no replay, second paste or late Enter"
@@ -62,20 +49,94 @@ async fn failed_write_withdraws_owned_draft(enter: bool) {
 }
 
 #[tokio::test]
-async fn a_paste_ack_timeout_withdraws_the_visible_draft_without_enter() {
-    failed_write_withdraws_owned_draft(false).await;
-}
-
-#[tokio::test]
-async fn an_enter_ack_timeout_withdraws_the_owned_draft_and_preserves_uncertainty() {
-    failed_write_withdraws_owned_draft(true).await;
-}
-
-async fn preserve_unrecognised_draft_on_withdrawal(ack_failed: bool) {
+async fn an_enter_ack_timeout_retains_uncertainty_and_recovers_on_the_next_lease() {
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
-    let release = ack_failed.then(|| clock.fail_next_write_completion(io::ErrorKind::TimedOut));
+    let paste_receipt = clock.hold_next_write_completion();
+    let completion = runtime
+        .queue_observed_input_submission(
+            Bytes::from_static(b"owned brief"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+            Duration::ZERO,
+            None,
+            |screen| {
+                if screen.contains("owned brief") {
+                    InputObservation::Pending
+                } else {
+                    InputObservation::Empty
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"owned brief")
+    );
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned brief");
+    let enter_receipt = clock.fail_next_write_completion(io::ErrorKind::TimedOut);
+    paste_receipt.send(()).unwrap();
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\r"));
+    enter_receipt.send(()).unwrap();
+    let error = completion
+        .recv_timeout(NATIVE_TEST_TIMEOUT)
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        !PromptNotShown::is(&error),
+        "lost Enter ACK is not safe to replay: {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("transcript and composer before resending"),
+        "{error}"
+    );
+    assert!(runtime.terminal.visible_ansi().contains("owned brief"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no automatic clear or duplicate Enter"
+    );
+
+    // Only a new lease recovers the old paste. Its unavailable new inspector
+    // stops the fresh message after recovery, before a second payload.
+    let recovery = runtime
+        .queue_observed_input_submission(
+            Bytes::from_static(b"new brief"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+            Duration::ZERO,
+            None,
+            |_| InputObservation::Unavailable,
+        )
+        .unwrap();
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x01"));
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned brief");
+    assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x0b"));
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+    let refusal = recovery
+        .recv_timeout(NATIVE_TEST_TIMEOUT)
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        PromptNotShown::is(&refusal),
+        "fresh input is unavailable: {refusal}"
+    );
+    assert!(!runtime.terminal.visible_ansi().contains("owned brief"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no old Enter, old paste or new payload"
+    );
+}
+
+#[tokio::test]
+async fn a_paste_ack_timeout_preserves_a_changed_unrecognised_draft() {
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let release = clock.fail_next_write_completion(io::ErrorKind::TimedOut);
     let completion = runtime
         .queue_observed_input_submission(
             Bytes::from_static(b"owned brief"),
@@ -103,53 +164,30 @@ async fn preserve_unrecognised_draft_on_withdrawal(ack_failed: bool) {
         Bytes::from_static(b"owned brief")
     );
     runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned brief + developer edit");
-    if !ack_failed {
-        clock.wait_for_draft_wait();
-    }
     clock.advance(Duration::from_millis(2100));
-    if let Some(release) = release {
-        release.send(()).unwrap();
-    }
-    let mut response = tokio::task::spawn_blocking(move || {
-        completion
-            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
-            .unwrap()
-    });
-    let mut keys = Vec::new();
-    let result = loop {
-        tokio::select! {
-            result=&mut response=>break result.unwrap(),
-            key=writes.recv()=>{
-                let key=key.unwrap();keys.push(key.clone());
-                if key.as_ref()==b"\x0b" || key.as_ref()==b"\x15" {runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");}
-                else {runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Howned brief + developer edit");}
-            }
-        }
-    };
+    release.send(()).unwrap();
+    let error = completion
+        .recv_timeout(NATIVE_TEST_TIMEOUT)
+        .unwrap()
+        .unwrap_err();
     assert!(
-        keys.is_empty(),
-        "unowned draft received destructive keys: {keys:?}"
+        writes.try_recv().is_err(),
+        "no Enter, destructive key or replay on foreign input"
     );
     assert!(runtime
         .terminal
         .visible_ansi()
         .contains("owned brief + developer edit"));
-    let error = result.unwrap_err();
     assert!(
         !PromptNotShown::is(&error),
         "changed input is not safe to replay: {error}"
     );
-    assert!(error.to_string().contains("draft was left"), "{error}");
-}
-
-#[tokio::test]
-async fn a_paste_ack_timeout_preserves_a_changed_unrecognised_draft() {
-    preserve_unrecognised_draft_on_withdrawal(true).await;
-}
-
-#[tokio::test]
-async fn a_render_timeout_preserves_a_changed_unrecognised_draft() {
-    preserve_unrecognised_draft_on_withdrawal(false).await;
+    for detail in ["draft was left", "edited", "transcript", "before resending"] {
+        assert!(
+            error.to_string().contains(detail),
+            "missing {detail}: {error}"
+        );
+    }
 }
 
 async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window: Duration) {
@@ -186,7 +224,7 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let writer = std::thread::spawn(move || {
         let result = submission
-            .withdraw_pending(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed Enter"));
+            .withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed paste"));
         result_tx.send((Instant::now(), result)).unwrap();
     });
     assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x01"));
@@ -202,9 +240,14 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     let (finished, result) = outcome.expect("cleanup ack wait exceeded the no-progress/hard bound");
     let error = result.unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert!(!PromptNotShown::is(&error), "Enter may have run: {error}");
     assert!(
-        error.to_string().contains("could not be safely cleared"),
+        !PromptNotShown::is(&error),
+        "failed cleanup is not safe to replay: {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("cleanup could not finish safely"),
         "{error}"
     );
     assert!(

@@ -12,7 +12,8 @@ impl Fixture {
         fs::create_dir_all(&root).unwrap();
         let file = root.join("native-editor.txt");
         fs::write(&file, text).unwrap();
-        let exchange = Exchange::begin(root.join("private"), Duration::from_secs(60)).unwrap();
+        let exchange =
+            Exchange::begin_preserving(root.join("private"), Duration::from_secs(60)).unwrap();
         Self {
             root,
             file,
@@ -39,9 +40,12 @@ fn interrupted_swap(original: &str, attempt: &str) -> (PathBuf, PathBuf, PathBuf
     let exchange = Exchange::begin_preserving(directory.clone(), Duration::from_secs(60)).unwrap();
     exchange.request_swap(attempt).unwrap();
     run_at(Some(&directory), &file, "false").unwrap();
-    assert_eq!(exchange.captured_text().unwrap(), original);
+    assert_eq!(fs::read_to_string(exchange.recovery()).unwrap(), original);
     assert!(
-        !Exchange::has_recoverable_draft(&directory),
+        !fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("draft-")),
         "a developer backup is not Bus withdrawal proof"
     );
     drop(exchange);
@@ -99,15 +103,25 @@ fn fast_pane_repeated_restoration_accepts_maximum_draft_with_marker() {
 fn external_editor_preserves_unicode_and_all_trailing_whitespace_through_readback() {
     let original = "\t  中文  \n\nline two \t \n\n";
     let fixture = Fixture::new(original);
-    fixture.exchange.request_capture().unwrap();
+    fixture.exchange.request_swap("").unwrap();
     assert!(!fixture.exchange.acknowledged().unwrap());
     fixture.run().unwrap();
     assert!(fixture.exchange.acknowledged().unwrap());
-    assert_eq!(fixture.exchange.captured_text().unwrap(), original);
-    assert_eq!(fs::read(&fixture.file).unwrap(), b"");
+    assert_eq!(
+        fs::read_to_string(fixture.exchange.recovery()).unwrap(),
+        original
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.file).unwrap(),
+        fixture.exchange.marker()
+    );
     // Duplicate editor callbacks cannot replace the saved draft with emptiness.
     fixture.run().unwrap();
-    assert_eq!(fixture.exchange.captured_text().unwrap(), original);
+    assert_eq!(
+        fs::read_to_string(fixture.exchange.recovery()).unwrap(),
+        original
+    );
+    fs::write(&fixture.file, "").unwrap();
     for verify in [false, true] {
         if verify {
             fixture.exchange.request_verify().unwrap();
@@ -157,7 +171,7 @@ fn kimi_persistent_cancelled_handoff_does_not_block_later_exchange() {
     let root = crate::utils::test_temp::unique_temp_path("bus-draft-cancelled-handoff");
     let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
     exchange.save_recovery("still recoverable").unwrap();
-    exchange.request_capture().unwrap();
+    exchange.request_swap("").unwrap();
     let saved = exchange.recovery().to_owned();
     drop(exchange);
     let next = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
@@ -175,7 +189,7 @@ fn kimi_persistent_cancelled_handoff_does_not_block_later_exchange() {
 fn exchange_files_and_directory_are_private() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new("private draft");
-    fixture.exchange.request_capture().unwrap();
+    fixture.exchange.request_swap("").unwrap();
     fixture.run().unwrap();
     assert_eq!(
         fs::metadata(fixture.exchange.path())
@@ -202,7 +216,7 @@ fn exchange_files_and_directory_are_private() {
 #[test]
 fn expired_and_cancelled_editor_invocations_never_clear_or_fall_back() {
     let fixture = Fixture::new("keep this draft");
-    fixture.exchange.request_capture().unwrap();
+    fixture.exchange.request_swap("").unwrap();
     let mut request = read_request(fixture.exchange.path()).unwrap().unwrap();
     request.expires_ms = 0;
     write_json(&fixture.exchange.path().join(REQUEST), &request).unwrap();
@@ -217,7 +231,7 @@ fn expired_and_cancelled_editor_invocations_never_clear_or_fall_back() {
     let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
     let file = root.join("native.txt");
     fs::write(&file, "cancelled draft").unwrap();
-    exchange.request_capture().unwrap();
+    exchange.request_swap("").unwrap();
     drop(exchange);
     assert!(run_at(Some(&root), &file, "false").is_err());
     assert_eq!(fs::read_to_string(file).unwrap(), "cancelled draft");
@@ -227,7 +241,7 @@ fn expired_and_cancelled_editor_invocations_never_clear_or_fall_back() {
 #[test]
 fn changed_composer_refuses_restore_and_readback_without_overwriting_user_input() {
     let fixture = Fixture::new("original \n\t");
-    fixture.exchange.request_capture().unwrap();
+    fixture.exchange.request_swap("").unwrap();
     fixture.run().unwrap();
     for verify in [false, true] {
         fs::write(&fixture.file, "developer typed meanwhile").unwrap();
@@ -242,7 +256,10 @@ fn changed_composer_refuses_restore_and_readback_without_overwriting_user_input(
             fs::read_to_string(&fixture.file).unwrap(),
             "developer typed meanwhile"
         );
-        assert_eq!(fixture.exchange.captured_text().unwrap(), "original \n\t");
+        assert_eq!(
+            fs::read_to_string(fixture.exchange.recovery()).unwrap(),
+            "original \n\t"
+        );
     }
     let recovery = fixture.exchange.recovery().to_owned();
     let dir = fixture.exchange.path().to_owned();
@@ -265,7 +282,7 @@ fn opaque_editor_placeholders_are_held_without_creating_or_clearing_a_draft() {
         "[Pasted Content 1024 chars]",
     ] {
         let fixture = Fixture::new(text);
-        fixture.exchange.request_capture().unwrap();
+        fixture.exchange.request_swap("").unwrap();
         assert!(fixture.run().is_err());
         assert!(fixture.exchange.acknowledged().is_err());
         assert_eq!(fs::read_to_string(&fixture.file).unwrap(), text);
@@ -276,7 +293,7 @@ fn opaque_editor_placeholders_are_held_without_creating_or_clearing_a_draft() {
 #[test]
 fn stale_ack_and_changed_owner_cannot_authorize_an_operation() {
     let fixture = Fixture::new("unchanged");
-    fixture.exchange.request_capture().unwrap();
+    fixture.exchange.request_swap("").unwrap();
     let mut stale = read_request(fixture.exchange.path()).unwrap().unwrap();
     stale.sequence -= 1;
     write_json(
@@ -316,7 +333,7 @@ fn orphaned_recovery_is_quarantined_and_cancelled_native_launch_blocks_replaceme
     drop(next);
     fs::remove_file(recovered).unwrap();
     let exchange = Exchange::begin(root.clone(), Duration::from_secs(60)).unwrap();
-    exchange.request_capture().unwrap();
+    exchange.request_swap("").unwrap();
     drop(exchange);
     let mut cancelled = read_request(&root).unwrap().unwrap();
     cancelled.expires_ms = 0;

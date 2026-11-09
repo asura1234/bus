@@ -371,21 +371,30 @@ pub(super) async fn next_write(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) 
 #[tokio::test]
 async fn fake_provider_scheduling_pause_does_not_expire_a_submission() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let paste_receipt = clock(&app).hold_next_write_completion();
     let response = start(&mut app, method);
-    // Model the fixture being descheduled during another build's test burst.
-    // This is an injected scheduling stall, not a provider readiness wait.
+    assert_eq!(
+        next_write(&mut writes).await,
+        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+    );
     std::thread::sleep(Duration::from_secs(3));
     assert!(
         response.try_recv().is_err(),
-        "fixture scheduling must not consume the native submission clock"
+        "a held write cannot complete during descheduling"
     );
-    accept_paste(&app, AgentKind::Codex, "from bus", &mut writes).await;
+    assert!(
+        writes.try_recv().is_err(),
+        "no Enter before the paste receipt"
+    );
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
     let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("agent_prompted"), "{response}");
+    assert!(writes.try_recv().is_err(), "no second paste or Enter");
 }
 
 #[tokio::test]
-async fn ignored_first_enter_is_verified_and_retried_without_repasting() {
+async fn one_flushed_paste_is_submitted_once_without_a_render_readback() {
     for (kind, bound) in [
         (AgentKind::Codex, true),
         (AgentKind::Codex, false),
@@ -393,24 +402,24 @@ async fn ignored_first_enter_is_verified_and_retried_without_repasting() {
         (AgentKind::Cursor, true),
     ] {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, "");
+        let receipt = clock(&app).hold_next_write_completion();
         let response = start(&mut app, method);
         assert_eq!(
             next_write(&mut writes).await,
             Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
         );
-        redraw(&app, kind, "from bus");
-        assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-        clock(&app).wait_for_enters(1);
-        clock(&app).advance(Duration::from_millis(250));
-        assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
         assert!(
-            response.try_recv().is_err(),
-            "{kind:?}: PTY write is not provider acceptance"
+            writes.try_recv().is_err(),
+            "{kind:?}: paste receipt is still pending"
         );
-        redraw(&app, kind, "");
+        receipt.send(()).unwrap();
+        assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
         let response = response.recv_timeout(WAIT).unwrap();
         assert!(response.contains("agent_prompted"), "{kind:?}: {response}");
-        assert!(writes.try_recv().is_err(), "must not type the prompt twice");
+        assert!(
+            writes.try_recv().is_err(),
+            "{kind:?}: no duplicate paste or Enter"
+        );
     }
 }
 
@@ -441,6 +450,7 @@ async fn correlated_codex_images_use_dedicated_pastes_and_one_enter() {
             Method::AgentPromptIfUnbound(params) => params.text = payload,
             _ => unreachable!(),
         }
+        let receipt = clock(&app).hold_next_write_completion();
         let response = start(&mut app, method);
         let expected = format!(
             "\x1b[200~{}\x1b[201~\x1b[200~{}\x1b[201~\x1b[200~{text}\x1b[201~",
@@ -449,8 +459,9 @@ async fn correlated_codex_images_use_dedicated_pastes_and_one_enter() {
         assert_eq!(next_write(&mut writes).await, Bytes::from(expected));
         assert!(
             writes.try_recv().is_err(),
-            "Enter must await our complete image-and-text composer"
+            "Enter must await the complete image-and-text write receipt"
         );
+        receipt.send(()).unwrap();
         redraw(
             &app,
             AgentKind::Codex,
@@ -468,88 +479,129 @@ async fn correlated_codex_images_use_dedicated_pastes_and_one_enter() {
 }
 
 #[tokio::test]
-async fn delayed_paste_render_waits_before_the_first_enter() {
+async fn a_delayed_paste_receipt_precedes_the_only_enter() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, false, "");
+    let receipt = clock(&app).hold_next_write_completion();
     let response = start(&mut app, method);
     assert_eq!(
         next_write(&mut writes).await,
         Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
     );
     clock(&app).advance(Duration::from_millis(450));
-    clock(&app).wait_for_draft_wait();
     assert!(
         writes.try_recv().is_err(),
-        "Enter must wait until provider consumed paste"
+        "Enter must wait for the paste receipt"
     );
-    redraw(&app, AgentKind::Codex, "from bus");
+    assert!(
+        response.try_recv().is_err(),
+        "held paste is not a completed submission"
+    );
+    receipt.send(()).unwrap();
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    redraw(&app, AgentKind::Codex, "");
     assert!(response
         .recv_timeout(WAIT)
         .unwrap()
         .contains("agent_prompted"));
+    assert!(writes.try_recv().is_err(), "one paste and one Enter only");
+}
+
+async fn fail_enter_receipt(
+    app: &mut App,
+    method: Method,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    kind: AgentKind,
+) -> String {
+    let clock = clock(app);
+    let paste_receipt = clock.hold_next_write_completion();
+    let response = start(app, method);
+    assert_eq!(
+        next_write(writes).await,
+        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+    );
+    redraw(app, kind, "from bus");
+    let enter_receipt = clock.fail_next_write_completion(std::io::ErrorKind::TimedOut);
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next_write(writes).await, Bytes::from_static(b"\r"));
+    enter_receipt.send(()).unwrap();
+    let reply = response.recv_timeout(WAIT).unwrap();
+    assert!(reply.contains("timeout"), "{reply}");
+    assert!(!reply.contains("agent_prompted"), "{reply}");
+    assert!(
+        !reply.contains("agent_prompt_not_shown"),
+        "lost Enter receipt is uncertain: {reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "no automatic cleanup or old replay"
+    );
+    reply
+}
+
+fn recovery_without_new_input(
+    app: &App,
+    deadline: Option<std::time::Instant>,
+) -> crate::terminal::pty::actor::InputCompletion {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .queue_observed_input_submission(
+            Bytes::from_static(b"new message"),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x01"), Bytes::from_static(b"\x0b")],
+            Duration::ZERO,
+            deadline,
+            |_| crate::terminal::runtime::InputObservation::Unavailable,
+        )
+        .unwrap()
 }
 
 #[tokio::test]
-async fn changed_draft_after_enter_is_never_submitted_by_retry() {
+async fn a_changed_draft_after_a_lost_enter_receipt_is_never_replayed_or_edited() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
-    let expiry = confirmation_expiry(&method);
-    let response = start(&mut app, method);
-    assert_eq!(
-        next_write(&mut writes).await,
-        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
-    );
-    redraw(&app, AgentKind::Codex, "from bus");
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock(&app).wait_for_enters(1);
+    fail_enter_receipt(&mut app, method, &mut writes, AgentKind::Codex).await;
     redraw(&app, AgentKind::Codex, "frombus");
-    let generation = clock(&app).advance(Duration::from_millis(250));
-    clock(&app).wait_for_submission_check(generation);
+    let deadline = clock(&app).now() + Duration::from_millis(100);
+    let completion = recovery_without_new_input(&app, Some(deadline));
+    clock(&app).advance(Duration::from_millis(200));
+    let error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(
+        crate::terminal::runtime::PromptNotShown::composer_busy(&error),
+        "{error}"
+    );
     assert!(
         writes.try_recv().is_err(),
-        "do not retry Enter on someone else's draft when the retry is due"
+        "no Enter, re-paste or destructive edit of foreign input"
     );
-    clock(&app).advance(expiry);
-    let response = response.recv_timeout(WAIT).unwrap();
-    assert!(response.contains("timeout"), "{response}");
-    assert!(!response.contains("agent_prompted"));
-    assert!(
-        writes.try_recv().is_err(),
-        "do not retry Enter on someone else's draft"
-    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    assert!(app
+        .lookup_runtime_sender(0, pane)
+        .unwrap()
+        .visible_ansi()
+        .contains("frombus"));
 }
 
 #[tokio::test]
-async fn enter_never_accepted_times_out_without_repasting_or_reporting_success() {
+async fn a_cursor_lost_enter_receipt_is_uncertain_and_recovered_without_replay() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Cursor, true, "");
-    let expiry = confirmation_expiry(&method);
-    let response = start(&mut app, method);
-    assert_eq!(
-        next_write(&mut writes).await,
-        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
-    );
-    redraw(&app, AgentKind::Cursor, "from bus");
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock(&app).wait_for_enters(1);
-    clock(&app).advance(Duration::from_millis(250));
-    assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
-    clock(&app).advance(expiry);
+    fail_enter_receipt(&mut app, method, &mut writes, AgentKind::Cursor).await;
+    let completion = recovery_without_new_input(&app, None);
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x01"));
     redraw(&app, AgentKind::Cursor, "from bus");
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\x0b"));
     redraw(&app, AgentKind::Cursor, "");
-    let response = response.recv_timeout(WAIT).unwrap();
-    assert!(response.contains("timeout"), "{response}");
-    assert!(!response.contains("agent_prompted"));
-    while let Ok(bytes) = writes.try_recv() {
-        assert_eq!(bytes, Bytes::from_static(b"\r"));
-    }
+    let error = completion.recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(
+        crate::terminal::runtime::PromptNotShown::is(&error),
+        "fresh input remains unavailable: {error}"
+    );
+    assert!(writes.try_recv().is_err(), "no duplicate Enter or paste");
 }
 
 #[tokio::test]
 async fn an_unrecognised_paste_is_preserved_without_being_retried() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
     let expiry = confirmation_expiry(&method);
+    let receipt = clock(&app).fail_next_write_completion(std::io::ErrorKind::TimedOut);
     let response = start(&mut app, method);
     assert_eq!(
         next_write(&mut writes).await,
@@ -557,6 +609,7 @@ async fn an_unrecognised_paste_is_preserved_without_being_retried() {
     );
     redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
     clock(&app).advance(expiry);
+    receipt.send(()).unwrap();
     let reply = response.recv_timeout(WAIT).unwrap();
     assert!(reply.contains("draft was left"), "{reply}");
     assert!(
