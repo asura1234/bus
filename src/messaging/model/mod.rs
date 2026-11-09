@@ -88,3 +88,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/launch_attempts_test.rs"]
 mod launch_attempts_test;
+
+#[cfg(test)]
+#[path = "tests/clear_dashboard_test.rs"]
+mod clear_dashboard_test;

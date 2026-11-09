@@ -202,9 +202,14 @@ fn restart_command() -> Command {
         .arg(
             Arg::new("binary")
                 .long("binary")
-                .required(true)
                 .value_name("PATH")
-                .help("Bus binary that relaunches the server and TUI/coordinator"),
+                .help("Bus binary to relaunch. Omit to build the checkout that owns this executable"),
+        )
+        .arg(
+            Arg::new("clear-data")
+                .long("clear-data")
+                .action(clap::ArgAction::SetTrue)
+                .help("Drop settled requests, replies and every launch attempt before saving and quitting"),
         )
         .arg(
             Arg::new("confirm")
@@ -218,7 +223,7 @@ fn restart_command() -> Command {
                 .value_name("WHO")
                 .help("Agent id recorded as who restarted Bus"),
         )
-        .after_help("Example: bus --dev restart --binary /path/to/bus --confirm --as 569")
+        .after_help("Example: bus --dev restart --confirm\n         bus --dev restart --clear-data --confirm\n         bus --dev restart --binary /path/to/bus --confirm --as 569")
 }
 
 pub(crate) fn command_tree(dev: bool) -> Command {

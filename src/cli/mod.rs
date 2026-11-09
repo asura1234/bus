@@ -944,6 +944,7 @@ mod tests {
             Action::Restart(crate::cli::session_pick::RestartRequest {
                 binary: Some("/tmp/bus".into()),
                 confirm: true,
+                clear_data: false,
                 as_who: Some("569".into()),
             })
         );
@@ -954,6 +955,34 @@ mod tests {
             Action::Restart(crate::cli::session_pick::RestartRequest {
                 binary: None,
                 confirm: true,
+                clear_data: false,
+                as_who: None,
+            })
+        );
+        assert_eq!(
+            parse_invocation(&args(&[
+                "--dev",
+                "restart",
+                "--binary=/tmp/other",
+                "--confirm"
+            ]))
+            .unwrap()
+            .action,
+            Action::Restart(crate::cli::session_pick::RestartRequest {
+                binary: Some("/tmp/other".into()),
+                confirm: true,
+                clear_data: false,
+                as_who: None,
+            })
+        );
+        assert_eq!(
+            parse_invocation(&args(&["--dev", "restart", "--clear-data", "--confirm"]))
+                .unwrap()
+                .action,
+            Action::Restart(crate::cli::session_pick::RestartRequest {
+                binary: None,
+                confirm: true,
+                clear_data: true,
                 as_who: None,
             })
         );

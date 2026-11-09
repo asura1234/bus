@@ -35,7 +35,7 @@ struct RestartQuit {
 
 impl Worker {
     pub(super) fn restart_quit_response(
-        &self,
+        &mut self,
         request: &Request,
         events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Response {
@@ -45,8 +45,29 @@ impl Worker {
         }
     }
 
+    /// Saves the dashboard reset before quit, so the shutdown save cannot
+    /// write the old history back. A failed save restores the archive file.
+    pub(super) fn clear_dashboard_for_restart(&mut self) -> Result<(), String> {
+        let mut cleared = self.state.clone();
+        if !cleared.clear_dashboard_data() {
+            return Ok(());
+        }
+        let previous = std::sync::Arc::clone(self.state.history());
+        let backup = std::fs::read(self.store.history_path()).ok();
+        if let Err(error) = self.store.rewrite_history(&cleared) {
+            return Err(error.to_string());
+        }
+        if let Err(error) = self.save(cleared) {
+            if let Some(bytes) = backup.as_deref() {
+                let _ = self.store.restore_history(bytes, &previous);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn authorize_restart_quit(
-        &self,
+        &mut self,
         params: &serde_json::Value,
         events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<(), String> {
@@ -71,6 +92,9 @@ impl Worker {
             return Err(
                 "restart quit does not match the published handoff and live processes".into(),
             );
+        }
+        if plan.clear_data {
+            self.clear_dashboard_for_restart()?;
         }
         let events = events.ok_or("Bus UI event channel unavailable")?;
         *RESTART_PLAN

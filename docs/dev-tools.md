@@ -13,7 +13,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   ui hits      (dev variant only)
   ui hold-acks (dev variant only)
   ui release-acks (dev variant only)
-  restart --binary PATH --confirm
+  restart [--binary PATH] [--clear-data] --confirm
   dashboard
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
@@ -47,12 +47,20 @@ cells; the TUI driver clicks them by name. Only the dev variant (./run dev) has 
 ui hold-acks and ui release-acks hold and release RoomCreated, AgentAdded and
 DevFocusRequested before UI dispatch for deterministic scratch ordering tests. ui hits reports
 holding_acknowledgements and held_acknowledgements so the test can confirm the hold without sleeps.
-restart (`bus --dev restart --binary PATH --confirm`) saves and quits the whole
-Bus, then relaunches PATH in the same terminal with the recorded flags and session.
-Both the server and TUI/coordinator must run PATH's build SHA before success is
-recorded. An unhealthy replacement relaunches the saved previous binary instead.
-Agents resume their saved provider sessions. Use the absolute binary path agents
-already call (for example `target/debug/bus`); other CLI paths are not rewritten.
+restart (`bus --dev restart --confirm`) builds the checkout that owns this
+executable with `cargo build --locked --bin bus` (and `--features dev-tools` when
+this build has it), then saves and quits the whole Bus and relaunches that binary
+in the same terminal with the recorded flags and session. A failed build aborts
+and leaves Bus running. `--binary PATH` remains for an install with no source
+checkout. `--clear-data` is off unless passed. Before the save and quit it drops
+settled requests and replies and every launch attempt, so Messaging, Agent and
+Errors open without that history. Queued and active requests stay.
+Both the server and TUI/coordinator must run the replacement binary's
+build SHA before success is recorded. An unhealthy replacement relaunches the
+saved previous binary instead. After a successful restart only the newest saved
+binary under `restarts/binaries` is kept. Agents resume their saved provider
+sessions. Without a source checkout, use the absolute binary path agents already
+call (for example `target/debug/bus`); other CLI paths are not rewritten.
 The initial `stage:handoff` receipt only means queuing; read `restarts/log.jsonl`
 for the outcome and any manual recovery command. It is refused without `--dev` and
 omitted from `bus --help`. Before it, every room's orchestrator asks working agents

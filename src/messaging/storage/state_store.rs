@@ -215,6 +215,44 @@ impl JsonStore {
         Ok(true)
     }
 
+    /// Replaces `history.jsonl` with the archive `state` holds now. An ordinary
+    /// save only appends, so dropping settled requests has to rewrite the file
+    /// or the next load brings them back.
+    pub(crate) fn rewrite_history(&self, state: &BusState) -> Result<(), StoreError> {
+        self.write_history_snapshot(state.history())
+    }
+
+    /// Puts a previous archive file and its in-memory snapshot back after a
+    /// clear whose `state.json` save failed.
+    pub(crate) fn restore_history(
+        &self,
+        bytes: &[u8],
+        history: &Arc<History>,
+    ) -> Result<(), StoreError> {
+        let path = self.history_path();
+        self.write_checkpointed(&path, bytes)?;
+        *self.history_lock() = Arc::clone(history);
+        self.history_stale
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
+    fn write_history_snapshot(&self, history: &Arc<History>) -> Result<(), StoreError> {
+        let bytes = history_lines(history.items())?;
+        let path = self.history_path();
+        if bytes.is_empty() && !path.exists() {
+            *self.history_lock() = Arc::clone(history);
+            self.history_stale
+                .store(false, std::sync::atomic::Ordering::Release);
+            return Ok(());
+        }
+        self.write_checkpointed(&path, &bytes)?;
+        *self.history_lock() = Arc::clone(history);
+        self.history_stale
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
     fn write_checkpointed(&self, path: &std::path::Path, bytes: &[u8]) -> Result<(), StoreError> {
         crate::platform::fs::atomic_write_detailed_with_checkpoint(path, bytes, |stage| {
             self.injected_failure(stage)

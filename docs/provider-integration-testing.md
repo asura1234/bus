@@ -589,7 +589,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   inspect `sbus message status MESSAGE_ID`.
   Explicit `BUS_DATA_DIR` cannot be combined with `bus resume`; this is an
   explicit-root relaunch, not a registry-resume test. Scratch relaunch is
-  `sbus --dev` on that private root. `bus --dev restart --binary PATH --confirm`
+  `sbus --dev` on that private root. `bus --dev restart --confirm` (or `--binary PATH` with no source checkout)
   saves/quits and relaunches the whole Bus and is not a step in this scratch test. Do not point
   it at the live session. Before any such live restart, commit and push, stop
   builds and tests, and release slot locks. The real-HOME section below is
@@ -841,7 +841,7 @@ idle then deliver, and an approval card without `--yolo`.
   Do not press Enter on the composer. An agent left launching fails the case.
 - **2026-10-31 — scratch relaunch is not `bus --dev restart`:** Symptom: an
   in-flight turn ended `reply_not_captured` when the server was swapped.
-  Cause: `bus --dev restart --binary PATH --confirm` saves/quits the whole Bus,
+  Cause: `bus --dev restart --confirm` (or `--binary PATH` with no source checkout) saves/quits the whole Bus,
   resumes the selected binary in the same terminal, health-checks server and TUI
   build SHAs, and resumes the previous binary on failure. It is hidden
   without `--dev`. Test: scratch acceptance still Ctrl+Q and relaunches `sbus

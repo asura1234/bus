@@ -16,7 +16,8 @@ pub(crate) struct History {
     pub(super) requests: BTreeMap<RequestId, Arc<Request>>,
     request_rooms: BTreeMap<RoomId, BTreeSet<RequestId>>,
     pub(super) groups: super::history_index::HistoryIndex,
-    /// Derived at insert/load; request bodies remain shared and history stays append-only.
+    /// Derived at insert/load; request bodies remain shared. The archive is
+    /// append-only except for an explicit restart `--clear-data`.
     messages: BTreeMap<(PromptId, RequestId), Arc<Request>>,
     pub(super) rooms: BTreeMap<RoomId, String>,
     /// Per room, in id order.
@@ -161,6 +162,15 @@ impl History {
             .map(|(_, request)| request.as_ref())
     }
 
+    /// Drops archived requests and the indexes derived from them. Room names
+    /// and notices stay; they are not dashboard request history.
+    pub(super) fn clear_requests(&mut self) {
+        self.requests.clear();
+        self.request_rooms.clear();
+        self.groups = super::history_index::HistoryIndex::default();
+        self.messages.clear();
+    }
+
     pub(super) fn room_notices(&self, room: RoomId) -> impl DoubleEndedIterator<Item = &Prompt> {
         self.notices
             .get(&room)
@@ -212,6 +222,64 @@ impl super::BusState {
             | events
             | (routes != self.reply_routes.len())
             | (before != self.routing_before_ms)
+    }
+
+    /// Drops dashboard history before a confirmed restart save. Settled
+    /// requests and their replies go, including the `history.jsonl` archive,
+    /// and every launch attempt goes with them. A queued or active request
+    /// stays, as does a settled request a queue, the agent's current request,
+    /// or an open group still needs.
+    pub(crate) fn clear_dashboard_data(&mut self) -> bool {
+        let cleared_launches = !self.launch_attempts.is_empty();
+        if cleared_launches {
+            self.launch_attempts = Arc::default();
+            for agent in self.agents.values_mut() {
+                agent.launch_attempt_id = None;
+            }
+        }
+        let cleared_archive = !self.history.requests.is_empty();
+        if cleared_archive {
+            Arc::make_mut(&mut self.history).clear_requests();
+        }
+        let protected_groups: std::collections::BTreeSet<RequestId> = self
+            .requests
+            .values()
+            .filter(|request| !request.settled())
+            .map(|request| request.group.unwrap_or(request.id))
+            .collect();
+        let protected_ids: std::collections::BTreeSet<RequestId> = self
+            .queues
+            .values()
+            .flatten()
+            .copied()
+            .chain(
+                self.agents
+                    .values()
+                    .filter_map(|agent| agent.current_request),
+            )
+            .collect();
+        let remove: Vec<RequestId> = self
+            .requests
+            .values()
+            .filter(|request| {
+                request.settled()
+                    && !protected_ids.contains(&request.id)
+                    && !protected_groups.contains(&request.group.unwrap_or(request.id))
+            })
+            .map(|request| request.id)
+            .collect();
+        let cleared_live = !remove.is_empty();
+        for id in remove {
+            self.requests.remove(&id);
+        }
+        let routes = self.reply_routes.len();
+        let needed: std::collections::BTreeSet<RequestId> = self
+            .requests
+            .values()
+            .flat_map(|request| [request.id, request.reply_key()])
+            .collect();
+        self.reply_routes.retain(|id, _| needed.contains(id));
+        cleared_launches || cleared_archive || cleared_live || routes != self.reply_routes.len()
     }
 
     pub(super) fn routing_source(&self, request: &Request) -> bool {
