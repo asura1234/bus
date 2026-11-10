@@ -440,7 +440,7 @@ async fn codex_native_interrupt_handshake_cannot_hold_the_app_dispatcher() {
 mod draft_admission {
     use super::*;
 
-    async fn project_draft(app: &mut App) {
+    async fn project_stale_blocked_draft(app: &mut App) {
         let pane = app.state.workspaces[0].tabs[0].root_pane;
         let runtime = app.lookup_runtime_sender(0, pane).unwrap();
         runtime.set_detection_context(
@@ -454,15 +454,17 @@ mod draft_admission {
             .await;
         assert_eq!(
             state,
-            AgentState::Blocked,
-            "a live obligation sees the draft"
+            AgentState::Idle,
+            "a preservable draft remains ready under the current detection policy"
         );
+        // Admission must also tolerate a stale Blocked projection when the
+        // fresh active screen proves that only a developer draft is present.
         let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
         app.state
             .terminals
             .get_mut(&terminal)
             .unwrap()
-            .set_detected_state(Some(AgentKind::Codex), state);
+            .set_detected_state(Some(AgentKind::Codex), AgentState::Blocked);
         let info = app.agent_info(0, pane).unwrap();
         assert_eq!(
             info.agent_status,
@@ -477,7 +479,7 @@ mod draft_admission {
         for (active, steer) in [(false, false), (true, true), (true, false)] {
             let (mut app, mut method, mut writes) =
                 provider_fixture(AgentKind::Codex, true, "developer draft 保留");
-            project_draft(&mut app).await;
+            project_stale_blocked_draft(&mut app).await;
             if let Method::AgentPromptIfIdle(params) = &mut method {
                 params.steer = steer;
                 params.expected_turn_id = steer.then(|| "busy-turn".into());
@@ -534,7 +536,7 @@ mod draft_admission {
     async fn codex_native_draft_projection_has_no_unavailable_channel_typed_fallback() {
         let (mut app, method, mut writes) =
             provider_fixture(AgentKind::Codex, true, "developer draft 保留");
-        project_draft(&mut app).await;
+        project_stale_blocked_draft(&mut app).await;
         let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
         assert!(response.contains("agent_not_idle"), "{response}");
         assert!(writes.try_recv().is_err());
@@ -550,7 +552,7 @@ mod draft_admission {
         ] {
             let (mut app, method, mut writes) =
                 provider_fixture(AgentKind::Codex, true, "developer draft 保留");
-            project_draft(&mut app).await;
+            project_stale_blocked_draft(&mut app).await;
             let pane = app.state.workspaces[0].tabs[0].root_pane;
             let runtime = app.lookup_runtime_sender(0, pane).unwrap();
             runtime.test_process_pty_bytes(format!("\x1b[2J\x1b[H{screen}").as_bytes());
@@ -585,7 +587,7 @@ mod draft_admission {
                 screen(AgentKind::Codex, "developer draft 保留").as_bytes(),
             );
             app.state.insert_test_runtime(pane, runtime);
-            project_draft(&mut app).await;
+            project_stale_blocked_draft(&mut app).await;
             let runtime = app.lookup_runtime_sender(0, pane).unwrap();
             let live = if draft {
                 "› current draft 保留\n GPT-6 · /repo\n ? for shortcuts"
