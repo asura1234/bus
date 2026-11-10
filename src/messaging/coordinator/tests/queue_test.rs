@@ -363,6 +363,15 @@ fn an_unstarted_request_is_released_when_the_agent_begins_another_turn_of_its_ow
         worker.state.request(request).unwrap().phase,
         RequestPhase::Abandoned
     );
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("submission_unconfirmed")
+    );
     assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
     // Releasing this request posts no room notice.
     assert!(worker.state.rooms().all(|room| room.notices.is_empty()));
@@ -407,6 +416,15 @@ fn an_unstarted_request_is_released_once_the_agent_stays_idle() {
     assert_eq!(
         worker.state.request(request).unwrap().phase,
         RequestPhase::Abandoned
+    );
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("submission_unconfirmed")
     );
     assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
     std::fs::remove_dir_all(dir).unwrap();

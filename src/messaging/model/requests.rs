@@ -421,7 +421,8 @@ impl BusState {
         now_ms: u64,
     ) -> Option<RequestId> {
         let request = self.unbound_request(agent)?.id;
-        self.abandon_current_request(request, now_ms).ok()?;
+        self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())
+            .ok()?;
         tracing::info!(
             event = "bus.message.recovered",
             request_id = request.0,
