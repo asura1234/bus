@@ -75,6 +75,21 @@ fn deletion_of_an_unstarted_launch_requires_authoritative_native_absence() {
 
 #[test]
 fn deletion_retry_reconciles_launch_attested_initial_session_without_callbacks_or_delivery() {
+    struct InspectCallbacks {
+        inner: NativeBoundClose,
+        capture: std::path::PathBuf,
+    }
+    impl Transport for InspectCallbacks {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if matches!(&method, Method::PaneCloseIfIdentity(params)
+                if params.expected_session_id.as_deref() == Some("native-session"))
+            {
+                // Reconciliation must not consume callbacks before final teardown.
+                assert_eq!(callbacks::records(&self.capture).unwrap().len(), 3);
+            }
+            self.inner.request(method)
+        }
+    }
     for provider in [Provider::ClaudeCode, Provider::Cursor, Provider::Codex] {
         let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
         let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
@@ -85,10 +100,13 @@ fn deletion_retry_reconciles_launch_attested_initial_session_without_callbacks_o
             .unwrap();
         queue(&mut worker, room, agent, "never deliver");
         let calls = Arc::new(Mutex::new(Vec::new()));
-        worker.transport = Box::new(NativeBoundClose {
-            session: "native-session".into(),
-            calls: Arc::clone(&calls),
-            state_path: dir.join("state.json"),
+        worker.transport = Box::new(InspectCallbacks {
+            inner: NativeBoundClose {
+                session: "native-session".into(),
+                calls: Arc::clone(&calls),
+                state_path: dir.join("state.json"),
+            },
+            capture: dir.join("callbacks/launch"),
         });
         let (events, _) = mpsc::channel();
         assert!(worker
@@ -123,12 +141,7 @@ fn deletion_retry_reconciles_launch_attested_initial_session_without_callbacks_o
             *calls.lock().unwrap(),
             vec![None, None, Some("native-session".into())]
         );
-        assert_eq!(
-            callbacks::records(&dir.join("callbacks/launch"))
-                .unwrap()
-                .len(),
-            3
-        );
+        assert!(!dir.join("callbacks/launch").exists());
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
