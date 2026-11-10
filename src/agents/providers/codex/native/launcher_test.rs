@@ -7,7 +7,12 @@ use std::os::unix::{
 const TEST: &str = "agents::providers::codex::native::launcher::tests::codex_native_shell_helper_inherits_environment_and_fences_runtime_lifetime";
 const ROOT_ENV: &str = "BUS_CODEX_HELPER_TEST_ROOT";
 
-fn initialize_peer(listener: UnixListener) -> std::thread::JoinHandle<()> {
+fn initialize_peer(
+    listener: UnixListener,
+    root: std::path::PathBuf,
+    command: String,
+    trusted: bool,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
         let deadline = Instant::now() + Duration::from_secs(7);
@@ -24,6 +29,12 @@ fn initialize_peer(listener: UnixListener) -> std::thread::JoinHandle<()> {
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
+        // The fixture endpoint is separate from the fake backend. Do not let
+        // an immediate refusal retire that child before its startup evidence.
+        while !root.join("backend-cwd").exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(root.join("backend-cwd").exists());
         let mut peer = tungstenite::accept(stream).unwrap();
         let request: serde_json::Value =
             serde_json::from_str(peer.read().unwrap().to_text().unwrap()).unwrap();
@@ -37,6 +48,23 @@ fn initialize_peer(listener: UnixListener) -> std::thread::JoinHandle<()> {
         let initialized: serde_json::Value =
             serde_json::from_str(peer.read().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(initialized["method"], "initialized");
+        if let Ok(frame) = peer.read() {
+            let request: serde_json::Value =
+                serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], "hooks/list");
+            let hooks: Vec<_> = ["sessionStart", "userPromptSubmit", "stop"].into_iter().map(|event| {
+                serde_json::json!({"eventName":event,"source":"project","handlerType":"command",
+                    "command":command,"enabled":true,"trustStatus":if trusted {"trusted"} else {"untrusted"}})
+            }).collect();
+            peer.send(tungstenite::Message::Text(
+                serde_json::json!({"id":request["id"],"result":{"data":[{
+                    "cwd": request["params"]["cwds"][0], "hooks":hooks,"errors":[],"warnings":[]
+                }]}})
+                .to_string()
+                .into(),
+            ))
+            .unwrap();
+        }
     })
 }
 
@@ -56,6 +84,74 @@ fn codex_native_shell_helper_inherits_environment_and_fences_runtime_lifetime() 
         .unwrap();
         unreachable!("the helper must exec its TUI");
     }
+    exercise_shell_helper(true);
+}
+
+#[test]
+fn codex_native_helper_uses_standalone_until_hooks_are_trusted() {
+    exercise_shell_helper(false);
+}
+
+#[test]
+fn codex_native_attachment_requires_current_enabled_trusted_callback_hooks() {
+    let cwd = Path::new("/private/project");
+    let capture = Path::new("/private/bus/callbacks/launch");
+    let command = crate::agents::providers::hook_json::HookContract::for_provider(
+        crate::agents::providers::ProviderKind::Codex,
+    )
+    .command(&capture.parent().unwrap().join("codex-hook-bridge"));
+    let hooks: Vec<_> = ["sessionStart", "userPromptSubmit", "stop"]
+        .into_iter()
+        .map(|event| {
+            serde_json::json!({"eventName":event,"source":"project",
+            "handlerType":"command","command":command,"enabled":true,"trustStatus":"trusted"})
+        })
+        .collect();
+    let trusted = serde_json::json!({"data":[{"cwd":cwd,"hooks":hooks,"errors":[],"warnings":[]}]});
+    assert!(trusted_bus_hooks(&trusted, capture, cwd));
+    for case in [
+        "untrusted-project",
+        "missing-event",
+        "disabled",
+        "modified",
+        "wrong-command",
+        "wrong-source",
+        "wrong-handler",
+        "errors",
+        "wrong-cwd",
+        "malformed",
+        "foreign-hook",
+    ] {
+        let mut result = trusted.clone();
+        match case {
+            "untrusted-project" => result["data"][0]["hooks"] = serde_json::json!([]),
+            "missing-event" => {
+                result["data"][0]["hooks"].as_array_mut().unwrap().pop();
+            }
+            "disabled" => result["data"][0]["hooks"][0]["enabled"] = false.into(),
+            "modified" => result["data"][0]["hooks"][0]["trustStatus"] = "modified".into(),
+            "wrong-command" => {
+                result["data"][0]["hooks"][0]["command"] =
+                    "/other/bus --bus-callback codex-hook".into()
+            }
+            "wrong-source" => result["data"][0]["hooks"][0]["source"] = "user".into(),
+            "wrong-handler" => result["data"][0]["hooks"][0]["handlerType"] = "prompt".into(),
+            "errors" => {
+                result["data"][0]["errors"] = serde_json::json!([{"message":"invalid hook"}])
+            }
+            "wrong-cwd" => result["data"][0]["cwd"] = "/other/project".into(),
+            "malformed" => result["data"] = serde_json::Value::Null,
+            "foreign-hook" => result["data"][0]["hooks"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"enabled":true,"trustStatus":"untrusted"})),
+            _ => unreachable!(),
+        }
+        assert!(!trusted_bus_hooks(&result, capture, cwd), "{case}");
+    }
+}
+
+fn exercise_shell_helper(trusted: bool) {
     let root = crate::utils::test_temp::unique_temp_path("codex-shell-helper");
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
     for name in ["capture", "home", "shell-cwd"] {
@@ -102,7 +198,16 @@ printf '%s\n' "$@" > "$BUS_CODEX_HELPER_TEST_ROOT/tui-argv"
         "Bus must not launch from the pre-shell environment"
     );
     fs::write(root.join("runtime-directory"), directory.to_str().unwrap()).unwrap();
-    let peer = initialize_peer(UnixListener::bind(directory.join("s")).unwrap());
+    let command = crate::agents::providers::hook_json::HookContract::for_provider(
+        crate::agents::providers::ProviderKind::Codex,
+    )
+    .command(&root.join("codex-hook-bridge"));
+    let peer = initialize_peer(
+        UnixListener::bind(directory.join("s")).unwrap(),
+        root.clone(),
+        command,
+        trusted,
+    );
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", TEST, "--nocapture"])
         .env_clear()
@@ -141,16 +246,28 @@ printf '%s\n' "$@" > "$BUS_CODEX_HELPER_TEST_ROOT/tui-argv"
         );
     }
     let tui = fs::read_to_string(root.join("tui-argv")).unwrap();
-    assert!(
+    assert_eq!(
         tui.starts_with(&format!("--remote\nunix://{}/s\n", directory.display())),
+        trusted,
         "{tui}"
     );
-    assert!(!tui.lines().any(|v| v == "--no-daemon"));
-    let lock_path = root.join("capture/codex-native-writer.lock");
-    assert!(
-        matches!(acquire_writer_lock(&lock_path),Err(e) if e.kind()==io::ErrorKind::WouldBlock),
-        "backend must retain the launch lock after TUI exec/exit"
+    assert_eq!(tui.lines().any(|v| v == "--no-daemon"), !trusted);
+    assert_eq!(
+        fs::read_to_string(directory.join("mode")).unwrap(),
+        if trusted { "native" } else { "standalone" }
     );
+    let lock_path = root.join("capture/codex-native-writer.lock");
+    if trusted {
+        assert!(
+            matches!(acquire_writer_lock(&lock_path),Err(e) if e.kind()==io::ErrorKind::WouldBlock),
+            "backend must retain the launch lock after TUI exec/exit"
+        );
+    } else {
+        assert!(
+            acquire_writer_lock(&lock_path).is_ok(),
+            "untrusted backend must retire before standalone exits"
+        );
+    }
     drop(runtime);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {

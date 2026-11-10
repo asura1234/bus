@@ -34,7 +34,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         &lock,
         control.try_clone()?,
     )?;
-    let attached = server.ready(&socket).is_ok();
+    let attached = server.ready(&socket, Path::new(capture)).is_ok();
     let tui = if attached {
         remote_argv(argv, &endpoint)
     } else {
@@ -149,7 +149,7 @@ impl Server {
         Ok(Self { child })
     }
 
-    fn ready(&mut self, socket: &Path) -> io::Result<()> {
+    fn ready(&mut self, socket: &Path, capture: &Path) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if self.child.try_wait()?.is_some() {
@@ -157,8 +157,16 @@ impl Server {
                     "Codex app-server exited before attachment",
                 ));
             }
-            if Rpc::connect(socket, deadline).is_ok() {
-                return Ok(());
+            if let Ok(mut rpc) = Rpc::connect(socket, deadline) {
+                let cwd = std::env::current_dir()?;
+                let hooks = rpc.call("hooks/list", serde_json::json!({"cwds":[cwd]}))?;
+                if trusted_bus_hooks(&hooks, capture, &cwd) {
+                    return Ok(());
+                }
+                // A remote frontend skips native project/hook onboarding. No
+                // input has been sent, so retire this backend and let the
+                // standalone TUI perform those reviews without bypassing them.
+                return Err(io::Error::other("Codex hooks require native onboarding"));
             }
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
@@ -173,6 +181,46 @@ impl Server {
     fn stop(&mut self) -> io::Result<()> {
         terminate_group(&mut self.child, Duration::from_secs(3))
     }
+}
+
+fn trusted_bus_hooks(result: &serde_json::Value, capture: &Path, cwd: &Path) -> bool {
+    let Some(entries) = result["data"]
+        .as_array()
+        .filter(|entries| entries.len() == 1)
+    else {
+        return false;
+    };
+    let entry = &entries[0];
+    if entry["cwd"].as_str() != cwd.to_str()
+        || !entry["errors"].as_array().is_some_and(Vec::is_empty)
+    {
+        return false;
+    }
+    let Some(hooks) = entry["hooks"].as_array() else {
+        return false;
+    };
+    let Some(callbacks) = capture.parent() else {
+        return false;
+    };
+    let command = crate::agents::providers::hook_json::HookContract::for_provider(
+        crate::agents::providers::ProviderKind::Codex,
+    )
+    .command(&callbacks.join("codex-hook-bridge"));
+    hooks.iter().all(|hook| {
+        hook["enabled"] != true
+            || matches!(hook["trustStatus"].as_str(), Some("trusted" | "managed"))
+    }) && ["sessionStart", "userPromptSubmit", "stop"]
+        .iter()
+        .all(|event| {
+            hooks.iter().any(|hook| {
+                hook["eventName"] == *event
+                    && hook["source"] == "project"
+                    && hook["handlerType"] == "command"
+                    && hook["command"] == command
+                    && hook["enabled"] == true
+                    && hook["trustStatus"] == "trusted"
+            })
+        })
 }
 
 impl Drop for Server {
