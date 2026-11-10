@@ -50,6 +50,13 @@ impl ObservedSubmission {
         let pristine = self
             .startup_suggestion_open
             .load(std::sync::atomic::Ordering::Acquire);
+        // A Codex picker can coexist with a complete developer draft. Refuse
+        // before reserving its durable editor exchange: no handoff can run
+        // while that picker owns the keys.
+        if self.inspect.confirm_consumption() && !self.inspect.submission_available(&screen) {
+            lease.restored();
+            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+        }
         if self.inspect.submission_available(&screen) {
             if let Some(editor) = self
                 .inspect
