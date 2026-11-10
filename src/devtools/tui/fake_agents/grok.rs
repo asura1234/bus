@@ -666,9 +666,12 @@ impl Grok {
     }
 
     fn draw(&self) -> io::Result<()> {
-        let mut out = io::stdout();
-        write!(out, "\x1b[H\x1b[2J{}", self.screen())?;
-        out.flush()
+        self.draw_to(&mut io::stdout())
+    }
+
+    fn draw_to(&self, output: &mut impl Write) -> io::Result<()> {
+        write!(output, "\x1b[H\x1b[2J{}", self.screen())?;
+        output.flush()
     }
 
     fn read_loop(&mut self) -> io::Result<()> {
@@ -706,6 +709,10 @@ impl Grok {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/grok_redraw_test.rs"]
+mod redraw_tests;
 
 #[cfg(test)]
 mod tests {
