@@ -329,9 +329,16 @@ impl SubmissionHandle {
                         if result.is_err() {
                             submission.diagnose_refusal("result_error");
                         }
-                        if let Some((since, entered)) =
-                            submission.diagnostics.pending_paste(&result)
+                        // Composer consumption is not a native turn claim.
+                        // Preserve Codex ownership through a transient empty
+                        // repaint; developer input still revokes this record.
+                        let pending = if result.is_ok() && submission.inspect.confirm_consumption()
                         {
+                            submission.diagnostics.written_paste()
+                        } else {
+                            submission.diagnostics.pending_paste(&result)
+                        };
+                        if let Some((since, entered)) = pending {
                             lease.retain_pending(super::draft_input::PendingPaste {
                                 inspect: std::mem::replace(
                                     &mut submission.inspect,

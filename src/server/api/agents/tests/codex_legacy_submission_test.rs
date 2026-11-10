@@ -156,3 +156,89 @@ async fn codex_legacy_late_render_after_empty_frame_retains_owned_cleanup() {
     assert!(crate::terminal::runtime::PromptNotShown::is(&error));
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn codex_legacy_picker_after_paste_is_closed_only_for_owned_withdrawal() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let paste_receipt = clock(&app).hold_next_write_completion();
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes(
+        "\x1b[2J\x1b[HMentions\r\nFiles, directories, plugins, skills and tasks\r\nno matches\r\nenter/tab insert · esc close · ↑/↓ select · ←/→ filter\r\n\r\n› from bus\r\n\r\n GPT-6 · /repo".as_bytes(),
+    );
+    paste_receipt.send(()).unwrap();
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b",
+        "only dismiss the owned picker; no Enter"
+    );
+    redraw(&app, AgentKind::Codex, "from bus");
+    let mut response = (
+        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        None,
+    );
+    let mut clears = 0;
+    let reply = loop {
+        match write_or_done(&mut writes, &mut response).await {
+            Ok(key) => {
+                assert!(
+                    matches!(key.as_ref(), b"\x01" | b"\x0b" | b"\x15"),
+                    "no Enter or repeated Esc: {key:?}"
+                );
+                clears += 1;
+                redraw(
+                    &app,
+                    AgentKind::Codex,
+                    if key.as_ref() == b"\x0b" {
+                        ""
+                    } else {
+                        "from bus"
+                    },
+                );
+            }
+            Err(reply) => break reply,
+        }
+    };
+    assert!(
+        reply.contains("agent_prompt_not_shown"),
+        "no Enter and a proven withdrawal: {reply}"
+    );
+    assert!(clears > 0);
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_legacy_developer_input_revokes_retained_cleanup_even_for_identical_text() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let response = start(&mut app, method);
+    accept_paste(&app, AgentKind::Codex, "from bus", &mut writes).await;
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .try_send_developer_bytes(Bytes::from_static(b"from bus"))
+        .unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"from bus");
+    redraw(&app, AgentKind::Codex, "from bus");
+    let error = recovery_without_new_input(&app, None)
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap_err();
+    assert!(crate::terminal::runtime::PromptNotShown::is(&error));
+    assert!(
+        writes.try_recv().is_err(),
+        "never clear identical text typed by the developer"
+    );
+    assert!(app
+        .lookup_runtime_sender(0, pane)
+        .unwrap()
+        .visible_ansi()
+        .contains("from bus"));
+}

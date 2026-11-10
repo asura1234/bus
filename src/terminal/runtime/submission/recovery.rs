@@ -67,7 +67,9 @@ impl ObservedSubmission {
                 InputObservation::Pending => {
                     self.deadline
                         .set((self.clock.now() + withdraw_grace).min(self.hard_deadline));
-                    let cleared = self.clear_draft();
+                    let cleared = self
+                        .close_owned_popup(lease)
+                        .and_then(|()| self.clear_draft_with_lease(Some(lease)));
                     self.diagnostics.cleared(&cleared, self.clock.now());
                     tracing::debug!(target: "bus::terminal::submission",
                         event = "bus.terminal.submission.recovery",

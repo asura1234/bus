@@ -191,11 +191,15 @@ impl Diagnostics {
             .as_ref()
             .is_err_and(|error| !PromptNotShown::is(error))
         {
-            self.paste_at
-                .get()
-                .map(|at| (at, self.enter_attempts.get() > 0))
+            self.written_paste()
         } else {
             None
         }
+    }
+
+    pub(super) fn written_paste(&self) -> Option<(Instant, bool)> {
+        self.paste_at
+            .get()
+            .map(|at| (at, self.enter_attempts.get() > 0))
     }
 }

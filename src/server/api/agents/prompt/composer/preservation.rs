@@ -93,11 +93,10 @@ mod tests;
 
 impl SubmissionInspector for PreservingComposer {
     fn confirm_consumption(&self) -> bool {
-        self.kind == AgentKind::Codex
+        self.owned.confirm_consumption()
     }
     fn owned_popup_escape(&self, screen: &str) -> Option<bytes::Bytes> {
-        (self.kind == AgentKind::Codex && super::codex_picker::mentions(screen))
-            .then(|| bytes::Bytes::from_static(b"\x1b"))
+        self.owned.owned_popup_escape(screen)
     }
     fn submission_available(&self, screen: &str) -> bool {
         super::submission_available(self.kind, screen)

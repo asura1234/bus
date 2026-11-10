@@ -79,7 +79,7 @@ impl ObservedSubmission {
         }
     }
 
-    fn close_owned_popup(&self, lease: &DraftInputLease) -> io::Result<()> {
+    pub(super) fn close_owned_popup(&self, lease: &DraftInputLease) -> io::Result<()> {
         let guard = self
             .content_lock
             .lock()
