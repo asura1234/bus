@@ -78,7 +78,13 @@ pub(crate) fn selected_executable(
     if provider == ProviderKind::ClaudeDs {
         return Ok(Some(provider.executable().to_owned()));
     }
-    if !matches!(provider, ProviderKind::Grok | ProviderKind::Kimi) {
+    if !matches!(
+        provider,
+        ProviderKind::Grok | ProviderKind::Kimi | ProviderKind::Codex
+    ) {
+        return Ok(None);
+    }
+    if provider == ProviderKind::Codex && !env.contains_key("PATH") {
         return Ok(None);
     }
     let directory = env
@@ -502,7 +508,11 @@ pub(crate) fn prepare(
             cwd,
             args,
             adopted_session,
-            env: spec.hooks.env(),
+            env: if spec.provider == ProviderKind::Codex {
+                codex::launch::environment(&spec.hooks)
+            } else {
+                spec.hooks.env()
+            },
         }),
         ProviderKind::Grok => unreachable!("Grok prepares its own launch"),
         ProviderKind::Kimi => unreachable!("Kimi prepares its own launch"),

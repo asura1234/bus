@@ -102,7 +102,7 @@ impl Rpc {
         self.deadline = deadline;
     }
 
-    fn call(&mut self, method: &str, params: Value) -> io::Result<Value> {
+    pub(super) fn call(&mut self, method: &str, params: Value) -> io::Result<Value> {
         self.next_id += 1;
         let id = self.next_id;
         let mut sent = false;

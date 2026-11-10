@@ -44,12 +44,16 @@ fn agent_start_argv(
         );
     }
     let executable = match (kind, selected_executable) {
-        (crate::agents::AgentKind::Grok | crate::agents::AgentKind::Kimi, Some(path))
-            if std::path::Path::new(&path).is_absolute()
-                && std::path::Path::new(&path)
-                    .file_name()
-                    .is_some_and(|name| name == crate::agents::agent_label(kind))
-                && !path.chars().any(char::is_control) =>
+        (
+            crate::agents::AgentKind::Grok
+            | crate::agents::AgentKind::Kimi
+            | crate::agents::AgentKind::Codex,
+            Some(path),
+        ) if std::path::Path::new(&path).is_absolute()
+            && std::path::Path::new(&path)
+                .file_name()
+                .is_some_and(|name| name == crate::agents::agent_label(kind))
+            && !path.chars().any(char::is_control) =>
         {
             path
         }
@@ -298,7 +302,7 @@ impl App {
 
         let args = params.args;
         let kimi_code_home = params.kimi_home.as_ref().map(std::path::PathBuf::from);
-        let argv = agent_start_argv(
+        let mut argv = agent_start_argv(
             kind,
             params.executable,
             params.grok_home,
@@ -312,6 +316,14 @@ impl App {
         );
         if timeout <= AGENT_START_SETTLE_DELAY || timeout > MAX_AGENT_START_TIMEOUT {
             return Err(AgentStartError::InvalidTimeout);
+        }
+        // One launch. The Runtime stays on the pane, so the helper's lifetime
+        // channel stays open. A profile or explicit permission argv is unchanged.
+        #[cfg(unix)]
+        {
+            argv = runtime
+                .launch_shared_codex(argv)
+                .map_err(|err| AgentStartError::InputFailed(err.to_string()))?;
         }
 
         let now = Instant::now();
