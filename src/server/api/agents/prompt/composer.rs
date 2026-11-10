@@ -8,8 +8,8 @@ mod diagnostics;
 mod ownership;
 mod preservation;
 
-/// The final submission guard asks only whether native input is available.
-/// It never compares the rendered body with the message Bus just wrote.
+/// The final submission guard checks native input availability. Attachment
+/// registration is checked separately; ordinary text needs no render readback.
 fn submission_available(kind: AgentKind, screen: &str) -> bool {
     let plain = screen
         .lines()
@@ -33,6 +33,28 @@ fn submission_available(kind: AgentKind, screen: &str) -> bool {
         || crate::terminal::driver::has_input_controls(&plain)
         || input(kind, screen).is_none()
         || kind == AgentKind::Codex && codex_picker::active(screen))
+}
+
+fn paste_ready(kind: AgentKind, screen: &str, expected: &str) -> bool {
+    if kind != AgentKind::Claude {
+        return true;
+    }
+    let (images, _) = crate::agents::providers::claude_code::hooks::claude_lifted_images(expected);
+    if images == 0 {
+        return true;
+    }
+    // Claude 2.1.316 consumes Enter while an image path is being loaded, then
+    // drops that deferred key. The PTY receipt does not attest registration.
+    // Wait for all chips, including when the rest of a long paste is clipped.
+    // A failed image read instead installs the literal payload as text.
+    let ready = input(kind, screen).is_some_and(|body| {
+        image_chips(&body).0 == images
+            || observe_with_cursor(kind, screen, expected, None) == InputObservation::Pending
+    });
+    if ready {
+        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.images_registered", images, "Claude image paste can receive Enter");
+    }
+    ready
 }
 
 fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {

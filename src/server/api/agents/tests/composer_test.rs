@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn claude_image_registration_waits_for_all_chips_and_allows_failed_read_text() {
+    let expected = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    assert!(!paste_ready(AgentKind::Claude, &frame(""), expected));
+    assert!(!paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7]from bus"),
+        expected
+    ));
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7][Image #8]from bus"),
+        expected
+    ));
+    assert!(paste_ready(AgentKind::Claude, &frame(expected), expected));
+    // Image registration does not depend on reading back an offscreen brief.
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7][Image #8]clipped suffix"),
+        expected
+    ));
+    assert!(paste_ready(AgentKind::Claude, &frame(""), "ordinary text"));
+}
+
 fn codex_review_inspector(
     directory: std::path::PathBuf,
 ) -> Box<dyn crate::terminal::runtime::SubmissionInspector> {
