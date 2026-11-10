@@ -1,5 +1,6 @@
 //! Live terminal runtime: construction, IO, reads and background task ownership.
 mod cli_env;
+pub(crate) use cli_env::prepare_bus_cli;
 mod compression;
 mod detection_process;
 mod detection_task;

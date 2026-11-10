@@ -29,6 +29,44 @@ pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Publish one native executable name without exposing its sibling commands.
+/// The caller owns the directory and invokes this after claiming its session.
+pub(crate) fn refresh_executable_alias(path: &Path, executable: &Path) -> io::Result<()> {
+    if !executable.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Bus executable must be absolute",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        if std::fs::read_link(path).is_ok_and(|target| target == executable) {
+            return Ok(());
+        }
+        static NEXT_ALIAS: AtomicU64 = AtomicU64::new(1);
+        let sequence = NEXT_ALIAS.fetch_add(1, Ordering::Relaxed);
+        let temp = path.with_extension(format!("alias-{}-{sequence}", std::process::id()));
+        std::os::unix::fs::symlink(executable, &temp)?;
+        if let Err(error) = replace_file(&temp, path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error);
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        // A native image works in PowerShell, cmd and provider child shells
+        // without symlink privileges or script-extension lookup rules.
+        let mut source = File::open(executable)?;
+        atomic_write_with_checkpoint(
+            path,
+            |target| io::copy(&mut source, target).map(|_| ()),
+            |_| Ok(()),
+        )
+        .map_err(|error| error.source)
+    }
+}
+
 /// Extensions whose default "open" runs code, or follows a shortcut that may
 /// lead to code: apps, scripts, installers, Terminal settings, Finder and
 /// Internet location files, desktop entries.

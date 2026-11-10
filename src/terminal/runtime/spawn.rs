@@ -337,18 +337,7 @@ pub(crate) const BUS_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 
 pub(crate) const BUS_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
-pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) -> io::Result<()> {
-    cmd.env(
-        crate::protocol::api::SOCKET_PATH_ENV_VAR,
-        crate::protocol::api::socket_path(),
-    );
-    super::cli_env::apply_bus_cli_env(cmd, &std::env::current_exe()?)?;
-    cmd.env(
-        crate::agents::providers::callback_entry::BUS_SERVER_PID_ENV_VAR,
-        std::process::id().to_string(),
-    );
-    Ok(())
-}
+pub(crate) use super::cli_env::apply_pane_base_env;
 
 #[cfg(unix)]
 pub(crate) struct SpawnedPty {
