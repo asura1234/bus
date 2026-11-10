@@ -433,6 +433,8 @@ fn queue_resumed_agent_launch(
     if let Some(terminal) = terminal {
         guard_resumed_agent_launch(terminal, runtime);
     }
+    #[cfg(unix)]
+    let argv = &runtime.launch_shared_codex(argv.to_vec())?;
     runtime.queue_shell_command(argv, super::agents::DEFAULT_AGENT_START_TIMEOUT)
 }
 
@@ -649,3 +651,7 @@ mod tests;
 #[cfg(test)]
 #[path = "resume/test_support_test.rs"]
 mod test_support;
+
+#[cfg(all(test, unix))]
+#[path = "tests/codex_cold_launch_test.rs"]
+mod codex_cold_launch;
