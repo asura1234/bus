@@ -414,3 +414,102 @@ fn an_interrupt_cannot_overtake_a_pending_native_write() {
         "the stop RPC overtook a native write that could still land afterward"
     );
 }
+
+struct ReadinessWhilePending {
+    deferred: DeferredNative,
+    infos: Vec<schema::AgentInfo>,
+    ready_recipient: mpsc::Sender<()>,
+}
+
+impl Transport for ReadinessWhilePending {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
+                agents: self.infos.clone(),
+            }),
+            other => panic!("unexpected readiness operation: {other:?}"),
+        }
+    }
+
+    fn submit(&mut self, method: Method) -> crate::messaging::native::NativeCall {
+        let newly_ready = matches!(&method,
+            Method::AgentPromptIfIdleAtGeneration(params) if params.target == "pane-b");
+        let call = self.deferred.submit(method);
+        if newly_ready {
+            self.ready_recipient.send(()).unwrap();
+        }
+        call
+    }
+}
+
+#[test]
+fn a_pending_write_does_not_hold_another_recipients_readiness_refresh() {
+    let (mut worker, a, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.dev_enabled = true;
+    let mut state = worker.state.clone();
+    let b = state
+        .create_agent(room, "newly-ready", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let mut identity = state.agent(a).unwrap().runtime_identity.clone();
+    identity.launch_id = Some("launch-b".into());
+    identity.terminal_id = Some("terminal-b".into());
+    identity.pane_id = Some("pane-b".into());
+    identity.session_id = Some("session-b".into());
+    state.set_agent_runtime_identity(b, identity).unwrap();
+    state.confirm_hook_setup(b).unwrap();
+    state.observe_status(b, RuntimeStatus::Blocked, 1).unwrap();
+    state.observe_dialog(b, true, 1).unwrap();
+    worker.save(state).unwrap();
+    callbacks::initialize(
+        &dir.join("callbacks/launch-b"),
+        &callbacks::Manifest {
+            routing_key: callbacks::RoutingKey(b.0),
+            provider: Provider::Codex,
+            launch_id: "launch-b".into(),
+        },
+    )
+    .unwrap();
+    queue(&mut worker, room, a, "slow native write");
+    queue(&mut worker, room, b, "dialog has now closed");
+    let mut first = native_info("pane", "codex", "session");
+    first.interactive_ready = true;
+    let mut second = native_info("pane-b", "codex", "session-b");
+    second.terminal_id = "terminal-b".into();
+    second.name = Some(format!("bus-r{}-a{}", room.0, b.0));
+    second.interactive_ready = true;
+    let deferred = DeferredNative(Default::default());
+    let (ready_recipient, submitted) = mpsc::channel();
+    worker.transport = Box::new(ReadinessWhilePending {
+        deferred: deferred.clone(),
+        infos: vec![first, second.clone()],
+        ready_recipient,
+    });
+    worker.submit_ready().unwrap();
+    assert_eq!(deferred.0.lock().unwrap().len(), 1);
+    let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let (events, _) = mpsc::channel();
+    let (commands, received) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let _providers = provider_binaries();
+        worker.run(received, events, snapshots);
+    });
+    let independent = submitted.recv_timeout(Duration::from_millis(250)).is_ok();
+    deferred.0.lock().unwrap()[0].1.send(confirmed()).unwrap();
+    if !independent {
+        submitted.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+    deferred.0.lock().unwrap()[1]
+        .1
+        .send(Ok(ResponseResult::AgentPrompted {
+            agent: second,
+            timestamps: Default::default(),
+        }))
+        .unwrap();
+    commands.send((1, BusCommand::Shutdown)).unwrap();
+    thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        independent,
+        "a pending native write blocked another recipient's readiness refresh"
+    );
+}
