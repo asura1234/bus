@@ -460,6 +460,7 @@ mod tests {
                 expected_session_id: "s".into(),
                 steer: false,
                 expected_generation: None,
+                expected_turn_id: None,
             },
         ));
         assert!(outcome.unwrap_err().definitely_rejected);
@@ -479,7 +480,6 @@ mod creation_failure_tests {
             let error=client.request_using(method,|_,request,_| {
                 if transport_failure { Err(ApiClientError::Io(std::io::Error::other("lost response"))) }
                 else { Ok(serde_json::json!({"id":request.id,"error":{"code":"tab_create_failed","message":"login shell is not executable"}})) }
-                expected_turn_id: None,
             }).unwrap_err();
             assert_eq!(error.definitely_rejected, !transport_failure);
         }
