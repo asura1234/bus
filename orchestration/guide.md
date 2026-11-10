@@ -411,8 +411,8 @@ workflow after the decision.
 
 Bus holds agent messages to a busy orchestrator until its turn ends; worker
 reports get their own turn. It also holds messages to busy Grok agents.
-These waits are intended. Same-room messages to working Codex, Claude and Kimi
-workers steer into the running turn; cross-room and `--queue` sends wait.
+These waits are intended. Same-room messages to working workers of every
+provider except Grok steer into the running turn; cross-room and `--queue` sends wait.
 
 When a message would be held and you need an immediate reaction, interrupt the
 agent first, then send the new instruction. Otherwise waiting for the turn to

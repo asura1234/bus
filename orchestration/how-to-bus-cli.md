@@ -55,8 +55,8 @@ A message has one ID and one recipient request per selected agent, tracking deli
 A provider turn is the agent's execution context. Ordinary agent-authored requests to busy
 orchestrators, including worker reports, wait for independent turns without steering or coalescing.
 Messages to busy Grok agents also wait for the turn to end; these waits are intended.
-Same-room messages to working Codex, Claude and Kimi workers can steer into the running turn's
-group; `--queue` gets an independent idle turn. Cross-room messages wait for a new turn.
+Same-room messages to working workers of every provider except Grok can steer into the running
+turn's group; `--queue` gets an independent idle turn. Cross-room messages wait for a new turn.
 Developer steering is unchanged. If a message would be held and you need an immediate reaction,
 run `bus agent interrupt AGENT`, then send the new instruction; otherwise waiting is fine.
 Interrupt stops in-flight builds, Git operations and device runs; use it only to change course,

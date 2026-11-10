@@ -156,8 +156,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   Answer promptly. Ask the developer about destructive or outward-facing actions
   only when existing workflow or developer authorization does not cover them.
 - Agent messages to busy orchestrators get their own turn; messages to busy
-  Grok agents also wait. Same-room messages to working Codex, Claude and Kimi
-  workers steer. If a message would be held and you need an immediate reaction,
+  Grok agents also wait. Same-room messages to working workers of every provider
+  except Grok steer. If a message would be held and you need an immediate reaction,
   run `bus agent interrupt AGENT --as {{AGENT_NAME}}`, then send the new instruction.
   Otherwise waiting for the turn to end is fine.
   Interrupt stops in-flight builds, Git operations and device runs:
