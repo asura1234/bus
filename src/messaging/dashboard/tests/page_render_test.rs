@@ -43,7 +43,7 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     assert_eq!(
         page.matches("<th>p50</th><th>p90</th><th>p99</th><th>n</th>")
             .count(),
-        2
+        3
     );
     assert!(page.contains("How these are counted"));
     assert!(!page.contains("id=\"group-mode\""));

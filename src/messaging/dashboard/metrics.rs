@@ -107,6 +107,9 @@ struct Series {
     /// Send accepted until agent pickup. Empty stays None.
     /// Not computed from reply capture or reply delivery.
     accepted_to_picked: super::latency::Percentiles,
+    accepted_to_eligible: super::latency::Percentiles,
+    eligible_to_picked: super::latency::Percentiles,
+    accepted_to_native_confirmed: super::latency::Percentiles,
 }
 #[derive(Default, Serialize)]
 struct Rates {
@@ -363,9 +366,21 @@ struct SeriesBuilder {
     counts: Counts,
     hours: BTreeMap<i64, (String, Counts)>,
     accepted_to_picked: Vec<u64>,
+    accepted_to_eligible: Vec<u64>,
+    eligible_to_picked: Vec<u64>,
+    accepted_to_native_confirmed: Vec<u64>,
 }
 impl SeriesBuilder {
     fn add(&mut self, hour: &HourKey, request: &Request, outcome: &Outcome) {
+        if let Some(ms) = super::latency::accepted_to_eligible_ms(request) {
+            self.accepted_to_eligible.push(ms);
+        }
+        if let Some(ms) = super::latency::eligible_to_picked_ms(request) {
+            self.eligible_to_picked.push(ms);
+        }
+        if let Some(ms) = super::latency::accepted_to_native_confirmed_ms(request) {
+            self.accepted_to_native_confirmed.push(ms);
+        }
         self.counts.add(request, outcome);
         self.hours
             .entry(hour.start_ms)
@@ -384,6 +399,11 @@ impl SeriesBuilder {
             rates,
             identity,
             accepted_to_picked: super::latency::percentiles(&self.accepted_to_picked),
+            accepted_to_eligible: super::latency::percentiles(&self.accepted_to_eligible),
+            eligible_to_picked: super::latency::percentiles(&self.eligible_to_picked),
+            accepted_to_native_confirmed: super::latency::percentiles(
+                &self.accepted_to_native_confirmed,
+            ),
             hours: self
                 .hours
                 .into_iter()

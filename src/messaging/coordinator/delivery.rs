@@ -7,8 +7,8 @@ use super::{
 use crate::messaging::model::DispatchMark;
 use crate::messaging::native::TransportError;
 
-mod submission;
-use submission::{native_response_timestamps, record_native_timestamps, submission_method};
+pub(super) mod submission;
+use submission::submission_method;
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
@@ -16,6 +16,11 @@ use submission::{native_response_timestamps, record_native_timestamps, submissio
 /// remain queued, but pause retries until fresh status, a new session or a
 /// change to the queue.
 pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
+
+enum DeliveryRoute {
+    Steer(RequestId, RequestId),
+    Submit(bool),
+}
 
 pub(super) struct ReplyDeliveryRetry {
     identity: crate::messaging::model::AgentRuntimeIdentity,
@@ -68,7 +73,22 @@ impl Worker {
 
     pub(super) fn submit_ready_while(
         &mut self,
+        can_deliver: impl FnMut() -> bool,
+    ) -> Result<(), String> {
+        self.submit_available_while(can_deliver, true)
+    }
+
+    pub(super) fn submit_eligible_while(
+        &mut self,
+        can_deliver: impl FnMut() -> bool,
+    ) -> Result<(), String> {
+        self.submit_available_while(can_deliver, false)
+    }
+
+    fn submit_available_while(
+        &mut self,
         mut can_deliver: impl FnMut() -> bool,
+        launch_prompts: bool,
     ) -> Result<(), String> {
         let now = self.reply_waiter_now();
         self.reply_waiters
@@ -92,23 +112,67 @@ impl Worker {
             self.state.agent(*id).is_some() && at.elapsed() < PROMPT_NOT_SHOWN_RETRY
         });
         let agents: Vec<_> = self.state.agents().cloned().collect();
+        // Observe admission for every recipient before any recipient's dispatch work.
+        for agent in &agents {
+            self.note_delivery_eligibility(agent);
+        }
         for agent in agents {
-            // A command may have arrived while polling or sending to a prior
-            // agent. Re-enter command dispatch before starting another send.
+            // Initial Cursor/Grok instructions stay on the readiness tick.
+            // They must precede queued work and must not hold another recipient.
+            if !launch_prompts
+                && matches!(agent.provider, Provider::Cursor | Provider::Grok)
+                && agent
+                    .runtime_identity
+                    .launch_id
+                    .as_ref()
+                    .is_some_and(|launch| {
+                        !self
+                            .data_dir
+                            .join("callbacks")
+                            .join(launch)
+                            .join("launch-prompt-attempted")
+                            .exists()
+                    })
+            {
+                continue;
+            }
             if !can_deliver() {
                 break;
             }
-            // Messages waited because the agent could not take them yet.
-            if agent.provider_retry.as_ref().is_some_and(|h| {
-                !h.queued || now_ms < h.retry_at_ms || agent.status != RuntimeStatus::Idle
-            }) {
-                continue;
-            }
             let waited = self.note_queued_delivery_wait(&agent);
-            if self.withdrawn_at.contains_key(&agent.id) {
-                continue;
+            match self.delivery_route(&agent) {
+                Some(DeliveryRoute::Steer(request, lead)) => self.steer(&agent, request, lead)?,
+                Some(DeliveryRoute::Submit(steer)) => {
+                    if !launch_prompts || !self.deliver_launch_prompt(&agent)? {
+                        self.deliver_queued_request(&agent, waited && !steer, steer)?;
+                    }
+                }
+                None => {}
             }
-            if self
+        }
+        Ok(())
+    }
+
+    pub(super) fn note_delivery_eligibility(&mut self, agent: &RoomAgent) {
+        let request = match self.delivery_route(agent) {
+            Some(DeliveryRoute::Steer(request, _)) => Some(request),
+            Some(DeliveryRoute::Submit(_)) => self.state.next_queued_request(agent.id),
+            None => None,
+        };
+        if let Some(request) = request {
+            self.state.record_eligible(request, io::now_ms());
+        }
+    }
+
+    fn delivery_route(&self, agent: &RoomAgent) -> Option<DeliveryRoute> {
+        let now_ms = io::now_ms();
+        if self.native_submissions.contains_key(&agent.id)
+            || self.submission_rechecks.contains(&agent.id)
+            || self.withdrawn_at.contains_key(&agent.id)
+            || agent.provider_retry.as_ref().is_some_and(|hold| {
+                !hold.queued || now_ms < hold.retry_at_ms || agent.status != RuntimeStatus::Idle
+            })
+            || self
                 .state
                 .queued_requests(agent.id)
                 .first()
@@ -117,44 +181,28 @@ impl Worker {
                         .get(id)
                         .is_some_and(|retry| retry.paused)
                 })
-            {
-                continue;
-            }
-            if let Some((request, lead)) = self.state.next_steering(agent.id) {
-                if agent.hook_setup_confirmed && !agent.session_binding_invalidated {
-                    self.steer(&agent, request, lead)?;
-                }
-                continue;
-            }
-            let own_turn = self
-                .own_turns
-                .get(&agent.id)
-                .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
-            let steer_unbound = self.steer_into_unbound_turn(&agent, own_turn);
-            // The native status lags a turn the agent just began on its own (a
-            // task notification, say); text typed then joins that turn and is
-            // never seen starting. Its Stop, or the status catching up, ends this.
-            if own_turn && !steer_unbound {
-                continue;
-            }
-            // A visible dialog takes typed text as its answer: Codex reports
-            // Idle under its startup update chooser, whose Enter updates.
-            if (agent.status != RuntimeStatus::Idle && !steer_unbound)
-                || agent.dialog
-                || !agent.hook_setup_confirmed
-                || agent.session_binding_invalidated
-                || agent.deletion_pending
-            {
-                continue;
-            }
-            if self.deliver_launch_prompt(&agent)? {
-                continue;
-            }
-            // A steer is one message, in queue order. Coalescing is only for
-            // text that waited until the agent was idle.
-            self.deliver_queued_request(&agent, waited && !steer_unbound, steer_unbound)?;
+        {
+            return None;
         }
-        Ok(())
+        if let Some((request, lead)) = self.state.next_steering(agent.id) {
+            return (agent.hook_setup_confirmed && !agent.session_binding_invalidated)
+                .then_some(DeliveryRoute::Steer(request, lead));
+        }
+        let own_turn = self
+            .own_turns
+            .get(&agent.id)
+            .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
+        let steer = self.steer_into_unbound_turn(agent, own_turn);
+        if (own_turn && !steer)
+            || (agent.status != RuntimeStatus::Idle && !steer)
+            || agent.dialog
+            || !agent.hook_setup_confirmed
+            || agent.session_binding_invalidated
+            || agent.deletion_pending
+        {
+            return None;
+        }
+        Some(DeliveryRoute::Submit(steer))
     }
 
     /// Whether the queue head can be typed into a turn Bus does not own yet.
@@ -512,6 +560,7 @@ impl Worker {
                 .ok_or("Missing queued request")?,
         };
         self.mark_open_dispatch(&mut state, request, DispatchMark::Render);
+        state.record_eligible(request, io::now_ms());
         let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
             .map_err(|e| e.to_string())?;
         self.mark_open_dispatch(&mut state, request, DispatchMark::Boundary);
@@ -585,34 +634,10 @@ impl Worker {
         self.mark_live_dispatch(request, DispatchMark::Diagnostics);
         let method = submission_method(agent, text, terminal, pane, steer, self.serving_generation);
         self.mark_live_dispatch(request, DispatchMark::Method);
-        let response = self.transport.request(method);
-        self.note_native_requested(request, io::now_ms());
-        let native_timestamps = native_response_timestamps(&response);
-        let outcome = Self::submission_outcome(response, &identity.session_id);
-        let outcome_name = match &outcome {
-            SubmissionOutcome::ComposerBusy => "composer_wait",
-            SubmissionOutcome::Confirmed { .. } => "confirmed",
-            SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
-            SubmissionOutcome::Uncertain { .. } => "uncertain",
-        };
-        tracing::info!(
-            event = "bus.delivery.result",
-            request_id = request.0,
-            outcome = outcome_name,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "Native submit result; uncertain outcomes are never retried"
-        );
-        let mut state = self.state.clone();
-        record_native_timestamps(&mut state, request, native_timestamps)?;
-        state
-            .record_submission(request, outcome.clone())
-            .map_err(|e| e.to_string())?;
-        self.save(state)?;
-        self.note_withdrawn(agent, request, &outcome);
-        Ok(())
+        self.start_native_submission(agent, request, method, false, started)
     }
 
-    fn submission_outcome(
+    pub(super) fn submission_outcome(
         result: Result<ResponseResult, TransportError>,
         session_id: &Option<String>,
     ) -> SubmissionOutcome {
@@ -641,7 +666,7 @@ impl Worker {
         }
     }
 
-    fn note_withdrawn(
+    pub(super) fn note_withdrawn(
         &mut self,
         agent: &RoomAgent,
         request: RequestId,
@@ -677,7 +702,7 @@ impl Worker {
         lead: RequestId,
     ) -> Result<(), String> {
         let identity = &agent.runtime_identity;
-        let (Some(terminal), Some(pane), Some(session)) = (
+        let (Some(terminal), Some(pane), Some(_session)) = (
             &identity.terminal_id,
             &identity.pane_id,
             &identity.session_id,
@@ -722,39 +747,6 @@ impl Worker {
                 .and_then(|request| request.provider_turn_id.clone());
         }
         self.mark_live_dispatch(request, DispatchMark::Method);
-        let response = self.transport.request(method);
-        self.note_native_requested(request, io::now_ms());
-        let native_timestamps = native_response_timestamps(&response);
-        let outcome = match response {
-            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
-                provider_session_id: Some(session.clone()),
-                provider_turn_id: None,
-            },
-            Ok(other) => SubmissionOutcome::Uncertain {
-                message: format!("Unexpected steering response: {other:?}"),
-            },
-            Err(error)
-                if error.code.as_deref() == Some(crate::protocol::api::AGENT_COMPOSER_BUSY) =>
-            {
-                SubmissionOutcome::ComposerBusy
-            }
-            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
-                message: error.message,
-            },
-            Err(error) => SubmissionOutcome::Uncertain {
-                message: error.message,
-            },
-        };
-        tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
-            mode = "steer", outcome = ?outcome,
-            elapsed_ms = started.elapsed().as_millis() as u64, "Steering admission completed");
-        let mut state = self.state.clone();
-        record_native_timestamps(&mut state, request, native_timestamps)?;
-        state
-            .record_steering(request, outcome.clone())
-            .map_err(|e| e.to_string())?;
-        self.save(state)?;
-        self.note_withdrawn(agent, request, &outcome);
-        Ok(())
+        self.start_native_submission(agent, request, method, true, started)
     }
 }

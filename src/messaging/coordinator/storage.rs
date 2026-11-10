@@ -43,6 +43,14 @@ impl Worker {
     pub(super) fn note_requests_queued(&mut self, ids: &[RequestId]) {
         let at_ms = io::now_ms();
         for id in ids {
+            if let Some(agent) = self
+                .state
+                .request(*id)
+                .and_then(|r| self.state.agent(r.agent_id))
+                .cloned()
+            {
+                self.note_delivery_eligibility(&agent);
+            }
             let mut state = self.state.clone();
             let Some(room) = state.request(*id).map(|request| request.room_id) else {
                 continue;
@@ -57,6 +65,7 @@ impl Worker {
                         room,
                         request_id: *id,
                         queued_at_ms: Some(at_ms),
+                        eligible_at_ms: state.request(*id).and_then(|r| r.latency.eligible_at_ms),
                         native_requested_at_ms: None,
                         reply_delivered_at_ms: None,
                     },
@@ -76,40 +85,38 @@ impl Worker {
         }
     }
 
-    pub(super) fn note_native_requested(&mut self, id: RequestId, at_ms: u64) {
+    pub(super) fn note_native_requested(
+        &mut self,
+        id: RequestId,
+        at_ms: u64,
+    ) -> Result<(), String> {
         let mut state = self.state.clone();
-        let Some(room) = state.request(id).map(|request| request.room_id) else {
-            return;
-        };
-        if state.record_native_requested(id, at_ms).is_err() {
-            return;
-        }
-        if self
-            .journal(
-                state.clone(),
-                JournalOp::DeliveryTimestamps {
-                    room,
-                    request_id: id,
-                    queued_at_ms: None,
-                    native_requested_at_ms: Some(at_ms),
-                    reply_delivered_at_ms: None,
-                },
-            )
-            .is_err()
-        {
-            return;
-        }
+        let room = state
+            .request(id)
+            .ok_or("Unknown native submission")?
+            .room_id;
+        state
+            .record_native_requested(id, at_ms)
+            .map_err(|error| error.to_string())?;
+        self.journal(
+            state.clone(),
+            JournalOp::DeliveryTimestamps {
+                room,
+                request_id: id,
+                queued_at_ms: None,
+                eligible_at_ms: None,
+                native_requested_at_ms: Some(at_ms),
+                reply_delivered_at_ms: None,
+            },
+        )?;
         let completed_at_ms = io::now_ms();
-        let mut completed = state.clone();
-        if completed
+        state
             .finish_native_requested(id, at_ms, completed_at_ms)
-            .is_ok()
-        {
-            let _ = self.journal(
-                completed,
-                JournalOp::complete_native(room, id, at_ms, completed_at_ms),
-            );
-        }
+            .map_err(|error| error.to_string())?;
+        self.journal(
+            state,
+            JournalOp::complete_native(room, id, at_ms, completed_at_ms),
+        )
     }
 
     /// Commits `state` and makes it durable. A state that differs from the
@@ -201,6 +208,7 @@ impl Worker {
                             room,
                             request_id: id,
                             queued_at_ms: None,
+                            eligible_at_ms: None,
                             native_requested_at_ms: None,
                             reply_delivered_at_ms: Some(at_ms),
                         },

@@ -46,6 +46,16 @@ impl BusState {
         Ok(targets)
     }
 
+    pub(crate) fn record_eligible(&mut self, request: RequestId, at_ms: u64) {
+        if let Ok(targets) = self.delivery_targets(request) {
+            for id in targets {
+                if let Some(request) = self.requests.get_mut(&id) {
+                    request.latency.eligible_at_ms.get_or_insert(at_ms);
+                }
+            }
+        }
+    }
+
     pub(crate) fn record_picked(
         &mut self,
         request: RequestId,

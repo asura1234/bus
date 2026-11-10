@@ -1055,3 +1055,6 @@ fn kimi_restore_preserves_a_persisted_provider_hold_until_its_original_request_c
         RuntimeStatus::Working
     );
 }
+
+#[path = "fast_delivery_test.rs"]
+mod fast_delivery_tests;

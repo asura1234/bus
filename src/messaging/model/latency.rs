@@ -99,6 +99,8 @@ impl DispatchTimestamps {
 pub(crate) struct DeliveryLatency {
     pub(crate) accepted_at_ms: Option<u64>,
     pub(crate) queued_at_ms: Option<u64>,
+    /// First observed safe admission to delivery, separate from selection.
+    pub(crate) eligible_at_ms: Option<u64>,
     pub(crate) picked_at_ms: Option<u64>,
     pub(crate) native_requested_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "DispatchTimestamps::is_empty")]

@@ -16,7 +16,10 @@ impl Worker {
         self.serve_control(call, events, snapshots);
         // Unchanged reads need no notification scan or copied UI state.
         // Due polls still run, so a follower flood cannot stop delivery.
-        read && self.revision == revision && self.error == error && Instant::now() < next_poll
+        read && self.native_submissions.is_empty()
+            && self.revision == revision
+            && self.error == error
+            && Instant::now() < next_poll
     }
 }
 

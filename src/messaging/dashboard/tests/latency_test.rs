@@ -107,3 +107,33 @@ fn latency_routes_are_read_only_and_legacy_storage_stays_absent() {
         "405 Method Not Allowed"
     );
 }
+
+#[test]
+fn admission_selection_and_native_confirmation_are_independent_phase_samples() {
+    let mut state = BusState::new();
+    let room = state.create_room("phases").unwrap();
+    let agent = state
+        .create_agent(room, "worker", Provider::Codex, "/scratch".into(), None)
+        .unwrap();
+    let first = add_request(&mut state, room, agent, 1_000, 1, true);
+    state.record_eligible(first, 1_015);
+    let second = add_request(&mut state, room, agent, 2_000, 1, false);
+    // Legacy rows have no admission boundary. A reversed native anchor must
+    // not become an accepted->confirmation sample from the wrong attempt.
+    state.record_native_requested(second, 2_090).unwrap();
+    let metrics = serde_json::to_value(super::metrics::snapshot(&state, |ms| {
+        super::clock::hour_with_offset(ms, 0).unwrap()
+    }))
+    .unwrap();
+    assert_eq!(metrics["all"]["accepted_to_eligible"]["n"], 1);
+    assert_eq!(metrics["all"]["accepted_to_eligible"]["mean"], 15);
+    assert_eq!(metrics["all"]["eligible_to_picked"]["n"], 1);
+    assert_eq!(metrics["all"]["eligible_to_picked"]["mean"], 5);
+    assert_eq!(metrics["all"]["accepted_to_native_confirmed"]["n"], 1);
+    assert_eq!(metrics["all"]["accepted_to_native_confirmed"]["mean"], 80);
+    assert_eq!(metrics["all"]["accepted_to_picked"]["n"], 2);
+    assert_eq!(
+        metrics["providers"]["codex"]["accepted_to_native_confirmed"]["mean"],
+        80
+    );
+}

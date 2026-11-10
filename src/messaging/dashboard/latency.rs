@@ -39,6 +39,24 @@ pub(super) fn accepted_to_picked_ms(request: &Request) -> Option<u64> {
     elapsed(request.latency.accepted_at_ms, request.latency.picked_at_ms)
 }
 
+pub(super) fn accepted_to_eligible_ms(request: &Request) -> Option<u64> {
+    elapsed(
+        request.latency.accepted_at_ms,
+        request.latency.eligible_at_ms,
+    )
+}
+
+pub(super) fn eligible_to_picked_ms(request: &Request) -> Option<u64> {
+    elapsed(request.latency.eligible_at_ms, request.latency.picked_at_ms)
+}
+
+pub(super) fn accepted_to_native_confirmed_ms(request: &Request) -> Option<u64> {
+    let confirmed = request.latency.native.native_confirmed_at_ms?;
+    (confirmed >= request.latency.native_requested_at_ms?)
+        .then(|| elapsed(request.latency.accepted_at_ms, Some(confirmed)))
+        .flatten()
+}
+
 /// Ready-queue time for a message that waited for an idle agent. A steer joins
 /// a running turn, so it has no ready-queue sample. The delivery page no longer
 /// reads this; the busy-steer tests do.
