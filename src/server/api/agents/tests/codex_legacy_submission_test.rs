@@ -353,6 +353,8 @@ async fn codex_legacy_buffered_input_revokes_withdrawal_between_clear_steps() {
         writes.try_recv().is_err(),
         "developer input must be buffered"
     );
+    // Ctrl+A repaints the unchanged native text and wakes the paused editor.
+    redraw(&app, AgentKind::Codex, "from bus");
     let recovery_root = directory.clone();
     let mut response = (
         tokio::task::spawn_blocking(move || {
