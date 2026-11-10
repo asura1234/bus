@@ -120,7 +120,11 @@ class ScratchBus:
                 "--pwd",
                 status.get("work_dir", str(self.data.parent / "work")),
             )
+        # Fake Codex creates its session on the first prompt, like the real CLI.
+        wait(lambda: self.all_status("idle"), "initial composers")
+        self.send("latency warm-up: establish and settle provider sessions")
         wait(lambda: self.ready("idle"), "bound and settled idle agents")
+        (self.run / "warm-state.json").write_text(json.dumps(self.saved(), indent=2))
 
     def saved(self):
         # Never poll the measured coordinator for timestamps.
