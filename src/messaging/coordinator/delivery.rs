@@ -1,11 +1,14 @@
 //! Coordinator delivery ownership.
 use super::io;
 use super::{
-    callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
-    RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
+    callbacks, diagnostics, Method, Provider, RequestId, ResponseResult, RoomAgent, RuntimeStatus,
+    SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
 use crate::messaging::model::DispatchMark;
 use crate::messaging::native::TransportError;
+
+mod submission;
+use submission::{native_response_timestamps, record_native_timestamps, submission_method};
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
@@ -710,7 +713,14 @@ impl Worker {
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
         self.mark_live_dispatch(request, DispatchMark::Diagnostics);
         let started = std::time::Instant::now();
-        let method = submission_method(agent, text, terminal, pane, true, self.serving_generation);
+        let mut method =
+            submission_method(agent, text, terminal, pane, true, self.serving_generation);
+        if let Method::AgentPromptIfIdleAtGeneration(params) = &mut method {
+            params.expected_turn_id = self
+                .state
+                .request(lead)
+                .and_then(|request| request.provider_turn_id.clone());
+        }
         self.mark_live_dispatch(request, DispatchMark::Method);
         let response = self.transport.request(method);
         self.note_native_requested(request, io::now_ms());
@@ -737,7 +747,7 @@ impl Worker {
         };
         tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
             mode = "steer", outcome = ?outcome,
-            elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
+            elapsed_ms = started.elapsed().as_millis() as u64, "Steering admission completed");
         let mut state = self.state.clone();
         record_native_timestamps(&mut state, request, native_timestamps)?;
         state
@@ -746,57 +756,5 @@ impl Worker {
         self.save(state)?;
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
-    }
-}
-
-fn native_response_timestamps(
-    response: &Result<ResponseResult, TransportError>,
-) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
-    match response {
-        Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
-        Err(error) => *error.timestamps,
-        _ => Default::default(),
-    }
-}
-
-fn record_native_timestamps(
-    state: &mut crate::messaging::model::BusState,
-    request: RequestId,
-    timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
-) -> Result<(), String> {
-    state
-        .record_native_timestamps(request, timestamps.into())
-        .map_err(|error| error.to_string())
-}
-
-fn submission_method(
-    agent: &RoomAgent,
-    text: String,
-    terminal: &str,
-    pane: &str,
-    steer: bool,
-    generation: u64,
-) -> Method {
-    if let Some(session) = &agent.runtime_identity.session_id {
-        Method::AgentPromptIfIdleAtGeneration(schema::AgentPromptIfIdleParams {
-            target: pane.to_owned(),
-            text,
-            expected_terminal_id: terminal.to_owned(),
-            expected_pane_id: pane.to_owned(),
-            expected_agent: launch::provider_kind(agent.provider).into(),
-            expected_session_id: session.clone(),
-            steer,
-            expected_generation: Some(generation),
-            expected_turn_id: None,
-        })
-    } else {
-        Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
-            target: pane.to_owned(),
-            text,
-            expected_terminal_id: terminal.to_owned(),
-            expected_pane_id: pane.to_owned(),
-            expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
-            expected_generation: Some(generation),
-        })
     }
 }
