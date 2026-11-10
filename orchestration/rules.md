@@ -198,6 +198,13 @@ the wrapper remains held.
   early on an error such as `bus_down` after four consecutive transport failures,
   so you stay free for the developer meanwhile. Live-server overload is retried.
 
+- **Wait by default; interrupt to change course.** Bus holds messages to busy
+  recipients until their turn ends; worker reports to orchestrators get their
+  own turn. If you need an immediate reaction, run `bus agent interrupt AGENT`,
+  then send the new instruction. Interrupt stops in-flight builds, Git operations
+  and device runs; never use it just to close a request.
+  [Guide](orchestrator-guide.md#immediate-reaction-or-waiting).
+
 <a id="process-every-result"></a>
 
 - **Process every result.** Keep full `bus send --async` and `bus wait` output;

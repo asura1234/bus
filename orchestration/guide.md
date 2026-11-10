@@ -407,20 +407,20 @@ concrete plan and the decision needed. Escalate to the developer in MASTER only
 when the orchestrator cannot resolve it within existing authority. Update the
 workflow after the decision.
 
-## Steer agents without waiting
+## Immediate reaction or waiting
 
-Correct an agent the moment you notice a problem; do not wait for its turn to
-end. `bus send` to a working agent types the message into its running turn, and
-the turn's reply answers the original task and every correction together:
-`bus wait` on any of those messages returns the same reply. Send with `--queue`
-only for an unrelated task that should get a turn and a reply of its own.
+By default, Bus holds a message to a busy recipient until its turn ends. This
+is intended: orchestrators can wait, and worker reports to an orchestrator get
+their own turn. Waiting for the current turn to end is fine.
 
-A plain send never stops a turn: Codex takes it into the running turn and
-Claude Code queues it, so "pause" or "stop" in a message is just more work. To
-stop a worker, or to redirect it onto something else, interrupt it:
+When you need an immediate reaction from a working agent, interrupt it first,
+then send the new instruction. Interrupt stops in-flight work, including builds,
+Git operations and device runs. Use it only to change course, never just to close
+a request. A message saying "pause" or "stop" does not stop a turn.
 
 ```sh
-bus agent interrupt AGENT --as YOU --text "Stop. Reply with your status."
+bus agent interrupt AGENT --as YOU
+bus send --room ROOM --as YOU --to AGENT --text "Change course: ..."
 ```
 
 Bus presses the provider's stop key once, waits until the turn has ended and
@@ -428,7 +428,7 @@ reports `stopped`, `already_idle` or `failed` with a reason. `--text` then
 arrives as a normal new message with its own reply. The interrupted message
 closes as `interrupted`: a running `send --async` or `wait` on it ends with
 `message_interrupted` instead of waiting on. Messages queued for the worker
-close with it, so send what it should do next with `--text`. `--room ROOM`
+close with it, so send what it should do next after the stop. `--room ROOM`
 stops every working or blocked agent in the room. Nothing is killed and the worker keeps
 its context.
 

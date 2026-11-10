@@ -155,11 +155,12 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   result before acting again, then observe the resulting screen to verify it.
   Answer promptly. Ask the developer about destructive or outward-facing actions
   only when existing workflow or developer authorization does not cover them.
-- Steer a working agent with a plain `bus send` from the running turn's room;
-  it joins that turn. Messages from another room wait for the next turn.
-  To stop or redirect a worker, use `bus agent interrupt AGENT --as
-  {{AGENT_NAME}} [--text "..."]`: a message saying "pause" does not stop a
-  turn. A wait on the interrupted message ends with `message_interrupted`.
+- By default, messages to busy recipients wait until their turn ends; worker
+  reports to orchestrators get their own turn. For an immediate reaction,
+  run `bus agent interrupt AGENT --as {{AGENT_NAME}}`, then send the new
+  instruction. Interrupt stops in-flight builds, Git operations and device runs:
+  use it only to change course, never just to close a request.
+  [Guide]({{DOCS}}/orchestrator-guide.md#immediate-reaction-or-waiting).
 - Delivery is not completion. A task is done when `bus message status` shows
   `complete: true` and you have read the reply.
 
