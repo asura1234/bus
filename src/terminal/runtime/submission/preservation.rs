@@ -375,11 +375,23 @@ impl ObservedSubmission {
                 .inspect
                 .restoration_marker_visible(&self.terminal.active_ansi(), exchange.marker()))
         })?;
+        self.close_marker_popup(lease, exchange.marker())?;
         let mut keys = Vec::with_capacity(backspace.len() * exchange.marker().len());
         for _ in exchange.marker().bytes() {
             keys.extend_from_slice(backspace);
         }
         self.swap_key(lease, Bytes::from(keys), false)?;
+        self.wait_transfer(|| {
+            Ok(self
+                .terminal
+                .active_ansi_if_complete()
+                .is_some_and(|screen| {
+                    !self
+                        .inspect
+                        .restoration_marker_visible(&screen, exchange.marker())
+                }))
+        })?;
+        self.close_deleted_marker_popup(lease, exchange.marker())?;
         self.wait_transfer(|| {
             let screen = self.terminal.active_ansi();
             Ok(self.inspect.submission_available(&screen)

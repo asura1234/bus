@@ -88,6 +88,35 @@ impl ObservedSubmission {
     }
 
     pub(super) fn close_owned_popup(&self, lease: &DraftInputLease) -> io::Result<()> {
+        self.close_popup(lease, |_| {
+            self.observe("owned_popup") == InputObservation::Pending
+        })
+    }
+
+    pub(super) fn close_marker_popup(
+        &self,
+        lease: &DraftInputLease,
+        marker: &str,
+    ) -> io::Result<()> {
+        self.close_popup(lease, |screen| {
+            self.inspect.restoration_marker_visible(screen, marker)
+        })
+    }
+
+    pub(super) fn close_deleted_marker_popup(
+        &self,
+        lease: &DraftInputLease,
+        marker: &str,
+    ) -> io::Result<()> {
+        // remove_marker has attested this token, queued only its deletion,
+        // and observed it disappear. The lease still buffers developer keys;
+        // a picker reopened by that edit belongs to the same restoration.
+        self.close_popup(lease, |screen| {
+            !self.inspect.restoration_marker_visible(screen, marker)
+        })
+    }
+
+    fn close_popup(&self, lease: &DraftInputLease, owned: impl Fn(&str) -> bool) -> io::Result<()> {
         let guard = self
             .content_lock
             .lock()
@@ -96,7 +125,7 @@ impl ObservedSubmission {
         let Some(key) = self.inspect.owned_popup_escape(&screen) else {
             return Ok(());
         };
-        if self.observe("owned_popup") != InputObservation::Pending {
+        if !owned(&screen) {
             return Err(io::Error::other("Picker input is not owned by Bus"));
         }
         self.check_deadline()?;
