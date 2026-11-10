@@ -176,22 +176,11 @@ After two minutes unsubmitted/unconfirmed it falls back to the developer; a
 readable closed dialog suppresses fallback. Unreadable state gets at most three
 extra minutes before fallback; uncertain writes are never replayed.
 
-Use `bus agent observe AGENT` for any blocked screen: permission, trust and question dialogs,
-shell prompts or pagers. Results include text, focus, dimensions, cursor and terminal identity;
-add `--cells` for styled cells. Use `bus agent press AGENT` with the input the screen calls for:
-
-- `bus agent press AGENT --select "LABEL"` navigates to a complete visible option label,
-  observes focus after each move, then presses Enter.
-- `--key KEY` sends a key or chord (`y`, `2`, `tab`, `pageup`, `ctrl+c`); repeat it for a sequence.
-- `--text "..."` types text; `--submit` presses Enter after text and keys, or alone for Enter.
-
-Use either `--select` or a combination of text, keys and submit. For a plain shell or pager,
-target its terminal or pane ID with `--pane` on both commands: `bus agent observe w1:p2 --pane`,
-then `bus agent press w1:p2 --pane --key n`. Bind input with `--terminal-id ID` from the observation.
-Every action needs a fresh observation and a decision. Without unique visible menu focus,
-read the styled screen and use explicit keys. Inspect pending or uncertain results before
-acting again; sent input is not retried implicitly. A successful press proves input was queued;
-observe the resulting screen to verify the program's response. See `bus agent press --help`.
+Use `bus agent observe AGENT` to read a blocked screen, then `bus agent press AGENT` to answer it.
+Observe before every action and verify the resulting screen afterward; queued input is not proof of effect.
+See `bus agent observe --help` and `bus agent press --help` for option selection, keys/text,
+styled cells, shell/pager targets and terminal identity binding. Inspect pending or uncertain
+results before continuing; sent input is never retried implicitly.
 For an Unavailable agent, follow the
 [binding replacement rule](orchestrator-rules.md#unavailable-agents).
 Use `request recover REQUEST_ID --confirm` only after checking
