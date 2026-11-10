@@ -510,3 +510,7 @@ mod kimi_screen_tests;
 #[cfg(test)]
 #[path = "../tests/kimi_incident_editor_test.rs"]
 mod kimi_incident_editor_tests;
+
+#[cfg(test)]
+#[path = "../tests/codex_legacy_picker_test.rs"]
+mod codex_legacy_picker_tests;
