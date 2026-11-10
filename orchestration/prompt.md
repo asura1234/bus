@@ -155,10 +155,12 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   result before acting again, then observe the resulting screen to verify it.
   Answer promptly. Ask the developer about destructive or outward-facing actions
   only when existing workflow or developer authorization does not cover them.
-- By default, messages to busy recipients wait until their turn ends; worker
-  reports to orchestrators get their own turn. For an immediate reaction,
-  run `bus agent interrupt AGENT --as {{AGENT_NAME}}`, then send the new
-  instruction. Interrupt stops in-flight builds, Git operations and device runs:
+- Agent messages to busy orchestrators get their own turn; messages to busy
+  Grok agents also wait. Same-room messages to working Codex, Claude and Kimi
+  workers steer. If a message would be held and you need an immediate reaction,
+  run `bus agent interrupt AGENT --as {{AGENT_NAME}}`, then send the new instruction.
+  Otherwise waiting for the turn to end is fine.
+  Interrupt stops in-flight builds, Git operations and device runs:
   use it only to change course, never just to close a request.
   [Guide]({{DOCS}}/orchestrator-guide.md#immediate-reaction-or-waiting).
 - Delivery is not completion. A task is done when `bus message status` shows

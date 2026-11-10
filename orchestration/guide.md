@@ -409,13 +409,15 @@ workflow after the decision.
 
 ## Immediate reaction or waiting
 
-By default, Bus holds a message to a busy recipient until its turn ends. This
-is intended: orchestrators can wait, and worker reports to an orchestrator get
-their own turn. Waiting for the current turn to end is fine.
+Bus holds agent messages to a busy orchestrator until its turn ends; worker
+reports get their own turn. It also holds messages to busy Grok agents.
+These waits are intended. Same-room messages to working Codex, Claude and Kimi
+workers steer into the running turn; cross-room and `--queue` sends wait.
 
-When you need an immediate reaction from a working agent, interrupt it first,
-then send the new instruction. Interrupt stops in-flight work, including builds,
-Git operations and device runs. Use it only to change course, never just to close
+When a message would be held and you need an immediate reaction, interrupt the
+agent first, then send the new instruction. Otherwise waiting for the turn to
+end is fine. Interrupt stops in-flight work, including builds, Git operations
+and device runs. Use it only to change course, never just to close
 a request. A message saying "pause" or "stop" does not stop a turn.
 
 ```sh
@@ -424,7 +426,7 @@ bus send --room ROOM --as YOU --to AGENT --text "Change course: ..."
 ```
 
 Bus presses the provider's stop key once, waits until the turn has ended and
-reports `stopped`, `already_idle` or `failed` with a reason. `--text` then
+reports `stopped`, `already_idle` or `failed` with a reason. The new instruction
 arrives as a normal new message with its own reply. The interrupted message
 closes as `interrupted`: a running `send --async` or `wait` on it ends with
 `message_interrupted` instead of waiting on. Messages queued for the worker

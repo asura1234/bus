@@ -52,12 +52,13 @@ old duplicate names, the lowest ID keeps its name; later duplicates become NAME-
 needed), recorded once before clients connect, preserving sessions, room bindings and queued work.
 
 A message has one ID and one recipient request per selected agent, tracking delivery and its answer.
-A provider turn is the agent's execution context. By default, messages to busy recipients wait
-until their turn ends; this is intended. Ordinary agent-authored requests to orchestrators,
-including worker reports, get independent turns without steering or coalescing.
-Developer steering is unchanged; same-room steering can join the running turn's group,
-while `--queue` gets an independent idle turn. Cross-room messages wait for a new turn.
-For an immediate reaction, run `bus agent interrupt AGENT`, then send the new instruction.
+A provider turn is the agent's execution context. Ordinary agent-authored requests to busy
+orchestrators, including worker reports, wait for independent turns without steering or coalescing.
+Messages to busy Grok agents also wait for the turn to end; these waits are intended.
+Same-room messages to working Codex, Claude and Kimi workers can steer into the running turn's
+group; `--queue` gets an independent idle turn. Cross-room messages wait for a new turn.
+Developer steering is unchanged. If a message would be held and you need an immediate reaction,
+run `bus agent interrupt AGENT`, then send the new instruction; otherwise waiting is fine.
 Interrupt stops in-flight builds, Git operations and device runs; use it only to change course,
 never just to close a request. See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
 Explicit replies complete individual requests without ending the turn; the final answers only outstanding group requests.
