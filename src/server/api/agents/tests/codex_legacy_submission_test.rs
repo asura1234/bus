@@ -242,3 +242,59 @@ async fn codex_legacy_developer_input_revokes_retained_cleanup_even_for_identica
         .visible_ansi()
         .contains("from bus"));
 }
+
+#[tokio::test]
+async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let payload = "owned payload\n".repeat(120);
+    let Method::AgentPromptIfIdle(params) = &mut method else {
+        unreachable!()
+    };
+    params.text = payload.clone();
+    let response = start(&mut app, method);
+    accept_paste(&app, AgentKind::Codex, &payload, &mut writes).await;
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    redraw(
+        &app,
+        AgentKind::Codex,
+        &format!("[Pasted Content {} chars]", payload.chars().count()),
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.set_detection_context(
+        AgentKind::Codex,
+        true,
+        None,
+        crate::server::api::agents::prompt::detection_composer(AgentKind::Codex),
+    );
+    let state = runtime
+        .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+        .await
+        .0;
+    assert_eq!(
+        state,
+        AgentState::Idle,
+        "the old Bus-owned chip must reach cleanup instead of blocking the next message"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "readiness must not edit or submit input"
+    );
+    runtime
+        .try_send_developer_bytes(Bytes::from(payload.clone()))
+        .unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), payload.as_bytes());
+    let state = runtime
+        .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+        .await
+        .0;
+    assert_eq!(
+        state,
+        AgentState::Blocked,
+        "developer input revokes the old ownership even when its chip looks identical"
+    );
+    assert!(writes.try_recv().is_err());
+}
