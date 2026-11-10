@@ -29,10 +29,10 @@ fn submission_available(kind: AgentKind, screen: &str) -> bool {
             osc_progress: "",
         },
     );
-    !(kind == AgentKind::Codex && codex_picker::active(screen))
-        && !detected.visible_blocker
-        && !crate::terminal::driver::has_input_controls(&plain)
-        && input(kind, screen).is_some()
+    !(detected.visible_blocker
+        || crate::terminal::driver::has_input_controls(&plain)
+        || input(kind, screen).is_none()
+        || kind == AgentKind::Codex && codex_picker::active(screen))
 }
 
 fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {

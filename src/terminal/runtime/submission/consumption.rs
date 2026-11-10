@@ -15,10 +15,10 @@ impl ObservedSubmission {
         if result.is_err()
             && (self.diagnostics.enter_attempted()
                 || self.diagnostics.pending_paste(&result).is_none()
-                || !self
+                || self
                     .terminal
                     .active_ansi_if_complete()
-                    .is_some_and(|screen| self.inspect.owned_popup_escape(&screen).is_some()))
+                    .is_none_or(|screen| self.inspect.owned_popup_escape(&screen).is_none()))
         {
             // Paste failures already ran their withdrawal protocol. Preserve
             // its result and pending ownership instead of retrying cleanup.
