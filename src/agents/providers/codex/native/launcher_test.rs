@@ -54,6 +54,11 @@ fn initialize_peer(
             let request: serde_json::Value =
                 serde_json::from_str(frame.to_text().unwrap()).unwrap();
             assert_eq!(request["method"], "hooks/list");
+            assert_eq!(
+                request["params"]["cwds"][0],
+                fs::read_to_string(root.join("expected-project")).unwrap(),
+                "the hook preflight must inspect Codex's effective project"
+            );
             let hooks: Vec<_> = ["sessionStart", "userPromptSubmit", "stop"].into_iter().map(|event| {
                 serde_json::json!({"eventName":event,"source":"project","handlerType":"command",
                     "command":command,"enabled":true,"trustStatus":if trusted {"trusted"} else {"untrusted"}})
@@ -75,23 +80,31 @@ fn codex_native_shell_helper_inherits_environment_and_fences_runtime_lifetime() 
     if let Some(root) = std::env::var_os(ROOT_ENV) {
         let root = std::path::PathBuf::from(root);
         let directory = fs::read_to_string(root.join("runtime-directory")).unwrap();
-        run(&[
+        let mut args = vec![
             directory,
             root.join("capture").to_string_lossy().into_owned(),
             root.join("codex").to_string_lossy().into_owned(),
             "--no-daemon".into(),
             "-c".into(),
             "note=\"--sandbox=read-only\"".into(),
-        ])
-        .unwrap();
+        ];
+        if std::env::var_os("BUS_CODEX_HELPER_TEST_CD").is_some() {
+            args.extend(["--cd".into(), "../target-project".into()]);
+        }
+        run(&args).unwrap();
         unreachable!("the helper must exec its TUI");
     }
-    exercise_shell_helper(true);
+    exercise_shell_helper(true, false);
 }
 
 #[test]
 fn codex_native_helper_uses_standalone_until_hooks_are_trusted() {
-    exercise_shell_helper(false);
+    exercise_shell_helper(false, false);
+}
+
+#[test]
+fn codex_native_helper_cd_uses_effective_project_for_backend_and_hook_preflight() {
+    exercise_shell_helper(true, true);
 }
 
 #[test]
@@ -153,12 +166,21 @@ fn codex_native_attachment_requires_current_enabled_trusted_callback_hooks() {
     }
 }
 
-fn exercise_shell_helper(trusted: bool) {
+fn exercise_shell_helper(trusted: bool, override_cd: bool) {
     let root = crate::utils::test_temp::unique_temp_path("codex-shell-helper");
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-    for name in ["capture", "home", "shell-cwd"] {
+    for name in ["capture", "home", "shell-cwd", "target-project"] {
         fs::create_dir(root.join(name)).unwrap();
     }
+    let project = root
+        .join(if override_cd {
+            "target-project"
+        } else {
+            "shell-cwd"
+        })
+        .canonicalize()
+        .unwrap();
+    fs::write(root.join("expected-project"), project.to_str().unwrap()).unwrap();
     let program = root.join("codex");
     fs::write(
         &program,
@@ -210,9 +232,13 @@ printf '%s\n' "$@" > "$BUS_CODEX_HELPER_TEST_ROOT/tui-argv"
         command,
         trusted,
     );
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", TEST, "--nocapture"])
-        .env_clear()
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", TEST, "--nocapture"]);
+    child.env_clear();
+    if override_cd {
+        child.env("BUS_CODEX_HELPER_TEST_CD", "1");
+    }
+    let output = child
         .env(ROOT_ENV, &root)
         .env("BUS_CODEX_TEST_EXPORT", "initialized-shell")
         .env("HOME", root.join("home"))
@@ -244,7 +270,11 @@ printf '%s\n' "$@" > "$BUS_CODEX_HELPER_TEST_ROOT/tui-argv"
             std::path::Path::new(fs::read_to_string(root.join(path)).unwrap().trim())
                 .canonicalize()
                 .unwrap(),
-            root.join("shell-cwd").canonicalize().unwrap()
+            if path == "backend-cwd" {
+                project.clone()
+            } else {
+                root.join("shell-cwd").canonicalize().unwrap()
+            }
         );
     }
     let tui = fs::read_to_string(root.join("tui-argv")).unwrap();

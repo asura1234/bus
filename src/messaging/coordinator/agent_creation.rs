@@ -71,8 +71,13 @@ impl Worker {
         bind_launch_orchestrator(&mut state, id, orchestrates)?;
         if !input.consent_project_hooks {
             let binary = self.hook_callback_binary(input.provider)?;
+            let project = launch::effective_project_directory(
+                identity::provider_kind(input.provider),
+                &cwd,
+                &input.extra_args,
+            )?;
             if let Some(notice) =
-                launch::setup_notice(identity::provider_kind(input.provider), &cwd, &binary)
+                launch::setup_notice(identity::provider_kind(input.provider), &project, &binary)
             {
                 let _ = events.send(BusEvent::SetupRequired {
                     input,
@@ -434,7 +439,12 @@ impl Worker {
         let orchestrates = orchestrator.map(|spec| spec.room);
         let cwd = launch::canonical_directory(&input.cwd)?;
         if input.provider == Provider::Codex {
-            codex::launch::validate_project_trust(&cwd)?;
+            let project = launch::effective_project_directory(
+                identity::provider_kind(input.provider),
+                &cwd,
+                &input.extra_args,
+            )?;
+            codex::launch::validate_project_trust(&project)?;
         }
         // One provider session belongs to one Bus agent: bound by its hook, or
         // reserved by a launch that adopted it and has not reported yet.

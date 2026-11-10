@@ -119,6 +119,73 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn codex_cd_binds_hooks_to_the_effective_project_and_preserves_shell_cwd() {
+    let _lock = crate::utils::config::test_config_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let fixture = Fixture::new();
+    let shell = fixture.project("shell", true);
+    let target = fixture.project("target project", true);
+    fixture.trust(&target, "trusted");
+    for options in [
+        format!("--cd '{}'", target.display()),
+        "--cd '../target project'".into(),
+        "--cd='../target project'".into(),
+        "-C '../target project'".into(),
+        "-C'../target project'".into(),
+    ] {
+        let mut spec = fixture.spec(&shell, ProviderKind::Codex);
+        spec.extra_args = options.clone();
+        let prepared = launch::prepare(&spec, |hooks| {
+            std::fs::create_dir_all(&hooks.spool).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        assert_eq!(
+            prepared.cwd, shell,
+            "the initialized shell stays at its cwd"
+        );
+        assert!(
+            hook_json::hooks_are_current(
+                &target.join(".codex/hooks.json"),
+                HookContract::for_provider(ProviderKind::Codex),
+                &spec.hooks.binary,
+            ),
+            "effective project hooks are missing for {options}"
+        );
+        assert!(!shell.join(".codex/hooks.json").exists());
+        assert_eq!(
+            launch::saved_options(ProviderKind::Codex, &spec.hooks.spool).unwrap(),
+            launch::parse_path_tokens(&options).unwrap(),
+        );
+    }
+}
+
+#[test]
+fn codex_cd_cannot_use_shell_trust_to_install_hooks_in_an_untrusted_target() {
+    let _lock = crate::utils::config::test_config_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let fixture = Fixture::new();
+    let shell = fixture.project("shell", true);
+    let target = fixture.project("target", true);
+    fixture.trust(&target, "untrusted");
+    let mut spec = fixture.spec(&shell, ProviderKind::Codex);
+    spec.extra_args = format!("--cd {}", target.display());
+    let mut initialized = false;
+    let result = launch::prepare(&spec, |hooks| {
+        initialized = true;
+        std::fs::create_dir_all(&hooks.spool).map_err(|error| error.to_string())
+    });
+    assert!(
+        result.is_err(),
+        "the effective target's distrust was ignored"
+    );
+    assert!(!initialized);
+    assert!(!target.join(".codex/hooks.json").exists());
+    assert!(!shell.join(".codex/hooks.json").exists());
+}
+
+#[test]
 fn untrusted_codex_non_git_refuses_even_with_current_hooks_before_capture() {
     let _lock = crate::utils::config::test_config_env_lock()
         .lock()
