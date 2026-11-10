@@ -22,7 +22,7 @@ impl Default for DirectoryChecks {
 }
 
 impl DirectoryChecks {
-    /// A new failure supersedes this recipient's in-flight observation, even
+    /// A fresh check supersedes this recipient's in-flight observation, even
     /// when the replacement warning has exactly the same text.
     fn invalidate(&mut self, id: AgentId) {
         if self.pending.is_some() {
@@ -153,7 +153,22 @@ impl super::Worker {
             return Ok(None);
         };
         let cwd = agent.cwd.clone();
-        if agent.deletion_pending || !directory_removed(std::fs::metadata(&cwd)) {
+        if agent.deletion_pending {
+            return Ok(None);
+        }
+        let result = std::fs::metadata(&cwd);
+        if result.as_ref().is_ok_and(|metadata| metadata.is_dir()) {
+            self.directory_checks.invalidate(id);
+            if agent.working_directory_error.is_some() {
+                let mut state = self.state.clone();
+                state
+                    .observe_working_directory_error(id, None)
+                    .map_err(|e| e.to_string())?;
+                self.save(state)?;
+            }
+            return Ok(None);
+        }
+        if !directory_removed(result) {
             return Ok(None);
         }
         self.directory_checks.invalidate(id);
