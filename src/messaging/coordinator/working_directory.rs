@@ -1,6 +1,6 @@
 //! One directory-check batch in flight; filesystem latency never holds a poll.
 use super::{mpsc, AgentId, BusState, Path, PathBuf};
-use std::{io, sync::Arc};
+use std::{collections::BTreeSet, io, sync::Arc};
 
 type Source = Arc<dyn Fn(&Path) -> io::Result<bool> + Send + Sync>;
 type Observation = (AgentId, PathBuf, Option<String>, io::Result<bool>);
@@ -8,6 +8,7 @@ type Observation = (AgentId, PathBuf, Option<String>, io::Result<bool>);
 pub(super) struct DirectoryChecks {
     source: Source,
     pending: Option<mpsc::Receiver<Vec<Observation>>>,
+    invalidated: BTreeSet<AgentId>,
 }
 
 impl Default for DirectoryChecks {
@@ -15,11 +16,20 @@ impl Default for DirectoryChecks {
         Self {
             source: Arc::new(|path| std::fs::metadata(path).map(|metadata| metadata.is_dir())),
             pending: None,
+            invalidated: BTreeSet::new(),
         }
     }
 }
 
 impl DirectoryChecks {
+    /// A new failure supersedes this recipient's in-flight observation, even
+    /// when the replacement warning has exactly the same text.
+    fn invalidate(&mut self, id: AgentId) {
+        if self.pending.is_some() {
+            self.invalidated.insert(id);
+        }
+    }
+
     pub(super) fn poll(&mut self, state: &mut BusState) -> Result<(), String> {
         if let Some(receiver) = &self.pending {
             let observations = match receiver.try_recv() {
@@ -28,11 +38,13 @@ impl DirectoryChecks {
                 Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
             };
             self.pending = None;
+            let invalidated = std::mem::take(&mut self.invalidated);
             for (id, cwd, warning, result) in observations {
                 let Some(agent) = state.agent(id) else {
                     continue;
                 };
-                if agent.deletion_pending
+                if invalidated.contains(&id)
+                    || agent.deletion_pending
                     || agent.cwd != cwd
                     || agent.working_directory_error != warning
                 {
@@ -144,6 +156,7 @@ impl super::Worker {
         if agent.deletion_pending || !directory_removed(std::fs::metadata(&cwd)) {
             return Ok(None);
         }
+        self.directory_checks.invalidate(id);
         let mut state = self.state.clone();
         let error = record_missing_directory(&mut state, id, &cwd)?;
         if state != self.state {

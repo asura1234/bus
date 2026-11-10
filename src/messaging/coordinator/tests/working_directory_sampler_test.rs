@@ -38,6 +38,7 @@ fn blocked_filesystem_query_does_not_hold_polling_or_spawn_more_queries() {
                 Ok(true)
             }),
             pending: None,
+            invalidated: BTreeSet::new(),
         };
         for _ in 0..100 {
             checks.poll(&mut state).unwrap();
@@ -71,6 +72,7 @@ fn completed_directory_check_does_not_apply_to_a_changed_path() {
     let mut checks = DirectoryChecks {
         source: Arc::new(|_| Ok(true)),
         pending: Some(receiver),
+        invalidated: BTreeSet::new(),
     };
     state
         .update_agent_runtime_metadata(id, "/new-worktree".into(), None)
@@ -86,6 +88,7 @@ fn stale_directory_result_cannot_clear_a_fresh_admission_failure() {
     let mut checks = DirectoryChecks {
         source: Arc::new(|_| Ok(true)),
         pending: None,
+        invalidated: BTreeSet::new(),
     };
     checks.poll(&mut state).unwrap();
     let old_result = checks
@@ -109,4 +112,52 @@ fn stale_directory_result_cannot_clear_a_fresh_admission_failure() {
         .actionable_error
         .as_deref()
         .is_some_and(|error| error.contains("replace the agent")));
+}
+
+#[test]
+fn same_warning_cannot_clear_fresh_admission_failure() {
+    let (mut worker, id, _, dir, _) =
+        super::super::tests::support::fixture(crate::messaging::model::Provider::Codex, Vec::new());
+    let cwd = dir.join("transient-worktree");
+    std::fs::create_dir(&cwd).unwrap();
+    let mut state = worker.state.clone();
+    state
+        .update_agent_runtime_metadata(id, cwd.clone(), None)
+        .unwrap();
+    worker.save(state).unwrap();
+    std::fs::remove_dir(&cwd).unwrap();
+    let warning = worker.check_launch_directory(id).unwrap().unwrap();
+    std::fs::create_dir(&cwd).unwrap();
+    worker.directory_checks.poll(&mut worker.state).unwrap();
+    let old_result = worker
+        .directory_checks
+        .pending
+        .take()
+        .unwrap()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(old_result
+        .iter()
+        .any(|(_, _, _, result)| matches!(result, Ok(true))));
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender.send(old_result).unwrap();
+    worker.directory_checks.pending = Some(receiver);
+    std::fs::remove_dir(&cwd).unwrap();
+    assert_eq!(worker.check_launch_directory(id).unwrap().unwrap(), warning);
+    worker.directory_checks.poll(&mut worker.state).unwrap();
+    assert_eq!(
+        worker.state.agent(id).unwrap().shown_status(),
+        super::super::RuntimeStatus::Unavailable
+    );
+    assert_eq!(
+        worker
+            .state
+            .agent(id)
+            .unwrap()
+            .working_directory_error
+            .as_ref(),
+        Some(&warning)
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
