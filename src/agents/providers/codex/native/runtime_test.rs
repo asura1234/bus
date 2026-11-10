@@ -290,3 +290,16 @@ async fn started_pane(
         session_open,
     }
 }
+
+#[test]
+fn codex_runtime_preparations_at_the_same_clock_tick_have_unique_endpoints() {
+    let first = Session::prepare_at(123).unwrap();
+    let second = Session::prepare_at(123).expect("a clock tick is not a unique launch identity");
+    let first_dir = first.directory.clone();
+    let second_dir = second.directory.clone();
+    assert_ne!(first_dir, second_dir);
+    drop(first);
+    drop(second);
+    assert!(!first_dir.exists());
+    assert!(!second_dir.exists());
+}

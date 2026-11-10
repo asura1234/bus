@@ -170,8 +170,14 @@ fn supports_native(args: &[String]) -> bool {
 #[cfg_attr(not(test), allow(dead_code))]
 impl Session {
     fn prepare() -> io::Result<Self> {
+        Self::prepare_at(crate::utils::time::now_ns())
+    }
+
+    fn prepare_at(timestamp: u128) -> io::Result<Self> {
+        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let token = crate::utils::time::digest(
-            format!("{}:{}", std::process::id(), crate::utils::time::now_ns()).as_bytes(),
+            format!("{}:{timestamp}:{sequence}", std::process::id()).as_bytes(),
         );
         let directory = std::env::temp_dir().join(format!("bus-codex-{}", &token[..20]));
         fs::DirBuilder::new().mode(0o700).create(&directory)?;
