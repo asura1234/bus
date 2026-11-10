@@ -1,4 +1,5 @@
 //! Local app-server RPC. Connection failure and an uncertain mutation differ.
+// This train slice reaches the wire client through tests; later slices bind the runtime.
 use serde_json::{json, Value};
 use std::{io, os::unix::net::UnixStream, path::Path, time::Instant};
 use tungstenite::WebSocket;
@@ -6,6 +7,7 @@ use tungstenite::WebSocket;
 /// Bus quotes an attachment as one double-quoted token and only unescapes
 /// `\\` and `\"`. JSON string decoding treats `\b` and the other JSON escapes
 /// as different characters, so it must not parse this line.
+#[cfg_attr(not(test), allow(dead_code))]
 fn pasted_image_path(line: &str) -> io::Result<String> {
     let tokens = crate::agents::providers::launch::parse_path_tokens(line).map_err(|error| {
         io::Error::other(format!(
@@ -21,6 +23,7 @@ fn pasted_image_path(line: &str) -> io::Result<String> {
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
 struct PreflightRefusal {
     source: io::Error,
 }
@@ -37,6 +40,7 @@ impl std::error::Error for PreflightRefusal {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn preflight_refusal(source: io::Error) -> io::Error {
     tracing::info!(
         event = "bus.codex.native_preflight",
@@ -46,16 +50,19 @@ fn preflight_refusal(source: io::Error) -> io::Error {
     io::Error::new(io::ErrorKind::WouldBlock, PreflightRefusal { source })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn lost_response(method: &str, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("Codex native {method}: {error}"))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct Rpc {
     socket: WebSocket<UnixStream>,
     next_id: u64,
     deadline: Instant,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl Rpc {
     pub(super) fn connect(path: &Path, deadline: Instant) -> io::Result<Self> {
         let stream = UnixStream::connect(path)?;
