@@ -576,6 +576,15 @@ fn each_provider_gets_its_own_prompt_delivery() {
 }
 
 #[test]
+fn claude_ds_orchestrator_prompt_matches_claude() {
+    let path = Path::new("/tmp/bus-claude-ds-prompt.txt");
+    let claude = prompt_args(Provider::ClaudeCode, path, false).unwrap();
+    let deepseek = prompt_args(Provider::ClaudeDs, path, false).unwrap();
+    assert_eq!(deepseek, claude);
+    assert!(deepseek.is_some());
+}
+
+#[test]
 fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
     let spool = temp_root("adopted");
     private_dir(&spool).unwrap();
