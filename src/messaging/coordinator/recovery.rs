@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 pub(super) fn check_saved_project_hooks(
     state: &mut super::BusState,
     id: AgentId,
+    data_dir: &std::path::Path,
 ) -> Result<(), String> {
     let Some(agent) = state
         .agent(id)
@@ -21,8 +22,24 @@ pub(super) fn check_saved_project_hooks(
     else {
         return Ok(());
     };
-    if let Err(error) = crate::agents::providers::codex::launch::validate_project_trust(&agent.cwd)
-    {
+    let checked = (|| {
+        let options = agent
+            .runtime_identity
+            .launch_id
+            .as_ref()
+            .map(|launch_id| {
+                launch::saved_options(
+                    crate::agents::providers::ProviderKind::Codex,
+                    &data_dir.join("callbacks").join(launch_id),
+                )
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let project =
+            crate::agents::providers::codex::launch::project_directory(&agent.cwd, &options)?;
+        crate::agents::providers::codex::launch::validate_project_trust(&project)
+    })();
+    if let Err(error) = checked {
         state
             .invalidate_agent_session(id)
             .map_err(|e| e.to_string())?;

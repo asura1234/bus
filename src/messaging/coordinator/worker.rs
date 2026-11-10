@@ -138,7 +138,7 @@ impl Worker {
         let codex_rollouts = saved_rollouts(&state);
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
-            super::recovery::check_saved_project_hooks(&mut state, id)?;
+            super::recovery::check_saved_project_hooks(&mut state, id, &data_dir)?;
             if let Some(request) = state.agent(id).and_then(|agent| agent.current_request) {
                 diagnostics::request(
                     &state,
