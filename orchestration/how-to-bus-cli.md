@@ -176,8 +176,9 @@ After two minutes unsubmitted/unconfirmed it falls back to the developer; a
 readable closed dialog suppresses fallback. Unreadable state gets at most three
 extra minutes before fallback; uncertain writes are never replayed.
 
-Use `bus agent observe AGENT` to read a blocked screen, then `bus agent press AGENT` to answer it.
-Observe before every action and verify the resulting screen afterward; queued input is not proof of effect.
+Use `bus agent observe AGENT` to read a blocked screen; `bus agent press AGENT --select LABEL` chooses a visible option.
+Bind input with `--terminal-id` from the observation. Observe before every action and verify the resulting screen afterward;
+queued input is not proof of effect.
 See `bus agent observe --help` and `bus agent press --help` for option selection, keys/text,
 styled cells, shell/pager targets and terminal identity binding. Inspect pending or uncertain
 results before continuing; sent input is never retried implicitly.
