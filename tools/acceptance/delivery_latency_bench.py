@@ -61,6 +61,30 @@ class ScratchBus:
     def all_status(self, status):
         return all(agent["status"] == status for agent in self.state()["agents"])
 
+    def ready(self, mode):
+        status = "idle" if mode == "idle" else "working"
+        if not self.all_status(status):
+            return False
+        saved = self.saved()
+        for agent in saved["agents"].values():
+            if (not agent["runtime_identity"].get("session_id")
+                    or not agent["hook_setup_confirmed"]
+                    or agent["session_binding_invalidated"]
+                    or agent["deletion_pending"] or agent["dialog"]):
+                return False
+            current = agent.get("current_request")
+            if mode == "idle":
+                if current is not None:
+                    return False
+            else:
+                lead = saved["requests"].get(str(current))
+                if (not lead or lead["phase"] != "active"
+                        or not lead["trusted_start_bound"]
+                        or not lead.get("provider_turn_id")
+                        or lead.get("pending_final") is not None):
+                    return False
+        return True
+
     def start(self, count):
         info = self.driver(
             "start",
@@ -96,7 +120,7 @@ class ScratchBus:
                 "--pwd",
                 status.get("work_dir", str(self.data.parent / "work")),
             )
-        wait(lambda: self.all_status("idle"), "idle agents")
+        wait(lambda: self.ready("idle"), "bound and settled idle agents")
 
     def saved(self):
         # Never poll the measured coordinator for timestamps.
@@ -125,13 +149,16 @@ class ScratchBus:
 def measure(bus, label, count, rounds, traffic, output, samples):
     for mode in ["idle", "busy-steer"]:
         if mode == "busy-steer":
+            wait(lambda: bus.ready("idle"), "settlement before seeded busy turn")
             bus.send("fake:work 3600 busy benchmark")
-            wait(lambda: bus.all_status("working"), "busy agents")
         for round_no in range(rounds):
-            if mode == "idle":
-                wait(lambda: bus.all_status("idle"), "idle between rounds")
+            wait(lambda: bus.ready(mode), "warm " + mode + " preconditions")
             recipient = "all" if traffic == "broadcast" else f"a{round_no % count}"
             rows = bus.send(f"latency-{label}-{count}-{mode}-{round_no}", recipient)
+            if mode == "idle":
+                assert all(row["latency"]["ready_at_enqueue"] for row in rows), (
+                    "idle samples require an eligible recipient at acceptance"
+                )
             if mode == "busy-steer":
                 assert all(row.get("steered") for row in rows), (
                     "busy benchmark must prove grouped mid-turn delivery"
