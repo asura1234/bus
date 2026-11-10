@@ -27,14 +27,20 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     ensure_owner_alive(&control)?;
     let socket = Path::new(directory).join("s");
     let endpoint = format!("unix://{}", socket.display());
+    let project = crate::agents::providers::codex::launch::project_directory(
+        &std::env::current_dir()?,
+        &argv[1..],
+    )
+    .map_err(io::Error::other)?;
     let mut server = Server::start(
         argv,
         &endpoint,
         Path::new(capture),
         &lock,
         control.try_clone()?,
+        &project,
     )?;
-    let attached = server.ready(&socket, Path::new(capture)).is_ok();
+    let attached = server.ready(&socket, Path::new(capture), &project).is_ok();
     let tui = if attached {
         remote_argv(argv, &endpoint)
     } else {
@@ -57,7 +63,8 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     if !attached {
         inherit_writer_lock(&mut command, &lock);
     }
-    // Both backend and TUI inherit this verified shell's cwd and environment.
+    // The TUI keeps the original shell cwd and --cd argv. The backend uses the
+    // same effective project; both retain the initialized shell's environment.
     Err(command.exec())
 }
 
@@ -133,6 +140,7 @@ impl Server {
         capture: &Path,
         lock: &fs::File,
         control: UnixStream,
+        project: &Path,
     ) -> io::Result<Self> {
         use std::os::unix::fs::OpenOptionsExt;
         let log = fs::OpenOptions::new()
@@ -148,6 +156,7 @@ impl Server {
             serde_json::to_string(&frontend).map_err(io::Error::other)?,
         );
         let child = command
+            .current_dir(project)
             .stdin(Stdio::from(OwnedFd::from(control)))
             .stdout(Stdio::null())
             .stderr(Stdio::from(log))
@@ -155,7 +164,7 @@ impl Server {
         Ok(Self { child })
     }
 
-    fn ready(&mut self, socket: &Path, capture: &Path) -> io::Result<()> {
+    fn ready(&mut self, socket: &Path, capture: &Path, cwd: &Path) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if self.child.try_wait()?.is_some() {
@@ -164,9 +173,8 @@ impl Server {
                 ));
             }
             if let Ok(mut rpc) = Rpc::connect(socket, deadline) {
-                let cwd = std::env::current_dir()?;
                 let hooks = rpc.call("hooks/list", serde_json::json!({"cwds":[cwd]}))?;
-                if trusted_bus_hooks(&hooks, capture, &cwd) {
+                if trusted_bus_hooks(&hooks, capture, cwd) {
                     return Ok(());
                 }
                 // A remote frontend skips native project/hook onboarding. No

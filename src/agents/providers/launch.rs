@@ -246,6 +246,19 @@ pub(crate) fn adopted_session(
     take_adopted_session(provider, &mut args)
 }
 
+pub(crate) fn effective_project_directory(
+    provider: ProviderKind,
+    cwd: &Path,
+    extra_args: &str,
+) -> Result<PathBuf, String> {
+    if provider == ProviderKind::Codex {
+        let args = parse_path_tokens(extra_args).map_err(|error| error.to_string())?;
+        codex::launch::project_directory(cwd, &args)
+    } else {
+        Ok(cwd.to_path_buf())
+    }
+}
+
 pub(crate) fn is_session_uuid(value: &str) -> bool {
     value.len() == 36
         && value.char_indices().all(|(index, c)| match index {
@@ -460,8 +473,9 @@ pub(crate) fn prepare(
         return kimi::launch::prepare(spec, initialize);
     }
     let cwd = canonical_directory(&spec.cwd)?;
+    let project = effective_project_directory(spec.provider, &cwd, &spec.extra_args)?;
     if spec.provider == ProviderKind::Codex {
-        codex::launch::validate_project_trust(&cwd)?;
+        codex::launch::validate_project_trust(&project)?;
     }
     let (mut args, adopted_session) = launch_args(spec.provider, &spec.extra_args)?;
     if !binary_available(spec.provider) {
@@ -470,7 +484,7 @@ pub(crate) fn prepare(
             executable(spec.provider)
         ));
     }
-    if let Some(notice) = setup_notice(spec.provider, &cwd, &spec.hooks.binary) {
+    if let Some(notice) = setup_notice(spec.provider, &project, &spec.hooks.binary) {
         if !spec.consent_project_hooks {
             return Err(format!(
                 "Setup confirmation required for {}. {}",

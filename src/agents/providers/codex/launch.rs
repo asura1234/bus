@@ -5,6 +5,39 @@ use super::super::{
 };
 use std::path::Path;
 
+/// Codex resolves --cd relative to its launch shell, before loading project hooks.
+pub(crate) fn project_directory(cwd: &Path, args: &[String]) -> Result<std::path::PathBuf, String> {
+    for index in argument_positions(ProviderKind::Codex, args) {
+        let arg = &args[index];
+        let value = if matches!(arg.as_str(), "--cd" | "-C") {
+            Some(
+                args.get(index + 1)
+                    .ok_or("Codex --cd requires a directory")?
+                    .as_str(),
+            )
+        } else {
+            arg.strip_prefix("--cd=").or_else(|| {
+                arg.strip_prefix("-C")
+                    .map(|value| value.strip_prefix('=').unwrap_or(value))
+            })
+        };
+        if let Some(value) = value {
+            if value.is_empty() {
+                return Err("Codex --cd requires a directory".into());
+            }
+            let path = cwd
+                .join(value)
+                .canonicalize()
+                .map_err(|error| format!("Codex --cd {value:?} cannot be read: {error}"))?;
+            if !path.is_dir() {
+                return Err("Codex --cd must name an existing directory".into());
+            }
+            return Ok(path);
+        }
+    }
+    Ok(cwd.to_path_buf())
+}
+
 /// A matching hook file is not usable when Codex explicitly distrusts its
 /// project layer. Unknown projects still get Codex's normal trust review.
 pub(crate) fn validate_project_trust(cwd: &Path) -> Result<(), String> {
