@@ -1490,3 +1490,7 @@ fn claude_ds_resume_matches_the_managed_agent_label_the_server_restores() {
     let loaded = load(&fixture.context(), &facts, &fixture.plan);
     assert!(loaded.is_ok(), "{loaded:?}");
 }
+
+#[cfg(unix)]
+#[path = "codex_project_resume_test.rs"]
+mod codex_project_resume;

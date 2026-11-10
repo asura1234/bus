@@ -132,7 +132,16 @@ pub(crate) fn load(
     if agent.provider == ProviderKind::Kimi {
         crate::agents::providers::kimi::launch::validate_run_permissions(&args)?;
     }
-    let (path, capture, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
+    let project = if agent.provider == ProviderKind::Codex {
+        // Saved --cd paths are relative to the launch cwd, not the restored
+        // shell's project root. Resume must validate the hooks Codex loads.
+        let directory =
+            crate::agents::providers::codex::launch::project_directory(&agent.cwd, &args)?;
+        crate::agents::providers::launch::project_root(&directory)
+    } else {
+        context.project.clone()
+    };
+    let (path, capture, rebound) = capture_args(agent.provider, &hooks, &project)?;
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),
         &mut args,
