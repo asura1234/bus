@@ -111,15 +111,15 @@ class ScratchBus:
             else None
         )
 
-    def send(self, text):
-        sent = self.control("send", "--room", "bus", "--to", "all", "--text", text)
+    def send(self, text, recipient="all"):
+        sent = self.control("send", "--room", "bus", "--to", recipient, "--text", text)
         return wait(lambda: self.confirmed(sent["request_ids"]), "native confirmations")
 
     def stop(self):
         return self.driver("stop", "--name", self.name)
 
 
-def measure(bus, label, count, rounds, output, samples):
+def measure(bus, label, count, rounds, traffic, output, samples):
     for mode in ["idle", "busy-steer"]:
         if mode == "busy-steer":
             bus.send("fake:work 3600 busy benchmark")
@@ -127,7 +127,8 @@ def measure(bus, label, count, rounds, output, samples):
         for round_no in range(rounds):
             if mode == "idle":
                 wait(lambda: bus.all_status("idle"), "idle between rounds")
-            rows = bus.send(f"latency-{label}-{count}-{mode}-{round_no}")
+            recipient = "all" if traffic == "broadcast" else f"a{round_no % count}"
+            rows = bus.send(f"latency-{label}-{count}-{mode}-{round_no}", recipient)
             if mode == "busy-steer":
                 assert all(row.get("steered") for row in rows), (
                     "busy benchmark must prove grouped mid-turn delivery"
@@ -139,6 +140,7 @@ def measure(bus, label, count, rounds, output, samples):
                 samples.append(
                     {
                         "label": label,
+                        "traffic": traffic,
                         "agents": count,
                         "mode": mode,
                         "round": round_no,
@@ -200,7 +202,8 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--label", required=True)
     parser.add_argument("--output", type=Path, default=Path("temp/reports/latency-fix"))
-    parser.add_argument("--rounds", type=int, default=20)
+    parser.add_argument("--rounds", type=int, default=40)
+    parser.add_argument("--traffic", choices=["single", "broadcast"], default="single")
     parser.add_argument("--counts", nargs="+", type=int, default=[2, 5, 10, 20])
     args = parser.parse_args()
     if args.rounds < 1 or any(count < 1 for count in args.counts):
@@ -217,7 +220,7 @@ def main():
         try:
             bus.start(count)
             print(args.label, count, "started", flush=True)
-            measure(bus, args.label, count, args.rounds, output, samples)
+            measure(bus, args.label, count, args.rounds, args.traffic, output, samples)
         finally:
             stopped = bus.stop()
             (run / "stop.json").write_text(json.dumps(stopped, indent=2))
