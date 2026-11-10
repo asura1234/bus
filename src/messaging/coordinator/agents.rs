@@ -399,6 +399,9 @@ impl Worker {
     }
 
     pub(super) fn agent_error(&mut self, id: AgentId, message: String) -> Result<(), String> {
+        if let Some(error) = self.check_launch_directory(id)? {
+            return Err(error);
+        }
         let mut state = self.state.clone();
         state
             .set_agent_error(id, Some(message.clone()))

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 /// A long-running session: about 1,300 sent messages, as in the 5 MB
 /// `state.json` where Enter waited behind every draft save.
-fn busy_session() -> (BusState, RoomId, AgentId) {
+fn busy_session(cwd: &std::path::Path) -> (BusState, RoomId, AgentId) {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let room = state.create_room("work").unwrap();
@@ -13,7 +13,7 @@ fn busy_session() -> (BusState, RoomId, AgentId) {
             master,
             "lead",
             Provider::ClaudeCode,
-            "/project".into(),
+            cwd.to_path_buf(),
             None,
         )
         .unwrap();
@@ -79,7 +79,8 @@ fn tick_until(
 fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
     const WAIT: Duration = Duration::from_secs(60);
     let dir = crate::utils::test_temp::unique_temp_path("bus-send-latency");
-    let (seed, master, _) = busy_session();
+    std::fs::create_dir(&dir).unwrap();
+    let (seed, master, _) = busy_session(&dir);
     let (handle, commands, saves) = BusHandle::start_for_test_observing_saves(dir.clone(), &seed);
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let poller = {

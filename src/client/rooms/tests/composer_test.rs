@@ -802,6 +802,7 @@ fn composer_pending_attachment_uses_the_validated_canonical_path() {
     let dir = crate::utils::test_temp::unique_temp_path("bus-composer-pending-path");
     let fixture_dir = home.join("attachments");
     std::fs::create_dir_all(&fixture_dir).unwrap();
+    seed.update_agent_runtime_metadata(agent, fixture_dir.clone(), None).unwrap();
     let file = fixture_dir.join("context.md");
     std::fs::write(&file, "attachment").unwrap();
     let relative = file.strip_prefix(&home).expect("the attachment fixture is within its private HOME");

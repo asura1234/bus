@@ -171,6 +171,11 @@ impl Worker {
             }
             recipients
         };
+        for recipient in &recipients {
+            if let Some(error) = self.check_launch_directory(*recipient)? {
+                return Err(error);
+            }
+        }
         let mut state = self.state.clone();
         let ids = state
             .submit_message_with(

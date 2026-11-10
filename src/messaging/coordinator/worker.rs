@@ -655,6 +655,7 @@ impl Worker {
     }
 
     pub(super) fn settle_requests(&mut self) -> Result<(), String> {
+        self.check_current_launch_directories()?;
         let mut state = self.state.clone();
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;

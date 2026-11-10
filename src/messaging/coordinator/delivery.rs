@@ -143,6 +143,11 @@ impl Worker {
             self.note_delivery_eligibility(agent);
         }
         for agent in agents {
+            if !self.state.queued_requests(agent.id).is_empty()
+                && self.check_launch_directory(agent.id)?.is_some()
+            {
+                continue;
+            }
             // Initial Cursor/Grok instructions stay on the readiness tick.
             // They must precede queued work and must not hold another recipient.
             if !launch_prompts

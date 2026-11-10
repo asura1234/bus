@@ -74,7 +74,7 @@ impl Worker {
             }
             C::RemoveFile(room, path) => state.remove_file(room, &path),
             C::Submit(room, draft) | C::SubmitQueued(room, draft) => {
-                return self.persist_draft_submission(state, room, draft, queued);
+                return self.persist_draft_submission(room, draft, queued);
             }
             C::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
             C::CompleteHookSetup(id) => {
@@ -125,11 +125,15 @@ impl Worker {
 
     fn persist_draft_submission(
         &mut self,
-        mut state: BusState,
         room: RoomId,
         mut draft: crate::messaging::model::Draft,
         queued: bool,
     ) -> Result<(), String> {
+        for recipient in &draft.recipient_ids {
+            if let Some(error) = self.check_launch_directory(*recipient)? {
+                return Err(error);
+            }
+        }
         let home = std::env::home_dir().ok_or("Home directory unavailable")?;
         draft.files = draft
             .files
@@ -143,6 +147,7 @@ impl Worker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
+        let mut state = self.state.clone();
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, queued)
             .map_err(|e| e.to_string())?;

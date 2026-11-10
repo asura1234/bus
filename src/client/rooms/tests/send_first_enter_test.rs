@@ -3,19 +3,14 @@ use std::time::{Duration, Instant};
 
 /// A real coordinator with one room whose draft already addresses an agent.
 fn live_room() -> (BusUi, RoomId, std::path::PathBuf) {
+    let dir = crate::utils::test_temp::unique_temp_path("bus-send-first-enter");
+    std::fs::create_dir(&dir).unwrap();
     let mut seed = BusState::default();
     let master = seed.ensure_master_room();
     let agent = seed
-        .create_agent(
-            master,
-            "lead",
-            Provider::ClaudeCode,
-            "/project".into(),
-            None,
-        )
+        .create_agent(master, "lead", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
     seed.set_draft_recipients(master, [agent]).unwrap();
-    let dir = crate::utils::test_temp::unique_temp_path("bus-send-first-enter");
     let (handle, _commands) = BusHandle::start_for_test(dir.clone(), &seed);
     let mut ui = BusUi::new(handle.snapshot().unwrap());
     ui.handle = Some(handle);
