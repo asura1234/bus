@@ -378,26 +378,41 @@ async fn buffered_edit_during_withdrawal(entered: bool) {
     let recovery_root = directory.clone();
     let mut response = (
         tokio::task::spawn_blocking(move || {
-            struct RestoreDataDir(Option<std::ffi::OsString>);
+            struct RestoreDataDir {
+                previous: Option<std::ffi::OsString>,
+                captured: bool,
+            }
             impl Drop for RestoreDataDir {
                 fn drop(&mut self) {
-                    match self.0.take() {
-                        Some(value) => std::env::set_var("BUS_DATA_DIR", value),
-                        None => std::env::remove_var("BUS_DATA_DIR"),
+                    // An outer API timeout must not redirect a still-running
+                    // worker's later recovery into the account's default root.
+                    if self.captured {
+                        match self.previous.take() {
+                            Some(value) => std::env::set_var("BUS_DATA_DIR", value),
+                            None => std::env::remove_var("BUS_DATA_DIR"),
+                        }
                     }
                 }
             }
             let _lock = crate::utils::test_env::mutex().lock().unwrap();
-            let _restore = RestoreDataDir(std::env::var_os("BUS_DATA_DIR"));
-            std::env::set_var("BUS_DATA_DIR", recovery_root);
+            let mut restore = RestoreDataDir {
+                previous: std::env::var_os("BUS_DATA_DIR"),
+                captured: false,
+            };
+            std::env::set_var("BUS_DATA_DIR", &recovery_root);
+            let recovery_directory = crate::utils::paths::data_dir().join("private/drafts");
+            assert!(recovery_directory.starts_with(&recovery_root));
             // Only now let the first clear finish. The next deletion must notice
             // the buffered edit, even though the native draft still looks owned.
             clear_receipt.send(()).unwrap();
-            response.recv_timeout(WAIT).unwrap()
+            let reply = response.recv_timeout(WAIT).unwrap();
+            restore.captured = std::fs::read_dir(&recovery_directory)
+                .is_ok_and(|mut files| files.next().is_some_and(|file| file.is_ok()));
+            (reply, recovery_directory)
         }),
         None,
     );
-    let reply = match write_or_done(&mut writes, &mut response).await {
+    let (reply, recovery_directory) = match write_or_done(&mut writes, &mut response).await {
         Ok(key) => {
             native_clock.advance(Duration::from_secs(2));
             let _ = super::owned_draft_cleanup_tests::finish_response(response).await;
@@ -417,7 +432,7 @@ async fn buffered_edit_during_withdrawal(entered: bool) {
         writes.try_recv().is_err(),
         "no deletion, Enter or buffered replay"
     );
-    let files = std::fs::read_dir(directory.join("private/drafts"))
+    let files = std::fs::read_dir(recovery_directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect::<Vec<_>>();
