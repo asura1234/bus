@@ -5,13 +5,7 @@ fn orchestrator(worker: &mut Worker, room: RoomId) -> AgentId {
     let master = state.master_room().unwrap().id;
     let cwd = state.agents().next().unwrap().cwd.clone();
     let agent = state
-        .create_agent(
-            master,
-            "priority-inbox",
-            Provider::Codex,
-            cwd,
-            None,
-        )
+        .create_agent(master, "priority-inbox", Provider::Codex, cwd, None)
         .unwrap();
     state.bind_orchestrator(agent, room).unwrap();
     state

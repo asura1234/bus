@@ -349,7 +349,9 @@ fn clock_rollback_near_send_must_not_hide_an_earlier_matching_turn() {
 
 #[test]
 fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answer() {
-    for (rollback_ms, remove_directory) in [(0_u64, false), (1_000, false), (0, true), (1_000, true)] {
+    for (rollback_ms, remove_directory) in
+        [(0_u64, false), (1_000, false), (0, true), (1_000, true)]
+    {
         let (mut f, path) = with_rollout();
         let id = f.send("clock-start", false);
         f.deliver();
@@ -387,9 +389,18 @@ fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answe
             f.status(RuntimeStatus::Idle);
             f.consume();
             assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
-            assert_eq!(f.request(id).failure_reason.as_deref(), Some("launch_directory_removed"));
+            assert_eq!(
+                f.request(id).failure_reason.as_deref(),
+                Some("launch_directory_removed")
+            );
             assert!(f.reply(id).is_none());
-            assert!(f.worker.state.agent(f.agent).unwrap().current_request.is_none());
+            assert!(f
+                .worker
+                .state
+                .agent(f.agent)
+                .unwrap()
+                .current_request
+                .is_none());
         } else {
             idle_then_settle(&mut f, id);
             settled_without_reply(&f, id);

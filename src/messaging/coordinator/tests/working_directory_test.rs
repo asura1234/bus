@@ -571,11 +571,32 @@ fn ui_admission_keeps_the_fresh_directory_recovery() {
         worker.command(command, &events).unwrap();
         assert_eq!(worker.state.requests().count(), 1);
         assert_eq!(worker.state.queued_requests(agent).len(), 1);
-        assert!(worker.state.agent(agent).unwrap().working_directory_error.is_none(), "queued={queued}");
-        assert_eq!(worker.state.agent(agent).unwrap().shown_status(), RuntimeStatus::Idle);
-        let durable = JsonStore::new(dir.join("state.json")).load().unwrap().unwrap();
-        assert!(durable.agent(agent).unwrap().working_directory_error.is_none());
-        assert_eq!(durable.queued_requests(agent), worker.state.queued_requests(agent));
+        assert!(
+            worker
+                .state
+                .agent(agent)
+                .unwrap()
+                .working_directory_error
+                .is_none(),
+            "queued={queued}"
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().shown_status(),
+            RuntimeStatus::Idle
+        );
+        let durable = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(durable
+            .agent(agent)
+            .unwrap()
+            .working_directory_error
+            .is_none());
+        assert_eq!(
+            durable.queued_requests(agent),
+            worker.state.queued_requests(agent)
+        );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }

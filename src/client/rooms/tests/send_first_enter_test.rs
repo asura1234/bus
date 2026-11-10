@@ -8,13 +8,7 @@ fn live_room() -> (BusUi, RoomId, std::path::PathBuf) {
     let mut seed = BusState::default();
     let master = seed.ensure_master_room();
     let agent = seed
-        .create_agent(
-            master,
-            "lead",
-            Provider::ClaudeCode,
-            dir.clone(),
-            None,
-        )
+        .create_agent(master, "lead", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
     seed.set_draft_recipients(master, [agent]).unwrap();
     let (handle, _commands) = BusHandle::start_for_test(dir.clone(), &seed);
