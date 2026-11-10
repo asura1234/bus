@@ -349,7 +349,7 @@ fn clock_rollback_near_send_must_not_hide_an_earlier_matching_turn() {
 
 #[test]
 fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answer() {
-    for rollback_ms in [0_u64, 1_000] {
+    for (rollback_ms, remove_directory) in [(0_u64, false), (1_000, false), (0, true), (1_000, true)] {
         let (mut f, path) = with_rollout();
         let id = f.send("clock-start", false);
         f.deliver();
@@ -378,15 +378,27 @@ fn a_subminute_rollback_before_the_original_start_must_not_deliver_a_retry_answe
         })
         .unwrap();
         let worker_cwd = f.worker.state.agent(f.agent).unwrap().cwd.clone();
-        std::fs::remove_dir(worker_cwd).unwrap();
+        if remove_directory {
+            std::fs::remove_dir(worker_cwd).unwrap();
+        }
         f.now = since + 1_001;
-        idle_then_settle(&mut f, id);
+        if remove_directory {
+            // Directory loss now closes the owner immediately, before settle grace.
+            f.status(RuntimeStatus::Idle);
+            f.consume();
+            assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
+            assert_eq!(f.request(id).failure_reason.as_deref(), Some("launch_directory_removed"));
+            assert!(f.reply(id).is_none());
+            assert!(f.worker.state.agent(f.agent).unwrap().current_request.is_none());
+        } else {
+            idle_then_settle(&mut f, id);
+            settled_without_reply(&f, id);
+        }
         println!(
             "START ROLLBACK_MS={rollback_ms}: selected={selected:?}; phase={:?}; reply={:?}",
             f.request(id).phase,
             f.reply(id)
         );
-        settled_without_reply(&f, id);
         reply_text_absent(&f, "ORIGINAL");
         reply_text_absent(&f, "WRONG RETRY");
         assert!(f.request(id).provider_turn_id.is_none(), "a 1-second clock step after the send must not exclude the original input and publish the retry's answer");

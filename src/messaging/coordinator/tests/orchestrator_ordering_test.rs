@@ -3,12 +3,13 @@ use super::*;
 fn orchestrator(worker: &mut Worker, room: RoomId) -> AgentId {
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;
+    let cwd = state.agents().next().unwrap().cwd.clone();
     let agent = state
         .create_agent(
             master,
             "priority-inbox",
             Provider::Codex,
-            "/synthetic".into(),
+            cwd,
             None,
         )
         .unwrap();
