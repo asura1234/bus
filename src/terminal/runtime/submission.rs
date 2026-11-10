@@ -103,6 +103,10 @@ pub(crate) trait SubmissionInspector: Send {
     fn confirm_consumption(&self) -> bool {
         false
     }
+    /// Read-only eligibility; withdrawal still checks a complete owned frame.
+    fn recoverable_input(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
+        false
+    }
     /// Only a recognized picker over an already attested owned composer.
     fn owned_popup_escape(&self, _screen: &str) -> Option<Bytes> {
         None

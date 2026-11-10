@@ -283,6 +283,23 @@ async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
         writes.try_recv().is_err(),
         "readiness must not edit or submit input"
     );
+    redraw(&app, AgentKind::Codex, "partial native repaint");
+    runtime
+        .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+        .await;
+    redraw(
+        &app,
+        AgentKind::Codex,
+        &format!("[Pasted Content {} chars]", payload.chars().count()),
+    );
+    assert_eq!(
+        runtime
+            .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+            .await
+            .0,
+        AgentState::Idle,
+        "readiness must not mutate ownership on a partial repaint"
+    );
     runtime
         .try_send_developer_bytes(Bytes::from(payload.clone()))
         .unwrap();

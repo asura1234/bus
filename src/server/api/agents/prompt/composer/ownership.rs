@@ -79,6 +79,22 @@ impl SubmissionInspector for OwnedComposer {
     fn confirm_consumption(&self) -> bool {
         self.kind == AgentKind::Codex
     }
+    fn recoverable_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
+        let Ok(owned) = self.state.lock() else {
+            return false;
+        };
+        if owned.lost {
+            return false;
+        }
+        match &owned.body {
+            Some(previous) => super::input_with_cursor(self.kind, screen, cursor)
+                .is_some_and(|body| body == *previous || owned.remainders.contains(&body)),
+            None => {
+                super::observe_with_cursor(self.kind, screen, &self.expected, cursor)
+                    == InputObservation::Pending
+            }
+        }
+    }
     fn owned_popup_escape(&self, screen: &str) -> Option<bytes::Bytes> {
         (self.kind == AgentKind::Codex && super::codex_picker::mentions(screen))
             .then(|| bytes::Bytes::from_static(b"\x1b"))
