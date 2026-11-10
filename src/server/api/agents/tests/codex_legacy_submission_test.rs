@@ -318,6 +318,15 @@ async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
 
 #[tokio::test]
 async fn codex_legacy_buffered_input_revokes_withdrawal_between_clear_steps() {
+    buffered_edit_during_withdrawal(true).await;
+}
+
+#[tokio::test]
+async fn codex_legacy_buffered_input_revokes_pre_enter_withdrawal() {
+    buffered_edit_during_withdrawal(false).await;
+}
+
+async fn buffered_edit_during_withdrawal(entered: bool) {
     let directory = crate::utils::test_temp::unique_temp_path("codex-cleanup-revoked");
     std::fs::create_dir_all(&directory).unwrap();
     #[cfg(unix)]
@@ -329,20 +338,31 @@ async fn codex_legacy_buffered_input_revokes_withdrawal_between_clear_steps() {
     let expiry = confirmation_expiry(&method);
     let native_clock = clock(&app);
     native_clock.pause();
-    let paste_receipt = native_clock.hold_next_write_completion();
+    let paste_receipt = if entered {
+        native_clock.hold_next_write_completion()
+    } else {
+        native_clock.fail_next_write_completion(std::io::ErrorKind::TimedOut)
+    };
     let response = start(&mut app, method);
     assert_eq!(
         next_write(&mut writes).await.as_ref(),
         b"\x1b[200~from bus\x1b[201~"
     );
     redraw(&app, AgentKind::Codex, "from bus");
-    let enter_receipt = native_clock.hold_next_write_completion();
-    paste_receipt.send(()).unwrap();
-    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
-    enter_receipt.send(()).unwrap();
-    native_clock.wait_for_enters(1);
-    let clear_receipt = native_clock.hold_next_write_completion();
-    native_clock.advance(expiry);
+    let clear_receipt = if entered {
+        let enter_receipt = native_clock.hold_next_write_completion();
+        paste_receipt.send(()).unwrap();
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+        enter_receipt.send(()).unwrap();
+        native_clock.wait_for_enters(1);
+        let receipt = native_clock.hold_next_write_completion();
+        native_clock.advance(expiry);
+        receipt
+    } else {
+        let receipt = native_clock.hold_next_write_completion();
+        paste_receipt.send(()).unwrap();
+        receipt
+    };
     assert_eq!(next_write(&mut writes).await.as_ref(), b"\x01");
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     let runtime = app.lookup_runtime_sender(0, pane).unwrap();
@@ -386,7 +406,12 @@ async fn codex_legacy_buffered_input_revokes_withdrawal_between_clear_steps() {
         Err(reply) => reply,
     };
     assert!(!reply.contains("agent_prompted"), "{reply}");
-    assert!(reply.contains("submission remains unconfirmed"), "{reply}");
+    let uncertainty = if entered {
+        "submission remains unconfirmed"
+    } else {
+        "No Enter was sent"
+    };
+    assert!(reply.contains(uncertainty), "{reply}");
     assert!(runtime.visible_ansi().contains("from bus"));
     assert!(
         writes.try_recv().is_err(),
