@@ -236,7 +236,7 @@ async fn grok_login_heading_above_composer_padding_receives_no_input() {
             )
             .unwrap();
         let error = completion
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
             .unwrap()
             .unwrap_err();
         assert!(
