@@ -1,6 +1,8 @@
 //! Codex launch and observation-hook behavior, without room ownership.
 pub(crate) mod hooks;
 pub(crate) mod launch;
+#[cfg(unix)]
+pub(crate) mod native;
 pub(crate) mod resume;
 pub(crate) mod system_prompt;
 pub(crate) mod usage;
