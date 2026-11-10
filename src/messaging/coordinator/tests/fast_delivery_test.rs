@@ -110,10 +110,10 @@ fn native_request_is_stamped_before_crossing_the_native_boundary() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+type DeferredSubmissions = Vec<(Method, mpsc::Sender<crate::messaging::native::NativeResult>)>;
+
 #[derive(Clone)]
-struct DeferredNative(
-    Arc<Mutex<Vec<(Method, mpsc::Sender<crate::messaging::native::NativeResult>)>>>,
-);
+struct DeferredNative(Arc<Mutex<DeferredSubmissions>>);
 impl Transport for DeferredNative {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         panic!("unexpected synchronous fast-path request: {method:?}")

@@ -142,12 +142,12 @@ impl Worker {
             let waited = self.note_queued_delivery_wait(&agent);
             match self.delivery_route(&agent) {
                 Some(DeliveryRoute::Steer(request, lead)) => self.steer(&agent, request, lead)?,
-                Some(DeliveryRoute::Submit(steer)) => {
-                    if !launch_prompts || !self.deliver_launch_prompt(&agent)? {
-                        self.deliver_queued_request(&agent, waited && !steer, steer)?;
-                    }
+                Some(DeliveryRoute::Submit(steer))
+                    if !launch_prompts || !self.deliver_launch_prompt(&agent)? =>
+                {
+                    self.deliver_queued_request(&agent, waited && !steer, steer)?;
                 }
-                None => {}
+                _ => {}
             }
         }
         Ok(())
@@ -193,8 +193,7 @@ impl Worker {
             .get(&agent.id)
             .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
         let steer = self.steer_into_unbound_turn(agent, own_turn);
-        if (own_turn && !steer)
-            || (agent.status != RuntimeStatus::Idle && !steer)
+        if ((agent.status != RuntimeStatus::Idle || own_turn) && !steer)
             || agent.dialog
             || !agent.hook_setup_confirmed
             || agent.session_binding_invalidated
