@@ -665,6 +665,7 @@ fn native_interrupt_unconfirmed_cannot_become_stopped_from_visual_idle() {
             code,
             message: "Native interrupt is unconfirmed".into(),
             definitely_rejected: false,
+            timestamps: Box::default(),
         })));
         let response = interrupt(&mut f, json!({"agent":"builder"}));
         assert_eq!(response.result["agents"][0]["outcome"], "failed");
@@ -812,6 +813,7 @@ fn native_unconfirmed_interrupt_disarms_an_older_visual_stop_wait() {
         code: Some("agent_interrupt_unconfirmed".into()),
         message: "unconfirmed".into(),
         definitely_rejected: false,
+        timestamps: Box::default(),
     })));
     let response = interrupt(&mut f, json!({"agent":"builder"}));
     assert_eq!(response.result["agents"][0]["outcome"], "failed");
