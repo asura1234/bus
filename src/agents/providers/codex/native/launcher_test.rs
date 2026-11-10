@@ -31,10 +31,12 @@ fn initialize_peer(
             .unwrap();
         // The fixture endpoint is separate from the fake backend. Do not let
         // an immediate refusal retire that child before its startup evidence.
-        while !root.join("backend-cwd").exists() && Instant::now() < deadline {
+        let cwd_written =
+            || fs::read_to_string(root.join("backend-cwd")).is_ok_and(|cwd| cwd.ends_with('\n'));
+        while !cwd_written() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(root.join("backend-cwd").exists());
+        assert!(cwd_written());
         let mut peer = tungstenite::accept(stream).unwrap();
         let request: serde_json::Value =
             serde_json::from_str(peer.read().unwrap().to_text().unwrap()).unwrap();
