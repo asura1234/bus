@@ -94,6 +94,12 @@ pub(crate) trait SubmissionInspector: Send {
         self.observe(screen) != InputObservation::Unavailable
             && !crate::terminal::driver::has_input_controls(screen)
     }
+    /// Some providers register pasted attachments asynchronously and swallow
+    /// Enter until registration finishes. This is independent of pane focus
+    /// and of the developer draft already saved by the input lease.
+    fn paste_ready(&self, _screen: &str) -> bool {
+        true
+    }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
     }
@@ -651,21 +657,26 @@ impl ObservedSubmission {
                     .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
                 match self.terminal.active_ansi_if_complete() {
                     Some(screen) if self.inspect.submission_available(&screen) => {
-                        self.check_deadline()?;
-                        let key = self.inspect.editor_submit_key(&screen, &self.enter);
-                        if self.inspect.confirm_consumption() {
-                            self.observe("legacy_enter_ownership");
+                        if !self.inspect.paste_ready(&screen) {
+                            self.observe("paste_processing");
+                            None
+                        } else {
+                            self.check_deadline()?;
+                            let key = self.inspect.editor_submit_key(&screen, &self.enter);
+                            if self.inspect.confirm_consumption() {
+                                self.observe("legacy_enter_ownership");
+                            }
+                            self.enter_content_seq
+                                .set(self.content_seq.load(Ordering::Acquire));
+                            self.diagnostics.enter(&key, self.clock.now());
+                            Some(self.io.queue_input_write_scoped(
+                                Bytes::new(),
+                                key,
+                                Duration::ZERO,
+                                Some(self.deadline.get()),
+                                &self.scope,
+                            ))
                         }
-                        self.enter_content_seq
-                            .set(self.content_seq.load(Ordering::Acquire));
-                        self.diagnostics.enter(&key, self.clock.now());
-                        Some(self.io.queue_input_write_scoped(
-                            Bytes::new(),
-                            key,
-                            Duration::ZERO,
-                            Some(self.deadline.get()),
-                            &self.scope,
-                        ))
                     }
                     Some(screen) if screen.trim().is_empty() => None,
                     Some(_) => return Err(blocked()),
@@ -715,8 +726,8 @@ impl ObservedSubmission {
             };
         }
         // Do not read back or attribute the pasted text. The pane lease keeps
-        // developer input buffered; only a fresh complete blocker reading may
-        // refuse the one submission key. A blank redraw is not that reading.
+        // developer input buffered. A complete blocker may refuse the one
+        // submit key; pending attachment registration and blank redraws wait.
         self.await_submit_key()?;
         #[cfg(test)]
         self.clock.entered();

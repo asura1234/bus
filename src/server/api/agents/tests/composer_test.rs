@@ -1,5 +1,101 @@
 use super::*;
 
+#[test]
+fn claude_completed_mixed_image_read_accepts_a_collapsed_text_chip() {
+    let expected = format!(
+        "[Bus message 5 from you]\nfrom bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"\n{}",
+        (0..100)
+            .map(|index| format!("Controlled filler line {index}: ignore this timing fixture."))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    // Real Claude 2.1.316 renders one successful image and a failed path
+    // hidden with the 102 non-image text lines in this one atomic paste.
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    let complete = frame("[Image #1][Pasted text #2 +102 lines]");
+    assert!(paste_ready(AgentKind::Claude, &complete, &expected));
+    assert_eq!(
+        observe(AgentKind::Claude, &complete, &expected),
+        InputObservation::Pending
+    );
+    for body in [
+        "[Image #1][Pasted text #2 +101 lines]",
+        "[Image #1][Pasted text #2 +103 lines]",
+        "[Pasted text #2 +102 lines]",
+    ] {
+        assert!(
+            !paste_ready(AgentKind::Claude, &frame(body), &expected),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn claude_image_registration_waits_for_all_chips_and_allows_failed_read_text() {
+    let expected = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    assert!(!paste_ready(AgentKind::Claude, &frame(""), expected));
+    assert!(!paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7]from bus"),
+        expected
+    ));
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7][Image #8]from bus"),
+        expected
+    ));
+    assert!(paste_ready(AgentKind::Claude, &frame(expected), expected));
+    // Image registration does not depend on reading back an offscreen brief.
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7][Image #8]clipped suffix"),
+        expected
+    ));
+    assert!(paste_ready(AgentKind::Claude, &frame(""), "ordinary text"));
+}
+
+#[test]
+fn claude_image_registration_accepts_a_chip_with_a_failed_literal_image_path() {
+    let expected = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7]from bus\n\"/tmp/b.jpg\""),
+        expected
+    ));
+    assert_eq!(
+        observe(
+            AgentKind::Claude,
+            &frame("[Image #7]from bus\n\"/tmp/b.jpg\""),
+            expected
+        ),
+        InputObservation::Pending
+    );
+    for body in [
+        "[Image #7]from bus\n\"/tmp/foreign.jpg\"",
+        "[Image #7]from bus\n\"/tmp/b.jpg\"\n\"/tmp/b.jpg\"",
+        "[Image #7]\"/tmp/b.jpg\"",
+    ] {
+        assert!(
+            !paste_ready(AgentKind::Claude, &frame(body), expected),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn claude_image_registration_waits_for_crlf_image_paths() {
+    let expected = "from bus\r\n\"/tmp/a.png\"\r\n";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    assert!(!paste_ready(AgentKind::Claude, &frame(""), expected));
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7]from bus"),
+        expected
+    ));
+}
+
 fn codex_review_inspector(
     directory: std::path::PathBuf,
 ) -> Box<dyn crate::terminal::runtime::SubmissionInspector> {

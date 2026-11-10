@@ -104,6 +104,9 @@ impl SubmissionInspector for PreservingComposer {
     fn submission_available(&self, screen: &str) -> bool {
         super::submission_available(self.kind, screen)
     }
+    fn paste_ready(&self, screen: &str) -> bool {
+        super::paste_ready(self.kind, screen, &self.expected)
+    }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         super::draft_ready(self.kind, screen, cursor, pristine)
     }

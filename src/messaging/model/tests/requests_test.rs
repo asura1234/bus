@@ -417,11 +417,11 @@ fn an_unconfirmed_submission_gets_a_recovery_reason_after_its_idle_grace() {
         .observe_status(agent, RuntimeStatus::Idle, 2_000)
         .unwrap();
     assert_eq!(
-        recovery_at(&state, submitting, 1_000 + DELIVERED_STALL_MS - 1),
+        recovery_at(&state, submitting, 1_000 + UNCONFIRMED_SUBMISSION_MS - 1),
         None
     );
     assert_eq!(
-        recovery_at(&state, submitting, 1_000 + DELIVERED_STALL_MS).as_deref(),
+        recovery_at(&state, submitting, 1_000 + UNCONFIRMED_SUBMISSION_MS).as_deref(),
         Some("submission_unconfirmed")
     );
 }

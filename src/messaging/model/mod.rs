@@ -82,6 +82,9 @@ pub(crate) use {
 };
 
 #[cfg(test)]
+pub(crate) use self::stall::UNCONFIRMED_SUBMISSION_MS;
+
+#[cfg(test)]
 #[path = "tests/types_test.rs"]
 mod tests;
 

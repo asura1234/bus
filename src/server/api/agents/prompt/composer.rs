@@ -8,8 +8,8 @@ mod diagnostics;
 mod ownership;
 mod preservation;
 
-/// The final submission guard asks only whether native input is available.
-/// It never compares the rendered body with the message Bus just wrote.
+/// The final submission guard checks native input availability. Attachment
+/// registration is checked separately; ordinary text needs no render readback.
 fn submission_available(kind: AgentKind, screen: &str) -> bool {
     let plain = screen
         .lines()
@@ -33,6 +33,29 @@ fn submission_available(kind: AgentKind, screen: &str) -> bool {
         || crate::terminal::driver::has_input_controls(&plain)
         || input(kind, screen).is_none()
         || kind == AgentKind::Codex && codex_picker::active(screen))
+}
+
+fn paste_ready(kind: AgentKind, screen: &str, expected: &str) -> bool {
+    if kind != AgentKind::Claude {
+        return true;
+    }
+    let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
+    let (images, _) = crate::agents::providers::claude_code::hooks::claude_lifted_images(&expected);
+    if images == 0 {
+        return true;
+    }
+    // Claude 2.1.316 consumes Enter while an image path is being loaded, then
+    // drops that deferred key. The PTY receipt does not attest registration.
+    // Wait for all chips, including when the rest of a long paste is clipped.
+    // Failed reads retain literal paths beside any successful image chips.
+    let ready = input(kind, screen).is_some_and(|body| {
+        image_chips(&body).0 == images
+            || observe_with_cursor(kind, screen, &expected, None) == InputObservation::Pending
+    });
+    if ready {
+        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.images_registered", images, "Claude image paste can receive Enter");
+    }
+    ready
 }
 
 fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
@@ -182,14 +205,25 @@ fn composer_frame(kind: AgentKind, screen: &str) -> bool {
 /// The draft is ours only when every chip stands for one of our image lines
 /// and the rest is exactly our remaining text.
 fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String) -> bool {
-    use crate::agents::providers::claude_code::hooks::claude_lifted_images;
+    use crate::agents::providers::claude_code::hooks::{
+        claude_lifted_images, claude_text_after_image_reads,
+    };
     let (images, rest) = image_chips(body);
-    let (lifted, remaining) =
-        claude_lifted_images(&expected.replace("\r\n", "\n").replace('\r', "\n"));
-    images > 0
-        && images == lifted
-        && (normalize(rest) == normalize(&remaining)
-            || collapsed_paste(AgentKind::Claude, rest, &remaining))
+    let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
+    let (lifted, remaining) = claude_lifted_images(&expected);
+    // Claude inserts the whole text remainder atomically after all reads finish.
+    // In a mixed result its collapsed chip also contains one line per failed
+    // path. Those paths need not be visible to prove the paste has completed.
+    if images > 0 && images < lifted {
+        let text_lines = remaining.lines().count() + lifted - images;
+        if pasted_text_count(rest) == Some(text_lines.saturating_sub(1)) {
+            return true;
+        }
+    }
+    claude_text_after_image_reads(images, rest, &expected).is_some_and(|text| {
+        normalize(&text) == normalize(&remaining)
+            || collapsed_paste(AgentKind::Claude, &text, &remaining)
+    })
 }
 
 /// Codex either attaches or inserts each dedicated image paste as literal text.
@@ -245,16 +279,9 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
         return kind == AgentKind::Codex
             && count.parse::<usize>().ok() == Some(expected.chars().count());
     }
-    let Some(label) = body
-        .strip_prefix("[Pasted text #")
-        .and_then(|text| text.strip_suffix(']'))
-    else {
+    let Some(count) = pasted_text_count(body) else {
         return false;
     };
-    let (id, count) = label.split_once(" +").unwrap_or((label, "0 lines"));
-    if id.parse::<usize>().ok().is_none_or(|id| id == 0) {
-        return false;
-    }
     // Installed provider renderers differ: Claude counts newline separators;
     // Cursor counts logical lines, including the first line.
     let newlines = expected
@@ -267,10 +294,16 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
         AgentKind::Cursor => newlines + 1,
         _ => return false,
     };
-    count
-        .strip_suffix(" lines")
-        .and_then(|count| count.parse::<usize>().ok())
-        == Some(expected_lines)
+    count == expected_lines
+}
+
+fn pasted_text_count(body: &str) -> Option<usize> {
+    let label = body.strip_prefix("[Pasted text #")?.strip_suffix(']')?;
+    let (id, count) = label.split_once(" +").unwrap_or((label, "0 lines"));
+    if id.parse::<usize>().ok().is_none_or(|id| id == 0) {
+        return None;
+    }
+    count.strip_suffix(" lines")?.parse().ok()
 }
 
 fn input(kind: AgentKind, screen: &str) -> Option<String> {

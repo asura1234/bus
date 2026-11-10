@@ -1029,3 +1029,17 @@ idle then deliver, and an approval card without `--yolo`.
   appearing in the Bus TUI. Generic 429, overload and connection failures
   retain their transient retry contract. Never infer a billing reset date
   from the word monthly.
+
+- **2026-11-10 — Claude image paste consumes an early Enter:** Claude Code
+  2.1.316 can flush a bracketed paste into the PTY, consume Enter during its
+  asynchronous image-path load, and leave the loaded prompt unsubmitted. A
+  focused idle orchestrator with a background shell and a 2200x1600 PNG
+  reproduced this; a later manual Enter immediately emitted UserPromptSubmit.
+  Account for every image as a successful chip or its exact failed-read literal
+  path before the single Enter, including mixed results. Normalize CRLF before
+  counting paths, and verify the same result correlates with UserPromptSubmit.
+  Include long mixed results: failed paths can be hidden inside one atomic
+  collapsed text chip while successful image chips remain visible. Plain text still submits without a render readback,
+  and focused panes and half-typed drafts still use immediate draft save/restore.
+  Check `message status`'s `latency.provider_started_at_ms`; native write clocks
+  and an empty worker `events` list do not prove or disprove provider acceptance.
