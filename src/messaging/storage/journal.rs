@@ -46,6 +46,8 @@ pub(crate) enum JournalOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         queued_at_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        eligible_at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         native_requested_at_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply_delivered_at_ms: Option<u64>,
@@ -72,21 +74,6 @@ impl JournalOp {
             room,
             request_id,
             phase: CompletionPhase::Queued,
-            started_at_ms,
-            completed_at_ms,
-        }
-    }
-
-    pub(crate) fn complete_native(
-        room: RoomId,
-        request_id: RequestId,
-        started_at_ms: u64,
-        completed_at_ms: u64,
-    ) -> Self {
-        Self::DeliveryTimestampCompletion {
-            room,
-            request_id,
-            phase: CompletionPhase::NativeRequested,
             started_at_ms,
             completed_at_ms,
         }
@@ -140,10 +127,14 @@ impl JournalOp {
             Self::DeliveryTimestamps {
                 request_id,
                 queued_at_ms,
+                eligible_at_ms,
                 native_requested_at_ms,
                 reply_delivered_at_ms,
                 ..
             } => {
+                if let Some(at_ms) = eligible_at_ms {
+                    state.record_eligible(*request_id, *at_ms);
+                }
                 if let Some(at_ms) = queued_at_ms {
                     state.record_queued(*request_id, *at_ms)?;
                 }

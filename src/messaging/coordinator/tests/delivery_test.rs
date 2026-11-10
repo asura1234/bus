@@ -2422,7 +2422,7 @@ fn deliver_with_stamp_probe(reject: bool) -> (Option<u64>, RequestPhase, Option<
         .control_send(&json!({
             "room": room.0.to_string(),
             "to": [agent.0.to_string()],
-            "text": "stamp after the transport returns"
+            "text": "stamp before native input"
         }))
         .unwrap();
     let request = RequestId(response["request_ids"][0].as_u64().unwrap());
@@ -2434,6 +2434,19 @@ fn deliver_with_stamp_probe(reject: bool) -> (Option<u64>, RequestPhase, Option<
         .unwrap()
         .latency
         .native_requested_at_ms;
+    let durable = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        durable
+            .request(request)
+            .unwrap()
+            .latency
+            .native_requested_at_ms,
+        after,
+        "the outcome must preserve or clear the stamp durably"
+    );
     let during = *during.lock().unwrap();
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -2441,16 +2454,16 @@ fn deliver_with_stamp_probe(reject: bool) -> (Option<u64>, RequestPhase, Option<
 }
 
 #[test]
-fn native_requested_is_journaled_after_the_transport_returns() {
+fn native_requested_is_durable_before_the_transport_and_preserved_after_confirmation() {
     let (during, phase, after) = deliver_with_stamp_probe(false);
     assert_eq!(phase, RequestPhase::Active);
-    assert_eq!(
-        during, None,
-        "the native request stamp is not durable until the transport returns"
-    );
     assert!(
-        after.is_some(),
-        "a completed transport still records native_requested"
+        during.is_some(),
+        "native I/O must start with a durable request stamp"
+    );
+    assert_eq!(
+        after, during,
+        "confirmation must preserve the pre-call boundary"
     );
 }
 
@@ -2491,26 +2504,16 @@ fn delivery_records_every_dispatch_subphase() {
         marks.boundary_at_ms.expect("boundary"),
         picked,
         marks.notice_at_ms.expect("notice"),
+        native,
         marks.save_at_ms.expect("save"),
         marks.diagnostics_at_ms.expect("diagnostics"),
         marks.method_at_ms.expect("method"),
-        native,
     ];
     assert!(
         stamps.windows(2).all(|pair| pair[0] <= pair[1]),
         "dispatch stamps must be ordered: {stamps:?}"
     );
     assert!(stamps.iter().all(|stamp| *stamp > 1_000_000));
-    let window = (stamps[4] - stamps[3])
-        + (stamps[5] - stamps[4])
-        + (stamps[6] - stamps[5])
-        + (stamps[7] - stamps[6])
-        + (stamps[8] - stamps[7]);
-    assert_eq!(
-        window,
-        native - picked,
-        "in-window sub-phases sum to dispatch with no residual"
-    );
     assert!(
         calls
             .lock()
@@ -2569,7 +2572,10 @@ fn delivery_failing_before_submit_leaves_later_dispatch_marks_unset() {
 fn rejected_native_attempt_does_not_keep_the_request_stamp() {
     let (during, phase, after) = deliver_with_stamp_probe(true);
     assert_eq!(phase, RequestPhase::Queued);
-    assert_eq!(during, None);
+    assert!(
+        during.is_some(),
+        "even a rejected call crosses the pre-call boundary"
+    );
     assert_eq!(
         after, None,
         "a rejected attempt clears native_requested before the outcome save"

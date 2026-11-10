@@ -15,6 +15,7 @@ mod exit_snapshot;
 mod expiry;
 mod first_message;
 mod launch_metrics;
+mod native_delivery;
 #[cfg(test)]
 #[path = "tests/operational_notice_retirement_test.rs"]
 mod operational_notice_retirement_tests;

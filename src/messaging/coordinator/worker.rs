@@ -23,7 +23,7 @@ mod kimi_settlement;
 mod restart_notice;
 mod restored_prompt;
 use codex_settlement::{recorded_codex_end, saved_rollouts};
-use control_reads::interrupts_delivery;
+use control_reads::{interrupts_delivery, native_input_barrier};
 use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 
 /// How often a tick moves settled history out of `state.json`.
@@ -53,6 +53,8 @@ pub(super) struct Worker {
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
     pub(super) transport: Box<dyn Transport>,
+    pub(super) submission_rechecks: BTreeSet<AgentId>,
+    pub(super) native_submissions: BTreeMap<AgentId, super::native_delivery::PendingSubmission>,
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
     /// UI command ids start at 1. Control commands set this to 0.
@@ -184,6 +186,8 @@ impl Worker {
             data_dir,
             _lease: lease,
             transport,
+            native_submissions: BTreeMap::new(),
+            submission_rechecks: BTreeSet::new(),
             revision: 0,
             last_command_id: 0,
             active_command_id: 0,
@@ -280,7 +284,7 @@ impl Worker {
     }
 
     /// Defers saves until [`Self::finish_batch`], which writes them once.
-    fn begin_batch(&mut self) {
+    pub(super) fn begin_batch(&mut self) {
         debug_assert!(self.batch.is_none(), "batches do not nest");
         self.batch = Some(SaveBatch::default());
     }
@@ -309,7 +313,7 @@ impl Worker {
     /// Writes the batch's changes once, then deletes the spool files they
     /// consumed. When the write fails, the state returns to where the batch
     /// began and every spool file stays, so nothing is acknowledged unsaved.
-    fn finish_batch(&mut self) -> Result<(), String> {
+    pub(super) fn finish_batch(&mut self) -> Result<(), String> {
         let Some(batch) = self.batch.take() else {
             return Ok(());
         };
@@ -399,6 +403,7 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
         snapshots: &Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
+        self.finish_native_submissions(true);
         self.fold_journal();
         self.last_command_id = id;
         if let Ok(mut shared) = snapshots.lock() {
@@ -421,18 +426,31 @@ impl Worker {
         let mut next_poll = std::time::Instant::now();
         let mut pending_commands = std::collections::VecDeque::new();
         let mut poll_overtakes = 0;
+        let mut observed_native = false;
         loop {
-            let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
+            let timeout = if self.native_submissions.is_empty() {
+                next_poll.saturating_duration_since(std::time::Instant::now())
+            } else {
+                Duration::from_millis(10)
+            };
             let received = next_command(&commands, &mut pending_commands, &mut poll_overtakes)
                 .map(Ok)
                 .unwrap_or_else(|| commands.recv_timeout(timeout));
             let busy = perf::COORDINATOR_LOOP.enter("command");
+            if received
+                .as_ref()
+                .is_ok_and(|(_, command)| native_input_barrier(command))
+            {
+                busy.stage("native_input_barrier");
+                self.finish_native_submissions(true);
+            }
             match received {
                 Ok((id, BusCommand::Shutdown)) => {
                     self.finish_shutdown(id, &events, &snapshots);
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.finish_native_submissions(true);
                     self.fold_journal();
                     break;
                 }
@@ -500,7 +518,16 @@ impl Worker {
             if let Err(error) = self.pump_feishu(&events, io::now_ms()) {
                 self.error = Some(error);
             }
+            self.finish_native_submissions(false);
             let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
+            if can_poll && observed_native && self.storage_pause.is_none() {
+                if let Err(error) = self.submit_eligible_while(|| {
+                    collect_delivery_commands(&commands, &mut pending_commands)
+                }) {
+                    self.error = Some(error);
+                }
+            }
+            let can_poll = can_poll && collect_delivery_commands(&commands, &mut pending_commands);
             if can_poll && std::time::Instant::now() >= next_poll {
                 if self.storage_pause.is_none() {
                     busy.stage("tick");
@@ -515,6 +542,7 @@ impl Worker {
                             self.error = Some(error);
                         }
                     }
+                    observed_native = self.poll_failures == 0;
                     #[cfg(test)]
                     self.observe_test_saves(None, "tick", saves_before);
                 }
@@ -577,6 +605,7 @@ impl Worker {
         else {
             return Ok(());
         };
+        self.submission_rechecks.clear();
         self.withdraw_restored_grok_prompts();
         // Every callback this tick applies is persisted by one write.
         perf::COORDINATOR_LOOP.relabel("tick.callbacks");
@@ -607,7 +636,7 @@ impl Worker {
     fn consume_all_callbacks(&mut self) -> Result<(), String> {
         let agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in agents {
-            if agent.deletion_pending {
+            if agent.deletion_pending || self.native_submissions.contains_key(&agent.id) {
                 continue;
             }
             if let Some(launch) = &agent.runtime_identity.launch_id {
@@ -630,6 +659,11 @@ impl Worker {
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
         for (agent, observed_at_ms) in agents {
+            // A native write still owns this recipient until its receipt.
+            // Other recipients must keep reconciling on the readiness tick.
+            if self.native_submissions.contains_key(&agent) {
+                continue;
+            }
             changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
             let current = state.agent(agent).and_then(|owner| owner.current_request);
             let rollout = self.codex_rollouts.get(&agent);

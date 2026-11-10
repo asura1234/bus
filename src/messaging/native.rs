@@ -16,25 +16,58 @@ pub(crate) struct TransportError {
     pub(crate) timestamps: Box<crate::protocol::api::schema::NativeSubmissionTimestamps>,
 }
 
-pub(crate) trait Transport: Send {
-    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError>;
+pub(crate) type NativeResult = Result<ResponseResult, TransportError>;
+
+/// A separate native connection; the coordinator retains mutation ownership.
+pub(crate) enum NativeCall {
+    Complete(Box<NativeResult>),
+    Pending(std::sync::mpsc::Receiver<NativeResult>),
 }
 
+pub(crate) trait Transport: Send {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError>;
+
+    fn submit(&mut self, method: Method) -> NativeCall {
+        NativeCall::Complete(Box::new(self.request(method)))
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct BusTransport {
     client: ApiClient,
-    next_id: u64,
+    next_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl BusTransport {
     pub(crate) fn new(target: ConnectionTarget) -> Self {
         Self {
             client: ApiClient::for_target(target),
-            next_id: 0,
+            next_id: Default::default(),
         }
     }
 }
 
 impl Transport for BusTransport {
+    fn submit(&mut self, method: Method) -> NativeCall {
+        let mut transport = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let suppressed = crate::utils::error_pipe::is_suppressed();
+        match std::thread::Builder::new()
+            .name("bus-native-submit".into())
+            .spawn(move || {
+                let _suppression = crate::utils::error_pipe::suppress(suppressed);
+                let _ = tx.send(transport.request(method));
+            }) {
+            Ok(_) => NativeCall::Pending(rx),
+            Err(error) => NativeCall::Complete(Box::new(Err(TransportError {
+                code: Some("native_submit_spawn_failed".into()),
+                message: error.to_string(),
+                definitely_rejected: true,
+                timestamps: Default::default(),
+            }))),
+        }
+    }
+
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         self.request_using(method, ApiClient::request_value_with_timeout)
     }
@@ -50,7 +83,10 @@ impl BusTransport {
             Duration,
         ) -> Result<serde_json::Value, ApiClientError>,
     ) -> Result<ResponseResult, TransportError> {
-        self.next_id += 1;
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let request = Request {
             id: format!(
                 "{}{}:{}",
@@ -60,7 +96,7 @@ impl BusTransport {
                     "bus:"
                 },
                 std::process::id(),
-                self.next_id
+                id
             ),
             method,
         };

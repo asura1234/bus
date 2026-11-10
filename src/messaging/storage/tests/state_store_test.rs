@@ -318,6 +318,7 @@ fn captured_draft_and_latency_metadata_replay_together_without_resubmitting() {
             room,
             request_id: request,
             queued_at_ms: Some(1_005),
+            eligible_at_ms: Some(1_008),
             native_requested_at_ms: Some(1_015),
             reply_delivered_at_ms: None,
         })
@@ -333,6 +334,7 @@ fn captured_draft_and_latency_metadata_replay_together_without_resubmitting() {
         let reloaded = JsonStore::new(path.clone()).load().unwrap().unwrap();
         assert_eq!(reloaded.requests().count(), 1);
         let delivered = reloaded.request(request).unwrap();
+        assert_eq!(delivered.latency.eligible_at_ms, Some(1_008));
         assert_eq!(delivered.prompt.text, "captured submission");
         assert_eq!(delivered.latency.accepted_at_ms, Some(1_000));
         assert_eq!(delivered.latency.queued_at_ms, Some(1_005));

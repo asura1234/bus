@@ -2,7 +2,7 @@
 use super::super::{launch, schema, Method, RequestId, ResponseResult, RoomAgent};
 use crate::messaging::native::TransportError;
 
-pub(super) fn native_response_timestamps(
+pub(in crate::messaging::coordinator) fn native_response_timestamps(
     response: &Result<ResponseResult, TransportError>,
 ) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
     match response {
@@ -12,7 +12,7 @@ pub(super) fn native_response_timestamps(
     }
 }
 
-pub(super) fn record_native_timestamps(
+pub(in crate::messaging::coordinator) fn record_native_timestamps(
     state: &mut crate::messaging::model::BusState,
     request: RequestId,
     timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,

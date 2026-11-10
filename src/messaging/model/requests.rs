@@ -439,10 +439,20 @@ impl BusState {
     /// it, and let the queue move on. Any text still in the composer is
     /// cleared by the next delivery.
     pub(crate) fn fail_unconfirmed_submissions(&mut self, now_ms: u64) -> Result<(), ModelError> {
+        self.fail_unconfirmed_submissions_if(now_ms, |_| true)
+    }
+
+    /// A still-running input operation retains its recipient's recovery ownership.
+    pub(crate) fn fail_unconfirmed_submissions_if(
+        &mut self,
+        now_ms: u64,
+        can_reconcile: impl Fn(AgentId) -> bool,
+    ) -> Result<(), ModelError> {
         let unconfirmed: Vec<_> = self
             .agents
             .keys()
             .filter_map(|agent| self.unbound_request(*agent))
+            .filter(|request| can_reconcile(request.agent_id))
             .filter(|request| request.phase == RequestPhase::Submitting)
             .filter(|request| {
                 self.recovery_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")

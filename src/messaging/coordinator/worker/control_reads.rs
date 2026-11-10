@@ -16,7 +16,29 @@ impl Worker {
         self.serve_control(call, events, snapshots);
         // Unchanged reads need no notification scan or copied UI state.
         // Due polls still run, so a follower flood cannot stop delivery.
-        read && self.revision == revision && self.error == error && Instant::now() < next_poll
+        read && self.native_submissions.is_empty()
+            && self.revision == revision
+            && self.error == error
+            && Instant::now() < next_poll
+    }
+}
+
+/// Preserve the old writer-before-revocation order without serializing sends
+/// to unrelated recipients. These controls can revoke, replace or edit input.
+pub(super) fn native_input_barrier(command: &BusCommand) -> bool {
+    match command {
+        BusCommand::DeleteAgent(_) | BusCommand::DeleteRoom(_) | BusCommand::Shutdown => true,
+        BusCommand::Control(call) => matches!(
+            call.request.method.as_str(),
+            "agent.interrupt"
+                | "agent.clear"
+                | "agent.resume"
+                | "agent.delete"
+                | "agent.press"
+                | "room.delete"
+                | "request.recover"
+        ),
+        _ => false,
     }
 }
 

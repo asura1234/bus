@@ -1,7 +1,10 @@
 //! Native Codex admission precedes all composer ownership and terminal writes.
 use crate::{
     protocol::api::schema::AgentInfo,
-    terminal::{pty::actor::InputCompletion, TerminalRuntime},
+    terminal::{
+        pty::actor::{InputCompletion, SharedSubmissionTimestamps},
+        TerminalRuntime,
+    },
 };
 use std::{io, sync::mpsc, time::Instant};
 
@@ -62,6 +65,13 @@ pub(super) fn queue(
         .unwrap_or_default();
     let message = message.to_owned();
     let (send, recv) = mpsc::channel();
+    let timestamps: SharedSubmissionTimestamps = Default::default();
+    let completion = InputCompletion::from(recv)
+        .with_timestamps(timestamps.clone())
+        .with_enter_delay_allowance(delay);
+    completion.update_timestamps(|timestamps| {
+        timestamps.writer_queued_at_ms = Some(crate::utils::time::now_ms());
+    });
     std::thread::spawn(move || {
         let result = submit(
             native,
@@ -72,12 +82,20 @@ pub(super) fn queue(
             deadline,
             expected_turn.as_deref(),
             typed,
+            &timestamps,
         );
+        if result.is_ok() {
+            // RPC success confirms native admission, without implying PTY bytes
+            // or model attention. Typed fallback retains its earlier receipt.
+            timestamps
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .native_confirmed_at_ms
+                .get_or_insert(crate::utils::time::now_ms());
+        }
         let _ = send.send(result);
     });
-    Ok(Some(
-        InputCompletion::from(recv).with_enter_delay_allowance(delay),
-    ))
+    Ok(Some(completion))
 }
 
 type TypedSubmission = Box<dyn FnOnce() -> io::Result<InputCompletion> + Send>;
@@ -91,6 +109,7 @@ fn submit(
     deadline: Instant,
     expected_turn: Option<&str>,
     typed: Option<TypedSubmission>,
+    timestamps: &SharedSubmissionTimestamps,
 ) -> io::Result<()> {
     if Instant::now() >= deadline {
         Err(io::Error::new(
@@ -124,10 +143,21 @@ fn submit(
                     },
                     |submit| {
                         let completion = submit()?;
-                        completion.wait_for_api(
+                        let result = completion.wait_for_api(
                             (deadline + completion.enter_delay_allowance())
                                 .saturating_duration_since(Instant::now()),
-                        )
+                        );
+                        let mut submitted = completion.submission_timestamps();
+                        let mut recorded =
+                            timestamps.lock().unwrap_or_else(|error| error.into_inner());
+                        submitted.server_accepted_at_ms = recorded
+                            .server_accepted_at_ms
+                            .or(submitted.server_accepted_at_ms);
+                        submitted.writer_queued_at_ms = recorded
+                            .writer_queued_at_ms
+                            .or(submitted.writer_queued_at_ms);
+                        *recorded = submitted;
+                        result
                     },
                 )
             })

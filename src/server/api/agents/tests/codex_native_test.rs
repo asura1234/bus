@@ -41,6 +41,11 @@ async fn codex_native_lost_ack_does_not_fall_back_to_typing() {
         .recv_timeout(Duration::from_millis(500))
         .expect("uncertain native result must settle without a typed retry");
     assert!(value.contains("agent_prompt_failed"), "{value}");
+    let response: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert!(
+        response["error"]["timestamps"]["native_confirmed_at_ms"].is_null(),
+        "a lost acknowledgement must not become native confirmation: {value}"
+    );
     assert!(writes.try_recv().is_err());
     let calls = server.join().unwrap();
     assert_eq!(
@@ -723,4 +728,100 @@ mod interrupt_completion_fact {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn codex_native_success_confirms_rpc_without_fabricating_terminal_write_stamps() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "draft");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let (path, server) = test_support::server_for("session", false, false);
+    crate::server::terminals::native_input::test_bind(
+        app.lookup_runtime_sender(0, pane).unwrap(),
+        path,
+    );
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    server.join().unwrap();
+    assert!(response.contains("agent_prompted"), "{response}");
+    assert!(writes.try_recv().is_err());
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let stamps = &value["result"]["timestamps"];
+    assert!(stamps["native_confirmed_at_ms"].is_u64(), "{response}");
+    assert!(stamps["server_accepted_at_ms"].as_u64() <= stamps["native_confirmed_at_ms"].as_u64());
+    for field in [
+        "paste_started_at_ms",
+        "text_written_at_ms",
+        "enter_sent_at_ms",
+        "enter_written_at_ms",
+    ] {
+        assert!(
+            stamps[field].is_null(),
+            "RPC must not fabricate {field}: {response}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn codex_native_typed_fallback_keeps_its_actual_submission_timestamps() {
+    use crate::protocol::api::schema::NativeSubmissionTimestamps;
+    use crate::terminal::runtime::native_input::{
+        NativeInput, NativeInterruptCompletion, NativePrompt,
+    };
+    use std::sync::{mpsc, Arc, Mutex};
+    struct Fallback;
+    impl NativeInput for Fallback {
+        fn has_session(&self) -> bool {
+            true
+        }
+        fn prompt(&self, _: NativePrompt<'_>) -> Option<std::io::Result<()>> {
+            None
+        }
+        fn interrupt(
+            &self,
+            _: &str,
+            _: std::time::Instant,
+        ) -> Option<std::io::Result<NativeInterruptCompletion>> {
+            None
+        }
+    }
+    let (app, _, _) = provider_fixture(AgentKind::Codex, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let agent = app.agent_info(0, pane).unwrap();
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.bind_native_input(Arc::new(Fallback));
+    let completion = crate::server::api::agents::codex_native::queue(
+        runtime,
+        &agent,
+        "fallback",
+        false,
+        None,
+        "fallback-stamps",
+        std::time::Instant::now() + WAIT,
+        false,
+        || {
+            Ok(Box::new(|| {
+                let (send, recv) = mpsc::channel();
+                send.send(Ok(())).unwrap();
+                Ok(
+                    crate::terminal::pty::actor::InputCompletion::from(recv).with_timestamps(
+                        Arc::new(Mutex::new(NativeSubmissionTimestamps {
+                            paste_started_at_ms: Some(21),
+                            text_written_at_ms: Some(22),
+                            enter_written_at_ms: Some(30),
+                            native_confirmed_at_ms: Some(31),
+                            ..Default::default()
+                        })),
+                    ),
+                )
+            }))
+        },
+        Duration::ZERO,
+    )
+    .unwrap()
+    .unwrap();
+    completion.wait_for_api(WAIT).unwrap();
+    let stamps = completion.submission_timestamps();
+    assert_eq!(stamps.paste_started_at_ms, Some(21));
+    assert_eq!(stamps.text_written_at_ms, Some(22));
+    assert_eq!(stamps.enter_written_at_ms, Some(30));
+    assert_eq!(stamps.native_confirmed_at_ms, Some(31));
 }
