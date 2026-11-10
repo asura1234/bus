@@ -336,3 +336,81 @@ fn shutdown_drains_the_native_write_before_releasing_the_lease() {
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+struct RevocationNative {
+    deferred: DeferredNative,
+    mutation: mpsc::Sender<()>,
+}
+impl Transport for RevocationNative {
+    fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
+        self.mutation.send(()).unwrap();
+        Err(TransportError {
+            code: Some("test_mutation_rejected".into()),
+            message: "No terminal exists in this fixture".into(),
+            definitely_rejected: true,
+            timestamps: Default::default(),
+        })
+    }
+    fn submit(&mut self, method: Method) -> crate::messaging::native::NativeCall {
+        self.deferred.submit(method)
+    }
+}
+
+#[test]
+fn an_interrupt_cannot_overtake_a_pending_native_write() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.dev_enabled = true;
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 2)
+        .unwrap();
+    queue(&mut worker, room, agent, "owned write before stop");
+    let deferred = DeferredNative(Default::default());
+    let (mutation, observed_mutation) = mpsc::channel();
+    worker.transport = Box::new(RevocationNative {
+        deferred: deferred.clone(),
+        mutation,
+    });
+    worker.submit_ready().unwrap();
+    let (reply, response) = mpsc::sync_channel(1);
+    let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let (events, _) = mpsc::channel();
+    let (commands, received) = mpsc::channel();
+    commands
+        .send((
+            1,
+            BusCommand::Control(crate::messaging::control::server::ControlCall {
+                request: crate::messaging::control::Request {
+                    id: "ordered-stop".into(),
+                    method: "agent.interrupt".into(),
+                    params: json!({"agent":agent.0.to_string()}),
+                },
+                reply,
+                deadline: None,
+                _poll_permit: None,
+                form_generation: None,
+            }),
+        ))
+        .unwrap();
+    let thread = std::thread::spawn(move || worker.run(received, events, snapshots));
+    let overtook = observed_mutation
+        .recv_timeout(Duration::from_millis(200))
+        .is_ok();
+    deferred.0.lock().unwrap()[0].1.send(confirmed()).unwrap();
+    response.recv_timeout(Duration::from_secs(2)).unwrap();
+    let eventually_sent = overtook
+        || observed_mutation
+            .recv_timeout(Duration::from_secs(2))
+            .is_ok();
+    commands.send((2, BusCommand::Shutdown)).unwrap();
+    thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        eventually_sent,
+        "the stop must eventually reach native admission"
+    );
+    assert!(
+        !overtook,
+        "the stop RPC overtook a native write that could still land afterward"
+    );
+}

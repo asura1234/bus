@@ -23,7 +23,7 @@ mod kimi_settlement;
 mod restart_notice;
 mod restored_prompt;
 use codex_settlement::{recorded_codex_end, saved_rollouts};
-use control_reads::interrupts_delivery;
+use control_reads::{interrupts_delivery, native_input_barrier};
 use kimi_settlement::{recorded_kimi_end, state_provider_is_kimi};
 
 /// How often a tick moves settled history out of `state.json`.
@@ -437,6 +437,13 @@ impl Worker {
                 .map(Ok)
                 .unwrap_or_else(|| commands.recv_timeout(timeout));
             let busy = perf::COORDINATOR_LOOP.enter("command");
+            if received
+                .as_ref()
+                .is_ok_and(|(_, command)| native_input_barrier(command))
+            {
+                busy.stage("native_input_barrier");
+                self.finish_native_submissions(true);
+            }
             match received {
                 Ok((id, BusCommand::Shutdown)) => {
                     self.finish_shutdown(id, &events, &snapshots);

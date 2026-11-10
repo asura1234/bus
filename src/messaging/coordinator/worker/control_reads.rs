@@ -23,6 +23,25 @@ impl Worker {
     }
 }
 
+/// Preserve the old writer-before-revocation order without serializing sends
+/// to unrelated recipients. These controls can revoke, replace or edit input.
+pub(super) fn native_input_barrier(command: &BusCommand) -> bool {
+    match command {
+        BusCommand::DeleteAgent(_) | BusCommand::DeleteRoom(_) | BusCommand::Shutdown => true,
+        BusCommand::Control(call) => matches!(
+            call.request.method.as_str(),
+            "agent.interrupt"
+                | "agent.clear"
+                | "agent.resume"
+                | "agent.delete"
+                | "agent.press"
+                | "room.delete"
+                | "request.recover"
+        ),
+        _ => false,
+    }
+}
+
 pub(super) fn interrupts_delivery(command: &BusCommand) -> bool {
     match command {
         BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
