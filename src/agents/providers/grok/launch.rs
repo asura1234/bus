@@ -129,7 +129,7 @@ fn driver_fixture(path: &Path) -> Result<bool, String> {
         let same = path
             .canonicalize()
             .ok()
-            .zip(std::env::current_exe().ok())
+            .zip(crate::platform::fs::running_executable().ok())
             .is_some_and(|(alias, binary)| alias == binary);
         return if same {
             Ok(true)

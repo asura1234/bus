@@ -3,7 +3,7 @@ use portable_pty::CommandBuilder;
 use std::{io, path::Path};
 
 pub(crate) fn prepare_bus_cli(data_dir: &Path, executable: &Path) -> io::Result<()> {
-    let directory = data_dir.join("cli-bin");
+    let directory = crate::platform::fs::bus_cli_directory(data_dir)?;
     crate::platform::fs::private_dir(&directory)?;
     crate::platform::fs::refresh_executable_alias(
         &directory.join(format!("bus{}", std::env::consts::EXE_SUFFIX)),
@@ -18,7 +18,7 @@ pub(super) fn apply_bus_cli_env(
 ) -> io::Result<()> {
     // Expose only bus. Its installation directory may also contain provider
     // commands or user tools whose PATH priority must remain unchanged.
-    let directory = data_dir.join("cli-bin");
+    let directory = crate::platform::fs::bus_cli_directory(data_dir)?;
     let inherited = cmd.get_env("PATH").map(std::ffi::OsStr::to_os_string);
     let paths = std::iter::once(directory.to_path_buf()).chain(
         inherited
@@ -40,7 +40,7 @@ pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) -> io::Result<()> {
     );
     apply_bus_cli_env(
         cmd,
-        &std::env::current_exe()?,
+        &crate::platform::fs::running_executable()?,
         &crate::utils::paths::data_dir(),
     )?;
     cmd.env(

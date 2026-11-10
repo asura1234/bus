@@ -162,7 +162,7 @@ impl Server {
 
 /// Runs off the UI thread. The child CLI owns/reuses the same per-session service.
 pub(crate) fn open_in_browser(root: &Path) -> io::Result<()> {
-    let mut child = Command::new(std::env::current_exe()?)
+    let mut child = Command::new(crate::platform::fs::running_executable()?)
         .args(["--dev", "dashboard"])
         .env("BUS_DATA_DIR", root)
         .env_remove("BUS_SESSION_ID")

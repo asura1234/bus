@@ -196,7 +196,7 @@ fn host_free_bytes(root: &Path) -> Result<u64, String> {
 }
 
 fn spawn_helper(plan: &HandoffPlan) -> Result<u32, String> {
-    let exe = std::env::current_exe()
+    let exe = crate::platform::fs::running_executable()
         .map_err(|error| format!("could not find this bus binary: {error}"))?;
     let mut command = Command::new(exe);
     command

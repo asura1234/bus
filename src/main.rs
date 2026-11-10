@@ -27,6 +27,10 @@ where
 }
 
 fn main() -> io::Result<()> {
+    #[cfg(windows)]
+    if let Some(status) = platform::fs::forward_cli_alias()? {
+        std::process::exit(status.code().unwrap_or(1));
+    }
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
         Err(err) => {

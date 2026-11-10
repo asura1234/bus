@@ -275,7 +275,7 @@ fn build_json(root: &std::path::Path) -> Value {
     json!({
         "client": {
             "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-            "binary": std::env::current_exe().ok(),
+            "binary": crate::platform::fs::running_executable().ok(),
             "sha": env!("BUS_BUILD_SHA"),
         },
         "server": server_build_json(root),

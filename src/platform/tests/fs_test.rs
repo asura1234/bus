@@ -204,3 +204,104 @@ fn links_are_judged_by_what_they_point_at() {
     assert!(!launches_code(&alias), "a document through a symlink opens");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn bus_cli_alias_refresh_from_its_own_path_keeps_the_executable_reachable() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-alias-self-refresh");
+    let real = root.join("real/bus");
+    let alias = root.join("cli-bin/bus");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+    std::fs::write(&real, b"image").unwrap();
+    crate::platform::fs::refresh_executable_alias(&alias, &real).unwrap();
+    // A CLI/server invoked through the alias can report this path as its image.
+    let _ = crate::platform::fs::refresh_executable_alias(&alias, &alias);
+    assert!(
+        std::fs::canonicalize(&alias).is_ok(),
+        "alias refresh must not publish a self-loop"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bus_cli_alias_refuses_images_inside_its_directory() {
+    let root = temp_dir("alias-containment");
+    let directory = root.join("cli-bin");
+    create_private_directory(&directory).unwrap();
+    let inside = directory.join("another-image");
+    std::fs::write(&inside, b"image").unwrap();
+    let alias = directory.join(format!("bus{}", std::env::consts::EXE_SUFFIX));
+    assert!(refresh_executable_alias(&alias, &inside).is_err());
+    assert!(!alias.exists());
+    assert_eq!(std::fs::read(&inside).unwrap(), b"image");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bus_cli_directory_is_absolute_before_panes_change_working_directory() {
+    let directory = bus_cli_directory(Path::new("relative-session")).unwrap();
+    assert!(directory.is_absolute());
+    assert!(directory.starts_with(
+        std::env::current_dir()
+            .unwrap()
+            .join("relative-session/cli-bin")
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn native_bus_alias_forwards_without_replacing_its_running_image() {
+    const CHILD: &str = "TEST_CLI_ALIAS_CHILD_ROOT";
+    if let Some(root) = std::env::var_os(CHILD) {
+        if let Some(status) = forward_cli_alias().unwrap() {
+            assert!(status.success());
+            return;
+        }
+        let root = PathBuf::from(root);
+        let origin = running_executable().unwrap();
+        assert_eq!(
+            origin,
+            std::env::current_exe().unwrap().canonicalize().unwrap()
+        );
+        let next = bus_cli_directory(&root).unwrap();
+        private_dir(&next).unwrap();
+        refresh_executable_alias(&next.join("bus.exe"), &origin).unwrap();
+        std::fs::write(
+            root.join("child-origin"),
+            origin
+                .as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(next, root.join("cli-bin"));
+        return;
+    }
+    use std::os::windows::ffi::OsStrExt;
+    let root = temp_dir("native-cli-origin");
+    let directory = bus_cli_directory(&root).unwrap();
+    private_dir(&directory).unwrap();
+    let alias = directory.join("bus.exe");
+    let origin = running_executable().unwrap();
+    refresh_executable_alias(&alias, &origin).unwrap();
+    assert_eq!(resolve_running_executable(&alias).unwrap(), origin);
+    let status = std::process::Command::new(&alias)
+        .args([
+            "--exact",
+            "platform::fs::tests::native_bus_alias_forwards_without_replacing_its_running_image",
+            "--nocapture",
+        ])
+        .env(CHILD, &root)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "alias-started server must not replace its running image"
+    );
+    assert!(root.join("child-origin").exists());
+    std::fs::write(directory.join(".bus-origin"), b"odd").unwrap();
+    assert!(resolve_running_executable(&alias).is_err());
+    std::fs::remove_dir_all(root).unwrap();
+}

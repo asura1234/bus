@@ -527,7 +527,8 @@ fn native_pane_defaults_disable_claude_updates_and_keep_explicit_settings() {
 #[test]
 fn pane_launch_env_adds_private_bus_directory_to_effective_path() {
     let executable = std::env::current_exe().unwrap();
-    let directory = crate::utils::paths::data_dir().join("cli-bin");
+    let directory =
+        crate::platform::fs::bus_cli_directory(&crate::utils::paths::data_dir()).unwrap();
     let inherited = std::env::join_paths([Path::new("/inherited/bin")]).unwrap();
     let override_path =
         std::env::join_paths([Path::new("/provider/bin"), Path::new("/user/bin")]).unwrap();
@@ -568,7 +569,7 @@ fn bus_cli_path_keeps_missing_empty_and_existing_entries() {
     let directory = crate::utils::test_temp::unique_temp_path("Bus path with spaces");
     let executable = directory.join("bus");
     let data = directory.join("session");
-    let alias = data.join("cli-bin");
+    let alias = crate::platform::fs::bus_cli_directory(&data).unwrap();
     for original in [
         None,
         Some(std::ffi::OsString::new()),
@@ -647,7 +648,10 @@ fn bus_cli_path_preserves_non_utf8_directories() {
         .unwrap();
     assert_eq!(
         std::env::split_paths(cmd.get_env("PATH").unwrap()).collect::<Vec<_>>(),
-        [data.join("cli-bin"), inherited]
+        [
+            crate::platform::fs::bus_cli_directory(&data).unwrap(),
+            inherited
+        ]
     );
 }
 

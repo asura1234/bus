@@ -6,7 +6,7 @@ use std::process::Command;
 
 /// `cargo build` the checkout above `current_exe`, then return the fresh binary.
 pub(super) fn default_source_build() -> io::Result<PathBuf> {
-    let exe = std::env::current_exe()
+    let exe = crate::platform::fs::running_executable()
         .map_err(|error| io::Error::other(format!("could not find this bus binary: {error}")))?;
     build_checkout(&exe, cfg!(feature = "dev-tools"))
 }
@@ -258,5 +258,31 @@ mod tests {
         std::fs::remove_dir_all(named).unwrap();
         std::fs::remove_dir_all(invalid).unwrap();
         std::fs::remove_dir_all(no_auto).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn source_restart_resolves_the_checkout_through_a_bus_cli_alias() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-alias-checkout");
+        let checkout = root.join("source checkout");
+        let image = checkout.join("target/debug/bus");
+        let directory = root.join("session/cli-bin");
+        std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(checkout.join("src")).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(&image, b"image").unwrap();
+        std::fs::write(checkout.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            checkout.join("Cargo.toml"),
+            "[package]\nname = \"bus\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let alias = directory.join("bus");
+        crate::platform::fs::refresh_executable_alias(&alias, &image).unwrap();
+        let resolved = crate::platform::fs::resolve_running_executable(&alias).unwrap();
+        assert_eq!(
+            source_checkout(&resolved).unwrap(),
+            checkout.canonicalize().unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

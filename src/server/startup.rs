@@ -59,7 +59,7 @@ pub fn run_server(
     // Only the server that owns this session may publish its CLI alias.
     crate::terminal::runtime::prepare_bus_cli(
         &crate::utils::paths::data_dir(),
-        &std::env::current_exe()?,
+        &crate::platform::fs::running_executable()?,
     )
     .map_err(startup_failed)?;
 

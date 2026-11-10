@@ -2,7 +2,7 @@ use crate::platform::windows::process::peb::command_line_to_argv;
 use std::path::PathBuf;
 
 pub(crate) fn remote_reattach_program(program: &str) -> String {
-    let path = std::env::current_exe()
+    let path = crate::platform::fs::running_executable()
         .ok()
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| PathBuf::from(program));

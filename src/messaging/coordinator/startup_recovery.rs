@@ -108,7 +108,7 @@ impl Worker {
             .as_deref()
             .ok_or("Saved provider launch identity is missing; no retry was sent")?;
         let hooks = crate::agents::providers::hook_json::HookContext {
-            binary: std::env::current_exe().map_err(|e| e.to_string())?,
+            binary: crate::platform::fs::running_executable().map_err(|e| e.to_string())?,
             spool: self.data_dir.join("callbacks").join(launch_id),
             launch_id: launch_id.into(),
         };

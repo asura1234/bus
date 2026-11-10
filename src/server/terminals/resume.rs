@@ -53,7 +53,8 @@ fn for_native_resume(
     {
         return Ok(LaunchExtras::default());
     }
-    let binary = std::env::current_exe().map_err(|_| "Bus resume executable unavailable")?;
+    let binary = crate::platform::fs::running_executable()
+        .map_err(|_| "Bus resume executable unavailable")?;
     // Project lookup is a native-resume operation, never a rendering read.
     let project = std::process::Command::new("git")
         .arg("-C")

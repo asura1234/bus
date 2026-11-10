@@ -231,7 +231,7 @@ impl Worker {
     /// Codex hashes the command string, so the callback path is a data-dir
     /// bridge. Consent must inspect that same path, or a trusted set looks new.
     fn hook_callback_binary(&self, provider: Provider) -> Result<std::path::PathBuf, String> {
-        let current = std::env::current_exe().map_err(|e| e.to_string())?;
+        let current = crate::platform::fs::running_executable().map_err(|e| e.to_string())?;
         if provider == Provider::Codex {
             crate::agents::providers::hook_json::codex_callback_binary(&self.data_dir, &current)
         } else {

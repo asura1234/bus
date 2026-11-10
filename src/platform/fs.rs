@@ -38,33 +38,129 @@ pub(crate) fn refresh_executable_alias(path: &Path, executable: &Path) -> io::Re
             "Bus executable must be absolute",
         ));
     }
+    let executable = resolve_running_executable(executable)?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Bus CLI alias has no directory"))?
+        .canonicalize()?;
+    if executable.starts_with(&directory) {
+        return Err(io::Error::other(
+            "Bus CLI alias must target an executable outside its directory",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let exists = match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => true,
+            Ok(_) => return Err(io::Error::other("Bus CLI alias is not a regular image")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        let origin = executable
+            .as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        guarded_atomic_write(&directory.join(".bus-origin"), &origin)?;
+        // The native copy is an immutable bootstrap, forwarding to this origin
+        // before product dispatch. Never replace an image another CLI is using.
+        if exists {
+            return Ok(());
+        }
+    }
+    static NEXT_ALIAS: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_ALIAS.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("alias-{}-{sequence}", std::process::id()));
     #[cfg(unix)]
     {
         if std::fs::read_link(path).is_ok_and(|target| target == executable) {
             return Ok(());
         }
-        static NEXT_ALIAS: AtomicU64 = AtomicU64::new(1);
-        let sequence = NEXT_ALIAS.fetch_add(1, Ordering::Relaxed);
-        let temp = path.with_extension(format!("alias-{}-{sequence}", std::process::id()));
-        std::os::unix::fs::symlink(executable, &temp)?;
-        if let Err(error) = replace_file(&temp, path) {
-            let _ = std::fs::remove_file(&temp);
-            return Err(error);
-        }
-        Ok(())
+        std::os::unix::fs::symlink(&executable, &temp)?;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // A native image works in PowerShell, cmd and provider child shells
-        // without symlink privileges or script-extension lookup rules.
-        let mut source = File::open(executable)?;
-        atomic_write_with_checkpoint(
-            path,
-            |target| io::copy(&mut source, target).map(|_| ()),
-            |_| Ok(()),
-        )
-        .map_err(|error| error.source)
+        // An independent native image supports every shell and source volume.
+        std::fs::copy(&executable, &temp)?;
     }
+    if let Err(error) = replace_file(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// An alias is a command entry point, not the image to use for another launch.
+pub(crate) fn running_executable() -> io::Result<PathBuf> {
+    resolve_running_executable(&std::env::current_exe()?)
+}
+
+pub(crate) fn resolve_running_executable(image: &Path) -> io::Result<PathBuf> {
+    let image = image.canonicalize()?;
+    #[cfg(windows)]
+    if let Some(origin) = alias_origin(&image)? {
+        return Ok(origin);
+    }
+    Ok(image)
+}
+
+pub(crate) fn bus_cli_directory(data_dir: &Path) -> io::Result<PathBuf> {
+    std::path::absolute(data_dir).map(|directory| directory.join("cli-bin"))
+}
+
+/// The Windows alias retains a small, stable bootstrap entry point. Running
+/// the real image preserves source discovery, build identity and restart paths.
+#[cfg(windows)]
+pub(crate) fn forward_cli_alias() -> io::Result<Option<std::process::ExitStatus>> {
+    let image = std::env::current_exe()?.canonicalize()?;
+    let Some(origin) = alias_origin(&image)? else {
+        return Ok(None);
+    };
+    std::process::Command::new(origin)
+        .args(std::env::args_os().skip(1))
+        .status()
+        .map(Some)
+}
+
+#[cfg(windows)]
+fn alias_origin(image: &Path) -> io::Result<Option<PathBuf>> {
+    use std::os::windows::ffi::OsStringExt;
+    let Some(directory) = image.parent() else {
+        return Ok(None);
+    };
+    let named = |path: &Path, name: &str| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(name))
+    };
+    if !named(directory, "cli-bin") || !named(image, "bus.exe") {
+        return Ok(None);
+    }
+    let bytes = match std::fs::read(directory.join(".bus-origin")) {
+        Ok(bytes) => bytes,
+        // A normal installation may happen to use this directory layout.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let chunks = bytes.chunks_exact(2);
+    if bytes.is_empty() || !chunks.remainder().is_empty() {
+        return Err(io::Error::other("Bus CLI origin is invalid"));
+    }
+    let units = chunks
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    let origin = PathBuf::from(std::ffi::OsString::from_wide(&units));
+    if !origin.is_absolute() {
+        return Err(io::Error::other("Bus CLI origin must be absolute"));
+    }
+    let origin = origin.canonicalize()?;
+    if origin.starts_with(directory) {
+        return Err(io::Error::other(
+            "Bus CLI origin points into its alias directory",
+        ));
+    }
+    Ok(Some(origin))
 }
 
 /// Extensions whose default "open" runs code, or follows a shortcut that may

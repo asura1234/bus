@@ -163,7 +163,7 @@ pub(crate) fn codex_resume_hook_binary(hooks: &HookContext) -> Result<PathBuf, S
     let Some(data_dir) = callbacks.parent() else {
         return Ok(hooks.binary.clone());
     };
-    match std::env::current_exe() {
+    match crate::platform::fs::running_executable() {
         Ok(current) if current == hooks.binary => codex_callback_binary(data_dir, &current),
         _ => Ok(hooks.binary.clone()),
     }

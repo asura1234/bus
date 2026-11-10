@@ -14,7 +14,7 @@ fn record_ready_inner(server: Option<&BuildStamp>) -> Result<(), String> {
     if server.is_none_or(|server| server.sha != sha) {
         return Err("TUI and server build SHAs differ; quit and resume the selected binary".into());
     }
-    let binary = std::env::current_exe().map_err(|error| error.to_string())?;
+    let binary = crate::platform::fs::running_executable().map_err(|error| error.to_string())?;
     let directory = restart_record::restarts_dir(&root).join("binaries");
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let backup_binary = directory.join(sha);

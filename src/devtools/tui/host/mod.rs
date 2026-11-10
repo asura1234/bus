@@ -127,7 +127,7 @@ fn start(
     owner: std::fs::File,
     trace: Option<Arc<Mutex<Trace>>>,
 ) -> Result<Host, String> {
-    let binary = std::env::current_exe().map_err(|e| e.to_string())?;
+    let binary = crate::platform::fs::running_executable().map_err(|e| e.to_string())?;
     let env = scratch_env(paths, &options.token, &super::session::inherited_env());
     super::fake_agents::install(&paths.bin_dir(), &binary).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&options.run_dir).map_err(|e| e.to_string())?;
