@@ -311,7 +311,13 @@ impl Worker {
             crate::messaging::storage::io::now_ms(),
         )?;
         self.save(state)?;
-        Ok(json!({"message_id":message,"request_ids":[request],"stage":"replied"}))
+        Ok(json!({
+            "message_id":message,
+            "request_ids":[request],
+            "stage":"replied",
+            "requester_turn_queued":false,
+            "notice":"No requester turn was queued. If the requester must act, use a fresh normal send: bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT."
+        }))
     }
 
     /// Resolve the same validated identity for both the mutation and its error

@@ -341,16 +341,20 @@ sbus agent add --room provider-claude --name second-peer --provider PROVIDER \
 | [ ] Agent → user | Correct room contains exactly one post; long answer has both boundary markers once |
 
 Initiate each route by sending a task **to the real source agent**, not by
-running `sbus send --as SOURCE` yourself. Ask the source to include the foreground
-`bus send --reply-to` instruction in its recipient's task: a native final alone
-will not supply the reply or wake required by these cells. For example:
+running `sbus send --as SOURCE` yourself. Ask the source to name itself and the
+result room in its recipient's task, and
+require a fresh normal `bus send --room ROOM --as WORKER --to SOURCE --text RESULT`.
+A native final is not captured as a reply. An explicit `bus send --reply-to` stores
+an answer and settles the original request but never queues a requester turn; its
+receipt reports `requester_turn_queued:false`. Test explicit settlement separately
+from the normal result message that starts the source's next turn. For example:
 
 ```sh
-sbus send --room master --to new-orch --text 'Send codex-worker a task asking it to send CODEX_R1 with a foreground bus send --reply-to using its delivered message ID and own agent ID. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
+sbus send --room master --to new-orch --text 'Send codex-worker a task asking it to report CODEX_R1 with a fresh normal bus send --room provider-matrix --as codex-worker --to new-orch --text CODEX_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
 sbus message status TASK_MESSAGE_ID
 sbus history --room provider-matrix --limit 100
 sbus history --room master --limit 100
-sbus send --room master --to claude-orch --text 'Send second-peer a task asking it to send CLAUDE_R1 with a foreground bus send --reply-to using its delivered message ID and own agent ID. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
+sbus send --room master --to claude-orch --text 'Send second-peer a task asking it to report CLAUDE_R1 with a fresh normal bus send --room provider-claude --as second-peer --to claude-orch --text CLAUDE_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
 sbus message status TASK_MESSAGE_ID
 sbus history --room provider-claude --limit 100
 sbus history --room master --limit 100
@@ -358,10 +362,10 @@ sbus history --room master --limit 100
 
 For worker routes, ask the source worker to run its own `bus send --room ROOM
 --as ITS_NAME --to TARGET --text 'Repeat MARKER'` and report the recipient's
-actual result. Ask the new provider to quote what it heard. Use the provider's
-wake/wait protocol: in particular, a waiter may consume a wake. Record the
-source's task, its authored send and ID in history, target `message status`,
-target reply, and the source's later turn acknowledging that reply. A receipt
+actual result through a fresh normal send back to the source. Ask the new
+provider to quote what it heard. Record the source's task, its authored send and
+ID in history, target `message status`, the normal result message and its ID,
+and the source's later turn acknowledging that result. A receipt
 or an attributed send by the tester proves neither model initiation nor wake.
 Also send a long paste that clips in a narrow composer. Prove the complete
 owned text was submitted, not a visible suffix, and that an unrelated or

@@ -60,7 +60,7 @@ Developer steering is unchanged. If a message would be held and you need an imme
 run `bus agent interrupt AGENT`, then send the new instruction; otherwise waiting is fine.
 Interrupt stops in-flight builds, Git operations and device runs; use it only to change course,
 never just to close a request. See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
-Explicit replies complete individual requests without ending the turn; the final answers only outstanding group requests.
+Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests without capturing its final text as a reply.
 
 A reply lands in the message's room, equally for developer and agent senders. A turn no message started
 posts in the orchestrator's work room. A captured Stop answer ends matching requests immediately,
@@ -115,6 +115,9 @@ wait on the shared message ID; inspect each request separately. Use `all` only
 for intentional room broadcasts. A worker's ordinary messages use `--as`.
 If you want an answer, say in the message whom to reply to and in which room (for example: report to @orchestrator in #build when complete). To settle the original request before the turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check success before claiming that settlement. If the target agent no longer exists on Bus when you reply, ignore it. Do not retry and do not treat it as an error.
 See `bus send --help` for first-answer conflicts and uncertain retry handling.
+`--reply-to` stores the answer but queues no requester turn (`requester_turn_queued:false`).
+If the requester must act, deliver the result with a fresh normal
+`bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT` instead.
 
 ### Async waits and settlement
 

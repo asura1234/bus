@@ -384,6 +384,9 @@ delivery. If the reply fails, check the existing answer with bus message status
 MESSAGE before resending. Identical text is a no-op; an uncorrelated send never
 completes the original request.
 Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
+  --reply-to also returns requester_turn_queued:false and a notice: no requester
+  turn was queued. If the requester must act, use a fresh normal send:
+  bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT.
   --async instead returns final message status (see message status --help), plus
   message_id and send_receipt (the original receipt). Status has complete, prompt,
   files, waiting_on_dialog and per-agent requests with request_id, stage, reason,
@@ -439,10 +442,10 @@ and the queue advances. Raw text/files remain queryable after restart.
 If you want an answer, say whom to reply to and in which room. If that agent no
 longer exists on Bus when you reply, ignore it; do not retry and do not treat it
 as an error. Bus does not forward a turn final as "Reply to message N".
-An explicit or inferred agent author async waiter renews a 3s lease deferring its reply wake
-(and orchestrator outcome wakes); after stdout flush only printed reply/event_acks
-are acknowledged. Killed waiters lose the lease; anonymous waits/status never
-suppress delivery.
+An explicit or inferred agent author async waiter renews a 3s lease deferring its
+orchestrator outcome wakes; after stdout flush only printed event_acks are
+acknowledged. Killed waiters lose the lease; anonymous waits/status never
+suppress outcome delivery. Explicit replies never queue a requester turn.
 
 Errors: recipient_deleted means that agent no longer exists and the message was
 not sent; name a live recipient. request_already_replied means different text
@@ -507,9 +510,10 @@ reply_not_captured fails a bounded wait and is accepted by an async wait.
 Interrupt and provider-error abandonment fail both. Result is the full last
 status, including raw Markdown replies/files and per-recipient progress.
 --as owning author renews a 3s waiter lease and acknowledges only printed
-completed replies/event_acks after stdout flush, deferring duplicate wakes while
-alive. Anonymous waits and message status never suppress delivery. Killing the
+event_acks after stdout flush, deferring duplicate outcome wakes while alive.
+Anonymous waits and message status never suppress outcome delivery. Killing the
 waiter leaves the request intact and its unseen events eligible for delivery.
+Explicit replies are stored for status/wait reads; they never wake the requester.
 Errors: timeout (exit 1): retain result and continue inspecting; it does not
 cancel work. agent_waiting_on_dialog: use agent observe and agent press, then wait again.
 message_abandoned: inspect reason; repair startup/provider and explicitly resend

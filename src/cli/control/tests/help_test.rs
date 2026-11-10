@@ -1,5 +1,21 @@
 use super::parse;
 
+#[test]
+fn reply_help_explains_settlement_without_requester_wakes() {
+    for command in ["send", "wait"] {
+        let args = [command, "--help"].map(String::from);
+        let text = super::help_for(super::command_tree(false), &args).unwrap();
+        assert!(!text.contains("deferring its reply wake"), "{text}");
+        assert!(text.contains("requester"), "{text}");
+        if command == "send" {
+            assert!(text.contains("requester_turn_queued:false"), "{text}");
+            assert!(text.contains("fresh normal send"), "{text}");
+        } else {
+            assert!(text.contains("never wake the requester"), "{text}");
+        }
+    }
+}
+
 fn walk(command: &clap::Command, path: &[String]) {
     let long = command
         .get_long_about()

@@ -20,6 +20,9 @@ room and orchestrator; use `bus state` to resolve selectors. Quote names and
 task text as needed. Always include `--as ORCH` so Bus can route the result
 back to you.
 
+Ask the worker to report with a fresh normal send to you in the named room.
+An explicit `--reply-to` stores an answer and settles the original request but
+never queues a requester turn; its receipt reports `requester_turn_queued:false`.
 Run this short send in the foreground. It returns after submitting the request;
 retain the message/request identity. Dispatch other independent tasks, then end
 your turn and return to idle, available for developer steering. For Grok this
@@ -27,14 +30,14 @@ replaces the shared instruction to never sit idle waiting for a worker.
 
 Do not use `bus send --async`, including an `--async` flag placed elsewhere
 in the command. Do not use `bus wait` or a background shell, wrapper, polling
-loop or result watcher to wait for worker replies. A waiter can acknowledge a
-reply and suppress its Bus-delivered wake. Grok v1 relies on Bus delivering the
-notification as a new prompt; it does not rely on a native background-task
-completion starting another model turn.
+loop or result watcher to wait for worker replies. A waiter can acknowledge an
+outcome event and suppress its Bus-delivered wake. Grok v1 relies on Bus delivering
+normal result messages and outcome notifications as new prompts; it does not
+rely on a native background-task completion starting another model turn.
 
 ## Handle the durable wake
 
-Bus delivers a worker result or blocker as a Bus-delivered wake through the
+Bus delivers a worker's normal result message or blocker through the
 normal guarded prompt path. Read the message and event references, inspect
 `bus message status MESSAGE_ID` and `bus history --room R`, and decide the
 next workflow step. Handle a failure, cancellation or abandoned request as its
@@ -42,9 +45,9 @@ reported outcome, never as a successful task result. A blocker needs inspection
 and possibly a dialog answer; resolving it does not itself finish the task.
 
 Delivery is not completion. Require `complete: true` from `bus message status`
-and read the worker's reply before declaring the task done. Status/history reads
-do not consume the retained reply as an author waiter does. Update the workflow
-on state changes; when no immediate action remains, end the turn
+and read the worker's result before declaring the task done. An explicit reply
+stays available through status/wait reads without waking the requester. Update
+the workflow on state changes; when no immediate action remains, end the turn
 and return to idle again.
 
 After a restart, delayed notice or failed delivery, reconcile durable state

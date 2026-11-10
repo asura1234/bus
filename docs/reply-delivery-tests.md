@@ -1,5 +1,10 @@
 # Reply delivery regression inventory and integration suite
 
+This is a historical inventory. Since #371, explicit `--reply-to` answers settle
+the original request without queuing a requester turn, and turn finals are not
+captured as replies. Earlier reply-wake descriptions below document old behavior;
+use a fresh normal send when the requester must act.
+
 Inventory baseline: `6f27346a` (master on 2026-10-19). Sources: every reachable Bus messaging fix since the verified messaging introduction `c6a1b245`, the complete 107-entry fork PR list, and the relevant diffs/added regression tests. GitHub issues are disabled for this fork (`gh issue list --state all`); there is no issue list to inventory. Inherited Herdr terminal/SSH/graphics bugs, presentation-only copy/spacing fixes, and external Feishu notification delivery are outside agent-reply delivery. The suite is rebased onto `a6e6a04d6904bf50f06315f9bc3d21a2893d6769`, where #107 is merged; its two regression cases now run in ordinary gates.
 
 The table consolidates repeated fixes by failure scenario. The new suite is `server::tests::reply_delivery::`; short names below identify those tests. Retained guards name existing narrower tests, not claims of new end-to-end or historical-red proof. All of them remain in the full local gates. Historical file moves from `src/bus` to `src/messaging` were followed while inspecting the original diffs.
