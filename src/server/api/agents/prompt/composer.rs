@@ -210,7 +210,16 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
     };
     let (images, rest) = image_chips(body);
     let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
-    let (_, remaining) = claude_lifted_images(&expected);
+    let (lifted, remaining) = claude_lifted_images(&expected);
+    // Claude inserts the whole text remainder atomically after all reads finish.
+    // In a mixed result its collapsed chip also contains one line per failed
+    // path. Those paths need not be visible to prove the paste has completed.
+    if images > 0 && images < lifted {
+        let text_lines = remaining.lines().count() + lifted - images;
+        if pasted_text_count(rest) == Some(text_lines.saturating_sub(1)) {
+            return true;
+        }
+    }
     claude_text_after_image_reads(images, rest, &expected).is_some_and(|text| {
         normalize(&text) == normalize(&remaining)
             || collapsed_paste(AgentKind::Claude, &text, &remaining)
@@ -270,16 +279,9 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
         return kind == AgentKind::Codex
             && count.parse::<usize>().ok() == Some(expected.chars().count());
     }
-    let Some(label) = body
-        .strip_prefix("[Pasted text #")
-        .and_then(|text| text.strip_suffix(']'))
-    else {
+    let Some(count) = pasted_text_count(body) else {
         return false;
     };
-    let (id, count) = label.split_once(" +").unwrap_or((label, "0 lines"));
-    if id.parse::<usize>().ok().is_none_or(|id| id == 0) {
-        return false;
-    }
     // Installed provider renderers differ: Claude counts newline separators;
     // Cursor counts logical lines, including the first line.
     let newlines = expected
@@ -292,10 +294,16 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
         AgentKind::Cursor => newlines + 1,
         _ => return false,
     };
-    count
-        .strip_suffix(" lines")
-        .and_then(|count| count.parse::<usize>().ok())
-        == Some(expected_lines)
+    count == expected_lines
+}
+
+fn pasted_text_count(body: &str) -> Option<usize> {
+    let label = body.strip_prefix("[Pasted text #")?.strip_suffix(']')?;
+    let (id, count) = label.split_once(" +").unwrap_or((label, "0 lines"));
+    if id.parse::<usize>().ok().is_none_or(|id| id == 0) {
+        return None;
+    }
+    count.strip_suffix(" lines")?.parse().ok()
 }
 
 fn input(kind: AgentKind, screen: &str) -> Option<String> {

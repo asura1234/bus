@@ -1037,7 +1037,9 @@ idle then deliver, and an approval card without `--yolo`.
   reproduced this; a later manual Enter immediately emitted UserPromptSubmit.
   Account for every image as a successful chip or its exact failed-read literal
   path before the single Enter, including mixed results. Normalize CRLF before
-  counting paths, and verify the same result correlates with UserPromptSubmit. Plain text still submits without a render readback,
+  counting paths, and verify the same result correlates with UserPromptSubmit.
+  Include long mixed results: failed paths can be hidden inside one atomic
+  collapsed text chip while successful image chips remain visible. Plain text still submits without a render readback,
   and focused panes and half-typed drafts still use immediate draft save/restore.
   Check `message status`'s `latency.provider_started_at_ms`; native write clocks
   and an empty worker `events` list do not prove or disprove provider acceptance.
