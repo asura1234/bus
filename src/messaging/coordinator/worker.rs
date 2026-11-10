@@ -10,6 +10,9 @@ use crate::messaging::perf;
 use std::path::Path;
 
 #[cfg(test)]
+#[path = "tests/callback_gc_startup_test.rs"]
+mod callback_gc_startup_tests;
+#[cfg(test)]
 #[path = "tests/callback_gc_test.rs"]
 mod callback_gc_tests;
 mod callback_spool;
@@ -167,6 +170,7 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         store.save(&state).map_err(|e| e.to_string())?;
+        super::callback_gc::collect(&data_dir, &state);
         Ok(Self {
             interrupt_attempts: InterruptAttempts::default(),
             idle_alerted_rooms: BTreeSet::new(),
