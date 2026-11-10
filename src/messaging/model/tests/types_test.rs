@@ -784,3 +784,6 @@ mod orchestrator_ordering_tests;
 
 #[path = "explicit_replies_test.rs"]
 mod explicit_replies_tests;
+
+#[path = "image_payload_test.rs"]
+mod image_payload_tests;
