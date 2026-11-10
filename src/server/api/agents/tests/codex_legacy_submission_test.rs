@@ -315,3 +315,86 @@ async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
     );
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn codex_legacy_buffered_input_revokes_withdrawal_between_clear_steps() {
+    let directory = crate::utils::test_temp::unique_temp_path("codex-cleanup-revoked");
+    std::fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let expiry = confirmation_expiry(&method);
+    let native_clock = clock(&app);
+    native_clock.pause();
+    let paste_receipt = native_clock.hold_next_write_completion();
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    redraw(&app, AgentKind::Codex, "from bus");
+    let enter_receipt = native_clock.hold_next_write_completion();
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    enter_receipt.send(()).unwrap();
+    native_clock.wait_for_enters(1);
+    let clear_receipt = native_clock.hold_next_write_completion();
+    native_clock.advance(expiry);
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x01");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime
+        .try_send_developer_bytes(Bytes::from_static(b" + developer draft"))
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "developer input must be buffered"
+    );
+    let recovery_root = directory.clone();
+    let mut response = (
+        tokio::task::spawn_blocking(move || {
+            struct RestoreDataDir(Option<std::ffi::OsString>);
+            impl Drop for RestoreDataDir {
+                fn drop(&mut self) {
+                    match self.0.take() {
+                        Some(value) => std::env::set_var("BUS_DATA_DIR", value),
+                        None => std::env::remove_var("BUS_DATA_DIR"),
+                    }
+                }
+            }
+            let _lock = crate::utils::test_env::mutex().lock().unwrap();
+            let _restore = RestoreDataDir(std::env::var_os("BUS_DATA_DIR"));
+            std::env::set_var("BUS_DATA_DIR", recovery_root);
+            // Only now let the first clear finish. The next deletion must notice
+            // the buffered edit, even though the native draft still looks owned.
+            clear_receipt.send(()).unwrap();
+            response.recv_timeout(WAIT).unwrap()
+        }),
+        None,
+    );
+    let reply = match write_or_done(&mut writes, &mut response).await {
+        Ok(key) => {
+            native_clock.advance(Duration::from_secs(2));
+            let _ = super::owned_draft_cleanup_tests::finish_response(response).await;
+            panic!("cleanup queued {key:?} after developer input revoked ownership");
+        }
+        Err(reply) => reply,
+    };
+    assert!(!reply.contains("agent_prompted"), "{reply}");
+    assert!(reply.contains("submission remains unconfirmed"), "{reply}");
+    assert!(runtime.visible_ansi().contains("from bus"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no deletion, Enter or buffered replay"
+    );
+    let files = std::fs::read_dir(directory.join("private/drafts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 1, "retain the buffered developer text");
+    assert_eq!(std::fs::read(&files[0]).unwrap(), b" + developer draft");
+    std::fs::remove_dir_all(directory).unwrap();
+}
