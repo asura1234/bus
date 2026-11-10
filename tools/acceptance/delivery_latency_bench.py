@@ -23,8 +23,9 @@ def wait(predicate, description, timeout=90):
 
 
 class ScratchBus:
-    def __init__(self, binary, root, name, run):
+    def __init__(self, binary, root, name, run, expected_sha):
         self.binary, self.root, self.name, self.run = binary, root, name, run
+        self.expected_sha = expected_sha
         self.env = {
             key: value
             for key, value in os.environ.items()
@@ -76,6 +77,11 @@ class ScratchBus:
         self.data = Path(status["data_dir"])
         assert self.data.is_relative_to(self.root)
         assert self.data.stat().st_mode & 0o777 == 0o700
+        build = self.state()["build"]
+        for role in ["client", "server"]:
+            assert build[role]["binary"] == str(self.binary), (role, build)
+            assert build[role]["sha"] == self.expected_sha, (role, build)
+        (self.run / "build.json").write_text(json.dumps(build, indent=2))
         for index in range(count):
             self.control(
                 "agent",
@@ -91,9 +97,6 @@ class ScratchBus:
                 status.get("work_dir", str(self.data.parent / "work")),
             )
         wait(lambda: self.all_status("idle"), "idle agents")
-        (self.run / "build.json").write_text(
-            json.dumps(self.state()["build"], indent=2)
-        )
 
     def saved(self):
         # Never poll the measured coordinator for timestamps.
@@ -201,11 +204,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--label", required=True)
+    parser.add_argument(
+        "--expected-sha", required=True,
+        help="Require both runtime roles to match before adding fake agents",
+    )
     parser.add_argument("--output", type=Path, default=Path("temp/reports/latency-fix"))
     parser.add_argument("--rounds", type=int, default=40)
     parser.add_argument("--traffic", choices=["single", "broadcast"], default="single")
     parser.add_argument("--counts", nargs="+", type=int, default=[2, 5, 10, 20])
     args = parser.parse_args()
+    if len(args.expected_sha) != 40 or any(
+        c not in "0123456789abcdef" for c in args.expected_sha
+    ):
+        parser.error("expected-sha must be a full lowercase source SHA")
     if args.rounds < 1 or any(count < 1 for count in args.counts):
         parser.error("rounds and agent counts must be positive")
     output = args.output.resolve() / args.label
@@ -216,7 +227,7 @@ def main():
     for count in args.counts:
         run = output / f"n{count}"
         run.mkdir(exist_ok=True)
-        bus = ScratchBus(args.binary.resolve(), root, f"n{count}", run)
+        bus = ScratchBus(args.binary.resolve(), root, f"n{count}", run, args.expected_sha)
         try:
             bus.start(count)
             print(args.label, count, "started", flush=True)
