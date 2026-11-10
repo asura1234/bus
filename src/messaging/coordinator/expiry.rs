@@ -30,10 +30,21 @@ impl Worker {
     /// already-spooled replies and current Working status win over expiry.
     pub(super) fn expire_unconfirmed_submissions(&mut self, now_ms: u64) -> Result<(), String> {
         let mut state = self.state.clone();
-        state
-            .fail_unconfirmed_submissions(now_ms)
-            .map_err(|e| e.to_string())?;
+        let expiry = if self.native_submissions.is_empty() {
+            state.fail_unconfirmed_submissions(now_ms)
+        } else {
+            state.fail_unconfirmed_submissions_if(now_ms, |agent| {
+                !self.native_submissions.contains_key(&agent)
+            })
+        };
+        expiry.map_err(|e| e.to_string())?;
         for (worker, notice, delivery_deadline) in state.dialog_notice_fallback_candidates(now_ms) {
+            if state
+                .request(notice)
+                .is_some_and(|request| self.native_submissions.contains_key(&request.agent_id))
+            {
+                continue;
+            }
             let observation = self.native_blocker(worker);
             // The notification marker is debounced history, not proof of a
             // still-open screen. A readable close always wins; an unreadable

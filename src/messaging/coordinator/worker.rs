@@ -528,10 +528,7 @@ impl Worker {
                 }
             }
             let can_poll = can_poll && collect_delivery_commands(&commands, &mut pending_commands);
-            if can_poll
-                && self.native_submissions.is_empty()
-                && std::time::Instant::now() >= next_poll
-            {
+            if can_poll && std::time::Instant::now() >= next_poll {
                 if self.storage_pause.is_none() {
                     busy.stage("tick");
                     let _tick = perf::TICK.start();
@@ -662,6 +659,11 @@ impl Worker {
         let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
         let mut changed = false;
         for (agent, observed_at_ms) in agents {
+            // A native write still owns this recipient until its receipt.
+            // Other recipients must keep reconciling on the readiness tick.
+            if self.native_submissions.contains_key(&agent) {
+                continue;
+            }
             changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
             let current = state.agent(agent).and_then(|owner| owner.current_request);
             let rollout = self.codex_rollouts.get(&agent);

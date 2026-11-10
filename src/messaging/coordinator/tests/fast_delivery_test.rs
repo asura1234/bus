@@ -513,3 +513,122 @@ fn a_pending_write_does_not_hold_another_recipients_readiness_refresh() {
         "a pending native write blocked another recipient's readiness refresh"
     );
 }
+
+#[test]
+fn a_pending_write_is_reconciled_before_generation_settlement() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.serving_generation = 1;
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "old generation write is still running",
+    );
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    worker.serving_generation = 2;
+    worker.settle_requests().unwrap();
+    let during = worker.state.request(request).unwrap().phase;
+    let mut info = native_info("pane", "codex", "session");
+    info.generation = 1;
+    native.0.lock().unwrap()[0]
+        .1
+        .send(Ok(ResponseResult::AgentPrompted {
+            agent: info,
+            timestamps: Default::default(),
+        }))
+        .unwrap();
+    worker.finish_native_submissions(false);
+    worker.settle_requests().unwrap();
+    let reconciled = worker.state.request(request).unwrap().settled();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        during,
+        RequestPhase::Submitting,
+        "settlement overtook the native receipt"
+    );
+    assert!(
+        reconciled,
+        "generation reconciliation must resume after the receipt"
+    );
+}
+
+#[test]
+fn pending_writes_defer_expiry_without_holding_other_unconfirmed_requests() {
+    let (mut worker, a, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let pending = queue(&mut worker, room, a, "native call still running");
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    let mut state = worker.state.clone();
+    let b = state
+        .create_agent(room, "unknown-outcome", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let mut identity = state.agent(a).unwrap().runtime_identity.clone();
+    identity.launch_id = Some("launch-b".into());
+    identity.terminal_id = Some("terminal-b".into());
+    identity.pane_id = Some("pane-b".into());
+    identity.session_id = Some("session-b".into());
+    state.set_agent_runtime_identity(b, identity).unwrap();
+    state.confirm_hook_setup(b).unwrap();
+    state
+        .observe_status(b, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    worker.save(state).unwrap();
+    let unknown = queue(&mut worker, room, b, "completed call with unknown outcome");
+    let mut state = worker.state.clone();
+    state.begin_submission(unknown, "launch-b", 1).unwrap();
+    state
+        .record_submission(
+            unknown,
+            SubmissionOutcome::Uncertain {
+                message: "lost acknowledgement".into(),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let deadline = io::now_ms() + crate::messaging::model::DELIVERED_STALL_MS + 1_000;
+    worker.expire_unconfirmed_submissions(deadline).unwrap();
+    let during = worker.state.request(pending).unwrap().phase;
+    let other_expired = worker
+        .state
+        .request(unknown)
+        .unwrap()
+        .failure_reason
+        .as_deref()
+        == Some("submission_unconfirmed");
+    native.0.lock().unwrap()[0]
+        .1
+        .send(Err(TransportError {
+            code: None,
+            message: "late transport loss".into(),
+            definitely_rejected: false,
+            timestamps: Default::default(),
+        }))
+        .unwrap();
+    worker.finish_native_submissions(false);
+    worker
+        .expire_unconfirmed_submissions(deadline + 1_000)
+        .unwrap();
+    let resumed = worker
+        .state
+        .request(pending)
+        .unwrap()
+        .failure_reason
+        .as_deref()
+        == Some("submission_unconfirmed");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        during,
+        RequestPhase::Submitting,
+        "expiry overtook an unfinished native call"
+    );
+    assert!(
+        other_expired,
+        "another agent's unknown outcome must still expire"
+    );
+    assert!(resumed, "expiry must resume once native I/O has returned");
+}
