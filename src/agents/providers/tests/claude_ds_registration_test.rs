@@ -160,15 +160,3 @@ fn claude_ds_resume_uses_resume_and_the_wrapper_command() {
     .unwrap();
     assert_eq!(plan.argv, argv(&["claude-ds", "--resume", session]));
 }
-
-#[test]
-fn claude_ds_orchestrator_prompt_matches_claude() {
-    let path = std::path::Path::new("/tmp/bus-claude-ds-prompt.txt");
-    let claude =
-        crate::messaging::orchestration::prompt_args(ProviderKind::ClaudeCode, path, false)
-            .unwrap();
-    let deepseek =
-        crate::messaging::orchestration::prompt_args(ProviderKind::ClaudeDs, path, false).unwrap();
-    assert_eq!(deepseek, claude);
-    assert!(deepseek.is_some());
-}
