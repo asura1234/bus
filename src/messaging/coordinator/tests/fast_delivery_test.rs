@@ -489,11 +489,16 @@ fn a_pending_write_does_not_hold_another_recipients_readiness_refresh() {
     let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
     let (events, _) = mpsc::channel();
     let (commands, received) = mpsc::channel();
+    let (prepared, fixture_ready) = mpsc::channel();
     let thread = std::thread::spawn(move || {
         let _providers = provider_binaries();
+        prepared.send(()).unwrap();
         worker.run(received, events, snapshots);
     });
-    let independent = submitted.recv_timeout(Duration::from_millis(250)).is_ok();
+    fixture_ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Prove ordering against the held receipt, without charging fixture I/O or
+    // host contention to a synthetic subsecond performance threshold.
+    let independent = submitted.recv_timeout(Duration::from_secs(2)).is_ok();
     deferred.0.lock().unwrap()[0].1.send(confirmed()).unwrap();
     if !independent {
         submitted.recv_timeout(Duration::from_secs(2)).unwrap();
