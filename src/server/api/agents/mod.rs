@@ -1,4 +1,6 @@
 mod basic;
+#[cfg(unix)]
+mod codex_native;
 mod detection_context;
 mod driver;
 mod prompt;

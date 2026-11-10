@@ -1,5 +1,7 @@
 pub(crate) mod agents;
 pub(crate) mod events;
+#[cfg(unix)]
+pub(crate) mod native_input;
 pub(crate) mod respawn;
 pub(crate) mod restore_launch;
 mod resume;

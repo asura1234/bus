@@ -82,6 +82,12 @@ pub enum ResponseResult {
         #[serde(default, skip_serializing_if = "NativeSubmissionTimestamps::is_empty")]
         timestamps: NativeSubmissionTimestamps,
     },
+    /// Strong native completion; ordinary key writes return only `Ok`.
+    AgentInterrupted {
+        terminal_id: String,
+        session_id: String,
+        turn_id: Option<String>,
+    },
     AgentList {
         agents: Vec<AgentInfo>,
     },

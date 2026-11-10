@@ -4,6 +4,7 @@ mod detection_process;
 mod detection_task;
 mod draft_input;
 mod io;
+mod launch_env;
 mod launch_transaction;
 mod read;
 mod shell_integration;
@@ -149,6 +150,9 @@ pub(crate) enum AgentDetection {
     Disabled,
 }
 
+#[cfg(unix)]
+pub(crate) mod native_input;
+
 /// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
 /// Dropping this aborts async tasks and closes the PTY. An already-running bounded
 /// compression step may finish before releasing its terminal reference.
@@ -171,9 +175,17 @@ pub struct TerminalRuntime {
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,
-    /// Pane-owned Codex runtime. Dropping it closes the helper lifetime channel.
+    /// Pane-owned Codex runtime. One `Option` created by `from_environment`.
+    /// Admission clones this handle onto its worker so the app thread does not
+    /// wait on the socket. Dropping the last handle closes the helper lifetime
+    /// channel: immediately when no admission call is in flight, and after that
+    /// call when one is.
     #[cfg(unix)]
-    shared_codex: Mutex<Option<crate::agents::providers::codex::native::Runtime>>,
+    shared_codex: Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>>,
+    /// Test stand-in for the admission port. Empty in production tests, so
+    /// admission still uses the pane runtime above.
+    #[cfg(all(test, unix))]
+    native_input_override: Mutex<Option<native_input::NativeInputHandle>>,
     preserve_processes_on_drop: bool,
     shell_integration: Option<shell_integration::ShellIntegration>,
     launch_transaction: launch_transaction::LaunchTransaction,
@@ -360,5 +372,41 @@ impl TerminalRuntime {
             .unwrap_or_else(|error| error.into_inner())
             .as_ref()
             .is_some_and(|runtime| runtime.has_session())
+    }
+
+    /// Clone of the pane runtime handle. The worker may lock it; it is not a
+    /// second runtime.
+    #[cfg(unix)]
+    pub(crate) fn shared_codex_handle(
+        &self,
+    ) -> Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>> {
+        Arc::clone(&self.shared_codex)
+    }
+
+    /// Admission port over the pane runtime. Always present so a busy lock can
+    /// still move onto a worker; an empty slot reports no session.
+    #[cfg(unix)]
+    pub(crate) fn native_input(&self) -> Option<native_input::NativeInputHandle> {
+        #[cfg(test)]
+        if let Some(input) = self
+            .native_input_override
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        {
+            return Some(input);
+        }
+        Some(Arc::new(native_input::PaneCodex::new(
+            self.shared_codex_handle(),
+        )))
+    }
+
+    /// Install a test admission port. This does not construct a runtime.
+    #[cfg(all(test, unix))]
+    pub(crate) fn bind_native_input(&self, input: native_input::NativeInputHandle) {
+        *self
+            .native_input_override
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(input);
     }
 }

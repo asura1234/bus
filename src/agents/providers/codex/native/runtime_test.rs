@@ -108,3 +108,68 @@ fn codex_runtime_preparations_at_the_same_clock_tick_have_unique_endpoints() {
     assert!(!first_dir.exists());
     assert!(!second_dir.exists());
 }
+
+#[test]
+fn native_interrupt_log_records_the_underlying_cause() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct LogCapture(Arc<Mutex<Vec<u8>>>);
+    impl tracing::Subscriber for LogCapture {
+        fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+            Some(tracing::level_filters::LevelFilter::TRACE)
+        }
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn register_callsite(
+            &self,
+            _: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::always()
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut Fields(self.0.clone()));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+    struct Fields(Arc<Mutex<Vec<u8>>>);
+    impl tracing::field::Visit for Fields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            let _ = writeln!(self.0.lock().unwrap(), "{}={value:?}", field.name());
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            let _ = writeln!(self.0.lock().unwrap(), "{}={value}", field.name());
+        }
+    }
+
+    let dir = crate::utils::test_temp::unique_temp_path("codex-interrupt-cause");
+    fs::create_dir_all(&dir).unwrap();
+    let mut runtime = super::test_support::connected_runtime(dir.join("missing.sock"));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let _registration = tracing::Dispatch::new(tracing_subscriber::registry());
+    let dispatch = tracing::Dispatch::new(LogCapture(captured.clone()));
+    let result = tracing::dispatcher::with_default(&dispatch, || {
+        runtime.interrupt("thread", std::time::Instant::now())
+    });
+    drop(runtime);
+    let log = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    let message = result
+        .expect("a connected session attempts the interrupt")
+        .expect_err("a missing socket cannot confirm the interrupt")
+        .to_string();
+    assert!(
+        message.contains("Codex attached runtime is unavailable"),
+        "{message}"
+    );
+    assert!(
+        log.contains("bus.codex.native_interrupt") && log.contains(&message),
+        "{log}"
+    );
+}

@@ -32,7 +32,7 @@ fn confirmation_expiry(method: &Method) -> Duration {
     method_budget(method).unwrap() - withdrawal_budget(text) + Duration::from_millis(100)
 }
 
-fn provider_fixture(
+pub(super) fn provider_fixture(
     kind: AgentKind,
     bound: bool,
     draft: &str,
@@ -80,6 +80,7 @@ fn provider_fixture(
             expected_session_id: "session".into(),
             steer: false,
             expected_generation: None,
+            expected_turn_id: None,
         })
     } else {
         Method::AgentPromptIfUnbound(AgentPromptIfUnboundParams {
@@ -970,3 +971,7 @@ async fn claude_empty_composer_with_a_developer_stash_receives_the_prompt() {
     )
     .await;
 }
+
+#[cfg(unix)]
+#[path = "codex_native_test.rs"]
+mod codex_native_tests;

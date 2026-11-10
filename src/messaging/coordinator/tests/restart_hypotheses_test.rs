@@ -132,6 +132,7 @@ fn legacy_awaiting_start() -> (Fixture, RequestId) {
                 expected_session_id: "session".into(),
                 steer: false,
                 expected_generation: None,
+                expected_turn_id: None,
             }));
     assert!(matches!(result, Ok(ResponseResult::AgentPrompted { .. })));
     let mut state = f.worker.state.clone();

@@ -135,6 +135,7 @@ impl Worker {
                     expected_session_id: session.clone(),
                     steer: false,
                     expected_generation: Some(self.serving_generation),
+                    expected_turn_id: None,
                 })
             }
             // Codex starts its provider session with the first turn.
@@ -362,6 +363,7 @@ impl Worker {
                         .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
                             target: pane,
                             keys: vec![key.into()],
+                            native_interrupt: None,
                         }));
                 match sent {
                     Err(error) if error.definitely_rejected => {

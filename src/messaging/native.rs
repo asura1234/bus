@@ -460,6 +460,7 @@ mod tests {
                 expected_session_id: "s".into(),
                 steer: false,
                 expected_generation: None,
+                expected_turn_id: None,
             },
         ));
         assert!(outcome.unwrap_err().definitely_rejected);
