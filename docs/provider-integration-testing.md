@@ -1043,3 +1043,17 @@ idle then deliver, and an approval card without `--yolo`.
   and focused panes and half-typed drafts still use immediate draft save/restore.
   Check `message status`'s `latency.provider_started_at_ms`; native write clocks
   and an empty worker `events` list do not prove or disprove provider acceptance.
+
+- **2026-11-10 — removed launch directory:** Codex 0.166.0 sets the hook
+  shell's cwd to the project before spawning it. If that directory was removed,
+  even an absolute callback executable or an internal `cd` cannot run. Its hook
+  schema has no execution-cwd override. Bus must refuse new sends at admission
+  with `launch directory removed; replace the agent`, expose Unavailable, and
+  close unanswered queued or active requests as `launch_directory_removed` on
+  detection or failure recovery. Keep already captured replies unchanged; do
+  not recreate the deleted directory. Test with a real scratch Codex: launch
+  and bind the agent, remove its project directory, then require the next send
+  to fail within two seconds, with no current or queued request. Include a
+  captured-reply neighbour and a stale positive directory observation so a
+  prior filesystem check cannot clear the new Unavailable state. This verifies
+  Bus detection, not a fix to Codex's hook runner.
