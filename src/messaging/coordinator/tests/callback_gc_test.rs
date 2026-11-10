@@ -5,7 +5,7 @@ use crate::messaging::coordinator::{AgentRuntimeIdentity, Provider, RoomKind};
 use crate::messaging::native::TransportError;
 use crate::messaging::storage::state_store::SaveStage;
 
-fn launch(root: &Path, name: &str, owner: AgentId, provider: ProviderKind) -> PathBuf {
+pub(super) fn launch(root: &Path, name: &str, owner: AgentId, provider: ProviderKind) -> PathBuf {
     let path = root.join("callbacks").join(name);
     spool::initialize(
         &path,
@@ -232,7 +232,7 @@ fn deletion_retains_unattributable_and_mismatched_manifests() {
 }
 
 #[test]
-fn deletion_preserves_kimi_native_home_outside_callback_storage() {
+fn deletion_keeps_native_kimi_history_at_its_original_path() {
     let (mut worker, agent, _, dir, _) = fixture(Provider::Kimi, vec![]);
     let home = dir.join("callbacks/launch/kimi-home");
     crate::platform::fs::private_dir(&home).unwrap();
@@ -246,14 +246,13 @@ fn deletion_preserves_kimi_native_home_outside_callback_storage() {
     worker
         .command(BusCommand::DeleteAgent(agent), &mpsc::channel().0)
         .unwrap();
-    assert!(!dir.join("callbacks/launch").exists());
-    let saved = dir.join("provider-homes/kimi/launch");
+    assert!(worker.state.agent(agent).is_none());
     assert_eq!(
-        std::fs::read_to_string(saved.join("sessions/conversation/context.jsonl")).unwrap(),
+        std::fs::read_to_string(home.join("sessions/conversation/context.jsonl")).unwrap(),
         "native conversation"
     );
     assert_eq!(
-        std::fs::read_to_string(saved.join("config.toml")).unwrap(),
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
         "default_model = 'synthetic'\n"
     );
     drop(worker);
@@ -261,28 +260,64 @@ fn deletion_preserves_kimi_native_home_outside_callback_storage() {
 }
 
 #[test]
-fn conflicting_native_home_archive_retains_both_copies_without_failing_deletion() {
+fn kimi_captures_without_native_homes_are_collectible() {
     let (mut worker, agent, _, dir, _) = fixture(Provider::Kimi, vec![]);
-    let home = dir.join("callbacks/launch/kimi-home");
-    let archived = dir.join("provider-homes/kimi/launch");
-    for (p, text) in [(&home, "original"), (&archived, "preexisting")] {
-        std::fs::create_dir_all(p).unwrap();
-        std::fs::write(p.join("marker"), text).unwrap();
-    }
     worker
         .command(BusCommand::DeleteAgent(agent), &mpsc::channel().0)
         .unwrap();
     assert!(worker.state.agent(agent).is_none());
-    assert_eq!(
-        std::fs::read_to_string(home.join("marker")).unwrap(),
-        "original"
-    );
-    assert_eq!(
-        std::fs::read_to_string(archived.join("marker")).unwrap(),
-        "preexisting"
-    );
+    assert!(!dir.join("callbacks/launch").exists());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleting_an_agent_or_room_keeps_a_left_open_kimi_sessions_home() {
+    for delete_room in [false, true] {
+        let moved: crate::protocol::api::schema::AgentInfo = serde_json::from_value(
+            serde_json::json!({
+                "terminal_id":"terminal", "pane_id":"pane", "name":"bus-r1-a2",
+                "agent":"kimi", "agent_status":"idle", "workspace_id":"w1",
+                "tab_id":"t1", "focused":false, "revision":1,
+                "agent_session":{"source":"herdr:kimi", "agent":"kimi", "kind":"id", "value":"moved"}
+            }),
+        ).unwrap();
+        let replies = vec![
+            Err(TransportError {
+                timestamps: Default::default(),
+                message: "session moved".into(),
+                code: Some("terminal_identity_changed".into()),
+                definitely_rejected: true,
+            }),
+            Ok(crate::protocol::api::schema::ResponseResult::AgentList {
+                agents: vec![moved.clone()],
+            }),
+            Ok(crate::protocol::api::schema::ResponseResult::AgentInfo { agent: moved }),
+        ];
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Kimi, replies);
+        let home = dir.join("callbacks/launch/kimi-home");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("native-session"), "still running").unwrap();
+        let (events, received) = mpsc::channel();
+        worker
+            .command(
+                if delete_room {
+                    BusCommand::DeleteRoom(room)
+                } else {
+                    BusCommand::DeleteAgent(agent)
+                },
+                &events,
+            )
+            .unwrap();
+        assert!(worker.state.agent(agent).is_none());
+        assert!(received.try_iter().any(|event| matches!(event, BusEvent::TerminalsLeftOpen(ref terminals) if terminals.len() == 1)));
+        assert_eq!(
+            std::fs::read_to_string(home.join("native-session")).unwrap(),
+            "still running"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(unix)]

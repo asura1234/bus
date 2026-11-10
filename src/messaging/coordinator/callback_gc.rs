@@ -36,8 +36,11 @@ pub(super) fn collect(data_dir: &Path, state: &BusState) {
             let Some(manifest) = manifest else {
                 return Ok(());
             };
-            if manifest.provider == ProviderKind::Kimi {
-                preserve_kimi_home(data_dir, &path)?;
+            if manifest.provider == ProviderKind::Kimi && has_native_home(&path)? {
+                tracing::info!(event = "bus.callbacks.native_home_retained",
+                    agent_id = manifest.routing_key.0, launch_id = %manifest.launch_id,
+                    "Kimi capture retained at its native session home path");
+                return Ok(());
             }
             fs::remove_dir_all(&path)?;
             crate::platform::sync_parent_directory(&root)?;
@@ -104,34 +107,13 @@ fn orphan(entry: &fs::DirEntry, state: &BusState) -> io::Result<Option<Manifest>
     Ok(Some(manifest))
 }
 
-/// Kimi's private home includes native conversations, not just callback data.
-/// Move it intact, including its auth links, without traversing or copying them.
-fn preserve_kimi_home(data_dir: &Path, capture: &Path) -> io::Result<()> {
-    let home = capture.join("kimi-home");
-    match fs::symlink_metadata(&home) {
-        Ok(_) => real_directory(&home)?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
+/// A deleted owner can leave a moved native session running. Kimi's home and
+/// session index contain absolute paths, so even relocation would break it.
+/// Retain uncertain home entries too, without following their links.
+fn has_native_home(capture: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(capture.join("kimi-home")) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
-    let homes = data_dir.join("provider-homes");
-    // Check each component so an existing parent link cannot redirect the move.
-    crate::platform::fs::private_dir(&homes)?;
-    let kimi = homes.join("kimi");
-    crate::platform::fs::private_dir(&kimi)?;
-    let destination = kimi.join(
-        capture
-            .file_name()
-            .ok_or_else(|| io::Error::other("Missing callback launch name"))?,
-    );
-    match fs::symlink_metadata(&destination) {
-        Ok(_) => return Err(io::Error::other("Retained Kimi home already exists")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    fs::rename(&home, &destination)?;
-    crate::platform::sync_parent_directory(&kimi)?;
-    crate::platform::sync_parent_directory(capture)?;
-    tracing::info!(event = "bus.callbacks.kimi_home_retained", path = %destination.display(),
-        "Deleted agent's native Kimi home retained outside callback storage");
-    Ok(())
 }
