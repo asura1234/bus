@@ -85,3 +85,29 @@ async fn codex_legacy_ignored_enter_withdraws_owned_text() {
 async fn codex_legacy_ignored_enter_preserves_developer_edit() {
     ignored_enter(true).await;
 }
+
+#[test]
+fn codex_legacy_pickers_do_not_accept_delivery_keys() {
+    use crate::terminal::runtime::SubmissionInspector;
+    for screen in [
+        "› \n\n GPT-6 · /repo\n reverse-i-search: no match",
+        "Mentions\nFiles, directories, plugins, skills and tasks\nno matches\nenter/tab insert · esc close · ↑/↓ select · ←/→ filter\n\n› developer draft @file\n\n GPT-6 · /repo",
+    ] {
+        let inspector = crate::server::api::agents::prompt::composer::observer(
+            AgentKind::Codex,
+            "from bus".into(),
+        );
+        assert!(!inspector.submission_available(screen), "picker intercepts input: {screen}");
+        assert!(!inspector.draft_ready(screen, None, false));
+    }
+}
+
+#[test]
+fn codex_legacy_picker_words_in_a_draft_are_literal_text() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let inspector =
+        crate::server::api::agents::prompt::composer::observer(AgentKind::Codex, "from bus".into());
+    assert!(inspector.submission_available(
+        "› Explain reverse-i-search: and Mentions\n  enter/tab insert · esc close · ↑/↓ select\n\n GPT-6 · /repo\n ? for shortcuts"
+    ));
+}
