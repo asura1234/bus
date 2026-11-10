@@ -184,6 +184,22 @@ impl DraftInputLease {
         }
     }
 
+    /// A raw withdrawal loses ownership as soon as developer input is buffered.
+    /// Native restoration uses the weaker invalidation guard so those keys can
+    /// be replayed after the original draft has been restored.
+    pub(super) fn with_unedited<T>(&self, action: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("pane input lock poisoned"))?;
+        if state.revision != self.revision {
+            return Err(io::Error::other(
+                super::submission::PromptNotShown::ComposerBusy,
+            ));
+        }
+        action()
+    }
+
     pub(super) fn with_uninvalidated<T>(
         &self,
         action: impl FnOnce() -> io::Result<T>,

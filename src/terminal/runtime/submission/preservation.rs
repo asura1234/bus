@@ -69,6 +69,7 @@ impl ObservedSubmission {
         let preservation = self
             .inspect
             .draft_preservation_since_launch(&screen, cursor, pristine);
+        let withdrawal_lease = self.inspect.confirm_consumption().then_some(lease);
         match initial {
             InputObservation::Empty if preservation.is_none() => {
                 if self.inspect.always_use_editor() {
@@ -83,7 +84,8 @@ impl ObservedSubmission {
                     }
                 }
                 let existing_stash = self.inspect.native_stash_visible(&screen);
-                let result = self.confirm_legacy_submission(self.run(text, delay), lease);
+                let result =
+                    self.confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
                 if result.is_ok() {
                     // A previously stashed Claude draft pops after submit.
                     // Its receipt, rather than the Enter write, releases user keys.
@@ -101,7 +103,8 @@ impl ObservedSubmission {
             InputObservation::Empty | InputObservation::Other | InputObservation::Pending => {}
             _ if preservation.is_none() || !self.inspect.submission_available(&screen) => {
                 lease.restored();
-                return self.confirm_legacy_submission(self.run(text, delay), lease);
+                return self
+                    .confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
             }
             _ => {}
         }
@@ -245,7 +248,7 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay);
+        let result = self.run(text, delay, None);
         if result.is_ok() {
             if let Err(error) = self.wait_transfer(|| {
                 Ok(self

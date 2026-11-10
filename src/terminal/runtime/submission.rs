@@ -483,10 +483,6 @@ impl ObservedSubmission {
         result
     }
 
-    fn clear_draft(&self) -> io::Result<ClearOutcome> {
-        self.clear_draft_with_lease(None)
-    }
-
     fn clear_draft_with_lease(
         &self,
         lease: Option<&super::draft_input::DraftInputLease>,
@@ -560,6 +556,7 @@ impl ObservedSubmission {
             )
         };
         let completion = match lease {
+            Some(lease) if self.inspect.confirm_consumption() => lease.with_unedited(queue),
             Some(lease) => lease.with_uninvalidated(queue),
             None => queue(),
         }?;
@@ -578,7 +575,11 @@ impl ObservedSubmission {
     /// No Enter was sent. Withdraw the paste, including a draft first seen
     /// across the confirmation deadline. Preserve ownership checks for a
     /// recognized draft; report definite non-delivery only once it is empty.
-    fn withdraw_before_enter(&self, timeout: io::Error) -> io::Result<()> {
+    fn withdraw_before_enter(
+        &self,
+        timeout: io::Error,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<()> {
         let observation = self.observe("withdraw_before_enter");
         self.diagnose_refusal("withdraw_before_enter");
         if observation != InputObservation::Pending {
@@ -596,7 +597,7 @@ impl ObservedSubmission {
         }
         self.deadline
             .set((self.clock.now() + self.withdraw_grace).min(self.hard_deadline));
-        let cleared = self.clear_draft();
+        let cleared = self.clear_draft_with_lease(lease);
         self.diagnostics.cleared(&cleared, self.clock.now());
         match cleared {
             Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Cleared) => {
@@ -687,7 +688,12 @@ impl ObservedSubmission {
         }
     }
 
-    fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
+    fn run(
+        &self,
+        text: Bytes,
+        delay: Duration,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
         match self.observe_initial("initial")? {
@@ -705,7 +711,7 @@ impl ObservedSubmission {
             return if PromptNotShown::is(&error) {
                 Err(error)
             } else {
-                self.withdraw_before_enter(error)
+                self.withdraw_before_enter(error, lease)
             };
         }
         // Do not read back or attribute the pasted text. The pane lease keeps

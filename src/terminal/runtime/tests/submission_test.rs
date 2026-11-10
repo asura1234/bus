@@ -62,7 +62,7 @@ async fn repeated_unowned_polls_emit_one_refusal_diagnostic_outside_the_render_l
         "polling emitted a refusal"
     );
     let error =
-        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"), None);
     assert!(error.is_err());
     submission.diagnose_refusal("result_error");
     assert_eq!(
@@ -127,7 +127,7 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         startup_suggestion_open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
     let result =
-        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"), None);
     assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
     assert!(
         writes.try_recv().is_err(),
@@ -227,7 +227,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
     };
     // Editor preservation still awaits consumption after its one guarded submit.
     let result = submission
-        .run(Bytes::from_static(b"hello"), Duration::ZERO)
+        .run(Bytes::from_static(b"hello"), Duration::ZERO, None)
         .and_then(|()| submission.wait_for_consumption());
     assert!(
         clock.now() > deadline,

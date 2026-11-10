@@ -225,8 +225,10 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     };
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let writer = std::thread::spawn(move || {
-        let result = submission
-            .withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed paste"));
+        let result = submission.withdraw_before_enter(
+            io::Error::new(io::ErrorKind::TimedOut, "unconfirmed paste"),
+            None,
+        );
         result_tx.send((Instant::now(), result)).unwrap();
     });
     assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x01"));

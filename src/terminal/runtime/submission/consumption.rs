@@ -88,7 +88,7 @@ impl ObservedSubmission {
     }
 
     pub(super) fn close_owned_popup(&self, lease: &DraftInputLease) -> io::Result<()> {
-        self.close_popup(lease, |_| {
+        self.close_popup(lease, false, |_| {
             self.observe("owned_popup") == InputObservation::Pending
         })
     }
@@ -98,7 +98,7 @@ impl ObservedSubmission {
         lease: &DraftInputLease,
         marker: &str,
     ) -> io::Result<()> {
-        self.close_popup(lease, |screen| {
+        self.close_popup(lease, true, |screen| {
             self.inspect.restoration_marker_visible(screen, marker)
         })
     }
@@ -111,12 +111,17 @@ impl ObservedSubmission {
         // remove_marker has attested this token, queued only its deletion,
         // and observed it disappear. The lease still buffers developer keys;
         // a picker reopened by that edit belongs to the same restoration.
-        self.close_popup(lease, |screen| {
+        self.close_popup(lease, true, |screen| {
             !self.inspect.restoration_marker_visible(screen, marker)
         })
     }
 
-    fn close_popup(&self, lease: &DraftInputLease, owned: impl Fn(&str) -> bool) -> io::Result<()> {
+    fn close_popup(
+        &self,
+        lease: &DraftInputLease,
+        restoring: bool,
+        owned: impl Fn(&str) -> bool,
+    ) -> io::Result<()> {
         let guard = self
             .content_lock
             .lock()
@@ -129,7 +134,7 @@ impl ObservedSubmission {
             return Err(io::Error::other("Picker input is not owned by Bus"));
         }
         self.check_deadline()?;
-        let completion = lease.with_uninvalidated(|| {
+        let queue = || {
             self.io.queue_input_write_scoped(
                 key,
                 bytes::Bytes::new(),
@@ -137,7 +142,12 @@ impl ObservedSubmission {
                 Some(self.deadline.get()),
                 &self.scope,
             )
-        })?;
+        };
+        let completion = if restoring {
+            lease.with_uninvalidated(queue)
+        } else {
+            lease.with_unedited(queue)
+        }?;
         drop(guard);
         completion
             .recv_timeout(self.clock.remaining(self.deadline.get()))
