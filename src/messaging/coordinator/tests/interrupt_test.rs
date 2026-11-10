@@ -677,7 +677,7 @@ fn native_interrupt_unconfirmed_cannot_become_stopped_from_visual_idle() {
 }
 
 #[test]
-fn native_interrupt_completion_preserves_a_captured_final() {
+fn native_interrupt_completion_settles_a_final_without_creating_a_reply() {
     let mut f = Fixture::new(Provider::Codex);
     let lead = running(&mut f, "work", "turn-1");
     let unclaimed = f.send("steered input without a start hook", false);
@@ -689,7 +689,41 @@ fn native_interrupt_completion_preserves_a_captured_final() {
     native_receipt(&mut f, "terminal", "session");
     let response = interrupt(&mut f, json!({"agent":"builder"}));
     assert_eq!(response.result["agents"][0]["outcome"], "stopped");
-    assert_eq!(f.reply(lead).as_deref(), Some("Work done."));
+    assert!(f.reply(lead).is_none());
+    assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(f.request(lead).failure_reason, None);
+    assert_eq!(
+        f.request(unclaimed).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+}
+
+#[test]
+fn native_interrupt_completion_preserves_an_explicit_reply() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = running(&mut f, "work", "turn-1");
+    let unclaimed = f.send("steered input without a start hook", false);
+    f.deliver();
+    let message = f.request(lead).prompt.id;
+    let agent = f.agent;
+    let replied = f.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "reply-before-native-interrupt".into(),
+            method: "message.send".into(),
+            params: json!({"reply_to": message.0.to_string(), "as": agent.0.to_string(), "text": "explicit answer"}),
+        },
+        None,
+    );
+    assert!(replied.ok, "{replied:?}");
+    assert_eq!(replied.result["stage"], "replied");
+    f.stopped("turn-1", "different turn-final text");
+    f.consume();
+    assert!(f.request(lead).pending_final.is_some());
+    f.status(RuntimeStatus::Blocked);
+    native_receipt(&mut f, "terminal", "session");
+    let response = interrupt(&mut f, json!({"agent":"builder"}));
+    assert_eq!(response.result["agents"][0]["outcome"], "stopped");
+    assert_eq!(f.reply(lead).as_deref(), Some("explicit answer"));
     assert_eq!(f.request(lead).failure_reason, None);
     assert_eq!(
         f.request(unclaimed).failure_reason.as_deref(),
