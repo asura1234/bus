@@ -1,0 +1,442 @@
+//! A PTY receipt does not mean Codex consumed the prompt.
+use super::owned_draft_cleanup_tests::write_or_done;
+use super::*;
+
+async fn ignored_enter(developer_edit: bool) {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let expiry = confirmation_expiry(&method);
+    let native_clock = clock(&app);
+    let paste_receipt = native_clock.hold_next_write_completion();
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    redraw(&app, AgentKind::Codex, "from bus");
+    let enter_receipt = native_clock.hold_next_write_completion();
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    // Codex's picker can consume Enter while leaving the composer intact.
+    // The writer acknowledges it, but no model turn has accepted this text.
+    enter_receipt.send(()).unwrap();
+    native_clock.wait_for_enters(1);
+    if developer_edit {
+        redraw(&app, AgentKind::Codex, "from bus + developer draft");
+    }
+    native_clock.advance(expiry);
+    let mut response = (
+        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        None,
+    );
+    let mut clears = 0;
+    let reply = loop {
+        match write_or_done(&mut writes, &mut response).await {
+            Ok(key) => {
+                assert!(
+                    !developer_edit,
+                    "cleanup edited the developer's draft: {key:?}"
+                );
+                assert!(
+                    matches!(key.as_ref(), b"\x01" | b"\x0b" | b"\x15"),
+                    "never replay Enter or paste: {key:?}"
+                );
+                clears += 1;
+                if key.as_ref() == b"\x0b" {
+                    redraw(&app, AgentKind::Codex, "");
+                } else {
+                    redraw(&app, AgentKind::Codex, "from bus");
+                }
+            }
+            Err(reply) => break reply,
+        }
+    };
+    assert!(
+        !reply.contains("agent_prompted"),
+        "a flushed Enter is not consumption: {reply}"
+    );
+    assert!(
+        !reply.contains("agent_prompt_not_shown"),
+        "Enter may already have run: {reply}"
+    );
+    if developer_edit {
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        assert!(app
+            .lookup_runtime_sender(0, pane)
+            .unwrap()
+            .visible_ansi()
+            .contains("from bus + developer draft"));
+        assert_eq!(clears, 0);
+    } else {
+        assert!(clears > 0, "withdraw the exact stranded Bus text");
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        assert!(!app
+            .lookup_runtime_sender(0, pane)
+            .unwrap()
+            .visible_ansi()
+            .contains("from bus"));
+    }
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_legacy_ignored_enter_withdraws_owned_text() {
+    ignored_enter(false).await;
+}
+
+#[tokio::test]
+async fn codex_legacy_ignored_enter_preserves_developer_edit() {
+    ignored_enter(true).await;
+}
+
+#[test]
+fn codex_legacy_pickers_do_not_accept_delivery_keys() {
+    for screen in [
+        "› \n\n GPT-6 · /repo\n reverse-i-search: no match",
+        "Mentions\nFiles, directories, plugins, skills and tasks\nno matches\nenter/tab insert · esc close · ↑/↓ select · ←/→ filter\n\n› developer draft @file\n\n GPT-6 · /repo",
+    ] {
+        let inspector = crate::server::api::agents::prompt::detection_composer(AgentKind::Codex).unwrap();
+        assert!(!inspector.submission_available(screen), "picker intercepts input: {screen}");
+        assert!(!inspector.draft_ready(screen, None, false));
+    }
+}
+
+#[test]
+fn codex_legacy_picker_words_in_a_draft_are_literal_text() {
+    let inspector =
+        crate::server::api::agents::prompt::detection_composer(AgentKind::Codex).unwrap();
+    assert!(inspector.submission_available(
+        "› Explain reverse-i-search: and Mentions\n  enter/tab insert · esc close · ↑/↓ select\n\n GPT-6 · /repo\n ? for shortcuts"
+    ));
+}
+
+#[tokio::test]
+async fn codex_legacy_late_render_after_empty_frame_retains_owned_cleanup() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let paste_receipt = clock(&app).hold_next_write_completion();
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    redraw(&app, AgentKind::Codex, "from bus");
+    paste_receipt.send(()).unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    // A complete empty repaint is only composer evidence, not a native claim.
+    redraw(&app, AgentKind::Codex, "");
+    let reply = response.recv_timeout(WAIT).unwrap();
+    assert!(reply.contains("agent_prompted"), "{reply}");
+    redraw(&app, AgentKind::Codex, "from bus");
+    let completion = recovery_without_new_input(&app, None);
+    let mut response = (
+        tokio::task::spawn_blocking(move || completion.recv_timeout(WAIT).unwrap()),
+        None,
+    );
+    let mut cleared = false;
+    let error = loop {
+        match write_or_done(&mut writes, &mut response).await {
+            Ok(key) => {
+                assert!(
+                    matches!(key.as_ref(), b"\x01" | b"\x0b" | b"\x15"),
+                    "no old Enter or new paste: {key:?}"
+                );
+                if key.as_ref() == b"\x0b" {
+                    cleared = true;
+                    redraw(&app, AgentKind::Codex, "");
+                } else {
+                    redraw(&app, AgentKind::Codex, "from bus");
+                }
+            }
+            Err(result) => break result.unwrap_err(),
+        }
+    };
+    assert!(
+        cleared,
+        "a transient empty frame lost the old Bus ownership record: {error}"
+    );
+    assert!(crate::terminal::runtime::PromptNotShown::is(&error));
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_legacy_picker_after_paste_is_closed_only_for_owned_withdrawal() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let paste_receipt = clock(&app).hold_next_write_completion();
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes(
+        "\x1b[2J\x1b[HMentions\r\nFiles, directories, plugins, skills and tasks\r\nno matches\r\nenter/tab insert · esc close · ↑/↓ select · ←/→ filter\r\n\r\n› from bus\r\n\r\n GPT-6 · /repo".as_bytes(),
+    );
+    paste_receipt.send(()).unwrap();
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b",
+        "only dismiss the owned picker; no Enter"
+    );
+    redraw(&app, AgentKind::Codex, "from bus");
+    let mut response = (
+        tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap()),
+        None,
+    );
+    let mut clears = 0;
+    let reply = loop {
+        match write_or_done(&mut writes, &mut response).await {
+            Ok(key) => {
+                assert!(
+                    matches!(key.as_ref(), b"\x01" | b"\x0b" | b"\x15"),
+                    "no Enter or repeated Esc: {key:?}"
+                );
+                clears += 1;
+                redraw(
+                    &app,
+                    AgentKind::Codex,
+                    if key.as_ref() == b"\x0b" {
+                        ""
+                    } else {
+                        "from bus"
+                    },
+                );
+            }
+            Err(reply) => break reply,
+        }
+    };
+    assert!(
+        reply.contains("agent_prompt_not_shown"),
+        "no Enter and a proven withdrawal: {reply}"
+    );
+    assert!(clears > 0);
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_legacy_developer_input_revokes_retained_cleanup_even_for_identical_text() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let response = start(&mut app, method);
+    accept_paste(&app, AgentKind::Codex, "from bus", &mut writes).await;
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .try_send_developer_bytes(Bytes::from_static(b"from bus"))
+        .unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"from bus");
+    redraw(&app, AgentKind::Codex, "from bus");
+    let error = recovery_without_new_input(&app, None)
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap_err();
+    assert!(crate::terminal::runtime::PromptNotShown::is(&error));
+    assert!(
+        writes.try_recv().is_err(),
+        "never clear identical text typed by the developer"
+    );
+    assert!(app
+        .lookup_runtime_sender(0, pane)
+        .unwrap()
+        .visible_ansi()
+        .contains("from bus"));
+}
+
+#[tokio::test]
+async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let payload = "owned payload ".repeat(80);
+    let Method::AgentPromptIfIdle(params) = &mut method else {
+        unreachable!()
+    };
+    params.text = payload.clone();
+    let response = start(&mut app, method);
+    accept_paste(&app, AgentKind::Codex, &payload, &mut writes).await;
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    redraw(
+        &app,
+        AgentKind::Codex,
+        &format!("[Pasted Content {} chars]", payload.chars().count()),
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.set_detection_context(
+        AgentKind::Codex,
+        true,
+        None,
+        crate::server::api::agents::prompt::detection_composer(AgentKind::Codex),
+    );
+    let state = runtime
+        .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+        .await
+        .0;
+    assert_eq!(
+        state,
+        AgentState::Idle,
+        "the old Bus-owned chip must reach cleanup instead of blocking the next message"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "readiness must not edit or submit input"
+    );
+    redraw(&app, AgentKind::Codex, "partial native repaint");
+    runtime
+        .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+        .await;
+    redraw(
+        &app,
+        AgentKind::Codex,
+        &format!("[Pasted Content {} chars]", payload.chars().count()),
+    );
+    assert_eq!(
+        runtime
+            .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+            .await
+            .0,
+        AgentState::Idle,
+        "readiness must not mutate ownership on a partial repaint"
+    );
+    runtime
+        .try_send_developer_bytes(Bytes::from(payload.clone()))
+        .unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), payload.as_bytes());
+    let state = runtime
+        .test_scan_detection_context(AgentKind::Codex, AgentState::Unknown)
+        .await
+        .0;
+    assert_eq!(
+        state,
+        AgentState::Blocked,
+        "developer input revokes the old ownership even when its chip looks identical"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_legacy_buffered_input_revokes_withdrawal_between_clear_steps() {
+    buffered_edit_during_withdrawal(true).await;
+}
+
+#[tokio::test]
+async fn codex_legacy_buffered_input_revokes_pre_enter_withdrawal() {
+    buffered_edit_during_withdrawal(false).await;
+}
+
+async fn buffered_edit_during_withdrawal(entered: bool) {
+    let directory = crate::utils::test_temp::unique_temp_path("codex-cleanup-revoked");
+    std::fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
+    let expiry = confirmation_expiry(&method);
+    let native_clock = clock(&app);
+    native_clock.pause();
+    let paste_receipt = if entered {
+        native_clock.hold_next_write_completion()
+    } else {
+        native_clock.fail_next_write_completion(std::io::ErrorKind::TimedOut)
+    };
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    redraw(&app, AgentKind::Codex, "from bus");
+    let clear_receipt = if entered {
+        let enter_receipt = native_clock.hold_next_write_completion();
+        paste_receipt.send(()).unwrap();
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+        enter_receipt.send(()).unwrap();
+        native_clock.wait_for_enters(1);
+        let receipt = native_clock.hold_next_write_completion();
+        native_clock.advance(expiry);
+        receipt
+    } else {
+        let receipt = native_clock.hold_next_write_completion();
+        paste_receipt.send(()).unwrap();
+        receipt
+    };
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x01");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime
+        .try_send_developer_bytes(Bytes::from_static(b" + developer draft"))
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "developer input must be buffered"
+    );
+    // Ctrl+A repaints the unchanged native text and wakes the paused editor.
+    redraw(&app, AgentKind::Codex, "from bus");
+    let recovery_root = directory.clone();
+    let mut response = (
+        tokio::task::spawn_blocking(move || {
+            struct RestoreDataDir {
+                previous: Option<std::ffi::OsString>,
+                captured: bool,
+            }
+            impl Drop for RestoreDataDir {
+                fn drop(&mut self) {
+                    // An outer API timeout must not redirect a still-running
+                    // worker's later recovery into the account's default root.
+                    if self.captured {
+                        match self.previous.take() {
+                            Some(value) => std::env::set_var("BUS_DATA_DIR", value),
+                            None => std::env::remove_var("BUS_DATA_DIR"),
+                        }
+                    }
+                }
+            }
+            let _lock = crate::utils::test_env::mutex().lock().unwrap();
+            let mut restore = RestoreDataDir {
+                previous: std::env::var_os("BUS_DATA_DIR"),
+                captured: false,
+            };
+            std::env::set_var("BUS_DATA_DIR", &recovery_root);
+            let recovery_directory = crate::utils::paths::data_dir().join("private/drafts");
+            assert!(recovery_directory.starts_with(&recovery_root));
+            // Only now let the first clear finish. The next deletion must notice
+            // the buffered edit, even though the native draft still looks owned.
+            clear_receipt.send(()).unwrap();
+            let reply = response.recv_timeout(WAIT).unwrap();
+            restore.captured = std::fs::read_dir(&recovery_directory)
+                .is_ok_and(|mut files| files.next().is_some_and(|file| file.is_ok()));
+            (reply, recovery_directory)
+        }),
+        None,
+    );
+    let (reply, recovery_directory) = match write_or_done(&mut writes, &mut response).await {
+        Ok(key) => {
+            native_clock.advance(Duration::from_secs(2));
+            let _ = super::owned_draft_cleanup_tests::finish_response(response).await;
+            panic!("cleanup queued {key:?} after developer input revoked ownership");
+        }
+        Err(reply) => reply,
+    };
+    assert!(!reply.contains("agent_prompted"), "{reply}");
+    let uncertainty = if entered {
+        "submission remains unconfirmed"
+    } else {
+        "No Enter was sent"
+    };
+    assert!(reply.contains(uncertainty), "{reply}");
+    assert!(runtime.visible_ansi().contains("from bus"));
+    assert!(
+        writes.try_recv().is_err(),
+        "no deletion, Enter or buffered replay"
+    );
+    let files = std::fs::read_dir(recovery_directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 1, "retain the buffered developer text");
+    assert_eq!(std::fs::read(&files[0]).unwrap(), b" + developer draft");
+    std::fs::remove_dir_all(directory).unwrap();
+}

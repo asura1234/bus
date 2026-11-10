@@ -36,6 +36,8 @@ async fn repeated_unowned_polls_emit_one_refusal_diagnostic_outside_the_render_l
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(Inspect {
@@ -60,7 +62,7 @@ async fn repeated_unowned_polls_emit_one_refusal_diagnostic_outside_the_render_l
         "polling emitted a refusal"
     );
     let error =
-        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"), None);
     assert!(error.is_err());
     submission.diagnose_refusal("result_error");
     assert_eq!(
@@ -110,6 +112,8 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|_: &str| InputObservation::Pending),
@@ -123,7 +127,7 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
         startup_suggestion_open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
     };
     let result =
-        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"));
+        submission.withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "expired"), None);
     assert!(result.is_err_and(|error| error.kind() == io::ErrorKind::TimedOut));
     assert!(
         writes.try_recv().is_err(),
@@ -140,6 +144,8 @@ async fn startup_controls_between_initial_observation_and_paste_receive_no_messa
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|screen: &str| {
@@ -190,6 +196,8 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         // Empty composer, our paste renders, Enter goes out, and the
@@ -219,7 +227,7 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
     };
     // Editor preservation still awaits consumption after its one guarded submit.
     let result = submission
-        .run(Bytes::from_static(b"hello"), Duration::ZERO)
+        .run(Bytes::from_static(b"hello"), Duration::ZERO, None)
         .and_then(|()| submission.wait_for_consumption());
     assert!(
         clock.now() > deadline,
@@ -259,6 +267,8 @@ async fn an_unfinished_synchronized_frame_is_never_given_to_an_ownership_inspect
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|screen: &str| {

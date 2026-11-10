@@ -12,6 +12,7 @@ pub(super) struct DetectionContext {
     activity_at: Option<Instant>,
     inspector: Option<Box<dyn SubmissionInspector>>,
     pristine: Arc<AtomicBool>,
+    pending_input: Option<super::draft_input::SharedDraftInput>,
 }
 
 impl DetectionContext {
@@ -23,7 +24,13 @@ impl DetectionContext {
     ) -> Option<bool> {
         (self.kind == kind).then_some(())?;
         self.inspector.as_ref().map(|inspect| {
-            inspect.draft_ready(screen, cursor, self.pristine.load(Ordering::Acquire))
+            // A retained Bus paste must reach the withdrawal transaction even
+            // when its native chip is opaque to the ordinary draft reader.
+            let owned = kind == Some(AgentKind::Codex)
+                && self.pending_input.as_ref().is_some_and(|pending| {
+                    super::draft_input::DraftInput::owns_pending_composer(pending, screen, cursor)
+                });
+            owned || inspect.draft_ready(screen, cursor, self.pristine.load(Ordering::Acquire))
         })
     }
 
@@ -53,6 +60,7 @@ impl TerminalRuntime {
                 .and_then(|age| Instant::now().checked_sub(Duration::from_millis(age))),
             inspector,
             pristine: self.startup_suggestion_open.clone(),
+            pending_input: Some(self.draft_input.clone()),
         };
     }
 

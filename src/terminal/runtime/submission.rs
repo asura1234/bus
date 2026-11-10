@@ -1,4 +1,5 @@
 //! Save the native draft, submit once behind a blocker guard, then restore it.
+mod consumption;
 mod diagnostics;
 mod preservation;
 mod recovery;
@@ -15,7 +16,7 @@ use bytes::Bytes;
 use std::{
     io,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -99,6 +100,17 @@ pub(crate) trait SubmissionInspector: Send {
     fn always_use_editor(&self) -> bool {
         false
     }
+    fn confirm_consumption(&self) -> bool {
+        false
+    }
+    /// Read-only eligibility; withdrawal still checks a complete owned frame.
+    fn recoverable_input(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
+        false
+    }
+    /// Only a recognized picker over an already attested owned composer.
+    fn owned_popup_escape(&self, _screen: &str) -> Option<Bytes> {
+        None
+    }
     /// Called once when this attempt is refused, outside the render lock.
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
@@ -168,6 +180,8 @@ struct ClearProgress {
 
 struct ObservedSubmission {
     terminal: Arc<PaneTerminal>,
+    content_seq: Arc<AtomicU64>,
+    enter_content_seq: std::cell::Cell<u64>,
     io: PaneRuntimeIo,
     scope: InputScope,
     content_lock: Arc<Mutex<()>>,
@@ -186,6 +200,7 @@ struct ObservedSubmission {
 #[derive(Clone)]
 pub(crate) struct SubmissionHandle {
     terminal: Arc<PaneTerminal>,
+    content_seq: Arc<AtomicU64>,
     io: PaneRuntimeIo,
     content_write_lock: Arc<Mutex<()>>,
     draft_input: super::draft_input::SharedDraftInput,
@@ -219,6 +234,7 @@ impl TerminalRuntime {
         }
         SubmissionHandle {
             terminal: self.terminal.clone(),
+            content_seq: self.content_seq.clone(),
             io: self.io.clone(),
             content_write_lock: self.content_write_lock.clone(),
             draft_input: self.draft_input.clone(),
@@ -278,6 +294,8 @@ impl SubmissionHandle {
         // collapses that interval before the caller can record it.
         let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
+            content_seq: self.content_seq.clone(),
+            enter_content_seq: std::cell::Cell::new(0),
             io: self.io.clone(),
             scope: scope.clone(),
             content_lock: self.content_write_lock.clone(),
@@ -315,9 +333,16 @@ impl SubmissionHandle {
                         if result.is_err() {
                             submission.diagnose_refusal("result_error");
                         }
-                        if let Some((since, entered)) =
-                            submission.diagnostics.pending_paste(&result)
+                        // Composer consumption is not a native turn claim.
+                        // Preserve Codex ownership through a transient empty
+                        // repaint; developer input still revokes this record.
+                        let pending = if result.is_ok() && submission.inspect.confirm_consumption()
                         {
+                            submission.diagnostics.written_paste()
+                        } else {
+                            submission.diagnostics.pending_paste(&result)
+                        };
+                        if let Some((since, entered)) = pending {
                             lease.retain_pending(super::draft_input::PendingPaste {
                                 inspect: std::mem::replace(
                                     &mut submission.inspect,
@@ -458,7 +483,10 @@ impl ObservedSubmission {
         result
     }
 
-    fn clear_draft(&self) -> io::Result<ClearOutcome> {
+    fn clear_draft_with_lease(
+        &self,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<ClearOutcome> {
         let mut sent = false;
         let mut progress = ClearProgress {
             revision: self.inspect.cleanup_progress(),
@@ -467,7 +495,7 @@ impl ObservedSubmission {
         loop {
             for (index, key) in self.clear.iter().enumerate() {
                 if let Some(outcome) =
-                    self.clear_step(key.clone(), index, &mut sent, &mut progress)?
+                    self.clear_step(key.clone(), index, &mut sent, &mut progress, lease)?
                 {
                     return Ok(outcome);
                 }
@@ -481,6 +509,7 @@ impl ObservedSubmission {
         index: usize,
         sent: &mut bool,
         progress: &mut ClearProgress,
+        lease: Option<&super::draft_input::DraftInputLease>,
     ) -> io::Result<Option<ClearOutcome>> {
         let generation = self.clock.generation();
         let guard = self
@@ -517,13 +546,20 @@ impl ObservedSubmission {
         self.check_deadline()?;
         let write_deadline = self.deadline.get().min(progress.expires);
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
-        let completion = self.io.queue_input_write_scoped(
-            key,
-            Bytes::new(),
-            Duration::ZERO,
-            Some(write_deadline),
-            &self.scope,
-        )?;
+        let queue = || {
+            self.io.queue_input_write_scoped(
+                key,
+                Bytes::new(),
+                Duration::ZERO,
+                Some(write_deadline),
+                &self.scope,
+            )
+        };
+        let completion = match lease {
+            Some(lease) if self.inspect.confirm_consumption() => lease.with_unedited(queue),
+            Some(lease) => lease.with_uninvalidated(queue),
+            None => queue(),
+        }?;
         self.inspect.clearing(index);
         drop(guard);
         completion
@@ -539,7 +575,11 @@ impl ObservedSubmission {
     /// No Enter was sent. Withdraw the paste, including a draft first seen
     /// across the confirmation deadline. Preserve ownership checks for a
     /// recognized draft; report definite non-delivery only once it is empty.
-    fn withdraw_before_enter(&self, timeout: io::Error) -> io::Result<()> {
+    fn withdraw_before_enter(
+        &self,
+        timeout: io::Error,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<()> {
         let observation = self.observe("withdraw_before_enter");
         self.diagnose_refusal("withdraw_before_enter");
         if observation != InputObservation::Pending {
@@ -557,7 +597,7 @@ impl ObservedSubmission {
         }
         self.deadline
             .set((self.clock.now() + self.withdraw_grace).min(self.hard_deadline));
-        let cleared = self.clear_draft();
+        let cleared = self.clear_draft_with_lease(lease);
         self.diagnostics.cleared(&cleared, self.clock.now());
         match cleared {
             Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Cleared) => {
@@ -613,6 +653,11 @@ impl ObservedSubmission {
                     Some(screen) if self.inspect.submission_available(&screen) => {
                         self.check_deadline()?;
                         let key = self.inspect.editor_submit_key(&screen, &self.enter);
+                        if self.inspect.confirm_consumption() {
+                            self.observe("legacy_enter_ownership");
+                        }
+                        self.enter_content_seq
+                            .set(self.content_seq.load(Ordering::Acquire));
                         self.diagnostics.enter(&key, self.clock.now());
                         Some(self.io.queue_input_write_scoped(
                             Bytes::new(),
@@ -643,7 +688,12 @@ impl ObservedSubmission {
         }
     }
 
-    fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
+    fn run(
+        &self,
+        text: Bytes,
+        delay: Duration,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<()> {
         // Nothing from this attempt has been pasted. Preserve all existing
         // input, even text identical to the new brief: ownership is unproven.
         match self.observe_initial("initial")? {
@@ -661,7 +711,7 @@ impl ObservedSubmission {
             return if PromptNotShown::is(&error) {
                 Err(error)
             } else {
-                self.withdraw_before_enter(error)
+                self.withdraw_before_enter(error, lease)
             };
         }
         // Do not read back or attribute the pasted text. The pane lease keeps

@@ -21,6 +21,9 @@ pub(super) struct Diagnostics {
 }
 
 impl Diagnostics {
+    pub(super) fn enter_attempted(&self) -> bool {
+        self.enter_attempts.get() > 0
+    }
     pub(super) fn with_timestamps(
         timestamps: crate::terminal::pty::actor::SharedSubmissionTimestamps,
     ) -> Self {
@@ -48,6 +51,16 @@ impl Diagnostics {
             timestamps.text_written_at_ms.get_or_insert(at_ms);
         });
         tracing::info!(target: "bus::terminal::submission", event = "bus.terminal.submission.editor_installed", at_ms, bytes, "Bus input installed through native editor");
+    }
+
+    pub(super) fn retain_editor_input(&self, now: Instant) {
+        // This is an owned input age, not a PTY paste receipt. Keep the paste
+        // byte counters and timing fields separate from native-editor writes.
+        self.paste_at.set(Some(now));
+    }
+
+    pub(super) fn editor_restored(&self) {
+        self.paste_at.set(None);
     }
 
     pub(super) fn ownership_verified(&self) {
@@ -188,11 +201,15 @@ impl Diagnostics {
             .as_ref()
             .is_err_and(|error| !PromptNotShown::is(error))
         {
-            self.paste_at
-                .get()
-                .map(|at| (at, self.enter_attempts.get() > 0))
+            self.written_paste()
         } else {
             None
         }
+    }
+
+    pub(super) fn written_paste(&self) -> Option<(Instant, bool)> {
+        self.paste_at
+            .get()
+            .map(|at| (at, self.enter_attempts.get() > 0))
     }
 }

@@ -3,6 +3,7 @@ use super::{styled_chars, StyledChar};
 use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
+mod codex_picker;
 mod diagnostics;
 mod ownership;
 mod preservation;
@@ -28,9 +29,10 @@ fn submission_available(kind: AgentKind, screen: &str) -> bool {
             osc_progress: "",
         },
     );
-    !detected.visible_blocker
-        && !crate::terminal::driver::has_input_controls(&plain)
-        && input(kind, screen).is_some()
+    !(detected.visible_blocker
+        || crate::terminal::driver::has_input_controls(&plain)
+        || input(kind, screen).is_none()
+        || kind == AgentKind::Codex && codex_picker::active(screen))
 }
 
 fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
@@ -508,3 +510,11 @@ mod kimi_screen_tests;
 #[cfg(test)]
 #[path = "../tests/kimi_incident_editor_test.rs"]
 mod kimi_incident_editor_tests;
+
+#[cfg(test)]
+#[path = "../tests/codex_legacy_picker_test.rs"]
+mod codex_legacy_picker_tests;
+
+#[cfg(test)]
+#[path = "../tests/codex_legacy_restoration_test.rs"]
+mod codex_legacy_restoration_tests;

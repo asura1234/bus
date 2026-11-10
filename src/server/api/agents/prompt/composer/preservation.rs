@@ -92,6 +92,15 @@ pub(super) fn opaque(body: &str) -> bool {
 mod tests;
 
 impl SubmissionInspector for PreservingComposer {
+    fn confirm_consumption(&self) -> bool {
+        self.owned.confirm_consumption()
+    }
+    fn recoverable_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
+        self.owned.recoverable_input(screen, cursor)
+    }
+    fn owned_popup_escape(&self, screen: &str) -> Option<bytes::Bytes> {
+        self.owned.owned_popup_escape(screen)
+    }
     fn submission_available(&self, screen: &str) -> bool {
         super::submission_available(self.kind, screen)
     }

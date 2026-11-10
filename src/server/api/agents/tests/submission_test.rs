@@ -389,6 +389,7 @@ async fn fake_provider_scheduling_pause_does_not_expire_a_submission() {
     );
     paste_receipt.send(()).unwrap();
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    redraw(&app, AgentKind::Codex, "");
     let response = response.recv_timeout(WAIT).unwrap();
     assert!(response.contains("agent_prompted"), "{response}");
     assert!(writes.try_recv().is_err(), "no second paste or Enter");
@@ -396,12 +397,7 @@ async fn fake_provider_scheduling_pause_does_not_expire_a_submission() {
 
 #[tokio::test]
 async fn one_flushed_paste_is_submitted_once_without_a_render_readback() {
-    for (kind, bound) in [
-        (AgentKind::Codex, true),
-        (AgentKind::Codex, false),
-        (AgentKind::Claude, true),
-        (AgentKind::Cursor, true),
-    ] {
+    for (kind, bound) in [(AgentKind::Claude, true), (AgentKind::Cursor, true)] {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, "");
         let receipt = clock(&app).hold_next_write_completion();
         let response = start(&mut app, method);
@@ -499,6 +495,7 @@ async fn a_delayed_paste_receipt_precedes_the_only_enter() {
     );
     receipt.send(()).unwrap();
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    redraw(&app, AgentKind::Codex, "");
     assert!(response
         .recv_timeout(WAIT)
         .unwrap()
@@ -975,3 +972,6 @@ async fn claude_empty_composer_with_a_developer_stash_receives_the_prompt() {
 #[cfg(unix)]
 #[path = "codex_native_test.rs"]
 mod codex_native_tests;
+
+#[path = "codex_legacy_submission_test.rs"]
+mod codex_legacy_submission_tests;

@@ -56,6 +56,19 @@ pub(super) struct DraftInputLease {
 }
 
 impl DraftInput {
+    pub(super) fn owns_pending_composer(
+        state: &SharedDraftInput,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+    ) -> bool {
+        state.lock().is_ok_and(|state| {
+            state.pending.as_ref().is_some_and(|pending| {
+                pending.inspect.confirm_consumption()
+                    && pending.inspect.recoverable_input(screen, cursor)
+            })
+        })
+    }
+
     pub(super) fn shared_with_launch_window() -> (SharedDraftInput, Arc<AtomicBool>) {
         let state = SharedDraftInput::default();
         let launch_window = state
@@ -169,6 +182,22 @@ impl DraftInputLease {
         if state.revision == self.revision {
             state.pending = Some(pending);
         }
+    }
+
+    /// A raw withdrawal loses ownership as soon as developer input is buffered.
+    /// Native restoration uses the weaker invalidation guard so those keys can
+    /// be replayed after the original draft has been restored.
+    pub(super) fn with_unedited<T>(&self, action: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("pane input lock poisoned"))?;
+        if state.revision != self.revision {
+            return Err(io::Error::other(
+                super::submission::PromptNotShown::ComposerBusy,
+            ));
+        }
+        action()
     }
 
     pub(super) fn with_uninvalidated<T>(

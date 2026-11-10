@@ -8,7 +8,9 @@ use serde_json::json;
 #[tokio::test]
 async fn provider_fixture_descheduling_does_not_expire_a_committed_submission() {
     for real_time in [true, false] {
-        let mut f = Delivery::new(&[Provider::Codex], false);
+        // Claude retains its writer-receipt contract; Codex additionally needs
+        // a consumption frame within its native confirmation window.
+        let mut f = Delivery::new(&[Provider::ClaudeCode], false);
         let agent = f.agents[0];
         if real_time {
             f.real_submission_time(agent);
@@ -29,6 +31,41 @@ async fn provider_fixture_descheduling_does_not_expire_a_committed_submission() 
         assert!(!f.state().request(request).unwrap().uncertain_outcome);
         f.tick();
         assert_eq!(f.typed(agent).len(), 1, "must not submit twice");
+    }
+}
+
+#[tokio::test]
+async fn codex_legacy_fixture_descheduling_keeps_a_late_enter_uncertain() {
+    for real_time in [true, false] {
+        let mut f = Delivery::new(&[Provider::Codex], false);
+        let agent = f.agents[0];
+        if real_time {
+            f.real_submission_time(agent);
+        }
+        // The writer commits while this independent provider has no CPU.
+        // Its eventual repaint cannot retrospectively confirm an expired RPC.
+        f.pause_next_provider_pump(std::time::Duration::from_secs(3));
+        let request = f.send(agent, f.work, "late codex consumption", false, None);
+        f.tick();
+        let response = f.last_submission_response().unwrap();
+        if real_time {
+            assert!(response["result"].is_null(), "{response}");
+            assert_eq!(response["error"]["code"], "timeout", "{response}");
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("submission remains unconfirmed"),
+                "{response}"
+            );
+            assert!(f.state().request(request).unwrap().uncertain_outcome);
+        } else {
+            assert_eq!(response["result"]["type"], "agent_prompted", "{response}");
+            assert!(!f.state().request(request).unwrap().uncertain_outcome);
+        }
+        assert_eq!(f.typed_content(agent), ["late codex consumption"]);
+        f.tick();
+        assert_eq!(f.typed(agent).len(), 1, "never replay the late Enter");
     }
 }
 

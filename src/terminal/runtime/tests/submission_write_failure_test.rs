@@ -209,6 +209,8 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|_: &str| InputObservation::Pending),
@@ -223,8 +225,10 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     };
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let writer = std::thread::spawn(move || {
-        let result = submission
-            .withdraw_before_enter(io::Error::new(io::ErrorKind::TimedOut, "unconfirmed paste"));
+        let result = submission.withdraw_before_enter(
+            io::Error::new(io::ErrorKind::TimedOut, "unconfirmed paste"),
+            None,
+        );
         result_tx.send((Instant::now(), result)).unwrap();
     });
     assert_eq!(writes.recv().await.unwrap(), Bytes::from_static(b"\x01"));
