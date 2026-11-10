@@ -2,6 +2,7 @@ pub mod config;
 pub(crate) mod disk_space;
 pub(crate) mod env;
 pub(crate) mod error_pipe;
+pub(crate) mod executable;
 pub(crate) mod home_path;
 pub(crate) mod ids;
 pub(crate) mod log_events;
