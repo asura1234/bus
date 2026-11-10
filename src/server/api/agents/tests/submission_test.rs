@@ -975,3 +975,6 @@ async fn claude_empty_composer_with_a_developer_stash_receives_the_prompt() {
 #[cfg(unix)]
 #[path = "codex_native_test.rs"]
 mod codex_native_tests;
+
+#[path = "codex_legacy_submission_test.rs"]
+mod codex_legacy_submission_tests;
