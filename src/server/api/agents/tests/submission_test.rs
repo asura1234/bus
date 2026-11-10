@@ -495,6 +495,7 @@ async fn a_delayed_paste_receipt_precedes_the_only_enter() {
     );
     receipt.send(()).unwrap();
     assert_eq!(next_write(&mut writes).await, Bytes::from_static(b"\r"));
+    redraw(&app, AgentKind::Codex, "");
     assert!(response
         .recv_timeout(WAIT)
         .unwrap()

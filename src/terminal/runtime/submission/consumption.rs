@@ -9,11 +9,19 @@ impl ObservedSubmission {
         result: io::Result<()>,
         lease: &DraftInputLease,
     ) -> io::Result<()> {
-        if !self.inspect.confirm_consumption()
-            || result.is_err()
-                && (self.diagnostics.enter_attempted()
-                    || self.diagnostics.pending_paste(&result).is_none())
+        if !self.inspect.confirm_consumption() {
+            return result;
+        }
+        if result.is_err()
+            && (self.diagnostics.enter_attempted()
+                || self.diagnostics.pending_paste(&result).is_none()
+                || !self
+                    .terminal
+                    .active_ansi_if_complete()
+                    .is_some_and(|screen| self.inspect.owned_popup_escape(&screen).is_some()))
         {
+            // Paste failures already ran their withdrawal protocol. Preserve
+            // its result and pending ownership instead of retrying cleanup.
             return result;
         }
         let entered = self.diagnostics.enter_attempted();
