@@ -407,28 +407,30 @@ concrete plan and the decision needed. Escalate to the developer in MASTER only
 when the orchestrator cannot resolve it within existing authority. Update the
 workflow after the decision.
 
-## Steer agents without waiting
+## Immediate reaction or waiting
 
-Correct an agent the moment you notice a problem; do not wait for its turn to
-end. `bus send` to a working agent types the message into its running turn, and
-the turn's reply answers the original task and every correction together:
-`bus wait` on any of those messages returns the same reply. Send with `--queue`
-only for an unrelated task that should get a turn and a reply of its own.
+Bus holds agent messages to a busy orchestrator until its turn ends; worker
+reports get their own turn. It also holds messages to busy Grok agents.
+These waits are intended. Same-room messages to working workers of every
+provider except Grok steer into the running turn; cross-room and `--queue` sends wait.
 
-A plain send never stops a turn: Codex takes it into the running turn and
-Claude Code queues it, so "pause" or "stop" in a message is just more work. To
-stop a worker, or to redirect it onto something else, interrupt it:
+When a message would be held and you need an immediate reaction, interrupt the
+agent first, then send the new instruction. Otherwise waiting for the turn to
+end is fine. Interrupt stops in-flight work, including builds, Git operations
+and device runs. Use it only to change course, never just to close
+a request. A message saying "pause" or "stop" does not stop a turn.
 
 ```sh
-bus agent interrupt AGENT --as YOU --text "Stop. Reply with your status."
+bus agent interrupt AGENT --as YOU
+bus send --room ROOM --as YOU --to AGENT --text "Change course: ..."
 ```
 
 Bus presses the provider's stop key once, waits until the turn has ended and
-reports `stopped`, `already_idle` or `failed` with a reason. `--text` then
+reports `stopped`, `already_idle` or `failed` with a reason. The new instruction
 arrives as a normal new message with its own reply. The interrupted message
 closes as `interrupted`: a running `send --async` or `wait` on it ends with
 `message_interrupted` instead of waiting on. Messages queued for the worker
-close with it, so send what it should do next with `--text`. `--room ROOM`
+close with it, so send what it should do next after the stop. `--room ROOM`
 stops every working or blocked agent in the room. Nothing is killed and the worker keeps
 its context.
 

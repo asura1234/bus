@@ -198,6 +198,15 @@ the wrapper remains held.
   early on an error such as `bus_down` after four consecutive transport failures,
   so you stay free for the developer meanwhile. Live-server overload is retried.
 
+- **Wait when a message is held; interrupt to change course.** Agent messages
+  to busy orchestrators get independent turns; messages to busy Grok wait until
+  its turn ends. Same-room sends to working workers of every provider except Grok steer.
+  If a message would be held and you need an immediate reaction, run
+  `bus agent interrupt AGENT`, then send the new instruction. Otherwise waiting
+  for the turn to end is fine. Interrupt stops in-flight builds, Git operations
+  and device runs; never use it just to close a request.
+  [Guide](orchestrator-guide.md#immediate-reaction-or-waiting).
+
 <a id="process-every-result"></a>
 
 - **Process every result.** Keep full `bus send --async` and `bus wait` output;
