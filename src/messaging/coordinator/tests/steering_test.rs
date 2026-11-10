@@ -1399,10 +1399,14 @@ fn codex_idle_background_steering_preserves_expected_turn_identity() {
     let steering = methods
         .iter()
         .find_map(|method| match method {
-            Method::AgentPromptIfIdle(params) if params.text == payload => Some(params),
+            Method::AgentPromptIfIdleAtGeneration(params) if params.text == payload => Some(params),
             _ => None,
         })
         .expect("idle background continuation must reach native input");
     assert!(steering.steer);
     assert_eq!(steering.expected_turn_id.as_deref(), Some("turn-1"));
+    assert_eq!(
+        steering.expected_generation,
+        Some(fixture.worker.serving_generation)
+    );
 }
