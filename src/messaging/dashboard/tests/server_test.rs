@@ -13,7 +13,7 @@ fn persisted_fixture(root: &Path) {
     JsonStore::new(root.join("state.json"))
         .save(&state)
         .unwrap();
-    let archive: Request = serde_json::from_value(cases[15]["record"].clone()).unwrap();
+    let archive: Request = serde_json::from_value(cases[19]["record"].clone()).unwrap();
     let line = serde_json::to_string(&json!({"request":archive})).unwrap();
     std::fs::write(
         root.join("history.jsonl"),

@@ -426,6 +426,15 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
     let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut failures = Vec::new();
     for request in state.requests() {
+        // Deliberate closures remain in message history, outside every dashboard
+        // population (including delivery rates and latency samples). Successful
+        // replies/turns still win over stale closure reasons.
+        if request.phase == RequestPhase::Abandoned
+            && !explicit_reply(request)
+            && crate::messaging::model::classify_request_failure(reason(request)).is_deliberate()
+        {
+            continue;
+        }
         let provider = provider_label(state, request.agent_id);
         let hour = clock(request.prompt.submitted_at_ms);
         let outcome = classify(state, request);
