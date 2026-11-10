@@ -440,6 +440,12 @@ impl BusState {
         no_reply_error: Option<&str>,
     ) -> Option<RequestId> {
         if let Some(RecordedTurnEnd::Error(message)) = &recorded {
+            if self.agents.get(&agent)?.provider == super::Provider::Kimi {
+                self.requests
+                    .get_mut(&id)?
+                    .turn_ended_at_ms
+                    .get_or_insert(now_ms);
+            }
             if self.hold_provider_error(id, message, now_ms) {
                 return Some(id);
             }

@@ -7,7 +7,7 @@ fn kimi_quota_exhaustion_closes_fresh_and_restored_requests_without_retry() {
         include_str!("../../../agents/providers/tests/fixtures/kimi-quota-error.jsonl"),
     ] {
         for held in [false, true] {
-            for restart in [false, true] {
+            for restart in 0..3 {
                 let mut f = Fixture::new(Provider::Kimi);
                 let wire = super::kimi_steering_tests::home(&f);
                 let lead = running(&mut f, "quota task", "0");
@@ -37,8 +37,12 @@ fn kimi_quota_exhaustion_closes_fresh_and_restored_requests_without_retry() {
                         .save(serde_json::from_value(saved).unwrap())
                         .unwrap();
                 }
-                if restart {
+                if restart > 0 {
                     super::kimi_steering_tests::reopen(&mut f);
+                }
+                if restart == 2 {
+                    f.worker.serving_generation =
+                        f.request(lead).delivery_epoch.as_ref().unwrap().generation + 1;
                 }
                 f.record(json!({"hook_event_name":"StopFailure","session_id":"session"}));
                 f.consume();

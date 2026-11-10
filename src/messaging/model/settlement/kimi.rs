@@ -49,12 +49,6 @@ impl BusState {
         if recorded.is_none() && (owner.dialog || !exited) {
             return None;
         }
-        if matches!(&recorded, Some(RecordedTurnEnd::Error(_))) {
-            self.requests
-                .get_mut(&id)?
-                .turn_ended_at_ms
-                .get_or_insert(now_ms);
-        }
         self.consume_recorded_end(
             agent,
             id,
