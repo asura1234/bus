@@ -131,6 +131,8 @@ fn admission_selection_and_native_confirmation_are_independent_phase_samples() {
     assert_eq!(metrics["all"]["eligible_to_picked"]["mean"], 5);
     assert_eq!(metrics["all"]["accepted_to_native_confirmed"]["n"], 1);
     assert_eq!(metrics["all"]["accepted_to_native_confirmed"]["mean"], 80);
+    assert_eq!(metrics["all"]["picked_to_native_confirmed"]["n"], 1);
+    assert_eq!(metrics["all"]["picked_to_native_confirmed"]["mean"], 60);
     assert_eq!(metrics["all"]["accepted_to_picked"]["n"], 2);
     assert_eq!(
         metrics["providers"]["codex"]["accepted_to_native_confirmed"]["mean"],

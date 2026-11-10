@@ -110,6 +110,7 @@ struct Series {
     accepted_to_eligible: super::latency::Percentiles,
     eligible_to_picked: super::latency::Percentiles,
     accepted_to_native_confirmed: super::latency::Percentiles,
+    picked_to_native_confirmed: super::latency::Percentiles,
 }
 #[derive(Default, Serialize)]
 struct Rates {
@@ -369,6 +370,7 @@ struct SeriesBuilder {
     accepted_to_eligible: Vec<u64>,
     eligible_to_picked: Vec<u64>,
     accepted_to_native_confirmed: Vec<u64>,
+    picked_to_native_confirmed: Vec<u64>,
 }
 impl SeriesBuilder {
     fn add(&mut self, hour: &HourKey, request: &Request, outcome: &Outcome) {
@@ -380,6 +382,9 @@ impl SeriesBuilder {
         }
         if let Some(ms) = super::latency::accepted_to_native_confirmed_ms(request) {
             self.accepted_to_native_confirmed.push(ms);
+        }
+        if let Some(ms) = super::latency::picked_to_native_confirmed_ms(request) {
+            self.picked_to_native_confirmed.push(ms);
         }
         self.counts.add(request, outcome);
         self.hours
@@ -403,6 +408,9 @@ impl SeriesBuilder {
             eligible_to_picked: super::latency::percentiles(&self.eligible_to_picked),
             accepted_to_native_confirmed: super::latency::percentiles(
                 &self.accepted_to_native_confirmed,
+            ),
+            picked_to_native_confirmed: super::latency::percentiles(
+                &self.picked_to_native_confirmed,
             ),
             hours: self
                 .hours
