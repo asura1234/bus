@@ -457,7 +457,7 @@ const STATUS: &str = r#"Read durable settlement once, without waiting or acknowl
 Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],requests:
   [{request_id,agent_id,agent_name,deleted,stage,reason,manual_recovery,status,detail,
   uncertain_outcome,session_id,turn_id,start_bound,dialog,turn_ended,settling,group,
-  queue,event_acks,events:[{key,text}],reply_ack,exit_snapshot,reply}]}.
+  queue,latency,event_acks,events:[{key,text}],reply_ack,exit_snapshot,reply}]}.
   prompt includes author/text/files/recipients/time; files are absolute paths.
   reply is null or {text,received_at_ms,...}, with raw Markdown.
   manual_recovery is null or {actor:"human"|{agent:AGENT_ID},at_ms:UNIX_MS};
@@ -469,6 +469,10 @@ Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],reque
   or a final hook; explicit replies can finish while turn_ended remains false.
   settling holds an ended turn briefly so a late error or final hook can land;
   group is the lead request ID for joined steering and is not a history badge.
+  latency contains nullable Unix-ms clocks for accepted, queued, eligible, picked,
+  dispatch preparation, native paste/Enter writes and provider_started_at_ms.
+  Native write completion is not provider acceptance; provider_started_at_ms is
+  the correlated start hook. Missing clocks mean that phase was not observed.
   events retains exits and group summaries; event_acks lists acknowledgeable
   unseen own outcomes; reply_ack stays false because nothing waits on a reply wake.
 Stages: queued persisted; submitting native write; awaiting_start typed but no

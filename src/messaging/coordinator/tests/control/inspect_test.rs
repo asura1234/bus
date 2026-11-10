@@ -125,6 +125,35 @@ fn dev_status_explains_gate_without_claiming_delivery() {
 }
 
 #[test]
+fn message_status_exposes_delivery_clocks_even_without_worker_events() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let receipt = call(
+        &mut worker,
+        "send",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"hello"}),
+    );
+    assert!(receipt.ok, "{receipt:?}");
+    let status = call(
+        &mut worker,
+        "status",
+        "message.status",
+        json!({"message":receipt.result["message_id"].to_string()}),
+    );
+    assert!(status.ok, "{status:?}");
+    let request = &status.result["requests"][0];
+    assert_eq!(request["events"], json!([]));
+    assert_eq!(
+        request["latency"]["accepted_at_ms"],
+        status.result["prompt"]["submitted_at_ms"]
+    );
+    assert!(request["latency"]["queued_at_ms"].is_u64());
+    assert!(request["latency"]["provider_started_at_ms"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_status_lists_the_message_files_as_absolute_paths() {
     let (mut worker, _room, _agent, dir) = fixture();
     let image = dir.join("shot.png");
