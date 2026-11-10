@@ -1,7 +1,6 @@
 # How to use the Bus CLI
 
-Bus coordinates native coding-agent terminals. Its UI is for conversations; control commands drive a running
-session. Bus stores delivery and replies; callers interpret them and decide which task comes next.
+Bus coordinates native coding-agent terminals. Its UI is for conversations; control commands drive a running session. Bus stores delivery and replies; callers interpret them and decide which task comes next.
 
 ## Getting help
 
