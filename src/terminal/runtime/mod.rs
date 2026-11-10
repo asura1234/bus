@@ -4,6 +4,7 @@ mod detection_process;
 mod detection_task;
 mod draft_input;
 mod io;
+mod launch_env;
 mod launch_transaction;
 mod read;
 mod shell_integration;

@@ -59,49 +59,8 @@ pub(super) fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env_remove("WT_SESSION");
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct PaneLaunchEnv {
-    pub(super) extra: Vec<(String, String)>,
-    pub(super) identity: PaneLaunchIdentity,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) enum PaneLaunchIdentity {
-    #[default]
-    Inherit,
-    Managed {
-        workspace_id: String,
-        tab_id: String,
-        pane_id: String,
-    },
-}
-
-impl PaneLaunchEnv {
-    pub(crate) fn extra(&self) -> &[(String, String)] {
-        &self.extra
-    }
-
-    pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
-        Self {
-            extra,
-            identity: PaneLaunchIdentity::Inherit,
-        }
-    }
-
-    pub(crate) fn with_identity(
-        mut self,
-        workspace_id: String,
-        tab_id: String,
-        pane_id: String,
-    ) -> Self {
-        self.identity = PaneLaunchIdentity::Managed {
-            workspace_id,
-            tab_id,
-            pane_id,
-        };
-        self
-    }
-}
+pub(crate) use super::launch_env::PaneLaunchEnv;
+pub(super) use super::launch_env::PaneLaunchIdentity;
 
 pub(super) fn apply_pane_launch_env(
     cmd: &mut CommandBuilder,
