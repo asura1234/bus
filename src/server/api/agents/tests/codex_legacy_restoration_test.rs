@@ -11,7 +11,7 @@ enum Failure {
     Expired,
     Invalidated,
     Preserved,
-    RestorationFailure,
+    RestoreFailed,
 }
 
 async fn failed_editor_enter(failure: Failure) {
@@ -19,7 +19,7 @@ async fn failed_editor_enter(failure: Failure) {
     std::fs::create_dir_all(&root).unwrap();
     let directory = root.join("exchange");
     let file = root.join("native.txt");
-    if matches!(failure, Failure::Preserved | Failure::RestorationFailure) {
+    if matches!(failure, Failure::Preserved | Failure::RestoreFailed) {
         std::fs::write(&file, ORIGINAL).unwrap();
         let exchange = crate::platform::draft_editor::Exchange::begin_preserving(
             directory.clone(),
@@ -45,14 +45,14 @@ async fn failed_editor_enter(failure: Failure) {
             format!("\x1b[2J\x1b[H{chrome}› {text}\r\n\r\n GPT-6 · /repo").as_bytes(),
         );
     };
-    let mut draft = if matches!(failure, Failure::Preserved | Failure::RestorationFailure) {
+    let mut draft = if matches!(failure, Failure::Preserved | Failure::RestoreFailed) {
         PAYLOAD
     } else {
         ORIGINAL
     }
     .to_owned();
     render(&draft, false);
-    let mut enter_ack = matches!(failure, Failure::Preserved | Failure::RestorationFailure)
+    let mut enter_ack = matches!(failure, Failure::Preserved | Failure::RestoreFailed)
         .then(|| clock.hold_next_write_completion());
     let mut restore_ack: Option<std::sync::mpsc::Sender<()>> = None;
     let completion = runtime
@@ -89,7 +89,7 @@ async fn failed_editor_enter(failure: Failure) {
             b"\x07" => {
                 assert!(!popup, "never open the editor inside a picker");
                 editors += 1;
-                if failure == Failure::RestorationFailure && enters > 0 {
+                if failure == Failure::RestoreFailed && enters > 0 {
                     // Consumption was seen, but this restoration key's
                     // receipt fails before an editor exchange can complete.
                     restore_ack.take().unwrap().send(()).unwrap();
@@ -113,7 +113,7 @@ async fn failed_editor_enter(failure: Failure) {
                 assert_eq!(draft, PAYLOAD, "never submit the developer draft");
                 // The first three modes ignore Enter; the final mode consumes
                 // it before a failed restoration and a later returned paste.
-                if failure == Failure::RestorationFailure {
+                if failure == Failure::RestoreFailed {
                     draft.clear();
                     restore_ack = Some(clock.fail_next_write_completion(io::ErrorKind::Other));
                 } else if failure == Failure::Invalidated {
@@ -147,7 +147,7 @@ async fn failed_editor_enter(failure: Failure) {
         }
         render(&draft, popup);
     };
-    if failure == Failure::RestorationFailure {
+    if failure == Failure::RestoreFailed {
         assert!(
             result.is_ok(),
             "consumption was confirmed before restoration failed"
@@ -195,7 +195,7 @@ async fn failed_editor_enter(failure: Failure) {
     });
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!(enters, 1);
-    if failure == Failure::RestorationFailure {
+    if failure == Failure::RestoreFailed {
         assert!(
             preserved && saved_original,
             "failed restoration retains the exact developer backup"
@@ -248,5 +248,5 @@ async fn codex_legacy_preserved_payload_ignored_enter_restores_draft() {
 
 #[tokio::test]
 async fn codex_legacy_preserved_editor_retains_late_input_after_restore_failure() {
-    failed_editor_enter(Failure::RestorationFailure).await;
+    failed_editor_enter(Failure::RestoreFailed).await;
 }
