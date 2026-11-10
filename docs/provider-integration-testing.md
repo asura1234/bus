@@ -241,14 +241,17 @@ sbus agent observe new-worker
 # If the visible choice is authorized, use its complete row label and observed terminal:
 sbus agent press new-worker --select 'VISIBLE LABEL' --terminal-id TERMINAL_ID
 sbus agent observe new-worker
-sbus send --room ROOM --to new-worker --text 'Reply with FIRST_LAUNCH_MARKER.'
+sbus send --room ROOM --to new-worker --text 'Send FIRST_LAUNCH_MARKER with a foreground bus send --reply-to using this message ID and your agent ID.'
 sbus message status MESSAGE_ID
 sbus history --room ROOM --limit 100
 ```
 
-Use actual returned IDs. Require a successful completed reply, not just queueing,
-idle or screen text. If submission is uncertain, inspect status, composer and
-native records before recovery; do not blindly resend.
+Use actual returned IDs. Cases requiring a reply must ask the recipient to run
+`bus send --reply-to MESSAGE_ID --as AGENT_ID --text MARKER` in the foreground;
+require `ok: true` and `stage: replied`. A native final alone closes the request
+as `stage: ended` with `reply: null`; it does not store a reply or prove a reply
+wake. If submission is uncertain, inspect status, composer and native records
+before recovery; do not blindly resend.
 
 ## Real-model messaging matrix
 
@@ -338,14 +341,16 @@ sbus agent add --room provider-claude --name second-peer --provider PROVIDER \
 | [ ] Agent → user | Correct room contains exactly one post; long answer has both boundary markers once |
 
 Initiate each route by sending a task **to the real source agent**, not by
-running `sbus send --as SOURCE` yourself. For example:
+running `sbus send --as SOURCE` yourself. Ask the source to include the foreground
+`bus send --reply-to` instruction in its recipient's task: a native final alone
+will not supply the reply or wake required by these cells. For example:
 
 ```sh
-sbus send --room master --to new-orch --text 'Send codex-worker a task asking it to reply CODEX_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
+sbus send --room master --to new-orch --text 'Send codex-worker a task asking it to send CODEX_R1 with a foreground bus send --reply-to using its delivered message ID and own agent ID. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
 sbus message status TASK_MESSAGE_ID
 sbus history --room provider-matrix --limit 100
 sbus history --room master --limit 100
-sbus send --room master --to claude-orch --text 'Send second-peer a task asking it to reply CLAUDE_R1. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
+sbus send --room master --to claude-orch --text 'Send second-peer a task asking it to send CLAUDE_R1 with a foreground bus send --reply-to using its delivered message ID and own agent ID. End your turn and, when the worker result wakes you, tell me exactly what it replied and include the message ID.'
 sbus message status TASK_MESSAGE_ID
 sbus history --room provider-claude --limit 100
 sbus history --room master --limit 100
@@ -408,19 +413,31 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
 
 ## Reply capture and failure
 
+`complete_pending_final` in `src/messaging/model/callbacks.rs` treats a native
+final as turn completion, not a reply. Apply the separate checks below even where
+older dated testing lessons refer to automatic capture.
+
 - [ ] For each request save `sbus message status MESSAGE_ID` privately. Select
   the correct `requests[]` entry; record `session_id`, `turn_id`, `start_bound`,
   `turn_ended`, `stage`, `reason`, and `reply.text`. Bind its exact prompt to the
-  native owned session and turn. For automatic capture, require a committed
-  terminal record and successful `stage: replied`; an explicit CLI reply can
-  settle before `turn_ended`, so test automatic capture separately.
+  native owned session and turn. Test both paths separately:
+
+  - For successful native completion without an explicit `--reply-to`, require
+    the matching committed final, `complete: true`, `stage: ended`,
+    `turn_ended: true`, and `reply: null`.
+  - For a reply, ask the agent to send a unique marker with foreground
+    `bus send --reply-to MESSAGE_ID --as AGENT_ID --text MARKER`. Require its
+    `ok: true` / `stage: replied` receipt and the same stored `reply.text` in
+    message status. This may settle before `turn_ended`; retain separate native
+    turn-end proof. A native final does not replace an explicit reply.
+
   Deliverable prompts carry one short `[Bus message N from NAME]` header
   (`from you` when the developer sent it). Blocked, No-reply, and idle-agent
   notices have no header. Match the native prompt on the task body. Do not
   require the old multi-line reply hint in the delivered text. That hint lives
   in the system prompt and `bus send --help`. Reply semantics are unchanged.
-  A Kimi request that is `replied` with `turn_ended` false and still
-  `current_request`, on an empty composer, fails. The next send is
+  After the owned native turn ends, a Kimi request with `turn_ended: false`
+  that remains `current_request` on an empty composer fails. The next send is
   `prior_request_active` or `prompt_not_shown`. The committed turn-end record
   must clear it. `request recover` is a repair, not a pass, and is forbidden
   while the frame shows `[N tasks running]`, `Working…`, or `Running a command`.
@@ -434,17 +451,21 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   `turn.prompt`, assistant final text, `agent.turn.ended` (`done`), `turn.ended`
   and `prompt.completed` (`completed`). For another provider, identify its
   owned transcript and commit boundary before accepting it; ask if unknown.
-- [ ] Extract the full matching native final into a private `native.txt` and the
-  status entry's exact `reply.text` into `bus-reply.txt` without adding a newline;
-  run `diff -u "$scratch/native.txt" "$scratch/bus-reply.txt"`. A difference,
-  wrong session/turn, incomplete JSON row or missing terminal record fails. Do
+- [ ] For native completion, extract the full matching native final into private
+  `native.txt` without adding a newline and compare it with the requested final.
+  A wrong session/turn, incomplete JSON row or missing terminal record fails. Do
   not use Stop preview, visible text or idle alone as a final; a transient idle
   can occur between tool calls. Check ordinary, tool preamble, continuation,
-  Unicode and long replies including one clipped in the hook preview.
-  For example, after saving status as `"$scratch/status.json"`, extract the
-  exact Bus text for a single numeric agent ID (set `AGENT_ID` first):
+  Unicode and long finals including one clipped in the hook preview.
+- [ ] Separately ask for an explicit `--reply-to` marker and compare the stored
+  `reply.text` byte-for-byte with that marker. A later native final may be empty
+  or differ from the reply; do not compare the two as an automatic-capture test.
+  For example, after asking for `FIRST_LAUNCH_MARKER` through the foreground CLI
+  and saving status as `"$scratch/status.json"`, extract the exact Bus reply for
+  one numeric agent ID (set `AGENT_ID` first):
 
   ```sh
+  printf '%s' 'FIRST_LAUNCH_MARKER' > "$scratch/expected-reply.txt"
   AGENT_ID=123 python3 - "$scratch/status.json" "$scratch/bus-reply.txt" <<'PYCODE'
   import json, os, pathlib, sys
   status = json.loads(pathlib.Path(sys.argv[1]).read_text())
@@ -454,7 +475,7 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   assert isinstance(rows[0]['reply']['text'], str)
   pathlib.Path(sys.argv[2]).write_bytes(rows[0]['reply']['text'].encode('utf-8'))
   PYCODE
-  diff -u "$scratch/native.txt" "$scratch/bus-reply.txt"
+  diff -u "$scratch/expected-reply.txt" "$scratch/bus-reply.txt"
   ```
 
   Derive `native.txt` from the selected complete native turn, preserving its
@@ -465,14 +486,17 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
   `sbus agent interrupt AGENT`, without Bus `--yolo`. That command sends Esc
   for Claude, Codex and Kimi, and Ctrl+C for Cursor and Grok (`Ctrl+c:cancel`). On
   success, interrupt `outcome` is `stopped`. Read `sbus message status
-  MESSAGE_ID` (`ok: true`). When no final was captured before the stop, expect
-  `complete: true`, `requests[].stage` `abandoned`, `reason` `interrupted`,
-  and `reply` null. A reply captured before the stop stays `replied`. Then
-  read the visible composer. A Ctrl+C typed in the pane on
+  MESSAGE_ID` (`ok: true`). If the owned turn had not ended and no explicit
+  reply was stored before the stop, expect `complete: true`, `requests[].stage`
+  `abandoned`, `reason` `interrupted`, and `reply` null. A stored explicit reply
+  stays `replied`; an already ended native-only request stays `ended` with
+  `reply: null`. Then read the visible composer. A Ctrl+C typed in the pane on
   `Waiting for response…` can put Bus's own prompt back in the idle composer,
   and the next delivery is `NotSubmitted`. Withdraw that owned text before
-  sending. Deliver a new marker and require `stage: replied` with no draft
-  left behind. Interrupt `outcome` is not the output of `sbus stop`. Esc
+  sending. Ask the next request for an explicit foreground `--reply-to` marker
+  and require `stage: replied` with that text and no draft left behind; record
+  its native turn end separately. Interrupt `outcome` is not the output of
+  `sbus stop`. Esc
   leaving the turn running (`outcome` `failed`, "still working 15s after esc")
   is not a pass.
 - [ ] Run the fixture filters below with `just test-one FILTER`. Each one is a
