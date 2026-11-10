@@ -3,7 +3,7 @@ use super::{mpsc, AgentId, BusState, Path, PathBuf};
 use std::{io, sync::Arc};
 
 type Source = Arc<dyn Fn(&Path) -> io::Result<bool> + Send + Sync>;
-type Observation = (AgentId, PathBuf, io::Result<bool>);
+type Observation = (AgentId, PathBuf, Option<String>, io::Result<bool>);
 
 pub(super) struct DirectoryChecks {
     source: Source,
@@ -28,11 +28,14 @@ impl DirectoryChecks {
                 Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
             };
             self.pending = None;
-            for (id, cwd, result) in observations {
+            for (id, cwd, warning, result) in observations {
                 let Some(agent) = state.agent(id) else {
                     continue;
                 };
-                if agent.deletion_pending || agent.cwd != cwd {
+                if agent.deletion_pending
+                    || agent.cwd != cwd
+                    || agent.working_directory_error != warning
+                {
                     continue;
                 }
                 let unavailable = match result {
@@ -61,7 +64,13 @@ impl DirectoryChecks {
         let paths: Vec<_> = state
             .agents()
             .filter(|agent| !agent.deletion_pending)
-            .map(|agent| (agent.id, agent.cwd.clone()))
+            .map(|agent| {
+                (
+                    agent.id,
+                    agent.cwd.clone(),
+                    agent.working_directory_error.clone(),
+                )
+            })
             .collect();
         if paths.is_empty() {
             return Ok(());
@@ -73,9 +82,9 @@ impl DirectoryChecks {
             .spawn(move || {
                 let observations = paths
                     .into_iter()
-                    .map(|(id, cwd)| {
+                    .map(|(id, cwd, warning)| {
                         let result = source(&cwd);
-                        (id, cwd, result)
+                        (id, cwd, warning, result)
                     })
                     .collect();
                 let _ = sender.send(observations);

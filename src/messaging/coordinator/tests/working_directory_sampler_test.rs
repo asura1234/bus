@@ -66,7 +66,7 @@ fn completed_directory_check_does_not_apply_to_a_changed_path() {
     let (mut state, id) = state();
     let (sender, receiver) = mpsc::sync_channel(1);
     sender
-        .send(vec![(id, PathBuf::from("/query"), Ok(false))])
+        .send(vec![(id, PathBuf::from("/query"), None, Ok(false))])
         .unwrap();
     let mut checks = DirectoryChecks {
         source: Arc::new(|_| Ok(true)),
@@ -78,4 +78,35 @@ fn completed_directory_check_does_not_apply_to_a_changed_path() {
     checks.poll(&mut state).unwrap();
     assert!(state.agent(id).unwrap().working_directory_error.is_none());
     assert!(state.agent(id).unwrap().actionable_error.is_none());
+}
+
+#[test]
+fn stale_directory_result_cannot_clear_a_fresh_admission_failure() {
+    let (mut state, id) = state();
+    let mut checks = DirectoryChecks {
+        source: Arc::new(|_| Ok(true)),
+        pending: None,
+    };
+    checks.poll(&mut state).unwrap();
+    let old_result = checks
+        .pending
+        .take()
+        .unwrap()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    record_missing_directory(&mut state, id, Path::new("/query")).unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender.send(old_result).unwrap();
+    checks.pending = Some(receiver);
+    checks.poll(&mut state).unwrap();
+    assert_eq!(
+        state.agent(id).unwrap().shown_status(),
+        super::super::RuntimeStatus::Unavailable
+    );
+    assert!(state
+        .agent(id)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .is_some_and(|error| error.contains("replace the agent")));
 }
