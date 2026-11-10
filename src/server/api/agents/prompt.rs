@@ -487,7 +487,11 @@ impl App {
         {
             return Err(encode_error(
                 id,
-                "agent_blocked",
+                if native_only {
+                    "agent_not_idle"
+                } else {
+                    "agent_blocked"
+                },
                 format!(
                     "agent {} is blocked and requires interactive input",
                     params.target
