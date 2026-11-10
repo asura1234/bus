@@ -225,6 +225,18 @@ fn bus_cli_alias_refresh_from_its_own_path_keeps_the_executable_reachable() {
 }
 
 #[test]
+fn running_executable_keeps_a_missing_image_path_nonfatal() {
+    let root = temp_dir("missing-running-image");
+    let image = root.join("bus (deleted)");
+    assert!(!image.exists());
+    assert_eq!(
+        resolve_running_executable(&image).expect("a replaced image must not block pane launch"),
+        image
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bus_cli_alias_refuses_images_inside_its_directory() {
     let root = temp_dir("alias-containment");
     let directory = root.join("cli-bin");

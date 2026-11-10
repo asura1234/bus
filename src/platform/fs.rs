@@ -97,7 +97,13 @@ pub(crate) fn running_executable() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn resolve_running_executable(image: &Path) -> io::Result<PathBuf> {
-    let image = image.canonicalize()?;
+    let image = match image.canonicalize() {
+        Ok(image) => image,
+        // Linux can report a removed image after an in-place dev rebuild.
+        // Preserve the old nonfatal current_exe behavior for later pane launches.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(image.to_path_buf()),
+        Err(error) => return Err(error),
+    };
     #[cfg(windows)]
     if let Some(origin) = alias_origin(&image)? {
         return Ok(origin);
