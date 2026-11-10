@@ -18,6 +18,8 @@ struct Config {
     capture: PathBuf,
 }
 
+// Admission and owned-turn interruption are wired by the following train slices.
+#[cfg_attr(not(test), allow(dead_code))]
 struct Session {
     directory: PathBuf,
     socket: PathBuf,
@@ -26,6 +28,7 @@ struct Session {
     watcher: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl Runtime {
     pub(crate) fn from_environment(env: &[(String, String)]) -> Option<Self> {
         if !env
@@ -108,6 +111,7 @@ impl Runtime {
         self.session.is_some()
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn interrupt(
         &mut self,
         thread: &str,
@@ -163,6 +167,7 @@ fn supports_native(args: &[String]) -> bool {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl Session {
     fn prepare() -> io::Result<Self> {
         let token = crate::utils::time::digest(
@@ -239,6 +244,7 @@ impl Drop for Session {
 }
 
 #[cfg(test)]
+#[allow(dead_code, unused_imports)]
 pub(crate) mod test_support {
     pub(crate) use super::super::rpc::tests::server_for;
     pub(crate) fn connected_runtime(socket: std::path::PathBuf) -> super::Runtime {
