@@ -1,6 +1,9 @@
 //! Provider turn facts read beyond the hook's own verdict: background shells
 //! for wake ownership, and Codex usage from its rollout.
-use super::{callbacks, AgentId, CallbackEventKind, Parsed, Path, ProviderCallback, Worker};
+use super::{
+    callbacks, AgentId, BTreeMap, CallbackEventKind, Parsed, Path, PathBuf, ProviderCallback,
+    Worker,
+};
 
 impl Worker {
     pub(super) fn mark_scheduled_turn(
@@ -170,4 +173,50 @@ pub(super) fn callback(
         prompt_payload: prompt,
         kind,
     }
+}
+
+/// Applies turns in the order they began, so a later turn (a task notification,
+/// or the user typing) can never overtake the Stop of the turn Bus submitted.
+/// Session starts go first, and within a turn the submit hook goes first:
+/// companion hooks can reach the spool in either order, including after reconnect.
+pub(super) fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
+    let mut keyed: Vec<_> = std::mem::take(records)
+        .into_iter()
+        .map(|entry| {
+            let parsed = callbacks::parse(entry.1.manifest.provider, &entry.1.value);
+            let turn = match &parsed {
+                Ok(
+                    Parsed::Started { session, turn, .. }
+                    | Parsed::Final { session, turn, .. }
+                    | Parsed::BackgroundPending { session, turn }
+                    | Parsed::Response { session, turn, .. }
+                    | Parsed::Completed { session, turn }
+                    | Parsed::CompletionCandidate { session, turn }
+                    | Parsed::Failure { session, turn, .. },
+                ) => Some((session.clone(), turn.clone())),
+                _ => None,
+            };
+            let rank = match parsed {
+                Ok(Parsed::Session { .. }) => 0,
+                Ok(Parsed::Started { .. }) => 1,
+                _ => 2,
+            };
+            (rank, turn, entry)
+        })
+        .collect();
+    let mut began = BTreeMap::new();
+    for (_, turn, (_, record)) in &keyed {
+        if let Some(turn) = turn {
+            let first = began.entry(turn.clone()).or_insert(record.sequence);
+            *first = (*first).min(record.sequence);
+        }
+    }
+    keyed.sort_by_key(|(rank, turn, (_, record))| {
+        let turn_began = turn
+            .as_ref()
+            .and_then(|turn| began.get(turn).copied())
+            .unwrap_or(record.sequence);
+        (*rank != 0, turn_began, *rank, record.sequence)
+    });
+    records.extend(keyed.into_iter().map(|(_, _, entry)| entry));
 }

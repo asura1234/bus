@@ -47,7 +47,7 @@ impl Worker {
                     continue;
                 };
                 let dir = self.data_dir.join("callbacks").join(launch);
-                self.consume_callbacks(id, &dir)?;
+                self.consume_callback_wake(id, &dir)?;
                 // A publisher holding append.lock may have left a durable stage.
                 // Retry it promptly without waiting for the next full poll.
                 if std::fs::read_dir(&dir)

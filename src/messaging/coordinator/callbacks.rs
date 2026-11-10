@@ -5,7 +5,7 @@ use super::{
     ResponseResult, RoomId, RuntimeStatus, Worker,
 };
 
-use self::provider_turns::callback;
+use self::provider_turns::{callback, order_records};
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
 use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
@@ -92,10 +92,35 @@ impl Worker {
     }
 
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
+        self.consume_callback_spool(id, dir, false)
+    }
+
+    pub(super) fn consume_callback_wake(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
+        self.consume_callback_spool(id, dir, true)
+    }
+
+    fn consume_callback_spool(
+        &mut self,
+        id: AgentId,
+        dir: &Path,
+        wake: bool,
+    ) -> Result<(), String> {
         let mut rollout = None;
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
         order_records(&mut records);
         for (path, record) in &records {
+            // Reconciliation-only gates need fresh native status and committed
+            // wire evidence. A wake must not spend Grok's retry budget on cached
+            // Idle or acknowledge Kimi's gate before its wire end is committed.
+            if wake
+                && matches!(record.manifest.provider, Provider::Grok | Provider::Kimi)
+                && matches!(
+                    callbacks::parse(record.manifest.provider, &record.value),
+                    Ok(Parsed::CompletionCandidate { .. } | Parsed::ReconcileSession { .. })
+                )
+            {
+                continue;
+            }
             if matches!(
                 self.consume_callback_record(id, dir, path, record, &records, &mut rollout)?,
                 CallbackFlow::Stop
@@ -725,52 +750,6 @@ impl Worker {
         self.acknowledge_spool(dir, remove)?;
         Ok(CallbackFlow::Next)
     }
-}
-
-/// Applies turns in the order they began, so a later turn (a task notification,
-/// or the user typing) can never overtake the Stop of the turn Bus submitted.
-/// Session starts go first, and within a turn the submit hook goes first:
-/// companion hooks can reach the spool in either order, including after reconnect.
-fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
-    let mut keyed: Vec<_> = std::mem::take(records)
-        .into_iter()
-        .map(|entry| {
-            let parsed = callbacks::parse(entry.1.manifest.provider, &entry.1.value);
-            let turn = match &parsed {
-                Ok(
-                    Parsed::Started { session, turn, .. }
-                    | Parsed::Final { session, turn, .. }
-                    | Parsed::BackgroundPending { session, turn }
-                    | Parsed::Response { session, turn, .. }
-                    | Parsed::Completed { session, turn }
-                    | Parsed::CompletionCandidate { session, turn }
-                    | Parsed::Failure { session, turn, .. },
-                ) => Some((session.clone(), turn.clone())),
-                _ => None,
-            };
-            let rank = match parsed {
-                Ok(Parsed::Session { .. }) => 0,
-                Ok(Parsed::Started { .. }) => 1,
-                _ => 2,
-            };
-            (rank, turn, entry)
-        })
-        .collect();
-    let mut began = BTreeMap::new();
-    for (_, turn, (_, record)) in &keyed {
-        if let Some(turn) = turn {
-            let first = began.entry(turn.clone()).or_insert(record.sequence);
-            *first = (*first).min(record.sequence);
-        }
-    }
-    keyed.sort_by_key(|(rank, turn, (_, record))| {
-        let turn_began = turn
-            .as_ref()
-            .and_then(|turn| began.get(turn).copied())
-            .unwrap_or(record.sequence);
-        (*rank != 0, turn_began, *rank, record.sequence)
-    });
-    records.extend(keyed.into_iter().map(|(_, _, entry)| entry));
 }
 
 #[cfg(test)]

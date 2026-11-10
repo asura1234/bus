@@ -19,6 +19,28 @@ impl Transport for CallbackNative {
     }
 }
 
+struct TickWitness {
+    native: CallbackNative,
+    path: PathBuf,
+    request: RequestId,
+    polls: usize,
+    seen: mpsc::Sender<bool>,
+}
+impl Transport for TickWitness {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::AgentListWithDetectionContext(_)) {
+            self.polls += 1;
+            if self.polls == 2 {
+                let saved = JsonStore::new(self.path.clone()).load().unwrap().unwrap();
+                self.seen
+                    .send(saved.request(self.request).unwrap().trusted_start_bound)
+                    .unwrap();
+            }
+        }
+        self.native.request(method)
+    }
+}
+
 #[test]
 fn durable_started_callback_wakes_the_coordinator_before_the_next_tick() {
     let _providers = provider_binaries();
@@ -33,6 +55,16 @@ fn durable_started_callback_wakes_the_coordinator_before_the_next_tick() {
         worker.state.request(request).unwrap().phase,
         RequestPhase::Active
     );
+    let (seen, witness) = mpsc::channel();
+    worker.transport = Box::new(TickWitness {
+        native: CallbackNative {
+            info: native_info("pane", "claude", "session"),
+        },
+        path: dir.join("state.json"),
+        request,
+        polls: 0,
+        seen,
+    });
     let (saved, observed) = mpsc::channel();
     worker.test_save_observations = Some(saved);
     let (commands, receiver) = mpsc::sync_channel(256);
@@ -51,34 +83,19 @@ fn durable_started_callback_wakes_the_coordinator_before_the_next_tick() {
             break;
         }
     }
-    let at = Instant::now();
     record(
         &dir,
         Provider::ClaudeCode,
         json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "prompt_id":"turn", "prompt":"wake this callback"}),
     );
-    let mut woke = false;
-    while at.elapsed() < Duration::from_millis(200) {
-        if snapshots
-            .lock()
-            .unwrap()
-            .state
-            .request(request)
-            .unwrap()
-            .trusted_start_bound
-        {
-            woke = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    let before_tick = witness.recv_timeout(Duration::from_secs(3)).unwrap();
     commands.send((1, BusCommand::Shutdown)).unwrap();
     thread.join().unwrap();
     drop(control);
     std::fs::remove_dir_all(dir).unwrap();
     assert!(
-        woke,
-        "durably published Started waited for the next 500 ms tick"
+        before_tick,
+        "durably published Started was still unbound when the next full native poll began"
     );
 }
 
@@ -414,6 +431,106 @@ fn callback_wake_closed_publisher_hint_is_safe_to_admit_without_a_mutation() {
         matches!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), (0, BusCommand::CallbackReady(launch)) if launch == "launch")
     );
     drop(control);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn callback_wake_does_not_spend_grok_reconciliation_budget_on_stale_idle() {
+    let (mut worker, agent, _, dir) = prepared(Provider::Grok);
+    record(&dir, Provider::Grok, started(Provider::Grok));
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    // The cached native observation is still Idle while the provider runs its
+    // synchronous Stop gate. A tick would refresh it before reconciling.
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    record(
+        &dir,
+        Provider::Grok,
+        json!({"hookEventName":"stop", "sessionId":"session", "promptId":"turn", "reason":"end_turn"}),
+    );
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    let retries = std::fs::read_dir(dir.join("callbacks/launch"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "grok-retry"))
+        .count();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(retries, 0, "a wake used stale Idle and started the two-second Grok retry budget before fresh native proof");
+}
+
+#[test]
+fn callback_wake_keeps_kimi_wire_reconciliation_for_the_fresh_poll() {
+    let (mut worker, _, request, dir) = prepared(Provider::Kimi);
+    record(&dir, Provider::Kimi, started(Provider::Kimi));
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    record(
+        &dir,
+        Provider::Kimi,
+        json!({"hook_event_name":"Stop", "session_id":"session"}),
+    );
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert_eq!(
+        callbacks::records(&dir.join("callbacks/launch"))
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn callback_wake_cursor_response_waits_for_its_matching_stop() {
+    let (mut worker, _, request, dir) = prepared(Provider::Cursor);
+    record(&dir, Provider::Cursor, started(Provider::Cursor));
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"afterAgentResponse", "conversation_id":"session", "generation_id":"turn", "text":"one response"}),
+    );
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"stop", "conversation_id":"session", "generation_id":"turn", "status":"completed"}),
+    );
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .completed_reply
+            .is_none(),
+        "turn finals must not publish replies"
+    );
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
