@@ -320,16 +320,23 @@ fn successful_deletion_retry_clears_previous_worker_snapshot_error() {
 #[test]
 fn delete_last_room_stays_empty_after_restart_and_ignores_late_callbacks() {
     let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let capture = dir.join("callbacks/launch");
+    let manifest: callbacks::Manifest =
+        serde_json::from_slice(&std::fs::read(capture.join("manifest.json")).unwrap()).unwrap();
     queue(&mut worker, room, agent, "deleted request");
     let (events, _) = mpsc::channel();
     worker
         .command(BusCommand::DeleteRoom(room), &events)
         .unwrap();
+    assert!(!capture.exists());
+    // Reintroduce an old capture so late-input recovery remains exercised.
+    callbacks::initialize(&capture, &manifest).unwrap();
     record(
         &dir,
         Provider::Codex,
         json!({"hook_event_name":"SessionStart", "session_id":"late-session"}),
     );
+    assert_eq!(callbacks::records(&capture).unwrap().len(), 1);
     drop(worker);
     let fake = FakeTransport {
         replies: vec![Ok(ResponseResult::AgentList { agents: vec![] })].into(),
@@ -337,6 +344,7 @@ fn delete_last_room_stays_empty_after_restart_and_ignores_late_callbacks() {
         state_path: dir.join("state.json"),
     };
     let mut recovered = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+    assert!(!capture.exists());
     recovered.tick().unwrap();
     // Only the undeletable MASTER room remains.
     assert_eq!(

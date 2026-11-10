@@ -9,6 +9,12 @@ use crate::agents::providers::spool;
 use crate::messaging::perf;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "tests/callback_gc_startup_test.rs"]
+mod callback_gc_startup_tests;
+#[cfg(test)]
+#[path = "tests/callback_gc_test.rs"]
+mod callback_gc_tests;
 mod callback_spool;
 mod codex_settlement;
 mod control_reads;
@@ -113,6 +119,8 @@ pub(super) struct SaveBatch {
     pub(super) before: Option<(BusState, u64)>,
     acknowledgements: Vec<(PathBuf, Vec<PathBuf>)>,
     rejections: Vec<(AgentId, PathBuf, PathBuf)>,
+    /// A deleted owner's captures outlive all callback acknowledgements in this batch.
+    collect_deleted_callbacks: bool,
 }
 
 impl Worker {
@@ -162,6 +170,7 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         store.save(&state).map_err(|e| e.to_string())?;
+        super::callback_gc::collect(&data_dir, &state);
         Ok(Self {
             interrupt_attempts: InterruptAttempts::default(),
             idle_alerted_rooms: BTreeSet::new(),
@@ -276,6 +285,14 @@ impl Worker {
         self.batch = Some(SaveBatch::default());
     }
 
+    pub(super) fn collect_deleted_callbacks(&mut self) {
+        if let Some(batch) = self.batch.as_mut() {
+            batch.collect_deleted_callbacks = true;
+        } else {
+            super::callback_gc::collect(&self.data_dir, &self.durable_state);
+        }
+    }
+
     /// Deletes consumed spool files now, or after the batch's write.
     pub(super) fn acknowledge_spool(
         &mut self,
@@ -310,6 +327,9 @@ impl Worker {
         for (id, dir, path) in batch.rejections {
             spool::retain_rejected(&dir, &path, spool::RoutingKey(id.0))
                 .map_err(|e| e.to_string())?;
+        }
+        if batch.collect_deleted_callbacks {
+            super::callback_gc::collect(&self.data_dir, &self.durable_state);
         }
         Ok(())
     }

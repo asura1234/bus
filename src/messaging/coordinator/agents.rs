@@ -52,6 +52,7 @@ impl Worker {
         );
         self.branch_checks.remove(&id);
         self.codex_rollouts.remove(&id);
+        self.collect_deleted_callbacks();
         self.finish_deletion(left_open, events);
         Ok(())
     }
@@ -80,6 +81,7 @@ impl Worker {
             self.branch_checks.remove(&agent);
             self.codex_rollouts.remove(&agent);
         }
+        self.collect_deleted_callbacks();
         self.finish_deletion(left_open, events);
         Ok(())
     }
