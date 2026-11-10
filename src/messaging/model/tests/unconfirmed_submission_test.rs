@@ -22,7 +22,7 @@ fn uncertain_write(
         )
         .unwrap();
     let behind = submit_text(state, room, agent, "blocked notice");
-    (typed, behind, 1_000 + DELIVERED_STALL_MS)
+    (typed, behind, 1_000 + UNCONFIRMED_SUBMISSION_MS)
 }
 
 fn tagged_master_notices(state: &mut BusState) -> usize {
@@ -42,6 +42,45 @@ fn assert_unknown_outcome_failure(state: &BusState, request: RequestId) {
     );
     assert!(request.uncertain_outcome);
     assert!(request.pending_final.is_none());
+}
+
+#[test]
+fn swallowed_enter_releases_idle_claude_queue_five_seconds_after_the_write() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.agents.get_mut(&agent).unwrap().provider = Provider::ClaudeCode;
+    let (typed, behind, _) = uncertain_write(&mut state, room, agent);
+    state
+        .record_native_timestamps(
+            typed,
+            NativeSubmissionTimestamps {
+                enter_written_at_ms: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // Repeated idle observations must not renew the confirmation deadline.
+    for observed_at in [3_000, 5_000, 6_999] {
+        state
+            .observe_status(agent, RuntimeStatus::Idle, observed_at)
+            .unwrap();
+        state.fail_unconfirmed_submissions(observed_at).unwrap();
+        assert_eq!(state.agent(agent).unwrap().current_request, Some(typed));
+        assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
+    }
+    state.fail_unconfirmed_submissions(7_000).unwrap();
+    assert_unknown_outcome_failure(&state, typed);
+    assert_eq!(state.next_queued_request(agent), Some(behind));
+    assert_eq!(state.agent(agent).unwrap().current_request, None);
+    assert!(state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("submission_unconfirmed"));
+    let restored: BusState = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert_unknown_outcome_failure(&restored, typed);
+    assert_eq!(restored.next_queued_request(agent), Some(behind));
 }
 
 #[test]
@@ -127,7 +166,7 @@ fn coalesced_messages_failed_with_their_unconfirmed_lead_carry_its_reason() {
         )
         .unwrap();
     state
-        .fail_unconfirmed_submissions(1_000 + DELIVERED_STALL_MS)
+        .fail_unconfirmed_submissions(1_000 + UNCONFIRMED_SUBMISSION_MS)
         .unwrap();
     let joined = state.request(member).unwrap();
     assert_eq!(joined.phase, RequestPhase::Abandoned);
@@ -160,7 +199,7 @@ fn an_unconfirmed_write_waits_its_full_bound_after_the_agent_flaps_idle() {
     );
     assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
     assert_eq!(tagged_master_notices(&mut state), 0);
-    let later = 3_000 + DELIVERED_STALL_MS;
+    let later = 3_000 + UNCONFIRMED_SUBMISSION_MS;
     state.fail_unconfirmed_submissions(later).unwrap();
     assert!(state
         .expire_stalled_queued_requests(later)
@@ -208,14 +247,14 @@ fn an_unconfirmed_write_waits_after_its_idle_dialog_closes() {
     );
     assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
     state
-        .fail_unconfirmed_submissions(resumed_at + DELIVERED_STALL_MS - 1)
+        .fail_unconfirmed_submissions(resumed_at + UNCONFIRMED_SUBMISSION_MS - 1)
         .unwrap();
     assert_eq!(
         state.request(typed).unwrap().phase,
         RequestPhase::Submitting
     );
     state
-        .fail_unconfirmed_submissions(resumed_at + DELIVERED_STALL_MS)
+        .fail_unconfirmed_submissions(resumed_at + UNCONFIRMED_SUBMISSION_MS)
         .unwrap();
     assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Abandoned);
 }
@@ -253,14 +292,14 @@ fn unconfirmed_submission_idle_dialog_bound_uses_the_closure_observation() {
             .observe_dialog(agent, false, closed_at + 1_000)
             .unwrap();
         state
-            .fail_unconfirmed_submissions(closed_at + DELIVERED_STALL_MS - 1)
+            .fail_unconfirmed_submissions(closed_at + UNCONFIRMED_SUBMISSION_MS - 1)
             .unwrap();
         assert_eq!(
             state.request(typed).unwrap().phase,
             RequestPhase::Submitting
         );
         state
-            .fail_unconfirmed_submissions(closed_at + DELIVERED_STALL_MS)
+            .fail_unconfirmed_submissions(closed_at + UNCONFIRMED_SUBMISSION_MS)
             .unwrap();
         assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Abandoned);
     }
@@ -278,18 +317,18 @@ fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
         .observe_status(agent, RuntimeStatus::Unavailable, restarted_at)
         .unwrap();
     restored
-        .fail_unconfirmed_submissions(restarted_at + DELIVERED_STALL_MS)
+        .fail_unconfirmed_submissions(restarted_at + UNCONFIRMED_SUBMISSION_MS)
         .unwrap();
     assert_eq!(
         restored.request(typed).unwrap().phase,
         RequestPhase::Submitting
     );
-    let idle_at = restarted_at + DELIVERED_STALL_MS + 1;
+    let idle_at = restarted_at + UNCONFIRMED_SUBMISSION_MS + 1;
     restored
         .observe_status(agent, RuntimeStatus::Idle, idle_at)
         .unwrap();
     restored
-        .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS - 1)
+        .fail_unconfirmed_submissions(idle_at + UNCONFIRMED_SUBMISSION_MS - 1)
         .unwrap();
     assert_eq!(
         restored.request(typed).unwrap().phase,
@@ -300,7 +339,7 @@ fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
         RequestPhase::Queued
     );
     restored
-        .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS)
+        .fail_unconfirmed_submissions(idle_at + UNCONFIRMED_SUBMISSION_MS)
         .unwrap();
     assert_eq!(
         restored.request(typed).unwrap().phase,
@@ -313,7 +352,7 @@ fn restored_unconfirmed_write_waits_for_fresh_idle_observation_and_bound() {
     let encoded = serde_json::to_vec(&restored).unwrap();
     let mut restored_again: BusState = serde_json::from_slice(&encoded).unwrap();
     restored_again
-        .fail_unconfirmed_submissions(idle_at + DELIVERED_STALL_MS + 1)
+        .fail_unconfirmed_submissions(idle_at + UNCONFIRMED_SUBMISSION_MS + 1)
         .unwrap();
     assert_eq!(restored_again.next_queued_request(agent), Some(behind));
     assert_eq!(tagged_master_notices(&mut restored_again), 0);

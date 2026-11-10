@@ -864,7 +864,7 @@ fn session_start_reports_bind_through_native_provider_session_adapter() {
 }
 
 /// The fixture polled at 1 ms. Bus fails a write it could not confirm once
-/// its agent sits idle past `DELIVERED_STALL_MS`, so typing starts on the real clock.
+/// its agent sits idle past its confirmation bound, so typing starts on the real clock.
 fn fresh_idle_poll(worker: &mut Worker, agent: AgentId) {
     worker
         .state
@@ -899,13 +899,22 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
     let next = queue(&mut worker, room, agent, "blocked notice");
     worker.submit_ready().unwrap();
     assert!(worker.state.request(lost).unwrap().uncertain_outcome);
-    let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap()
-        + crate::messaging::model::DELIVERED_STALL_MS;
+    // A swallowed Enter must not retain queue ownership for minutes.
+    let bound = worker.state.request(lost).unwrap().progress_at_ms.unwrap() + 5_000;
     worker.expire_unconfirmed_submissions(bound).unwrap();
     let failed = worker.state.request(lost).unwrap();
     assert_eq!(failed.phase, RequestPhase::Abandoned);
     assert_eq!(
         failed.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    let durable = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable.agent(agent).unwrap().current_request, None);
+    assert_eq!(
+        durable.request(lost).unwrap().failure_reason.as_deref(),
         Some("submission_unconfirmed")
     );
     worker.submit_ready().unwrap();

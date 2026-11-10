@@ -250,7 +250,11 @@ fn an_unconfirmed_new_turn_write_uses_the_same_episode_fallback() {
         f.worker.state.agent(worker).unwrap().dialog_notice_to,
         Some(DialogNoticeTo::Developer)
     );
-    assert_eq!(f.request(notice).phase, RequestPhase::Submitting);
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(notice).failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
 }
 
 #[test]

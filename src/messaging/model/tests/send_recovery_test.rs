@@ -450,7 +450,7 @@ fn an_uncertain_write_the_idle_agent_never_took_fails_and_frees_its_queue() {
 
     // Within its bound the uncertain write holds the agent, and the message
     // behind it waits rather than expiring as prior_request_active.
-    let bound = 1_000 + DELIVERED_STALL_MS;
+    let bound = 1_000 + UNCONFIRMED_SUBMISSION_MS;
     state.fail_unconfirmed_submissions(bound - 1).unwrap();
     assert!(state
         .expire_stalled_queued_requests(bound - 1)

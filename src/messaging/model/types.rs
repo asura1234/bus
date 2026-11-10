@@ -1,5 +1,7 @@
 //! Persisted DTOs, identities and payload representation.
-pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
+pub(crate) use super::stall::{
+    BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS, UNCONFIRMED_SUBMISSION_MS,
+};
 use super::{payload::payload_matches, DeliveryLatency, DialogNoticeDelivery, QueuedRejection};
 use serde::{Deserialize, Serialize};
 use std::{

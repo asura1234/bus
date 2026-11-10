@@ -78,6 +78,7 @@ pub(crate) use {
         RoomHistoryFilters, RoomId, RoomKind, RuntimeStatus, StartupFailure, StartupRecovery,
         SubmissionOutcome, AGENT_STARTUP_FAILED, BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS,
         MASTER_ROOM_NAME, QUEUED_STALL_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
+        UNCONFIRMED_SUBMISSION_MS,
     },
 };
 
