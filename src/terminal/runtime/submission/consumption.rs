@@ -62,7 +62,7 @@ impl ObservedSubmission {
         ))
     }
 
-    fn wait_legacy_consumption(&self) -> io::Result<()> {
+    pub(super) fn wait_legacy_consumption(&self) -> io::Result<()> {
         loop {
             let generation = self.clock.generation();
             let guard = self
@@ -133,13 +133,30 @@ impl ObservedSubmission {
         if !owned(&screen) {
             return Err(io::Error::other("Picker input is not owned by Bus"));
         }
-        self.check_deadline()?;
+        // Returning a saved draft owns the transfer reserve even when the
+        // shorter submission confirmation window has already expired.
+        let deadline = if restoring {
+            self.hard_deadline
+        } else {
+            self.deadline.get()
+        };
+        let check_deadline = || {
+            if self.clock.now() >= deadline {
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Picker transfer expired",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        check_deadline()?;
         let queue = || {
             self.io.queue_input_write_scoped(
                 key,
                 bytes::Bytes::new(),
                 Duration::ZERO,
-                Some(self.deadline.get()),
+                Some(deadline),
                 &self.scope,
             )
         };
@@ -150,7 +167,7 @@ impl ObservedSubmission {
         }?;
         drop(guard);
         completion
-            .recv_timeout(self.clock.remaining(self.deadline.get()))
+            .recv_timeout(self.clock.remaining(deadline))
             .map_err(io::Error::other)??;
         // One Esc closes a known picker; never repeat it against a live turn.
         loop {
@@ -162,7 +179,7 @@ impl ObservedSubmission {
             {
                 return Ok(());
             }
-            self.check_deadline()?;
+            check_deadline()?;
             self.clock.sleep(Duration::from_millis(20), generation);
         }
     }

@@ -63,7 +63,7 @@ impl ObservedSubmission {
                 .editor_submission()
                 .filter(|editor| Exchange::has_preserved_draft(&editor.directory))
             {
-                return self.finish_preserved_draft(editor, lease);
+                return self.finish_preserved_draft(editor, delay, lease);
             }
         }
         let preservation = self
@@ -136,12 +136,21 @@ impl ObservedSubmission {
     fn finish_preserved_draft(
         &self,
         editor: EditorSubmission,
+        delay: Duration,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
         match self.observe("preserved_draft") {
             // The Bus payload is already on screen. One Enter submits
             // that attempt; opening the editor would replace it.
             InputObservation::Pending => {
+                if self.inspect.confirm_consumption() {
+                    let exchange = Exchange::begin_restoration(
+                        editor.directory.clone(),
+                        self.clock.remaining(self.hard_deadline),
+                    )
+                    .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+                    return self.submit_editor_attempt(&exchange, editor, delay, lease);
+                }
                 let submitted = self.swap_key(lease, self.enter.clone(), true);
                 lease.restored();
                 return submitted;
@@ -340,6 +349,11 @@ impl ObservedSubmission {
                 key
             };
             if submit {
+                if self.inspect.confirm_consumption() {
+                    self.observe("legacy_editor_enter_ownership");
+                    self.enter_content_seq
+                        .set(self.content_seq.load(std::sync::atomic::Ordering::Acquire));
+                }
                 self.diagnostics.enter(&key, self.clock.now());
             }
             let (text, enter) = if submit {
@@ -474,34 +488,78 @@ impl ObservedSubmission {
             self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        // Installation is recorded before submit. The receipt is content-free
-        // and excludes the subsequent submit and draft restoration. Ownership
-        // is recorded only after that Enter write is accepted.
+        self.submit_editor_attempt(
+            &exchange,
+            EditorSubmission {
+                key,
+                backspace,
+                ..editor
+            },
+            delay,
+            lease,
+        )
+    }
+
+    fn submit_editor_attempt(
+        &self,
+        exchange: &Exchange,
+        editor: EditorSubmission,
+        delay: Duration,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
+        // This receipt records installed composer input, not a native turn.
+        // Keep its recovery ownership until exact restoration is proven;
+        // model ownership still requires the native callback.
         self.diagnostics.editor_installed(editor.text.len());
+        if self.inspect.confirm_consumption() {
+            self.diagnostics.retain_editor_input(self.clock.now());
+        }
         self.reset_confirmation(delay);
         let submitted = self.swap_key(lease, self.enter.clone(), true);
         if submitted.is_ok() {
             self.diagnostics.ownership_verified();
         }
-        let result = submitted.and_then(|()| self.wait_for_consumption());
+        let result = submitted.and_then(|()| {
+            if self.inspect.confirm_consumption() {
+                self.wait_legacy_consumption()
+            } else {
+                self.wait_for_consumption()
+            }
+        });
         let restoration = if result.is_err() {
             exchange
                 .request_restore_after_attempt(&editor.text)
                 .and_then(|()| {
-                    self.restore_editor_transfer(&exchange, &key, &backspace, true, lease)
+                    self.restore_editor_transfer(
+                        exchange,
+                        &editor.key,
+                        &editor.backspace,
+                        true,
+                        lease,
+                    )
                 })
         } else {
-            self.restore_editor(&exchange, &key, &backspace, lease)
+            self.restore_editor(exchange, &editor.key, &editor.backspace, lease)
         };
         match restoration {
-            Ok(()) => lease.restored(),
+            Ok(()) => {
+                lease.restored();
+                self.diagnostics.editor_restored();
+            }
             Err(error) => {
-                self.recovery_log(&exchange, &error);
+                self.recovery_log(exchange, &error);
                 // Enter already cleared the composer. Reporting the later
                 // restore failure would invite a second submit; the recovery
                 // file stays for a later empty-composer restoration.
                 if result.is_err() {
-                    return Err(error);
+                    return Err(
+                        if self.inspect.confirm_consumption() && self.diagnostics.enter_attempted()
+                        {
+                            Self::uncertain_submission(error)
+                        } else {
+                            error
+                        },
+                    );
                 }
             }
         }

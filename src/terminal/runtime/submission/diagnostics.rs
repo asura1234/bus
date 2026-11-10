@@ -53,6 +53,16 @@ impl Diagnostics {
         tracing::info!(target: "bus::terminal::submission", event = "bus.terminal.submission.editor_installed", at_ms, bytes, "Bus input installed through native editor");
     }
 
+    pub(super) fn retain_editor_input(&self, now: Instant) {
+        // This is an owned input age, not a PTY paste receipt. Keep the paste
+        // byte counters and timing fields separate from native-editor writes.
+        self.paste_at.set(Some(now));
+    }
+
+    pub(super) fn editor_restored(&self) {
+        self.paste_at.set(None);
+    }
+
     pub(super) fn ownership_verified(&self) {
         self.record(|timestamps| {
             timestamps
