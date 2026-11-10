@@ -82,7 +82,33 @@ impl Worker {
         &mut self,
         can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        self.refresh_queued_recipient_callbacks()?;
         self.submit_available_while(can_deliver, false)
+    }
+
+    fn refresh_queued_recipient_callbacks(&mut self) -> Result<(), String> {
+        let recipients: Vec<_> = self
+            .state
+            .agents()
+            .filter(|agent| {
+                !agent.deletion_pending
+                    && !self.native_submissions.contains_key(&agent.id)
+                    && !self.state.queued_requests(agent.id).is_empty()
+            })
+            .filter_map(|agent| {
+                agent
+                    .runtime_identity
+                    .launch_id
+                    .as_ref()
+                    .map(|launch| (agent.id, self.data_dir.join("callbacks").join(launch)))
+            })
+            .collect();
+        self.begin_batch();
+        let consumed = recipients
+            .into_iter()
+            .try_for_each(|(agent, dir)| self.consume_callbacks(agent, &dir));
+        let saved = self.finish_batch();
+        consumed.and(saved)
     }
 
     fn submit_available_while(

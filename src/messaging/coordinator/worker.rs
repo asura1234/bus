@@ -284,7 +284,7 @@ impl Worker {
     }
 
     /// Defers saves until [`Self::finish_batch`], which writes them once.
-    fn begin_batch(&mut self) {
+    pub(super) fn begin_batch(&mut self) {
         debug_assert!(self.batch.is_none(), "batches do not nest");
         self.batch = Some(SaveBatch::default());
     }
@@ -313,7 +313,7 @@ impl Worker {
     /// Writes the batch's changes once, then deletes the spool files they
     /// consumed. When the write fails, the state returns to where the batch
     /// began and every spool file stays, so nothing is acknowledged unsaved.
-    fn finish_batch(&mut self) -> Result<(), String> {
+    pub(super) fn finish_batch(&mut self) -> Result<(), String> {
         let Some(batch) = self.batch.take() else {
             return Ok(());
         };

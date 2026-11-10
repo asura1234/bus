@@ -708,3 +708,166 @@ fn a_failed_pre_send_timestamp_never_strands_an_unsent_steering_member() {
         );
     }
 }
+
+#[test]
+fn a_claude_turn_starting_between_ticks_keeps_unbound_steering_admission() {
+    for provider in [Provider::ClaudeCode, Provider::ClaudeDs] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+        assert!(!worker.own_turns.contains_key(&agent));
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "prompt_id":"background-turn", "prompt":"autonomous background notification"}),
+        );
+        queue(&mut worker, room, agent, "developer correction");
+        let native = DeferredNative(Default::default());
+        worker.transport = Box::new(native.clone());
+        worker.submit_eligible_while(|| true).unwrap();
+        let steer = match &native.0.lock().unwrap()[0].0 {
+            Method::AgentPromptIfIdleAtGeneration(params) => params.steer,
+            other => panic!("unexpected admission {other:?}"),
+        };
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            steer,
+            "the between-tick autonomous turn was submitted as idle instead of steering"
+        );
+    }
+}
+
+#[test]
+fn a_queue_only_claude_message_holds_for_a_between_tick_autonomous_turn() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "prompt_id":"background-turn", "prompt":"autonomous background notification"}),
+    );
+    let mut state = worker.state.clone();
+    let request = state
+        .submit_message_with(
+            room,
+            crate::messaging::model::Draft {
+                text: "independent turn".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            crate::messaging::model::Author::Developer,
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_eligible_while(|| true).unwrap();
+    let submitted = !native.0.lock().unwrap().is_empty();
+    let phase = worker.state.request(request).unwrap().phase;
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"Stop", "session_id":"session", "prompt_id":"background-turn", "last_assistant_message":"background finished"}),
+    );
+    worker.submit_eligible_while(|| true).unwrap();
+    let after_stop = native.0.lock().unwrap().len();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !submitted,
+        "queue-only work was sent into an autonomous turn that started between ticks"
+    );
+    assert_eq!(phase, RequestPhase::Queued);
+    assert_eq!(
+        after_stop, 1,
+        "the matching stop must release independent work"
+    );
+}
+
+#[test]
+fn fast_callback_refresh_defers_a_recipient_until_its_native_receipt() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let lead = queue(&mut worker, room, agent, "owned work");
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "prompt_id":"owned-turn", "prompt":"owned work"}),
+    );
+    queue(&mut worker, room, agent, "queued followup");
+    worker.submit_eligible_while(|| true).unwrap();
+    let before_receipt = worker.state.request(lead).unwrap().trusted_start_bound;
+    native.0.lock().unwrap()[0]
+        .1
+        .send(Ok(ResponseResult::AgentPrompted {
+            agent: native_info("pane", "claude", "session"),
+            timestamps: Default::default(),
+        }))
+        .unwrap();
+    worker.finish_native_submissions(false);
+    worker.submit_eligible_while(|| true).unwrap();
+    let after_receipt = worker.state.request(lead).unwrap().trusted_start_bound;
+    let callback_state = format!(
+        "{:?}, own turns: {:?}",
+        worker.state.request(lead),
+        worker.own_turns
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !before_receipt,
+        "callbacks must not overtake an outstanding native write"
+    );
+    assert!(
+        after_receipt,
+        "callback reconciliation must resume after the receipt: {callback_state}"
+    );
+}
+
+#[test]
+fn a_fast_callback_checkpoint_failure_prevents_native_input() {
+    use crate::messaging::storage::state_store::SaveStage;
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "prompt_id":"background-turn", "prompt":"autonomous background notification"}),
+    );
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "followup after callback checkpoint",
+    );
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.store.fail_once_at_after(SaveStage::TempWrite, 0);
+    let failed = worker.submit_eligible_while(|| true).is_err();
+    let sent = !native.0.lock().unwrap().is_empty();
+    let durable = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap()
+        .request(request)
+        .unwrap()
+        .phase;
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        failed,
+        "callback persistence failure must reach the coordinator"
+    );
+    assert!(
+        !sent,
+        "input must not cross an uncommitted callback checkpoint"
+    );
+    assert_eq!(durable, RequestPhase::Queued);
+}
