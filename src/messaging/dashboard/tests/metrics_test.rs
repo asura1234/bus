@@ -2,6 +2,9 @@ use super::*;
 use crate::messaging::model::{AgentId, Provider, RequestId};
 use serde::Deserialize;
 
+#[path = "deliberate_test.rs"]
+mod deliberate;
+
 #[derive(Deserialize)]
 struct Case {
     name: String,
@@ -139,7 +142,7 @@ fn complete_bus_reliability_names_every_excluded_attempt() {
     records[0].phase = RequestPhase::Completed;
     records[0].failure_reason = None;
     records[1].phase = RequestPhase::Abandoned;
-    records[1].failure_reason = Some("interrupted".into());
+    records[1].failure_reason = Some("provider_error: quota".into());
     records[1].trusted_start_bound = false;
     let report = snapshot(&fixture_state(records), singapore_hour);
     let counts = &report.all.counts;
@@ -289,7 +292,7 @@ fn group_rows_reconcile_attempted_with_delivered_failed_external_and_pending() {
     records[4].failure_reason = None;
     records[4].agent_id = AgentId(4);
     records[5].phase = RequestPhase::Abandoned;
-    records[5].failure_reason = Some("interrupted".into());
+    records[5].failure_reason = Some("provider_error: quota".into());
     records[5].trusted_start_bound = false;
     records[5].agent_id = AgentId(4);
     let report = snapshot(&fixture_state(records), singapore_hour);
@@ -409,11 +412,10 @@ fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
 // cross-room requests to the agent's home room, and a drill-down with no IDs.
 #[test]
 fn provider_room_and_failure_views_preserve_auditable_request_metadata() {
-    let cases = cases();
     let records = [
-        cases[0].record.clone(),
-        cases[4].record.clone(),
-        cases[15].record.clone(),
+        named_case("completed-without-text"),
+        named_case("reply-not-captured-bound"),
+        named_case("provider_error: quota exhausted"),
     ];
     let mut state = fixture_state(records);
     state.delete_agent(AgentId(2), 1).unwrap();
@@ -423,7 +425,7 @@ fn provider_room_and_failure_views_preserve_auditable_request_metadata() {
     assert_eq!(report["rooms"]["1"]["name"], "dashboard");
     assert_eq!(report["rooms"]["1"]["series"]["counts"]["attempts"], 3);
     let failures = report["failures"].as_array().unwrap();
-    assert_eq!(failures.len(), 3);
+    assert_eq!(failures.len(), 2);
     let lost = failures.iter().find(|f| f["request_id"] == 104).unwrap();
     assert_eq!(lost["message_id"], 94);
     assert_eq!(lost["recipient_id"], 2);
@@ -726,7 +728,7 @@ fn dashboard_wording_absent_rate_for_empty_all_pending_and_all_external() {
     assert_absent_bus_rate(&pending.all, "all pending");
 
     let external = snapshot(
-        &fixture_state([named_case("interrupted-before-start")]),
+        &fixture_state([named_case("provider_error: quota exhausted")]),
         singapore_hour,
     );
     assert!(external.all.counts.external > 0, "all external");
@@ -850,7 +852,7 @@ fn delivery_rate_excludes_external_failures_and_pending() {
     let external_only = snapshot(
         &fixture_state([
             named_case("completed-without-text"),
-            named_case("interrupted-before-start"),
+            named_case("provider_error: quota exhausted"),
         ]),
         singapore_hour,
     );
@@ -956,7 +958,7 @@ fn delivery_rate_excludes_external_failures_and_pending() {
 #[test]
 fn absent_delivery_rate_is_not_drawn_as_zero_percent() {
     let external_only = snapshot(
-        &fixture_state([named_case("interrupted-before-start")]),
+        &fixture_state([named_case("provider_error: quota exhausted")]),
         singapore_hour,
     );
     let hour = &external_only.all.hours[0];

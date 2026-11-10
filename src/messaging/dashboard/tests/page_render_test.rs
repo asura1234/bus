@@ -251,7 +251,7 @@ fn page_splits_delivery_launches_and_failures_across_three_tabs() {
 }
 
 #[test]
-fn errors_tab_ranks_failures_and_labels_caller_errors() {
+fn errors_tab_ranks_failures_and_explains_deliberate_exclusion() {
     let page =
         String::from_utf8(response_for(Path::new("/nonexistent-dashboard-page"), "GET", "/").body)
             .unwrap();
@@ -263,8 +263,8 @@ fn errors_tab_ranks_failures_and_labels_caller_errors() {
         "the ranking renders with the page"
     );
     assert!(
-        page.contains("f.reason==='agent_deleted'||f.reason==='room_deleted'?'Caller error'"),
-        "sends to a deleted recipient are a caller error"
+        page.contains("Deliberate closures are excluded from dashboard totals, failure shares, delivery rates and latency samples"),
+        "deliberate closures belong in message history"
     );
     assert!(
         !page.contains("<th>Request</th>"),
@@ -294,8 +294,7 @@ fn errors_tab_tracks_bus_caused_failures_by_hour() {
     ));
     assert!(page.contains("data-responsibility=\"all\" aria-pressed=\"true\">All</button>"));
     assert!(page.contains("data-responsibility=\"bus\" aria-pressed=\"false\">Bus-caused</button>"));
-    assert!(page
-        .contains("data-responsibility=\"caller\" aria-pressed=\"false\">Caller error</button>"));
+    assert!(!page.contains("Caller error"));
     assert!(
         page.contains("data-responsibility=\"external\" aria-pressed=\"false\">External</button>")
     );
