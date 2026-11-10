@@ -670,7 +670,13 @@ impl Grok {
     }
 
     fn draw_to(&self, output: &mut impl Write) -> io::Result<()> {
-        write!(output, "\x1b[H\x1b[2J{}", self.screen())?;
+        // PTY reads can split the repaint before its footer. Keep that partial
+        // composer away from the native submission guard until drawing ends.
+        write!(
+            output,
+            "\x1b[?2026h\x1b[H\x1b[2J{}\x1b[?2026l",
+            self.screen()
+        )?;
         output.flush()
     }
 
