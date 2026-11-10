@@ -113,7 +113,7 @@ pub(crate) fn configure(
         })
         .or(inherited)
         .unwrap_or_else(|| if cfg!(windows) { "notepad.exe" } else { "vi" }.into());
-    let exe = std::env::current_exe()?;
+    let exe = crate::platform::fs::running_executable()?;
     #[cfg(not(windows))]
     let executable = format!("'{}'", exe.to_string_lossy().replace('\'', "'\\''"));
     #[cfg(windows)]

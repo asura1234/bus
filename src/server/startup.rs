@@ -56,6 +56,13 @@ pub fn run_server(
         Err(err) => return Err(startup_failed(err)),
     };
 
+    // Only the server that owns this session may publish its CLI alias.
+    crate::terminal::runtime::prepare_bus_cli(
+        &crate::utils::paths::data_dir(),
+        &crate::platform::fs::running_executable()?,
+    )
+    .map_err(startup_failed)?;
+
     // Pane output runs on the runtime's workers; agents' builds must not
     // starve it.
     let rt = tokio::runtime::Builder::new_multi_thread()

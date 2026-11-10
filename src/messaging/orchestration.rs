@@ -194,7 +194,7 @@ fn workflows_dir(docs: &Path) -> PathBuf {
     workflows_dir_at(
         docs,
         cfg!(debug_assertions) || super::diagnostics::dev_enabled(),
-        std::env::current_exe().ok().as_deref(),
+        crate::platform::fs::running_executable().ok().as_deref(),
         std::env::current_dir().ok().as_deref(),
     )
 }

@@ -170,7 +170,7 @@ impl Worker {
             session_name: Some(super::DEFAULT_SESSION.into()),
             config_root: self.data_dir.join("herdr-config"),
             project: crate::agents::providers::launch::project_root(&agent.cwd),
-            binary: std::env::current_exe().map_err(|e| e.to_string())?,
+            binary: crate::platform::fs::running_executable().map_err(|e| e.to_string())?,
         };
         let attempt = self.begin_agent_launch(agent, LaunchKind::Resume)?;
         let extras = super::resume::for_native_resume(

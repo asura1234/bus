@@ -1,5 +1,6 @@
 use super::*;
 use std::io;
+use std::path::Path;
 
 #[cfg(unix)]
 #[test]
@@ -99,7 +100,15 @@ fn pane_launch_env_isolates_agent_sessions_without_losing_configuration() {
             );
         }
         for (key, value) in config {
-            assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)), "{key}");
+            if key == "PATH" {
+                let paths = std::env::split_paths(cmd.get_env(key).unwrap()).collect::<Vec<_>>();
+                assert_eq!(
+                    &paths[1..],
+                    std::env::split_paths(value).collect::<Vec<_>>()
+                );
+            } else {
+                assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)), "{key}");
+            }
         }
         for (key, value) in [
             ("BUS_LAUNCH_ID", "own-launch"),
@@ -513,4 +522,193 @@ fn native_pane_defaults_disable_claude_updates_and_keep_explicit_settings() {
     assert_eq!(default.as_deref(), Some(std::ffi::OsStr::new("1")));
     assert_eq!(inherited.as_deref(), Some(std::ffi::OsStr::new("0")));
     assert_eq!(explicit.as_deref(), Some(std::ffi::OsStr::new("user")));
+}
+
+#[test]
+fn pane_launch_env_adds_private_bus_directory_to_effective_path() {
+    let executable = std::env::current_exe().unwrap();
+    let directory =
+        crate::platform::fs::bus_cli_directory(&crate::utils::paths::data_dir()).unwrap();
+    let inherited = std::env::join_paths([Path::new("/inherited/bin")]).unwrap();
+    let override_path =
+        std::env::join_paths([Path::new("/provider/bin"), Path::new("/user/bin")]).unwrap();
+    let process_path = std::env::var_os("PATH");
+    for explicit in [false, true] {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_clear();
+        cmd.env("PATH", &inherited);
+        cmd.env("HERDR_BIN_PATH", "/stale/bus");
+        let extras = if explicit {
+            vec![("PATH".into(), override_path.to_str().unwrap().into())]
+        } else {
+            Vec::new()
+        };
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extras)).unwrap();
+        let paths = std::env::split_paths(cmd.get_env("PATH").unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            paths.first().map(|p| p.as_path()),
+            Some(directory.as_path()),
+            "the running Bus CLI must be reachable before stale installs"
+        );
+        let original = if explicit { &override_path } else { &inherited };
+        assert_eq!(
+            &paths[1..],
+            std::env::split_paths(original).collect::<Vec<_>>()
+        );
+        assert_eq!(cmd.get_env("HERDR_BIN_PATH"), Some(executable.as_os_str()));
+    }
+    assert_eq!(
+        std::env::var_os("PATH"),
+        process_path,
+        "pane setup must not mutate the server environment"
+    );
+}
+
+#[test]
+fn bus_cli_path_keeps_missing_empty_and_existing_entries() {
+    let directory = crate::utils::test_temp::unique_temp_path("Bus path with spaces");
+    let executable = directory.join("bus");
+    let data = directory.join("session");
+    let alias = crate::platform::fs::bus_cli_directory(&data).unwrap();
+    for original in [
+        None,
+        Some(std::ffi::OsString::new()),
+        Some(
+            std::env::join_paths([
+                Path::new("/provider/bin"),
+                directory.as_path(),
+                alias.as_path(),
+                Path::new("/user/bin"),
+            ])
+            .unwrap(),
+        ),
+    ] {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_clear();
+        if let Some(path) = &original {
+            cmd.env("PATH", path);
+        }
+        crate::terminal::runtime::cli_env::apply_bus_cli_env(&mut cmd, &executable, &data).unwrap();
+        let paths = std::env::split_paths(cmd.get_env("PATH").unwrap()).collect::<Vec<_>>();
+        assert_eq!(paths[0], alias);
+        assert_eq!(paths.iter().filter(|path| *path == &alias).count(), 1);
+        let retained = original
+            .iter()
+            .flat_map(std::env::split_paths)
+            .filter(|path| path != &alias)
+            .collect::<Vec<_>>();
+        assert_eq!(&paths[1..], retained);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bus_cli_path_resolves_dev_and_installed_binaries_ahead_of_stale_bus() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = crate::utils::test_temp::unique_temp_path("bus-command-path");
+    let stale = root.join("stale");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("bus"), "#!/bin/sh\nexit 42\n").unwrap();
+    std::fs::set_permissions(stale.join("bus"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    for location in ["checkout/target/debug", "installed app/bin"] {
+        let directory = root.join(location);
+        let executable = directory.join("bus");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "bus"]);
+        cmd.env_clear();
+        cmd.env("PATH", &stale);
+        let data = root.join("session");
+        crate::terminal::runtime::prepare_bus_cli(&data, &executable).unwrap();
+        crate::terminal::runtime::cli_env::apply_bus_cli_env(&mut cmd, &executable, &data).unwrap();
+        let mut spawned =
+            crate::terminal::runtime::spawn::spawn_with_portable_pty(24, 80, cmd).unwrap();
+        assert!(
+            spawned.child.wait().unwrap().success(),
+            "{location}: bare bus selected the stale CLI"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn bus_cli_path_preserves_non_utf8_directories() {
+    use std::os::unix::ffi::OsStringExt;
+    let directory = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/bus-\xff".to_vec()));
+    let inherited =
+        std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/provider-\xfe".to_vec()));
+    let mut cmd = CommandBuilder::new("shell");
+    cmd.env_clear();
+    cmd.env("PATH", std::env::join_paths([&inherited]).unwrap());
+    let data = directory.join("session");
+    crate::terminal::runtime::cli_env::apply_bus_cli_env(&mut cmd, &directory.join("bus"), &data)
+        .unwrap();
+    assert_eq!(
+        std::env::split_paths(cmd.get_env("PATH").unwrap()).collect::<Vec<_>>(),
+        [
+            crate::platform::fs::bus_cli_directory(&data).unwrap(),
+            inherited
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bus_cli_alias_preserves_provider_resolution_and_refreshes_the_running_binary() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = crate::utils::test_temp::unique_temp_path("bus-shared-bin-priority");
+    let shared = root.join("shared bin");
+    let selected = root.join("provider bin");
+    let data = root.join("session");
+    for (directory, name, code) in [
+        (&shared, "bus", 0),
+        (&shared, "claude", 7),
+        (&selected, "claude", 0),
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+        let file = directory.join(name);
+        std::fs::write(&file, format!("#!/bin/sh\nexit {code}\n")).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let executable = shared.join("bus");
+    crate::terminal::runtime::prepare_bus_cli(&data, &executable).unwrap();
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    cmd.args(["-c", "claude && bus"]);
+    cmd.env_clear();
+    cmd.env("PATH", std::env::join_paths([&selected, &shared]).unwrap());
+    crate::terminal::runtime::cli_env::apply_bus_cli_env(&mut cmd, &executable, &data).unwrap();
+    let mut spawned =
+        crate::terminal::runtime::spawn::spawn_with_portable_pty(24, 80, cmd).unwrap();
+    assert!(
+        spawned.child.wait().unwrap().success(),
+        "the selected provider must win over a same-named executable beside Bus"
+    );
+    assert_eq!(std::fs::read_dir(data.join("cli-bin")).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::metadata(data.join("cli-bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+
+    // The next server start may use another executable. Existing PATH values
+    // keep resolving the stable alias, now pointing at that server's image.
+    let moved = root.join("another Bus");
+    std::fs::write(&moved, "#!/bin/sh\nexit 17\n").unwrap();
+    std::fs::set_permissions(&moved, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::terminal::runtime::prepare_bus_cli(&data, &moved).unwrap();
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    cmd.args(["-c", "bus"]);
+    cmd.env_clear();
+    cmd.env("PATH", data.join("cli-bin"));
+    let mut spawned =
+        crate::terminal::runtime::spawn::spawn_with_portable_pty(24, 80, cmd).unwrap();
+    assert_eq!(spawned.child.wait().unwrap().exit_code(), 17);
+    assert_eq!(std::fs::read_link(data.join("cli-bin/bus")).unwrap(), moved);
+    std::fs::remove_dir_all(root).unwrap();
 }

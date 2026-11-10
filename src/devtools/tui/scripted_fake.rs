@@ -125,8 +125,7 @@ impl Drop for Raw {
 }
 
 fn callback(payload: Value) -> Result<(), String> {
-    let binary = std::fs::canonicalize(std::env::current_exe().map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    let binary = crate::platform::fs::running_executable().map_err(|e| e.to_string())?;
     let mut child = Command::new(binary)
         .args(["--bus-callback", "fake-hook"])
         .stdin(Stdio::piped())
@@ -146,8 +145,7 @@ fn callback(payload: Value) -> Result<(), String> {
 }
 
 fn send(agent: &str, room: &str, to: &str, text: &str) -> Result<(), String> {
-    let binary = std::fs::canonicalize(std::env::current_exe().map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    let binary = crate::platform::fs::running_executable().map_err(|e| e.to_string())?;
     let output = Command::new(binary)
         .args([
             "send", "--room", room, "--as", agent, "--to", to, "--text", text,

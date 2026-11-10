@@ -384,7 +384,7 @@ pub(crate) fn write_build_sha(root: Option<&Path>, sha: &str, birth: Option<u64>
         return;
     };
     let path = build_path(root);
-    let binary = std::env::current_exe()
+    let binary = super::executable::running_executable()
         .map(|exe| exe.display().to_string())
         .unwrap_or_default();
     let launch = current_launch_flags();

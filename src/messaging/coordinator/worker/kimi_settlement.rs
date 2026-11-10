@@ -82,7 +82,7 @@ fn committed_kimi_end(
     let Some(prompt) = state.render_request_payload(request.id) else {
         return Ok(None);
     };
-    let Ok(executable) = std::env::current_exe() else {
+    let Ok(executable) = crate::platform::fs::running_executable() else {
         return Ok(None);
     };
     let hooks = crate::agents::providers::hook_json::HookContext {

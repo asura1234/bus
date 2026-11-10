@@ -211,7 +211,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
 ///
 /// Returns the PID of the spawned server process.
 pub fn spawn_server_daemon() -> io::Result<u32> {
-    let exe = std::env::current_exe().map_err(|err| {
+    let exe = crate::platform::fs::running_executable().map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("failed to determine bus executable path: {err}"),

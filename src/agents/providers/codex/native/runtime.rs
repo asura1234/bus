@@ -66,7 +66,9 @@ impl Runtime {
         // The helper runs only after that initialized shell accepts the command.
         let session = Session::prepare()?;
         let mut launch = vec![
-            std::env::current_exe()?.to_string_lossy().into_owned(),
+            crate::platform::fs::running_executable()?
+                .to_string_lossy()
+                .into_owned(),
             "--bus-codex-runtime".into(),
             session.directory.to_string_lossy().into_owned(),
             config.capture.to_string_lossy().into_owned(),

@@ -6,6 +6,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[cfg(windows)]
+pub(crate) use crate::utils::executable::forward_cli_alias;
+pub(crate) use crate::utils::executable::{resolve_running_executable, running_executable};
+
 pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
     super::create_remote_private_dir(path)
 }
@@ -27,6 +31,72 @@ pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
         return Err(io::Error::other("Bus directory is not a real directory"));
     }
     Ok(())
+}
+
+/// Publish one native executable name without exposing its sibling commands.
+/// The caller owns the directory and invokes this after claiming its session.
+pub(crate) fn refresh_executable_alias(path: &Path, executable: &Path) -> io::Result<()> {
+    if !executable.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Bus executable must be absolute",
+        ));
+    }
+    let executable = resolve_running_executable(executable)?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Bus CLI alias has no directory"))?
+        .canonicalize()?;
+    if executable.starts_with(&directory) {
+        return Err(io::Error::other(
+            "Bus CLI alias must target an executable outside its directory",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let exists = match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => true,
+            Ok(_) => return Err(io::Error::other("Bus CLI alias is not a regular image")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        let origin = executable
+            .as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        guarded_atomic_write(&directory.join(".bus-origin"), &origin)?;
+        // The native copy is an immutable bootstrap, forwarding to this origin
+        // before product dispatch. Never replace an image another CLI is using.
+        if exists {
+            return Ok(());
+        }
+    }
+    static NEXT_ALIAS: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_ALIAS.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("alias-{}-{sequence}", std::process::id()));
+    #[cfg(unix)]
+    {
+        if std::fs::read_link(path).is_ok_and(|target| target == executable) {
+            return Ok(());
+        }
+        std::os::unix::fs::symlink(&executable, &temp)?;
+    }
+    #[cfg(windows)]
+    {
+        // An independent native image supports every shell and source volume.
+        std::fs::copy(&executable, &temp)?;
+    }
+    if let Err(error) = replace_file(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub(crate) fn bus_cli_directory(data_dir: &Path) -> io::Result<PathBuf> {
+    std::path::absolute(data_dir).map(|directory| directory.join("cli-bin"))
 }
 
 /// Extensions whose default "open" runs code, or follows a shortcut that may

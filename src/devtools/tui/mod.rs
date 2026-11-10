@@ -230,7 +230,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         return Ok(failure("refused", message));
     }
     let started = Instant::now();
-    let binary = std::env::current_exe().map_err(|e| e.to_string())?;
+    let binary = crate::platform::fs::running_executable().map_err(|e| e.to_string())?;
     let allow_target_debug = std::env::var_os(session::ALLOW_TARGET_DEBUG_ENV).is_some();
     if let Err(message) = session::ensure_binary_allowed(&binary, allow_target_debug) {
         return Ok(failure("refused", message));
@@ -395,7 +395,7 @@ fn sweep_stopped_session(paths: &SessionPaths, info: Option<&session::SessionInf
         return;
     }
     session::reap_session_tree(&paths.dir, &token, host_pid, bus_pid);
-    if let Ok(binary) = std::env::current_exe() {
+    if let Ok(binary) = crate::platform::fs::running_executable() {
         stop_leftovers(paths, &binary, &token);
     }
     session::reap_session_tree(&paths.dir, &token, host_pid, bus_pid);
