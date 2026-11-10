@@ -16,8 +16,11 @@ mod callback_gc_startup_tests;
 #[path = "tests/callback_gc_test.rs"]
 mod callback_gc_tests;
 mod callback_spool;
+mod callback_wake;
 mod codex_settlement;
+mod command_queue;
 mod control_reads;
+use command_queue::{collect_delivery_commands, next_command};
 mod history;
 mod kimi_settlement;
 mod restart_notice;
@@ -53,6 +56,7 @@ pub(super) struct Worker {
     pub(super) data_dir: PathBuf,
     pub(super) _lease: CoordinatorLease,
     pub(super) transport: Box<dyn Transport>,
+    pub(super) callback_wakes: BTreeSet<AgentId>,
     pub(super) submission_rechecks: BTreeSet<AgentId>,
     pub(super) native_submissions: BTreeMap<AgentId, super::native_delivery::PendingSubmission>,
     pub(super) revision: u64,
@@ -187,6 +191,7 @@ impl Worker {
             _lease: lease,
             transport,
             native_submissions: BTreeMap::new(),
+            callback_wakes: BTreeSet::new(),
             submission_rechecks: BTreeSet::new(),
             revision: 0,
             last_command_id: 0,
@@ -428,7 +433,9 @@ impl Worker {
         let mut poll_overtakes = 0;
         let mut observed_native = false;
         loop {
-            let timeout = if self.native_submissions.is_empty() {
+            let timeout = if self.native_submissions.is_empty()
+                && (self.callback_wakes.is_empty() || self.storage_pause.is_some())
+            {
                 next_poll.saturating_duration_since(std::time::Instant::now())
             } else {
                 Duration::from_millis(10)
@@ -453,6 +460,10 @@ impl Worker {
                     self.finish_native_submissions(true);
                     self.fold_journal();
                     break;
+                }
+                Ok((_, BusCommand::CallbackReady(launch))) => {
+                    self.queue_callback_wake(&launch);
+                    self.coalesce_callback_wakes(&mut pending_commands);
                 }
                 Ok((_id, BusCommand::Control(call))) => {
                     busy.stage("control");
@@ -519,6 +530,9 @@ impl Worker {
                 self.error = Some(error);
             }
             self.finish_native_submissions(false);
+            if let Err(error) = self.consume_woken_callbacks() {
+                self.error = Some(error);
+            }
             let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
             if can_poll && observed_native && self.storage_pause.is_none() {
                 if let Err(error) = self.submit_eligible_while(|| {
@@ -713,92 +727,4 @@ impl Worker {
         }
         Ok(())
     }
-}
-
-/// How many commands may run ahead of a waiting status poll before it runs:
-/// interactive calls skip the poll backlog, and polls still progress.
-const STATUS_POLL_OVERTAKES: usize = 4;
-
-/// The next command to run: the developer's oldest UI command when only
-/// control reads (follower status polls) are queued ahead of it, else the
-/// oldest command other than a status poll, else the oldest poll. A waiting
-/// poll is overtaken at most `STATUS_POLL_OVERTAKES` times in a row, counted
-/// in `overtakes`. Control mutations and shutdown are never overtaken.
-fn next_command(
-    commands: &mpsc::Receiver<(u64, BusCommand)>,
-    pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
-    overtakes: &mut usize,
-) -> Option<(u64, BusCommand)> {
-    for _ in 0..super::COMMAND_QUEUE_CAPACITY {
-        match commands.try_recv() {
-            Ok(command) => pending.push_back(command),
-            Err(_) => break,
-        }
-    }
-    let ui = pending.iter().position(|(_, command)| match command {
-        BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
-        _ => true,
-    });
-    match ui {
-        Some(index)
-            if !matches!(
-                pending[index].1,
-                BusCommand::Control(_) | BusCommand::Shutdown
-            ) =>
-        {
-            pending.remove(index)
-        }
-        _ => {
-            // Followers poll status by the hundred; a caller's one read,
-            // interrupt or delete must not wait behind them. Shutdown keeps
-            // its place, so polls queued before it are still answered.
-            let interactive = pending.iter().position(|(_, command)| match command {
-                BusCommand::Control(call) => call.request.method != "message.status",
-                _ => true,
-            });
-            match interactive {
-                Some(0) => pending.pop_front(),
-                Some(index)
-                    if !matches!(pending[index].1, BusCommand::Shutdown)
-                        && *overtakes < STATUS_POLL_OVERTAKES =>
-                {
-                    *overtakes += 1;
-                    pending.remove(index)
-                }
-                _ => {
-                    *overtakes = 0;
-                    pending.pop_front()
-                }
-            }
-        }
-    }
-}
-
-/// Reads are answered after this tick, without suppressing its delivery. A
-/// mutation still returns to command dispatch first, in FIFO order. Bound the
-/// drain by the input channel's capacity so a read flood cannot trap this loop.
-fn collect_delivery_commands(
-    commands: &mpsc::Receiver<(u64, BusCommand)>,
-    pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
-) -> bool {
-    if pending
-        .iter()
-        .any(|(_, command)| interrupts_delivery(command))
-    {
-        return false;
-    }
-    for _ in 0..super::COMMAND_QUEUE_CAPACITY {
-        match commands.try_recv() {
-            Ok(command) => {
-                let barrier = interrupts_delivery(&command.1);
-                pending.push_back(command);
-                if barrier {
-                    return false;
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => return true,
-            Err(mpsc::TryRecvError::Disconnected) => return false,
-        }
-    }
-    true
 }

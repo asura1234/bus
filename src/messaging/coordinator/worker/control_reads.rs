@@ -17,6 +17,7 @@ impl Worker {
         // Unchanged reads need no notification scan or copied UI state.
         // Due polls still run, so a follower flood cannot stop delivery.
         read && self.native_submissions.is_empty()
+            && self.callback_wakes.is_empty()
             && self.revision == revision
             && self.error == error
             && Instant::now() < next_poll
