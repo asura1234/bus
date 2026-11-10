@@ -130,6 +130,11 @@ impl Worker {
         mut draft: crate::messaging::model::Draft,
         queued: bool,
     ) -> Result<(), String> {
+        for recipient in &draft.recipient_ids {
+            if let Some(error) = self.check_launch_directory(*recipient)? {
+                return Err(error);
+            }
+        }
         let home = std::env::home_dir().ok_or("Home directory unavailable")?;
         draft.files = draft
             .files

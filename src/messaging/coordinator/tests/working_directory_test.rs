@@ -359,6 +359,47 @@ fn removed_launch_directory_refuses_multi_recipient_admission_atomically() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn removed_directory_refuses_ui_admission_atomically() {
+    for queued in [false, true] {
+        let (mut worker, agent, dir, cwd) =
+            directory_fixture(Provider::Codex, schema::AgentStatus::Idle);
+        let room = worker.state.agent(agent).unwrap().room_id;
+        let mut state = worker.state.clone();
+        let healthy = state
+            .create_agent(room, "healthy", Provider::Codex, dir.clone(), None)
+            .unwrap();
+        state
+            .set_draft_text(room, "preserve this UI draft")
+            .unwrap();
+        state.set_draft_recipients(room, [healthy, agent]).unwrap();
+        let draft = state.room(room).unwrap().draft.clone();
+        worker.save(state).unwrap();
+        std::fs::remove_dir(&cwd).unwrap();
+        let command = if queued {
+            crate::messaging::coordinator::BusCommand::SubmitQueued(room, draft.clone())
+        } else {
+            crate::messaging::coordinator::BusCommand::Submit(room, draft.clone())
+        };
+        let (events, _) = std::sync::mpsc::channel();
+        let result = worker.command(command, &events);
+        assert!(result.is_err(), "queued={queued}: {result:?}");
+        assert!(result.unwrap_err().contains("replace the agent"));
+        assert_eq!(worker.state.requests().count(), 0);
+        assert!(worker.state.queued_requests(healthy).is_empty());
+        assert!(worker.state.queued_requests(agent).is_empty());
+        assert_eq!(worker.state.room(room).unwrap().draft, draft);
+        let durable = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(durable.requests().count(), 0);
+        assert_eq!(durable.room(room).unwrap().draft, draft);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 fn directory_running_request(worker: &mut Worker, room: RoomId, agent: AgentId) -> RequestId {
     let request = queue(worker, room, agent, "already running");
     let mut state = worker.state.clone();
