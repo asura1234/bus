@@ -1,5 +1,6 @@
 use super::*;
 use std::io;
+use std::path::Path;
 
 #[cfg(unix)]
 #[test]
@@ -513,4 +514,43 @@ fn native_pane_defaults_disable_claude_updates_and_keep_explicit_settings() {
     assert_eq!(default.as_deref(), Some(std::ffi::OsStr::new("1")));
     assert_eq!(inherited.as_deref(), Some(std::ffi::OsStr::new("0")));
     assert_eq!(explicit.as_deref(), Some(std::ffi::OsStr::new("user")));
+}
+
+#[test]
+fn pane_launch_env_adds_running_bus_directory_to_effective_path() {
+    let executable = std::env::current_exe().unwrap();
+    let directory = executable.parent().unwrap();
+    let inherited = std::env::join_paths([Path::new("/inherited/bin")]).unwrap();
+    let override_path =
+        std::env::join_paths([Path::new("/provider/bin"), Path::new("/user/bin")]).unwrap();
+    let process_path = std::env::var_os("PATH");
+    for explicit in [false, true] {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_clear();
+        cmd.env("PATH", &inherited);
+        cmd.env("HERDR_BIN_PATH", "/stale/bus");
+        let extras = if explicit {
+            vec![("PATH".into(), override_path.to_str().unwrap().into())]
+        } else {
+            Vec::new()
+        };
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extras)).unwrap();
+        let paths = std::env::split_paths(cmd.get_env("PATH").unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            paths.first().map(|p| p.as_path()),
+            Some(directory),
+            "the running Bus CLI must be reachable before stale installs"
+        );
+        let original = if explicit { &override_path } else { &inherited };
+        assert_eq!(
+            &paths[1..],
+            std::env::split_paths(original).collect::<Vec<_>>()
+        );
+        assert_eq!(cmd.get_env("HERDR_BIN_PATH"), Some(executable.as_os_str()));
+    }
+    assert_eq!(
+        std::env::var_os("PATH"),
+        process_path,
+        "pane setup must not mutate the server environment"
+    );
 }
