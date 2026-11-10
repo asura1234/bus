@@ -1,4 +1,5 @@
 //! Live terminal runtime: construction, IO, reads and background task ownership.
+mod cli_env;
 mod compression;
 mod detection_process;
 mod detection_task;

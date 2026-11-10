@@ -80,7 +80,7 @@ pub(super) fn apply_pane_launch_env(
         crate::utils::env::BUS_ENV_VAR,
         crate::utils::env::BUS_ENV_VALUE,
     );
-    apply_pane_base_env(cmd);
+    apply_pane_base_env(cmd)?;
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {
         PaneLaunchIdentity::Inherit => {}
@@ -337,18 +337,17 @@ pub(crate) const BUS_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 
 pub(crate) const BUS_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
-pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
+pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) -> io::Result<()> {
     cmd.env(
         crate::protocol::api::SOCKET_PATH_ENV_VAR,
         crate::protocol::api::socket_path(),
     );
-    if let Ok(executable) = std::env::current_exe() {
-        cmd.env("HERDR_BIN_PATH", executable);
-    }
+    super::cli_env::apply_bus_cli_env(cmd, &std::env::current_exe()?)?;
     cmd.env(
         crate::agents::providers::callback_entry::BUS_SERVER_PID_ENV_VAR,
         std::process::id().to_string(),
     );
+    Ok(())
 }
 
 #[cfg(unix)]
