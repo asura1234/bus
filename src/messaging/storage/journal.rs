@@ -79,21 +79,6 @@ impl JournalOp {
         }
     }
 
-    pub(crate) fn complete_native(
-        room: RoomId,
-        request_id: RequestId,
-        started_at_ms: u64,
-        completed_at_ms: u64,
-    ) -> Self {
-        Self::DeliveryTimestampCompletion {
-            room,
-            request_id,
-            phase: CompletionPhase::NativeRequested,
-            started_at_ms,
-            completed_at_ms,
-        }
-    }
-
     fn room(&self) -> RoomId {
         match self {
             Self::DraftText { room, .. }

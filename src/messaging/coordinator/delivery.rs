@@ -581,6 +581,9 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.mark_open_dispatch(&mut state, request, DispatchMark::Notice);
+        state
+            .record_native_requested(request, io::now_ms())
+            .map_err(|error| error.to_string())?;
         Ok((state, text))
     }
 
@@ -732,6 +735,9 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         state.begin_dialog_notice_write(request, io::now_ms());
         self.mark_open_dispatch(&mut state, request, DispatchMark::Notice);
+        state
+            .record_native_requested(request, io::now_ms())
+            .map_err(|error| error.to_string())?;
         self.save(state)?;
         self.mark_live_dispatch(request, DispatchMark::Save);
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");

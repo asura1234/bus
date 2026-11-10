@@ -22,7 +22,6 @@ impl Worker {
         steered: bool,
         started: Instant,
     ) -> Result<(), String> {
-        self.note_native_requested(request, super::io::now_ms())?;
         match self.transport.submit(method) {
             NativeCall::Complete(response) => {
                 self.apply_native_submission(agent, request, steered, started, *response)

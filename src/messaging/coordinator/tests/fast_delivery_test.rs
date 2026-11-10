@@ -637,3 +637,74 @@ fn pending_writes_defer_expiry_without_holding_other_unconfirmed_requests() {
     );
     assert!(resumed, "expiry must resume once native I/O has returned");
 }
+
+#[test]
+fn a_failed_pre_send_timestamp_never_strands_an_unsent_submission() {
+    use crate::messaging::storage::state_store::SaveStage;
+    // Some skip count lets the prompt save commit and fails the next
+    // checkpointed write: the native_requested journal entry.
+    for skips in 0..4 {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let request = queue(&mut worker, room, agent, "stamp fails");
+        let native = DeferredNative(Default::default());
+        worker.transport = Box::new(native.clone());
+        worker.store.fail_once_at_after(SaveStage::TempWrite, skips);
+        let _ = worker.submit_ready();
+        let sent = !native.0.lock().unwrap().is_empty();
+        let durable = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap()
+            .request(request)
+            .unwrap()
+            .phase;
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            sent || durable != RequestPhase::Submitting,
+            "skips={skips}: request is durably Submitting but was never sent; \
+             expiry will fail it as submission_unconfirmed"
+        );
+    }
+}
+
+#[test]
+fn a_failed_pre_send_timestamp_never_strands_an_unsent_steering_member() {
+    use crate::messaging::storage::state_store::SaveStage;
+    for skips in 0..4 {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![confirmed()]);
+        queue(&mut worker, room, agent, "owned lead");
+        worker.submit_ready().unwrap();
+        record(
+            &dir,
+            Provider::Codex,
+            json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "turn_id":"lead-turn", "prompt":"owned lead"}),
+        );
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, io::now_ms())
+            .unwrap();
+        let request = queue(&mut worker, room, agent, "steer stamp fails");
+        let native = DeferredNative(Default::default());
+        worker.transport = Box::new(native.clone());
+        worker.store.fail_once_at_after(SaveStage::TempWrite, skips);
+        let _ = worker.submit_ready();
+        let sent = !native.0.lock().unwrap().is_empty();
+        let durable = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap()
+            .request(request)
+            .unwrap()
+            .phase;
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            sent || durable != RequestPhase::Submitting,
+            "skips={skips}: steering member is durably Submitting but was never sent"
+        );
+    }
+}

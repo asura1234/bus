@@ -85,40 +85,6 @@ impl Worker {
         }
     }
 
-    pub(super) fn note_native_requested(
-        &mut self,
-        id: RequestId,
-        at_ms: u64,
-    ) -> Result<(), String> {
-        let mut state = self.state.clone();
-        let room = state
-            .request(id)
-            .ok_or("Unknown native submission")?
-            .room_id;
-        state
-            .record_native_requested(id, at_ms)
-            .map_err(|error| error.to_string())?;
-        self.journal(
-            state.clone(),
-            JournalOp::DeliveryTimestamps {
-                room,
-                request_id: id,
-                queued_at_ms: None,
-                eligible_at_ms: None,
-                native_requested_at_ms: Some(at_ms),
-                reply_delivered_at_ms: None,
-            },
-        )?;
-        let completed_at_ms = io::now_ms();
-        state
-            .finish_native_requested(id, at_ms, completed_at_ms)
-            .map_err(|error| error.to_string())?;
-        self.journal(
-            state,
-            JournalOp::complete_native(room, id, at_ms, completed_at_ms),
-        )
-    }
-
     /// Commits `state` and makes it durable. A state that differs from the
     /// last write only in status-only observations writes nothing: those are
     /// never persisted on their own (see `apply_poll`), so rewriting the same

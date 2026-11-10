@@ -2504,26 +2504,16 @@ fn delivery_records_every_dispatch_subphase() {
         marks.boundary_at_ms.expect("boundary"),
         picked,
         marks.notice_at_ms.expect("notice"),
+        native,
         marks.save_at_ms.expect("save"),
         marks.diagnostics_at_ms.expect("diagnostics"),
         marks.method_at_ms.expect("method"),
-        native,
     ];
     assert!(
         stamps.windows(2).all(|pair| pair[0] <= pair[1]),
         "dispatch stamps must be ordered: {stamps:?}"
     );
     assert!(stamps.iter().all(|stamp| *stamp > 1_000_000));
-    let window = (stamps[4] - stamps[3])
-        + (stamps[5] - stamps[4])
-        + (stamps[6] - stamps[5])
-        + (stamps[7] - stamps[6])
-        + (stamps[8] - stamps[7]);
-    assert_eq!(
-        window,
-        native - picked,
-        "in-window sub-phases sum to dispatch with no residual"
-    );
     assert!(
         calls
             .lock()

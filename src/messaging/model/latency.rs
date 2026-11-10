@@ -69,13 +69,12 @@ pub(crate) enum DispatchMark {
     Method,
 }
 
-/// Clocks for the work around `record_picked` → `note_native_requested`.
+/// Raw preparation clocks around selection, the durable checkpoint and native I/O.
 ///
-/// `started` through `boundary` finish before the pick stamp, so those phases
-/// are outside `dispatch`. `notice` through `method` plus the native-request
-/// stamp partition `dispatch`. When every in-window stamp is present the
-/// durations sum to `dispatch` exactly; shared edges cancel, so the residual
-/// is 0. A missing later stamp stays `None` and that phase is omitted.
+/// Render and boundary precede the pick. Notice and native-request intent are
+/// part of the state committed before input; save, diagnostics and method follow
+/// that checkpoint. Those later marks lie outside picked→native-request intent,
+/// so the full preparation interval ends at method. Missing steps stay `None`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct DispatchTimestamps {
