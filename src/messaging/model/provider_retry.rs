@@ -392,6 +392,9 @@ impl BusState {
 
 /// Only a provider-owned terminal failure enters this classifier, never assistant text.
 fn transient(provider: Provider, error: &str) -> Option<bool> {
+    if provider == Provider::Kimi && crate::agents::providers::kimi::quota_exhausted(error) {
+        return None;
+    }
     let text = error.to_ascii_lowercase();
     // Kimi's native connection errors can wrap a fetch/Proxy AbortError.
     // That nested cancellation does not mean the user interrupted the turn.

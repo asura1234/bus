@@ -1017,3 +1017,15 @@ idle then deliver, and an approval card without `--yolo`.
   for server-only restore, require the coordinator to stay and the serving
   generation to advance, including when terminal identity stays unchanged. Test a running turn, its interrupted outcome,
   retained queued messages and successful replies in the original session.
+
+- **2026-11-10 — Kimi exhausted quota:** Incident message 44326 / request
+  44327 committed `APIProviderQuotaExhaustedError` (monthly HTTP 429,
+  `retryable: false`) and fired StopFailure. Bus read it but held the delivery
+  for retry, forcing Working and hiding the actionable error. Replay the
+  recorded monthly and five-hour quota failures, including a restored old
+  hold: require `complete: true`, `abandoned`, `turn_ended: true`,
+  `provider_error: APIProviderQuotaExhaustedError: ...`, and actionable quota
+  detail. The waiter must end and the error must reach the client log without
+  appearing in the Bus TUI. Generic 429, overload and connection failures
+  retain their transient retry contract. Never infer a billing reset date
+  from the word monthly.

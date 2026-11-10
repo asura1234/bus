@@ -7,6 +7,11 @@ fn incident() -> Value {
 fn failure_wire(f: &mut Fixture, lead: RequestId, case: usize) -> String {
     let mut rows = incident()["wire"].as_array().unwrap().clone();
     rows[0]["input"][0]["text"] = f.worker.state.render_request_payload(lead).unwrap().into();
+    // Retain the incident's event order for transient retry/steering coverage.
+    // Explicit exhausted quota now closes; a generic rate limit still retries.
+    rows[1]["error"]["name"] = "APIRateLimitError".into();
+    rows[1]["error"]["message"] = "429 Too Many Requests".into();
+    rows[1]["error"]["retryable"] = true.into();
     match case {
         1 => {
             rows.remove(2); // The owned prompt has not committed yet.

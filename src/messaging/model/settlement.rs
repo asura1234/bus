@@ -4,6 +4,7 @@ use super::{
     RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
+mod kimi;
 mod restart;
 
 /// How the provider's own record says a turn ended, for a turn whose
@@ -427,58 +428,6 @@ impl BusState {
         settled
     }
 
-    /// An owned Kimi wire commit ends the turn even while its screen still
-    /// looks busy or blocked. Process exit without a commit keeps its grace.
-    fn settle_kimi_ended_request(
-        &mut self,
-        agent: AgentId,
-        now_ms: u64,
-        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
-    ) -> Option<RequestId> {
-        let owner = self.agents.get(&agent)?;
-        if owner
-            .provider_retry
-            .as_ref()
-            .is_some_and(|h| owner.current_request == Some(h.lead))
-            || owner.deletion_pending
-            || owner.session_binding_invalidated
-        {
-            return None;
-        }
-        let request = self.requests.get(&owner.current_request?)?;
-        if !matches!(
-            request.phase,
-            RequestPhase::Submitting | RequestPhase::Active
-        ) || request.awaiting_background
-            || request.pending_final.is_some()
-        {
-            return None;
-        }
-        let id = request.id;
-        let exited = owner.status == RuntimeStatus::Unavailable
-            && owner.exit_snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot.launch_id == request.expected_launch_id
-                    && now_ms >= snapshot.at_ms.saturating_add(TURN_SETTLE_MS)
-            });
-        if !(request.trusted_start_bound || exited && request.phase == RequestPhase::Active) {
-            return None;
-        }
-        let recorded = recorded_end(request);
-        if recorded.is_none() && (owner.dialog || !exited) {
-            return None;
-        }
-        self.consume_recorded_end(
-            agent,
-            id,
-            now_ms,
-            recorded,
-            "kimi-wire",
-            exited,
-            "Kimi process exited after its turn ended; inspect its terminal.",
-            None,
-        )
-    }
-
     fn consume_recorded_end(
         &mut self,
         agent: AgentId,
@@ -491,6 +440,12 @@ impl BusState {
         no_reply_error: Option<&str>,
     ) -> Option<RequestId> {
         if let Some(RecordedTurnEnd::Error(message)) = &recorded {
+            if self.agents.get(&agent)?.provider == super::Provider::Kimi {
+                self.requests
+                    .get_mut(&id)?
+                    .turn_ended_at_ms
+                    .get_or_insert(now_ms);
+            }
             if self.hold_provider_error(id, message, now_ms) {
                 return Some(id);
             }
