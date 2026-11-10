@@ -363,3 +363,157 @@ fn manual_recovery_preserves_coalesced_submission_uncertainty() {
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn unbound_release_retains_native_failure_for_every_provider_across_restart() {
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::ClaudeDs,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        for restart_before_release in [false, true] {
+            let (mut worker, room, _, dir) = fixture();
+            let agent = worker
+                .state
+                .create_agent(room, "recipient", provider, dir.clone(), None)
+                .unwrap();
+            bind(&mut worker, agent);
+            let request = enqueue(&mut worker, room, agent, "failed native write");
+            worker
+                .state
+                .begin_submission(request, "launch", 102)
+                .unwrap();
+            worker
+                .state
+                .record_submission(
+                    request,
+                    SubmissionOutcome::Uncertain {
+                        message: NATIVE_ERROR.into(),
+                    },
+                )
+                .unwrap();
+            let queued = worker
+                .state
+                .submit_message_with(
+                    room,
+                    Draft {
+                        text: "independent next turn".into(),
+                        files: Vec::new(),
+                        recipient_ids: [agent].into(),
+                    },
+                    Author::Developer,
+                    crate::messaging::storage::io::now_ms(),
+                    true,
+                )
+                .unwrap()[0];
+            worker.save(worker.state.clone()).unwrap();
+            if restart_before_release {
+                drop(worker);
+                worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
+            }
+            assert_eq!(
+                worker.state.release_unbound_request(agent, 105),
+                Some(request)
+            );
+            worker.save(worker.state.clone()).unwrap();
+            for _ in 0..2 {
+                let receipt = status(&worker, request);
+                assert_eq!(receipt["stage"], "abandoned", "{provider:?}");
+                assert_eq!(receipt["reason"], "submission_unconfirmed", "{provider:?}");
+                assert_eq!(receipt["detail"], NATIVE_ERROR, "{provider:?}");
+                assert_eq!(receipt["uncertain_outcome"], true);
+                assert_eq!(receipt["start_bound"], false);
+                assert!(receipt["manual_recovery"].is_null());
+                assert!(receipt["reply"].is_null());
+                assert!(worker.state.agent(agent).unwrap().current_request.is_none());
+                assert_eq!(worker.state.next_queued_request(agent), Some(queued));
+                assert!(worker.state.request(queued).unwrap().queue_only);
+                assert_eq!(
+                    worker.state.request(queued).unwrap().phase,
+                    RequestPhase::Queued
+                );
+                assert_eq!(worker.state.release_unbound_request(agent, 106), None);
+                drop(worker);
+                worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
+            }
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn unbound_release_retains_shared_failure_and_leaves_bound_turns_owned() {
+    let (mut worker, room, agent, dir) = fixture();
+    bind(&mut worker, agent);
+    let lead = enqueue(&mut worker, room, agent, "first coalesced input");
+    let member = enqueue(&mut worker, room, agent, "second coalesced input");
+    let replied = enqueue(&mut worker, room, agent, "already answered input");
+    assert!(worker.state.coalesce_queue(lead).is_some());
+    worker.state.begin_submission(lead, "launch", 102).unwrap();
+    worker
+        .state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Uncertain {
+                message: NATIVE_ERROR.into(),
+            },
+        )
+        .unwrap();
+    let message = worker.state.request(replied).unwrap().prompt.id;
+    worker
+        .state
+        .answer_message(message, agent, "stored answer".into(), 104)
+        .unwrap();
+    let answered = worker.state.request(replied).unwrap().clone();
+    assert_eq!(worker.state.release_unbound_request(agent, 105), Some(lead));
+    assert_eq!(worker.state.request(replied).unwrap(), &answered);
+    for request in [lead, member] {
+        let receipt = status(&worker, request);
+        assert_eq!(receipt["stage"], "abandoned");
+        assert_eq!(receipt["reason"], "submission_unconfirmed");
+        assert_eq!(receipt["detail"], NATIVE_ERROR);
+    }
+    let bound = enqueue(&mut worker, room, agent, "proven provider turn");
+    start(&mut worker, bound);
+    let before = worker.state.clone();
+    assert_eq!(worker.state.release_unbound_request(agent, 107), None);
+    assert_eq!(worker.state, before);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unbound_release_of_native_receipt_without_start_does_not_invent_detail() {
+    let (mut worker, room, agent, dir) = fixture();
+    bind(&mut worker, agent);
+    let request = enqueue(&mut worker, room, agent, "receipt without provider start");
+    worker
+        .state
+        .begin_submission(request, "launch", 102)
+        .unwrap();
+    worker
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        worker.state.release_unbound_request(agent, 105),
+        Some(request)
+    );
+    let receipt = status(&worker, request);
+    assert_eq!(receipt["stage"], "abandoned");
+    assert_eq!(receipt["reason"], "submission_unconfirmed");
+    assert!(receipt["detail"].is_null());
+    assert_eq!(receipt["start_bound"], false);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
