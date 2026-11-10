@@ -1,11 +1,14 @@
 //! Coordinator delivery ownership.
 use super::io;
 use super::{
-    callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
-    RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
+    callbacks, diagnostics, Method, Provider, RequestId, ResponseResult, RoomAgent, RuntimeStatus,
+    SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
 use crate::messaging::model::DispatchMark;
 use crate::messaging::native::TransportError;
+
+mod submission;
+use submission::{native_response_timestamps, record_native_timestamps, submission_method};
 
 /// How long a definitely rejected native prompt waits before Bus pastes it
 /// again. Each attempt pastes into and clears the agent's input box, and the
@@ -753,57 +756,5 @@ impl Worker {
         self.save(state)?;
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
-    }
-}
-
-fn native_response_timestamps(
-    response: &Result<ResponseResult, TransportError>,
-) -> crate::protocol::api::schema::NativeSubmissionTimestamps {
-    match response {
-        Ok(ResponseResult::AgentPrompted { timestamps, .. }) => *timestamps,
-        Err(error) => *error.timestamps,
-        _ => Default::default(),
-    }
-}
-
-fn record_native_timestamps(
-    state: &mut crate::messaging::model::BusState,
-    request: RequestId,
-    timestamps: crate::protocol::api::schema::NativeSubmissionTimestamps,
-) -> Result<(), String> {
-    state
-        .record_native_timestamps(request, timestamps.into())
-        .map_err(|error| error.to_string())
-}
-
-fn submission_method(
-    agent: &RoomAgent,
-    text: String,
-    terminal: &str,
-    pane: &str,
-    steer: bool,
-    generation: u64,
-) -> Method {
-    if let Some(session) = &agent.runtime_identity.session_id {
-        Method::AgentPromptIfIdleAtGeneration(schema::AgentPromptIfIdleParams {
-            target: pane.to_owned(),
-            text,
-            expected_terminal_id: terminal.to_owned(),
-            expected_pane_id: pane.to_owned(),
-            expected_agent: launch::provider_kind(agent.provider).into(),
-            expected_session_id: session.clone(),
-            steer,
-            expected_generation: Some(generation),
-            expected_turn_id: None,
-        })
-    } else {
-        Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
-            target: pane.to_owned(),
-            text,
-            expected_terminal_id: terminal.to_owned(),
-            expected_pane_id: pane.to_owned(),
-            expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
-            expected_generation: Some(generation),
-        })
     }
 }
