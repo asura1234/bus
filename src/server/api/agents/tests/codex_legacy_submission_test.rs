@@ -246,7 +246,7 @@ async fn codex_legacy_developer_input_revokes_retained_cleanup_even_for_identica
 #[tokio::test]
 async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
     let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Codex, true, "");
-    let payload = "owned payload\n".repeat(120);
+    let payload = "owned payload ".repeat(80);
     let Method::AgentPromptIfIdle(params) = &mut method else {
         unreachable!()
     };
