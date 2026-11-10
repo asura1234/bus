@@ -79,7 +79,7 @@ fn grok_default_prompt_retains_room_policy_under_explicit_transport_override() {
     assert!(protocol.contains("Do not use `bus wait`"));
     assert!(protocol.contains("return to idle"));
     assert!(protocol.contains("Bus-delivered wake"));
-    assert!(protocol.contains("worker result or blocker"));
+    assert!(protocol.contains("worker's normal result message or blocker"));
     assert!(prompt.contains("Your room: synthetic work (id 568). Your agent name: grok-orch."));
     assert!(prompt.contains("/synthetic/docs/orchestrator-rules.md"));
 }
@@ -103,7 +103,10 @@ Keep this line.
 fn grok_dispatch_keeps_durable_notifications_and_uncertain_submissions() {
     let prompt = flat(&orchestrator_prompt("Synthetic policy.").unwrap());
     for instruction in [
-        "waiter can acknowledge a reply and suppress its Bus-delivered wake",
+        "waiter can acknowledge an outcome event and suppress its Bus-delivered wake",
+        "report with a fresh normal send",
+        "never queues a requester turn",
+        "requester_turn_queued:false",
         "Delivery is not completion",
         "bus message status",
         "bus history --room R",
@@ -112,6 +115,7 @@ fn grok_dispatch_keeps_durable_notifications_and_uncertain_submissions() {
     ] {
         assert!(prompt.contains(instruction), "missing: {instruction}");
     }
+    assert!(!prompt.contains("waiter can acknowledge a reply and suppress its Bus-delivered wake"));
 }
 
 #[test]
