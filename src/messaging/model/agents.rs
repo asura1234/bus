@@ -517,6 +517,42 @@ impl BusState {
         Ok(())
     }
 
+    /// A missing launch directory makes further turn tracking impossible.
+    /// Close only unanswered requests; a captured reply remains immutable.
+    pub(crate) fn fail_missing_launch_directory(
+        &mut self,
+        id: AgentId,
+        error: String,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let previous_error = self
+            .agent(id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .actionable_error
+            .clone();
+        let requests: Vec<_> = self
+            .unsettled_requests()
+            .filter(|request| request.agent_id == id)
+            .map(|request| request.id)
+            .collect();
+        for request in requests {
+            if self.request(request).is_some_and(|r| !r.settled()) {
+                self.close_turn_with_reason(request, now_ms, "launch_directory_removed".into())?;
+            }
+        }
+        if let Some(queue) = self.queues.get_mut(&id) {
+            queue.clear();
+        }
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        agent.current_request = None;
+        agent.provider_retry = None;
+        agent.actionable_error = previous_error;
+        self.observe_working_directory_error(id, Some(error))
+    }
+
     /// Directory warnings never replace another error, and recovering the
     /// directory never clears an error that arrived after this warning.
     pub(crate) fn observe_working_directory_error(

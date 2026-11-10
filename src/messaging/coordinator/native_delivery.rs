@@ -111,6 +111,9 @@ impl Worker {
         {
             return Ok(());
         }
+        if response.is_err() && self.check_launch_directory(agent.id)?.is_some() {
+            return Ok(());
+        }
         let timestamps = native_response_timestamps(&response);
         let outcome = match response {
             Err(error)

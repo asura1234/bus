@@ -49,13 +49,13 @@ impl DirectoryChecks {
                     // recovery. Keep the last known directory warning.
                     Err(_) => continue,
                 };
-                let error = unavailable.then(|| format!(
-                    "Working directory is unavailable: {}. Provider hooks may fail before Bus runs. Restore the worktree or remount its filesystem, or re-add the agent with an existing --pwd.",
-                    cwd.display()
-                ));
-                state
-                    .observe_working_directory_error(id, error)
-                    .map_err(|e| e.to_string())?;
+                if unavailable {
+                    record_missing_directory(state, id, &cwd)?;
+                } else {
+                    state
+                        .observe_working_directory_error(id, None)
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
         let paths: Vec<_> = state
@@ -84,6 +84,74 @@ impl DirectoryChecks {
             Err(error) => {
                 tracing::warn!(event = "bus.working_directory.check_failed", %error, "Could not start directory observation; retaining warning state")
             }
+        }
+        Ok(())
+    }
+}
+
+fn directory_removed(result: io::Result<std::fs::Metadata>) -> bool {
+    match result {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+        ),
+    }
+}
+
+fn record_missing_directory(
+    state: &mut BusState,
+    id: AgentId,
+    cwd: &Path,
+) -> Result<String, String> {
+    let error = format!(
+        "Agent launch directory removed: {}; replace the agent with an existing --pwd.",
+        cwd.display()
+    );
+    let changed = state.agent(id).is_some_and(|agent| {
+        agent.working_directory_error.as_ref() != Some(&error) || agent.current_request.is_some()
+    }) || state
+        .unsettled_requests()
+        .any(|request| request.agent_id == id);
+    state
+        .fail_missing_launch_directory(id, error.clone(), super::io::now_ms())
+        .map_err(|e| e.to_string())?;
+    if changed {
+        tracing::warn!(event = "bus.agent.launch_directory_removed", agent_id = id.0,
+            path = %cwd.display(), reason = "launch_directory_removed", %error,
+            "Launch directory is gone; refusing further delivery");
+    }
+    Ok(error)
+}
+
+impl super::Worker {
+    /// Admission and failure recovery need fresh evidence, before the next poll.
+    /// Permission and other indeterminate filesystem errors do not prove removal.
+    pub(super) fn check_launch_directory(&mut self, id: AgentId) -> Result<Option<String>, String> {
+        let Some(agent) = self.state.agent(id) else {
+            return Ok(None);
+        };
+        let cwd = agent.cwd.clone();
+        if agent.deletion_pending || !directory_removed(std::fs::metadata(&cwd)) {
+            return Ok(None);
+        }
+        let mut state = self.state.clone();
+        let error = record_missing_directory(&mut state, id, &cwd)?;
+        if state != self.state {
+            self.save(state)?;
+        }
+        Ok(Some(error))
+    }
+
+    pub(super) fn check_current_launch_directories(&mut self) -> Result<(), String> {
+        let agents: Vec<_> = self
+            .state
+            .agents()
+            .filter(|agent| agent.current_request.is_some())
+            .map(|agent| agent.id)
+            .collect();
+        for agent in agents {
+            self.check_launch_directory(agent)?;
         }
         Ok(())
     }
