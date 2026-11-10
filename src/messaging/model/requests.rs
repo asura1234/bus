@@ -354,7 +354,11 @@ impl BusState {
             .get(&request.agent_id)
             .is_some_and(|agent| agent.provider == super::Provider::Kimi)
         {
-            return false;
+            let lead = request
+                .group
+                .and_then(|lead| self.requests.get(&lead))
+                .unwrap_or(request);
+            return lead.trusted_start_bound && lead.turn_ended_at_ms.is_some();
         }
         // An uncertain write without a matching provider start may be a
         // startup dialog or unrelated activity, not work on this message.

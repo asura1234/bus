@@ -1168,6 +1168,7 @@ fn shared_request_classification_keeps_provider_errors_and_bus_failures_at_warni
     // but remain actionable warnings in request diagnostics.
     for reason in [
         "provider_error: quota",
+        "provider_error: APIProviderQuotaExhaustedError: 429 You've reached your monthly usage limit for this billing cycle.",
         "reply_not_captured",
         "submission_unconfirmed",
     ] {
@@ -1177,6 +1178,7 @@ fn shared_request_classification_keeps_provider_errors_and_bus_failures_at_warni
             snapshot.revision += 1;
             ui.receive_snapshot(Arc::new(snapshot));
         });
+        assert_no_diagnostics(&mut ui, &[reason]);
         assert!(
             capture.text().contains("WARN") && capture.text().contains("bus.request.failed"),
             "{}",
