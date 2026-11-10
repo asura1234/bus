@@ -534,3 +534,94 @@ fn callback_wake_cursor_response_waits_for_its_matching_stop() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn callback_wake_preserves_cursor_quota_classification_observed_by_the_next_poll() {
+    let (mut worker, _, request, dir) = prepared(Provider::Cursor);
+    record(&dir, Provider::Cursor, started(Provider::Cursor));
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    let error = crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR;
+    let mut info = native_info("pane", "cursor", "session");
+    info.interactive_ready = true;
+    info.provider_error = Some(error.into());
+    info.provider_quota_reset_at = Some(io::now_ms() / 1000 + 3600);
+    worker.transport = Box::new(CallbackNative { info });
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"stop", "conversation_id":"session", "generation_id":"turn", "status":"error", "loop_count":0}),
+    );
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    worker.poll().unwrap();
+    worker
+        .consume_callbacks(
+            worker.state.request(request).unwrap().agent_id,
+            &dir.join("callbacks/launch"),
+        )
+        .unwrap();
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some(format!("provider_error: {error}").as_str())
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn callback_wake_corrupt_envelope_defers_to_periodic_recovery_instead_of_spinning() {
+    let (mut worker, _, _, dir) = prepared(Provider::ClaudeCode);
+    record(&dir, Provider::ClaudeCode, started(Provider::ClaudeCode));
+    let path = callbacks::records(&dir.join("callbacks/launch")).unwrap()[0]
+        .0
+        .clone();
+    std::fs::write(&path, b"{").unwrap();
+    worker.queue_callback_wake("launch");
+    assert!(worker.consume_woken_callbacks().is_err());
+    assert!(
+        path.exists(),
+        "the damaged envelope must remain available for repair"
+    );
+    assert!(
+        worker.callback_wakes.is_empty(),
+        "non-storage spool errors must not retry every 10 ms forever"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn callback_wake_cursor_failure_with_its_own_quota_proof_still_runs_immediately() {
+    let (mut worker, _, request, dir) = prepared(Provider::Cursor);
+    record(&dir, Provider::Cursor, started(Provider::Cursor));
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    let error = crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR;
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"stop", "conversation_id":"session", "generation_id":"turn", "status":"error", "error_code":"upgrade", "error":"You've reached your monthly usage limit\nRequest higher limits to continue using Cursor"}),
+    );
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some(format!("provider_error: {error}").as_str())
+    );
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

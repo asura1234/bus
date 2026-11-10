@@ -63,7 +63,9 @@ impl Worker {
         })();
         let finished = self.finish_batch();
         let result = consumed.and(finished);
-        if result.is_err() {
+        if result.is_err() && self.storage_pause.is_some() {
+            // Storage recovery retries this batch. Other spool errors retain
+            // their files for the normal tick instead of a permanent hot loop.
             self.callback_wakes.extend(ids);
         }
         result

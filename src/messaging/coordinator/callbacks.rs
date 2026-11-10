@@ -109,16 +109,9 @@ impl Worker {
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
         order_records(&mut records);
         for (path, record) in &records {
-            // Reconciliation-only gates need fresh native status and committed
-            // wire evidence. A wake must not spend Grok's retry budget on cached
-            // Idle or acknowledge Kimi's gate before its wire end is committed.
-            if wake
-                && matches!(record.manifest.provider, Provider::Grok | Provider::Kimi)
-                && matches!(
-                    callbacks::parse(record.manifest.provider, &record.value),
-                    Ok(Parsed::CompletionCandidate { .. } | Parsed::ReconcileSession { .. })
-                )
-            {
+            // Some gates require fresh native status/usage or committed wire
+            // evidence; a wake cannot replace that existing poll boundary.
+            if wake && provider_turns::requires_fresh_poll(record) {
                 continue;
             }
             if matches!(
