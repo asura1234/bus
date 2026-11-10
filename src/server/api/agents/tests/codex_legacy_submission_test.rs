@@ -43,6 +43,8 @@ async fn ignored_enter(developer_edit: bool) {
                 clears += 1;
                 if key.as_ref() == b"\x0b" {
                     redraw(&app, AgentKind::Codex, "");
+                } else {
+                    redraw(&app, AgentKind::Codex, "from bus");
                 }
             }
             Err(reply) => break reply,

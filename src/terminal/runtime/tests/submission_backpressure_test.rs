@@ -65,6 +65,8 @@ fn backpressured_cleanup(master: OwnedFd, peer: OwnedFd) {
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: PaneRuntimeIo::Actor(handle.clone()),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|_: &str| InputObservation::Pending),

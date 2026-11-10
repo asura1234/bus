@@ -21,6 +21,9 @@ pub(super) struct Diagnostics {
 }
 
 impl Diagnostics {
+    pub(super) fn enter_attempted(&self) -> bool {
+        self.enter_attempts.get() > 0
+    }
     pub(super) fn with_timestamps(
         timestamps: crate::terminal::pty::actor::SharedSubmissionTimestamps,
     ) -> Self {

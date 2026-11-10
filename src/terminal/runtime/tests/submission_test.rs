@@ -36,6 +36,8 @@ async fn repeated_unowned_polls_emit_one_refusal_diagnostic_outside_the_render_l
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(Inspect {
@@ -110,6 +112,8 @@ async fn withdrawal_cannot_extend_the_hard_deadline_or_send_late_clear_keys() {
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|_: &str| InputObservation::Pending),
@@ -140,6 +144,8 @@ async fn startup_controls_between_initial_observation_and_paste_receive_no_messa
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|screen: &str| {
@@ -190,6 +196,8 @@ async fn an_acceptance_observed_as_the_deadline_passes_still_counts_as_delivered
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         // Empty composer, our paste renders, Enter goes out, and the
@@ -259,6 +267,8 @@ async fn an_unfinished_synchronized_frame_is_never_given_to_an_ownership_inspect
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|screen: &str| {

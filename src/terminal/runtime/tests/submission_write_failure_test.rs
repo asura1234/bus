@@ -209,6 +209,8 @@ async fn stalled_cleanup_acknowledgement(hard_limit: Duration, assertion_window:
     let submission = ObservedSubmission {
         scope: Default::default(),
         terminal: runtime.terminal.clone(),
+        content_seq: runtime.content_seq.clone(),
+        enter_content_seq: std::cell::Cell::new(0),
         io: runtime.io.clone(),
         content_lock: runtime.content_write_lock.clone(),
         inspect: Box::new(|_: &str| InputObservation::Pending),

@@ -76,7 +76,7 @@ impl ObservedSubmission {
                     }
                 }
                 let existing_stash = self.inspect.native_stash_visible(&screen);
-                let result = self.run(text, delay);
+                let result = self.confirm_legacy_submission(self.run(text, delay), lease);
                 if result.is_ok() {
                     // A previously stashed Claude draft pops after submit.
                     // Its receipt, rather than the Enter write, releases user keys.
@@ -94,7 +94,7 @@ impl ObservedSubmission {
             InputObservation::Empty | InputObservation::Other | InputObservation::Pending => {}
             _ if preservation.is_none() || !self.inspect.submission_available(&screen) => {
                 lease.restored();
-                return self.run(text, delay);
+                return self.confirm_legacy_submission(self.run(text, delay), lease);
             }
             _ => {}
         }

@@ -1,4 +1,5 @@
 //! Save the native draft, submit once behind a blocker guard, then restore it.
+mod consumption;
 mod diagnostics;
 mod preservation;
 mod recovery;
@@ -15,7 +16,7 @@ use bytes::Bytes;
 use std::{
     io,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -99,6 +100,13 @@ pub(crate) trait SubmissionInspector: Send {
     fn always_use_editor(&self) -> bool {
         false
     }
+    fn confirm_consumption(&self) -> bool {
+        false
+    }
+    /// Only a recognized picker over an already attested owned composer.
+    fn owned_popup_escape(&self, _screen: &str) -> Option<Bytes> {
+        None
+    }
     /// Called once when this attempt is refused, outside the render lock.
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
@@ -168,6 +176,8 @@ struct ClearProgress {
 
 struct ObservedSubmission {
     terminal: Arc<PaneTerminal>,
+    content_seq: Arc<AtomicU64>,
+    enter_content_seq: std::cell::Cell<u64>,
     io: PaneRuntimeIo,
     scope: InputScope,
     content_lock: Arc<Mutex<()>>,
@@ -186,6 +196,7 @@ struct ObservedSubmission {
 #[derive(Clone)]
 pub(crate) struct SubmissionHandle {
     terminal: Arc<PaneTerminal>,
+    content_seq: Arc<AtomicU64>,
     io: PaneRuntimeIo,
     content_write_lock: Arc<Mutex<()>>,
     draft_input: super::draft_input::SharedDraftInput,
@@ -219,6 +230,7 @@ impl TerminalRuntime {
         }
         SubmissionHandle {
             terminal: self.terminal.clone(),
+            content_seq: self.content_seq.clone(),
             io: self.io.clone(),
             content_write_lock: self.content_write_lock.clone(),
             draft_input: self.draft_input.clone(),
@@ -278,6 +290,8 @@ impl SubmissionHandle {
         // collapses that interval before the caller can record it.
         let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
+            content_seq: self.content_seq.clone(),
+            enter_content_seq: std::cell::Cell::new(0),
             io: self.io.clone(),
             scope: scope.clone(),
             content_lock: self.content_write_lock.clone(),
@@ -459,6 +473,13 @@ impl ObservedSubmission {
     }
 
     fn clear_draft(&self) -> io::Result<ClearOutcome> {
+        self.clear_draft_with_lease(None)
+    }
+
+    fn clear_draft_with_lease(
+        &self,
+        lease: Option<&super::draft_input::DraftInputLease>,
+    ) -> io::Result<ClearOutcome> {
         let mut sent = false;
         let mut progress = ClearProgress {
             revision: self.inspect.cleanup_progress(),
@@ -467,7 +488,7 @@ impl ObservedSubmission {
         loop {
             for (index, key) in self.clear.iter().enumerate() {
                 if let Some(outcome) =
-                    self.clear_step(key.clone(), index, &mut sent, &mut progress)?
+                    self.clear_step(key.clone(), index, &mut sent, &mut progress, lease)?
                 {
                     return Ok(outcome);
                 }
@@ -481,6 +502,7 @@ impl ObservedSubmission {
         index: usize,
         sent: &mut bool,
         progress: &mut ClearProgress,
+        lease: Option<&super::draft_input::DraftInputLease>,
     ) -> io::Result<Option<ClearOutcome>> {
         let generation = self.clock.generation();
         let guard = self
@@ -517,13 +539,19 @@ impl ObservedSubmission {
         self.check_deadline()?;
         let write_deadline = self.deadline.get().min(progress.expires);
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
-        let completion = self.io.queue_input_write_scoped(
-            key,
-            Bytes::new(),
-            Duration::ZERO,
-            Some(write_deadline),
-            &self.scope,
-        )?;
+        let queue = || {
+            self.io.queue_input_write_scoped(
+                key,
+                Bytes::new(),
+                Duration::ZERO,
+                Some(write_deadline),
+                &self.scope,
+            )
+        };
+        let completion = match lease {
+            Some(lease) => lease.with_uninvalidated(queue),
+            None => queue(),
+        }?;
         self.inspect.clearing(index);
         drop(guard);
         completion
@@ -613,6 +641,11 @@ impl ObservedSubmission {
                     Some(screen) if self.inspect.submission_available(&screen) => {
                         self.check_deadline()?;
                         let key = self.inspect.editor_submit_key(&screen, &self.enter);
+                        if self.inspect.confirm_consumption() {
+                            self.observe("legacy_enter_ownership");
+                        }
+                        self.enter_content_seq
+                            .set(self.content_seq.load(Ordering::Acquire));
                         self.diagnostics.enter(&key, self.clock.now());
                         Some(self.io.queue_input_write_scoped(
                             Bytes::new(),
