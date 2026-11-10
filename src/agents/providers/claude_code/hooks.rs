@@ -185,6 +185,33 @@ pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
     (lifted, remaining)
 }
 
+/// Successful reads become leading chips; failed reads retain their exact path
+/// lines among the text. Account for each expected path once before matching
+/// the remaining text, including when successes and failures are interleaved.
+pub(crate) fn claude_text_after_image_reads(
+    images: usize,
+    body: &str,
+    typed: &str,
+) -> Option<String> {
+    let mut unread: Vec<_> = typed
+        .lines()
+        .filter(|line| is_quoted_image_path(line))
+        .collect();
+    if images == 0 || images > unread.len() {
+        return None;
+    }
+    let mut text = Vec::new();
+    for line in body.lines() {
+        if is_quoted_image_path(line) {
+            let index = unread.iter().position(|path| *path == line)?;
+            unread.remove(index);
+        } else if !line.trim().is_empty() {
+            text.push(line);
+        }
+    }
+    (images == unread.len()).then(|| text.join("\n"))
+}
+
 /// Whether `line` is exactly one path quoted the way Bus quotes attachments
 /// (`"path"`, with `\\` and `\"` escaped), naming an image Claude Code attaches.
 fn is_quoted_image_path(line: &str) -> bool {

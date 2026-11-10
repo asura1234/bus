@@ -39,17 +39,18 @@ fn paste_ready(kind: AgentKind, screen: &str, expected: &str) -> bool {
     if kind != AgentKind::Claude {
         return true;
     }
-    let (images, _) = crate::agents::providers::claude_code::hooks::claude_lifted_images(expected);
+    let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
+    let (images, _) = crate::agents::providers::claude_code::hooks::claude_lifted_images(&expected);
     if images == 0 {
         return true;
     }
     // Claude 2.1.316 consumes Enter while an image path is being loaded, then
     // drops that deferred key. The PTY receipt does not attest registration.
     // Wait for all chips, including when the rest of a long paste is clipped.
-    // A failed image read instead installs the literal payload as text.
+    // Failed reads retain literal paths beside any successful image chips.
     let ready = input(kind, screen).is_some_and(|body| {
         image_chips(&body).0 == images
-            || observe_with_cursor(kind, screen, expected, None) == InputObservation::Pending
+            || observe_with_cursor(kind, screen, &expected, None) == InputObservation::Pending
     });
     if ready {
         tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.images_registered", images, "Claude image paste can receive Enter");
@@ -204,14 +205,16 @@ fn composer_frame(kind: AgentKind, screen: &str) -> bool {
 /// The draft is ours only when every chip stands for one of our image lines
 /// and the rest is exactly our remaining text.
 fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String) -> bool {
-    use crate::agents::providers::claude_code::hooks::claude_lifted_images;
+    use crate::agents::providers::claude_code::hooks::{
+        claude_lifted_images, claude_text_after_image_reads,
+    };
     let (images, rest) = image_chips(body);
-    let (lifted, remaining) =
-        claude_lifted_images(&expected.replace("\r\n", "\n").replace('\r', "\n"));
-    images > 0
-        && images == lifted
-        && (normalize(rest) == normalize(&remaining)
-            || collapsed_paste(AgentKind::Claude, rest, &remaining))
+    let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
+    let (_, remaining) = claude_lifted_images(&expected);
+    claude_text_after_image_reads(images, rest, &expected).is_some_and(|text| {
+        normalize(&text) == normalize(&remaining)
+            || collapsed_paste(AgentKind::Claude, &text, &remaining)
+    })
 }
 
 /// Codex either attaches or inserts each dedicated image paste as literal text.

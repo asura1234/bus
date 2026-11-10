@@ -25,6 +25,47 @@ fn claude_image_registration_waits_for_all_chips_and_allows_failed_read_text() {
     assert!(paste_ready(AgentKind::Claude, &frame(""), "ordinary text"));
 }
 
+#[test]
+fn claude_image_registration_accepts_a_chip_with_a_failed_literal_image_path() {
+    let expected = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7]from bus\n\"/tmp/b.jpg\""),
+        expected
+    ));
+    assert_eq!(
+        observe(
+            AgentKind::Claude,
+            &frame("[Image #7]from bus\n\"/tmp/b.jpg\""),
+            expected
+        ),
+        InputObservation::Pending
+    );
+    for body in [
+        "[Image #7]from bus\n\"/tmp/foreign.jpg\"",
+        "[Image #7]from bus\n\"/tmp/b.jpg\"\n\"/tmp/b.jpg\"",
+        "[Image #7]\"/tmp/b.jpg\"",
+    ] {
+        assert!(
+            !paste_ready(AgentKind::Claude, &frame(body), expected),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn claude_image_registration_waits_for_crlf_image_paths() {
+    let expected = "from bus\r\n\"/tmp/a.png\"\r\n";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    assert!(!paste_ready(AgentKind::Claude, &frame(""), expected));
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("[Image #7]from bus"),
+        expected
+    ));
+}
+
 fn codex_review_inspector(
     directory: std::path::PathBuf,
 ) -> Box<dyn crate::terminal::runtime::SubmissionInspector> {

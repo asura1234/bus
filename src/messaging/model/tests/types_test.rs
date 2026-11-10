@@ -3,6 +3,16 @@ use std::path::PathBuf;
 use super::*;
 
 #[test]
+fn mixed_claude_image_success_and_failed_literal_path_correlate() {
+    let typed = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
+    assert!(payload_matches("[Image #7]from bus\n\"/tmp/b.jpg\"", typed));
+    assert!(!payload_matches(
+        "[Image #7]from bus\n\"/tmp/foreign.jpg\"",
+        typed
+    ));
+}
+
+#[test]
 fn observation_snapshots_share_callback_dedupe_keys_and_keep_consumption_independent() {
     let mut document = serde_json::to_value(BusState::new()).unwrap();
     document["consumed_callbacks"] = serde_json::Value::Object(

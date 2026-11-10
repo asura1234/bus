@@ -1035,8 +1035,9 @@ idle then deliver, and an approval card without `--yolo`.
   asynchronous image-path load, and leave the loaded prompt unsubmitted. A
   focused idle orchestrator with a background shell and a 2200x1600 PNG
   reproduced this; a later manual Enter immediately emitted UserPromptSubmit.
-  Require every attachment chip (or the complete literal image-read fallback)
-  before the single Enter. Plain text still submits without a render readback,
+  Account for every image as a successful chip or its exact failed-read literal
+  path before the single Enter, including mixed results. Normalize CRLF before
+  counting paths, and verify the same result correlates with UserPromptSubmit. Plain text still submits without a render readback,
   and focused panes and half-typed drafts still use immediate draft save/restore.
   Check `message status`'s `latency.provider_started_at_ms`; native write clocks
   and an empty worker `events` list do not prove or disprove provider acceptance.

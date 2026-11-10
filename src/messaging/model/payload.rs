@@ -176,7 +176,7 @@ fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
 /// blank lines while lifting images; Codex's separate text paste preserves them.
 pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
     use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_lifted_images,
+        claude_image_placeholders, claude_lifted_images, claude_text_after_image_reads,
     };
     let payload = normalized_payload(payload);
     let typed = normalized_payload(typed);
@@ -184,9 +184,11 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
         return true;
     }
     let (length, images) = claude_image_placeholders(&payload);
-    let (lifted, remaining) = claude_lifted_images(&typed);
+    let (_, remaining) = claude_lifted_images(&typed);
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    if images > 0 && images == lifted && &payload[length..] == remaining {
+    if claude_text_after_image_reads(images, &payload[length..], &typed)
+        .is_some_and(|text| text.trim_end_matches(|c: char| c.is_ascii_whitespace()) == remaining)
+    {
         return true;
     }
     let (expected_images, expected_text) =
