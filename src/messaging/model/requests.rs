@@ -3,7 +3,7 @@ use super::types::clock;
 use super::{
     AgentId, Author, BusState, Draft, ModelError, Prompt, PromptId, Request, RequestId,
     RequestPhase, RoomId, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER,
-    DELIVERED_STALL_MS, QUEUED_STALL_MS, UNCONFIRMED_SUBMISSION_MS,
+    QUEUED_STALL_MS,
 };
 
 mod latency;
@@ -297,11 +297,7 @@ impl BusState {
                     .progress_at_ms
                     .unwrap_or(agent.status_since_ms)
                     .max(lead.latency.native.enter_written_at_ms.unwrap_or(0));
-                let grace = if agent.provider == super::Provider::Kimi {
-                    DELIVERED_STALL_MS
-                } else {
-                    UNCONFIRMED_SUBMISSION_MS
-                };
+                let grace = super::stall::submission_confirmation_grace(agent.provider);
                 let invalidated =
                     agent.status == RuntimeStatus::Unavailable && agent.session_binding_invalidated;
                 if (agent.status != RuntimeStatus::Idle && !invalidated)
@@ -444,10 +440,8 @@ impl BusState {
     /// Bounds waiting for an unconfirmed write with no observed start hook:
     /// fail it after `UNCONFIRMED_SUBMISSION_MS` from its latest Enter, progress
     /// or idle start, while its agent remains idle (Kimi retains its old bound).
-    /// This does not prove the provider
-    /// never ran it. Tell the developer its outcome is unknown, never retype
-    /// it, and let the queue move on. Any text still in the composer is
-    /// cleared by the next delivery.
+    /// This does not prove the provider never ran it: keep the unknown outcome
+    /// and failure reason visible rather than retrying, and release its queue.
     pub(crate) fn fail_unconfirmed_submissions(&mut self, now_ms: u64) -> Result<(), ModelError> {
         self.fail_unconfirmed_submissions_if(now_ms, |_| true)
     }

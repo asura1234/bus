@@ -16,3 +16,13 @@ pub(crate) const UNCONFIRMED_SUBMISSION_MS: u64 = 5_000;
 /// person or the orchestrator a moment; five minutes untouched means nobody
 /// saw it.
 pub(crate) const BLOCKED_STALL_MS: u64 = 5 * 60 * 1000;
+
+/// Preserve the deferred integration's existing bound while ordinary idle
+/// submissions recover promptly when their Enter has no confirmed start.
+pub(super) fn submission_confirmation_grace(provider: super::Provider) -> u64 {
+    if provider == super::Provider::Kimi {
+        DELIVERED_STALL_MS
+    } else {
+        UNCONFIRMED_SUBMISSION_MS
+    }
+}
