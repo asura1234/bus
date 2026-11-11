@@ -403,6 +403,8 @@ fn perf_prints_and_flushes_root_and_window_before_opening_a_blocked_archive() {
         ])
         .env("BUS_DATA_DIR", &dir)
         .env("BUS_PERF_READER_PROBE", "1")
+        // Serial libtest prefixes the first stdout line with the test name.
+        .env("RUST_TEST_THREADS", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
