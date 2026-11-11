@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
+from unittest.mock import Mock, patch
 
 from tools.acceptance.harness_test import Bus
 
@@ -41,3 +42,13 @@ def test_real_provider_login_home_still_requires_private_non_live_bus_data(tmp_p
     bus = Bus(Path("must-not-execute"), tmp_path, env, real_providers=True)
     with pytest.raises(AssertionError, match="private 0700 BUS_DATA_DIR"):
         bus.prepare_skills()
+
+
+def test_cleanup_reports_only_processes_holding_its_own_custom_workspace(tmp_path):
+    work = tmp_path / "private-work"
+    bus = Bus(Path("private-bus"), tmp_path, {"BUS_DATA_DIR": str(tmp_path / "data")}, work)
+    bus.cli = Mock()
+    with patch("tools.acceptance.harness_test.subprocess.run", return_value=Mock(returncode=0, stdout='{"stopped":false}')), \
+            patch("tools.acceptance.harness_test.pids_holding", return_value=set()) as holding:
+        assert bus.stop()["leftover"] == []
+    assert holding.call_args.args == ([bus.data, work],)

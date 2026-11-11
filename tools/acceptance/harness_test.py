@@ -229,5 +229,5 @@ class Bus:
                 pass
             self.master = None
         report["killed"] = sorted(set(killed))
-        report["leftover"] = sorted(pids_holding([self.data, WORKSPACE]))
+        report["leftover"] = sorted(pids_holding([self.data, self.workspace]))
         return report
