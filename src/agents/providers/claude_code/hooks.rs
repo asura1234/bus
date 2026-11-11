@@ -176,7 +176,7 @@ pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
     let remaining = typed
         .split('\n')
         .filter(|line| {
-            let image = is_quoted_image_path(line) || is_unquoted_png_path(line);
+            let image = is_lifted_image_path(line);
             lifted += usize::from(image);
             !image && !line.trim().is_empty()
         })
@@ -195,14 +195,14 @@ pub(crate) fn claude_text_after_image_reads(
 ) -> Option<String> {
     let mut unread: Vec<_> = typed
         .lines()
-        .filter(|line| is_quoted_image_path(line))
+        .filter(|line| is_lifted_image_path(line))
         .collect();
     if images == 0 || images > unread.len() {
         return None;
     }
     let mut text = Vec::new();
     for line in body.lines() {
-        if is_quoted_image_path(line) {
+        if is_lifted_image_path(line) {
             let index = unread.iter().position(|path| *path == line)?;
             unread.remove(index);
         } else if !line.trim().is_empty() {
@@ -210,6 +210,10 @@ pub(crate) fn claude_text_after_image_reads(
         }
     }
     (images == unread.len()).then(|| text.join("\n"))
+}
+
+fn is_lifted_image_path(line: &str) -> bool {
+    is_quoted_image_path(line) || is_unquoted_png_path(line)
 }
 
 /// Measured with Claude Code 2.1.310. Keep prose, relative paths, whitespace

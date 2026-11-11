@@ -50,6 +50,30 @@ fn claude_unquoted_image_path_matches_its_exact_remaining_payload() {
 }
 
 #[test]
+fn claude_unquoted_image_mixed_read_results_keep_each_exact_path() {
+    let body = "[Bus message 6 from you]\nInspect both images.";
+    let typed = format!("{body}\n/tmp/a.png\n\"/tmp/b.jpg\"");
+    for unread in ["/tmp/a.png", "\"/tmp/b.jpg\""] {
+        assert!(payload_matches(
+            &format!("[Image #3]{body}\n{unread}"),
+            &typed
+        ));
+        assert!(!payload_matches(
+            &format!("[Image #3][Image #4]{body}\n{unread}"),
+            &typed
+        ));
+        assert!(!payload_matches(
+            &format!("[Image #3]{body}\n{unread}\n{unread}"),
+            &typed
+        ));
+    }
+    assert!(!payload_matches(
+        &format!("[Image #3]{body}\n/tmp/foreign.png"),
+        &typed
+    ));
+}
+
+#[test]
 fn claude_unquoted_image_callback_binds_and_ends_only_its_frozen_request() {
     for framed in [false, true] {
         let (mut state, room, _, claude) = state_with_room_and_agents();
