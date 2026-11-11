@@ -224,3 +224,61 @@ fn caption_png_keeps_prefix_bytes_and_rejects_ambiguous_paths() {
         );
     }
 }
+
+#[test]
+fn codex_quoted_caption_remains_literal_text() {
+    let typed = "[Bus message 6 from you]\nInspect this\n\"Dialog screenshot\": /tmp/a.png";
+    let (images, text) = crate::agents::providers::codex::hooks::image_paste_parts(typed);
+    assert!(
+        images.is_empty(),
+        "a quoted caption is not a quoted image path: {images:?}"
+    );
+    assert_eq!(text, typed);
+}
+
+#[test]
+fn non_claude_quoted_caption_rejects_foreign_image_substitution() {
+    let mut results = Vec::new();
+    for provider in [
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Kimi,
+    ] {
+        let (mut state, room, agent) = caption_worker(provider);
+        let request = submit_text(
+            &mut state,
+            room,
+            agent,
+            "Inspect this\n\"Dialog screenshot\": /tmp/a.png",
+        );
+        let frozen = state.render_request_payload(request).unwrap();
+        submit_request(&mut state, request, "caption-launch", 10);
+        let foreign = format!(
+            "[Image #3] {}",
+            frozen
+                .strip_suffix("\n\"Dialog screenshot\": /tmp/a.png")
+                .unwrap()
+        );
+        let disposition = state.accept_callback(ProviderCallback {
+            callback_id: "quoted-caption-substitution".into(),
+            sequence: 11,
+            occurred_at_ms: 11,
+            agent_id: agent,
+            launch_id: "caption-launch".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: Some("turn-1".into()),
+            prompt_payload: Some(foreign),
+            kind: CallbackEventKind::PromptStarted,
+        });
+        results.push((provider, disposition));
+    }
+    assert!(
+        results
+            .iter()
+            .all(|(_, result)| *result
+                == CallbackDisposition::Rejected(CallbackRejection::WrongPrompt)),
+        "the exact Bus header cannot authorize replacing literal caption text: {results:?}"
+    );
+}
