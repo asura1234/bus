@@ -91,6 +91,10 @@ pub(super) fn opaque(body: &str) -> bool {
 #[path = "../../tests/draft_policy_test.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "../../tests/claude_rich_draft_test.rs"]
+mod claude_rich_draft_tests;
+
 impl SubmissionInspector for PreservingComposer {
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()

@@ -147,6 +147,14 @@ impl SubmissionClock {
         );
     }
 
+    pub(crate) fn wait_for_draft_wait_or_enter(&self) -> bool {
+        self.wait_for(
+            |state| state.draft_waits > 0 || state.enters > 0,
+            "writer neither waited for input nor acknowledged Enter",
+        );
+        self.state.0.lock().unwrap().draft_waits > 0
+    }
+
     pub(crate) fn wait_for_draft_wait(&self) {
         self.wait_for(
             |state| state.draft_waits > 0,
