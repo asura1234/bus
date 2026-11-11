@@ -16,8 +16,8 @@ fn caption_prompt(raw: &str) -> String {
         crate::agents::providers::spool::parse(
             Provider::ClaudeCode,
             &serde_json::json!({
-                "hook_event_name":"UserPromptSubmit", "session_id":"caption-session",
-                "prompt_id":"caption-turn", "prompt":raw,
+                "hook_event_name":"UserPromptSubmit", "session_id":"provider-session",
+                "prompt_id":"turn-1", "prompt":raw,
             }),
         )
         .unwrap()
@@ -87,9 +87,9 @@ fn caption_png_callback_binds_its_frozen_turn_and_releases_the_follower() {
             occurred_at_ms: 11,
             agent_id: agent,
             launch_id: "caption-launch".into(),
-            provider_session_id: Some("caption-session".into()),
-            provider_turn_id: Some("caption-turn".into()),
-            provider_prompt_id: Some("caption-turn".into()),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: Some("turn-1".into()),
             prompt_payload: Some(prompt.clone()),
             kind: CallbackEventKind::PromptStarted,
         };
@@ -110,8 +110,8 @@ fn caption_png_callback_binds_its_frozen_turn_and_releases_the_follower() {
                 12,
                 agent,
                 "caption-launch",
-                "caption-session",
-                "caption-turn",
+                "provider-session",
+                "turn-1",
                 &prompt,
                 "STASH_4136a0ecb1",
             )),
@@ -124,7 +124,7 @@ fn caption_png_callback_binds_its_frozen_turn_and_releases_the_follower() {
         assert!(settled.trusted_start_bound && state.turn_ended(settled));
         assert_eq!(settled.phase, RequestPhase::Completed);
         assert!(settled.failure_reason.is_none() && settled.reply().is_none());
-        assert_eq!(settled.provider_turn_id.as_deref(), Some("caption-turn"));
+        assert_eq!(settled.provider_turn_id.as_deref(), Some("turn-1"));
         assert_eq!(settled.submitted_payload.as_deref(), Some(frozen.as_str()));
         assert_eq!(settled.prompt.text, body);
         assert_eq!(state.next_queued_request(agent), Some(follower));
@@ -162,9 +162,9 @@ fn caption_png_is_literal_for_every_provider_and_foreign_to_non_claude() {
                 occurred_at_ms: 11,
                 agent_id: agent,
                 launch_id: "caption-launch".into(),
-                provider_session_id: Some("caption-session".into()),
-                provider_turn_id: Some("caption-turn".into()),
-                provider_prompt_id: Some("caption-turn".into()),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-1".into()),
+                provider_prompt_id: Some("turn-1".into()),
                 prompt_payload: Some(prompt),
                 kind: CallbackEventKind::PromptStarted,
             }),
