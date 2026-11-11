@@ -109,7 +109,22 @@ impl SubmissionInspector for PreservingComposer {
         super::submission_available(self.kind, screen)
     }
     fn paste_ready(&self, screen: &str) -> bool {
-        super::paste_ready(self.kind, screen, &self.expected)
+        if !super::paste_ready(self.kind, screen, &self.expected) {
+            return false;
+        }
+        if self.kind != AgentKind::Claude {
+            return true;
+        }
+        let Ok(saved) = self.native_draft.lock() else {
+            return false;
+        };
+        let rich_transfer =
+            matches!(saved.as_ref(), Some(NativeDraft::Captured(body)) if opaque(body));
+        drop(saved);
+        // A native rich-draft swap established an empty composer under the
+        // input lease. Wait for the new editable body, including collapsed
+        // pastes, even when image paths fall outside the attachment policy.
+        !rich_transfer || input(self.kind, screen).is_some_and(|body| !body.is_empty())
     }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         super::draft_ready(self.kind, screen, cursor, pristine)

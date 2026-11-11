@@ -35,11 +35,6 @@ async fn delayed_paste(painted_before_receipt: bool, unrelated_output: bool) {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    assert_eq!(
-        crate::agents::providers::claude_code::hooks::claude_lifted_images(&payload).0,
-        0,
-        "inline paths are outside the existing standalone-image registration policy"
-    );
     let inspector = PreservingComposer::new(
         AgentKind::Claude,
         payload.clone(),
