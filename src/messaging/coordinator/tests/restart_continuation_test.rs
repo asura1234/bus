@@ -161,6 +161,7 @@ impl Transport for RejectRestartNotice {
         if matches!(&method, Method::AgentPromptIfIdleAtGeneration(_)) {
             self.methods.lock().unwrap().push(method);
             return Err(TransportError {
+                timestamps: Default::default(),
                 code: Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN.into()),
                 message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
                 definitely_rejected: true,

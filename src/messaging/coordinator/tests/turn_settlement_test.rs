@@ -45,6 +45,52 @@ fn server_restart(fixture: &mut Fixture) {
     fixture.worker.serving_generation = 2;
 }
 
+#[cfg(unix)]
+fn end_restarted_turn(
+    fixture: &mut Fixture,
+    turn: &str,
+    text: &str,
+    kimi_wire: Option<&std::path::Path>,
+) {
+    fixture.status(RuntimeStatus::Idle);
+    match fixture.provider {
+        Provider::Kimi => {
+            let lead = fixture
+                .worker
+                .state
+                .agent(fixture.agent)
+                .unwrap()
+                .current_request
+                .unwrap();
+            let prompt = fixture.worker.state.render_request_payload(lead).unwrap();
+            append(
+                kimi_wire.expect("isolated Kimi wire"),
+                &super::kimi_steering_tests::native_turn(turn.parse().unwrap(), &prompt, &[], text),
+            );
+            fixture.record(json!({"hook_event_name":"Stop","session_id":"session"}));
+        }
+        Provider::Grok => {
+            let directory = fixture.dir.join("grok-native/session");
+            std::fs::create_dir_all(&directory).unwrap();
+            let transcript = directory.join("updates.jsonl");
+            let rows = [
+                json!({"method":"session/update","params":{"sessionId":"session","_meta":{"promptId":turn},"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}}),
+                json!({"method":"session/update","params":{"sessionId":"session","update":{"sessionUpdate":"turn_completed","prompt_id":turn,"stop_reason":"end_turn"}}}),
+            ];
+            std::fs::write(
+                &transcript,
+                rows.iter()
+                    .map(|row| format!("{row}\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            fixture.record(json!({"hookEventName":"stop","sessionId":"session","promptId":turn,"reason":"end_turn","transcriptPath":transcript}));
+        }
+        _ => fixture.stopped(turn, text),
+    }
+    fixture.consume();
+}
+
 struct RestartLifecycleNative {
     methods: Arc<Mutex<Vec<Method>>>,
     info: schema::AgentInfo,
@@ -194,8 +240,7 @@ fn restart_lifecycle_late_outcome_keeps_queued_work_without_a_loaded_current_req
 
 #[cfg(unix)]
 #[test]
-fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_every_provider_queue()
-{
+fn restart_request_continues_bound_and_closes_unbound_requests_before_queued_work() {
     let mut failures = Vec::new();
     for provider in [
         Provider::ClaudeCode,
@@ -207,9 +252,8 @@ fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_ev
         for server_only in [false, true] {
             for start_bound in [false, true] {
                 let mut fixture = Fixture::new(provider);
-                if provider == Provider::Kimi {
-                    super::kimi_steering_tests::home(&fixture);
-                }
+                let wire = (provider == Provider::Kimi)
+                    .then(|| super::kimi_steering_tests::home(&fixture));
                 let interrupted = if start_bound {
                     running(&mut fixture, "interrupted delivered request", "1")
                 } else {
@@ -226,7 +270,32 @@ fn restart_request_settles_delivered_and_awaiting_start_requests_and_releases_ev
                 fixture.status(RuntimeStatus::Idle);
                 fixture.worker.settle_requests().unwrap();
                 let request = fixture.request(interrupted);
-                if request.phase != RequestPhase::Abandoned
+                if start_bound {
+                    assert!(!request.settled(), "{provider:?}: {request:?}");
+                    assert_eq!(
+                        fixture
+                            .worker
+                            .state
+                            .agent(fixture.agent)
+                            .unwrap()
+                            .current_request,
+                        Some(interrupted)
+                    );
+                    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+                    fixture.deliver();
+                    let notice = fixture.typed().last().unwrap().0.clone();
+                    assert!(notice.contains("Bus restarted"), "{notice}");
+                    fixture.started("2", &notice);
+                    fixture.consume();
+                    end_restarted_turn(
+                        &mut fixture,
+                        "2",
+                        "continued task completed",
+                        wire.as_deref(),
+                    );
+                    assert_completed_without_reply(&fixture, interrupted);
+                    fixture.status(RuntimeStatus::Idle);
+                } else if request.phase != RequestPhase::Abandoned
                     || request.failure_reason.as_deref() != Some("reply_not_captured")
                     || fixture
                         .worker
@@ -273,7 +342,7 @@ fn restart_request_plain_coordinator_reopen_keeps_a_live_turn() {
 
 #[cfg(unix)]
 #[test]
-fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_final() {
+fn restart_request_continues_mid_steer_group_without_losing_an_already_spooled_final() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         let mut fixture = Fixture::new(provider);
         let lead = running(&mut fixture, "lead before restart", "turn-1");
@@ -284,12 +353,20 @@ fn restart_request_settles_a_mid_steer_group_without_losing_an_already_spooled_f
         fixture.status(RuntimeStatus::Idle);
         fixture.worker.settle_requests().unwrap();
         for request in [lead, steering] {
-            assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
-            assert_eq!(
-                fixture.request(request).failure_reason.as_deref(),
-                Some("reply_not_captured")
-            );
+            assert!(!fixture.request(request).settled());
+            assert!(fixture.request(request).failure_reason.is_none());
         }
+        assert_eq!(fixture.request(steering).group, Some(lead));
+        assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+        fixture.deliver();
+        let notice = fixture.typed().last().unwrap().0.clone();
+        fixture.started("turn-2", &notice);
+        fixture.consume();
+        fixture.stopped("turn-2", "resumed group completed");
+        fixture.consume();
+        assert_completed_without_reply(&fixture, lead);
+        assert_completed_without_reply(&fixture, steering);
+        fixture.status(RuntimeStatus::Idle);
         fixture.deliver();
         assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 
@@ -1915,7 +1992,7 @@ fn restart_published_recovers_distinct_committed_steering_final() {
 }
 
 #[test]
-fn restart_published_settles_the_pre_stop_started_successor() {
+fn restart_published_continues_the_pre_stop_started_successor() {
     let mut f = Fixture::new(Provider::Codex);
     let lead = running(&mut f, "first task before restart", "turn-1");
     let member = f.send("followup started before restart", false);
@@ -1928,22 +2005,31 @@ fn restart_published_settles_the_pre_stop_started_successor() {
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, lead);
     assert_reply_text_absent(&f, "first task completed");
+    assert!(!f.request(member).settled());
+    assert!(f.request(member).provider_turn_id.is_none());
+    assert!(f.request(member).failure_reason.is_none());
     assert_eq!(
-        f.request(member).provider_turn_id.as_deref(),
-        Some("turn-2")
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(member)
     );
-    assert_eq!(
-        (f.request(member).phase, f.request(member).failure_reason.as_deref()),
-        (RequestPhase::Abandoned, Some("reply_not_captured")),
-        "the saved Started belongs to the replaced execution, not a surviving turn; owner={:?}, queued={:?}",
-        f.worker.state.agent(f.agent).unwrap().current_request, f.request(queued).phase,
-    );
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    let notice = f.typed().last().unwrap().0.clone();
+    f.stopped("turn-2", "late end from the interrupted execution");
+    f.consume();
+    assert!(!f.request(member).settled());
+    f.started("turn-3", &notice);
+    f.consume();
+    f.stopped("turn-3", "resumed successor completed");
+    f.consume();
+    assert_completed_without_reply(&f, member);
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
     assert_ne!(f.request(queued).phase, RequestPhase::Queued);
 }
 
 #[cfg(unix)]
 #[test]
-fn restart_published_settles_earlier_independent_kimi_inputs() {
+fn restart_published_continues_independent_kimi_inputs_without_stranding_the_owner() {
     let mut f = Fixture::new(Provider::Kimi);
     let wire = super::kimi_steering_tests::home(&f);
     std::fs::write(&wire, "").unwrap();
@@ -1962,30 +2048,45 @@ fn restart_published_settles_earlier_independent_kimi_inputs() {
         assert_eq!(f.request(id).group, None);
     }
     let queued = f.send("pending after both old inputs", true);
+    let before = f.typed().len();
     restart_lifecycle_reopen(&mut f, true);
     f.worker.tick().unwrap();
-    let outcomes: Vec<_> = [first, second]
-        .into_iter()
-        .map(|id| (f.request(id).phase, f.request(id).failure_reason.clone()))
-        .collect();
+    for id in [first, second] {
+        assert!(!f.request(id).settled(), "{:?}", f.request(id));
+        assert!(f.request(id).failure_reason.is_none());
+        assert_eq!(f.request(id).group, None);
+    }
     assert_eq!(
-        outcomes,
-        vec![
-            (RequestPhase::Abandoned, Some("reply_not_captured".into())),
-            (RequestPhase::Abandoned, Some("reply_not_captured".into())),
-        ],
-        "every outstanding submitted root belongs to the replaced execution; queued={:?}",
-        f.request(queued).phase
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(second)
     );
+    assert_eq!(
+        f.typed().len(),
+        before + 1,
+        "the retained current owner must be deliverable"
+    );
+    for (id, turn) in [(second, "2"), (first, "3")] {
+        let notice = f.typed().last().unwrap().0.clone();
+        assert!(notice.contains(&format!("message {}", f.request(id).prompt.id.0)));
+        f.started(turn, &notice);
+        f.consume();
+        end_restarted_turn(&mut f, turn, "resumed input completed", Some(&wire));
+        assert_completed_without_reply(&f, id);
+        f.status(RuntimeStatus::Idle);
+        f.deliver();
+    }
     assert_ne!(f.request(queued).phase, RequestPhase::Queued);
 }
 
 #[test]
-fn restart_published_logs_only_durable_interrupted_closures_once() {
+fn restart_published_logs_only_durable_unbound_closures_once() {
     let mut f = Fixture::new(Provider::ClaudeCode);
-    let lead = running(&mut f, "lead interrupted by restore", "turn-1");
+    let lead = f.send("unconfirmed lead interrupted by restore", false);
+    f.deliver();
+    f.status(RuntimeStatus::Working);
     let member = f.send("steering interrupted by restore", false);
     f.deliver();
+    assert_eq!(f.request(member).group, Some(lead));
     restart(&mut f);
     f.status(RuntimeStatus::Idle);
     f.worker
@@ -2031,10 +2132,16 @@ fn restart_published_retained_receipt_after_saved_ack_preserves_successor() {
         let successor = f.send("fresh successor after native replacement", true);
         f.worker.transport = restart_lifecycle_transport(&f, true);
         f.worker.tick().unwrap();
-        assert_eq!(
-            f.request(old).failure_reason.as_deref(),
-            Some("reply_not_captured")
-        );
+        assert!(!f.request(old).settled());
+        assert_eq!(f.request(successor).phase, RequestPhase::Queued);
+        let notice = f.typed().last().unwrap().0.clone();
+        f.started("turn-2", &notice);
+        f.consume();
+        f.stopped("turn-2", "continued original completed");
+        f.consume();
+        assert_completed_without_reply(&f, old);
+        f.status(RuntimeStatus::Idle);
+        f.deliver();
         assert_eq!(f.request(successor).phase, RequestPhase::Active);
 
         f.now += 1;
@@ -2112,7 +2219,7 @@ fn restart_generation_proof_native(f: &Fixture, generation: u64) -> Box<dyn Tran
 }
 #[cfg(unix)]
 #[test]
-fn restart_generation_serving_change_without_rebind_or_receipt_releases_all_provider_queues() {
+fn restart_generation_without_rebind_or_receipt_continues_bound_and_closes_unbound_work() {
     let mut failures = Vec::new();
     for provider in [
         Provider::ClaudeCode,
@@ -2123,9 +2230,7 @@ fn restart_generation_serving_change_without_rebind_or_receipt_releases_all_prov
     ] {
         for bound in [false, true] {
             let mut f = Fixture::new(provider);
-            if provider == Provider::Kimi {
-                super::kimi_steering_tests::home(&f);
-            }
+            let wire = (provider == Provider::Kimi).then(|| super::kimi_steering_tests::home(&f));
             f.worker.transport = restart_generation_proof_native(&f, 1);
             f.worker.tick().unwrap();
             let old = if bound {
@@ -2140,7 +2245,23 @@ fn restart_generation_serving_change_without_rebind_or_receipt_releases_all_prov
             assert_eq!(f.request(queued).phase, RequestPhase::Queued);
             f.worker.transport = restart_generation_proof_native(&f, 2);
             f.worker.tick().unwrap();
-            if f.request(old).phase != RequestPhase::Abandoned
+            if bound {
+                assert!(
+                    !f.request(old).settled(),
+                    "{provider:?}: {:?}",
+                    f.request(old)
+                );
+                assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+                let notice = f.typed().last().unwrap().0.clone();
+                assert!(notice.contains("Bus restarted"), "{notice}");
+                f.started("2", &notice);
+                f.consume();
+                end_restarted_turn(&mut f, "2", "continued task completed", wire.as_deref());
+                assert_completed_without_reply(&f, old);
+                f.status(RuntimeStatus::Idle);
+                f.deliver();
+                assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+            } else if f.request(old).phase != RequestPhase::Abandoned
                 || f.request(old).failure_reason.as_deref() != Some("reply_not_captured")
                 || f.request(queued).phase == RequestPhase::Queued
             {
