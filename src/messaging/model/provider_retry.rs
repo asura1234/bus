@@ -271,15 +271,31 @@ impl BusState {
                 continue;
             }
             let next_lead = pending[0];
-            for id in &pending {
-                self.prepare_retry_request(*id, hold.attempts, now_ms);
+            let continuation = lead.restart_continuation;
+            if continuation {
+                let Some(generation) = lead.delivery_epoch.as_ref().map(|epoch| epoch.generation)
+                else {
+                    continue;
+                };
+                if !self.prepare_restart_continuation(agent, hold.lead, generation, now_ms) {
+                    continue;
+                }
+                for id in &pending {
+                    let request = self.requests.get_mut(id).expect("held member");
+                    request.provider_retry_attempts =
+                        request.provider_retry_attempts.max(hold.attempts);
+                }
+            } else {
+                for id in &pending {
+                    self.prepare_retry_request(*id, hold.attempts, now_ms);
+                }
+                if let Some(anchor) = self.requests.get_mut(&hold.lead).filter(|r| r.settled()) {
+                    anchor.phase = RequestPhase::Completed;
+                }
+                let queue = self.queues.entry(agent).or_default();
+                queue.retain(|id| !pending.contains(id));
+                queue.splice(0..0, pending);
             }
-            if let Some(anchor) = self.requests.get_mut(&hold.lead).filter(|r| r.settled()) {
-                anchor.phase = RequestPhase::Completed;
-            }
-            let queue = self.queues.entry(agent).or_default();
-            queue.retain(|id| !pending.contains(id));
-            queue.splice(0..0, pending);
             // Time spent in the provider hold is not a refused delivery opportunity.
             for id in self.queued_requests(agent).to_vec() {
                 if let Some(request) = self.requests.get_mut(&id) {
@@ -290,7 +306,7 @@ impl BusState {
                 }
             }
             let owner = self.agents.get_mut(&agent).expect("held agent");
-            owner.current_request = None;
+            owner.current_request = continuation.then_some(next_lead);
             owner.provider_retry = Some(ProviderRetry {
                 lead: next_lead,
                 queued: true,
