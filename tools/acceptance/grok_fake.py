@@ -258,12 +258,24 @@ class Run:
         self.case("question-and-dismissal", dialogs)
 
         def errors():
-            rows = []
-            for prompt in ("fake:api-error", "fake:gate-cancel"):
-                status = self.settle(self.send(self.room, self.worker, prompt), success=False)
-                assert all(r["reply"] is None and r["stage"] != "replied" for r in status["requests"]), status
-                rows.append(status)
-            return rows
+            message = self.send(self.room, self.worker, "fake:api-error")
+            # Transient API failures are held for native retry, not settled as
+            # successful native finals or handed back to the sender for replay.
+            hold = poll(lambda: json.loads((self.root / "data/state.json").read_text())
+                        ["state"]["agents"][str(self.worker)].get("provider_retry"), bool)
+            failed = self.cli("message", "status", message)
+            assert not failed["complete"] and all(r["reply"] is None for r in failed["requests"]), failed
+            assert hold["lead"] == failed["requests"][0]["request_id"] and hold["attempts"] >= 1, hold
+            failed_agent = self.worker
+            self.cli("agent", "delete", failed_agent, "--confirm")
+            poll(lambda: self.cli("state"), lambda s: all(a["id"] != failed_agent for a in s["agents"]))
+            removed = self.settle(message, success=False)
+            assert all(r["reply"] is None and r["reason"] == "agent_deleted" for r in removed["requests"])
+            self.worker = self.add(self.room, "grok-worker")
+            cancelled = self.settle(self.send(self.room, self.worker, "fake:gate-cancel"), success=False)
+            assert all(r["reply"] is None and r["stage"] == "abandoned" and r["reason"]
+                       for r in cancelled["requests"]), cancelled
+            return {"retry_hold": hold, "failed": failed, "removed": removed, "cancelled": cancelled}
         self.case("failure-and-cancellation", errors)
 
     def history_result(self, room, agent, token):
