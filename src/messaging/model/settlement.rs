@@ -395,6 +395,39 @@ impl BusState {
         if self.agents.get(&agent)?.provider == super::Provider::Kimi {
             return self.settle_kimi_ended_request(agent, now_ms, recorded_end);
         }
+        let owner = self.agents.get(&agent)?;
+        let current = owner.current_request.and_then(|id| self.requests.get(&id));
+        if let Some(request) = current.filter(|request| {
+            owner.working_directory_error.is_some()
+                && !owner.deletion_pending
+                && !owner.session_binding_invalidated
+                && request.phase == RequestPhase::Active
+                && request.trusted_start_bound
+                && !request.awaiting_background
+                && request.pending_final.is_none()
+        }) {
+            // The directory warning changes availability, not turn lifetime.
+            // Even Idle or a failed socket is insufficient evidence of an end.
+            let exited = owner.status == RuntimeStatus::Unavailable
+                && owner.exit_snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.launch_id == request.expected_launch_id
+                        && now_ms >= snapshot.at_ms.saturating_add(TURN_SETTLE_MS)
+                });
+            let recorded = recorded_end(request);
+            if recorded.is_none() && !exited {
+                return None;
+            }
+            return self.consume_recorded_end(
+                agent,
+                request.id,
+                now_ms,
+                recorded,
+                "rollout",
+                exited,
+                "Agent process exited; request closed. Inspect its terminal and resume it.",
+                None,
+            );
+        }
         if let Some(id) = self.idle_bound_turn_candidate(agent, now_ms) {
             let recorded = recorded_end(self.requests.get(&id)?);
             return self.settle_idle_bound_turn(agent, id, now_ms, recorded);
