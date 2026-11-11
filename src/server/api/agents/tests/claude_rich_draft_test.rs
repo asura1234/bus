@@ -111,3 +111,77 @@ async fn claude_rich_paste_unrelated_output_is_not_input_readiness() {
 async fn claude_rich_paste_render_before_flush_receipt_is_not_missed() {
     delayed_paste(true, false).await;
 }
+
+#[tokio::test]
+async fn claude_rich_paste_timeout_does_not_restore_over_an_unresolved_flush() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-late-rich-paste");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    paint(&runtime, ORIGINAL, false, "original draft");
+    let payload = "Long report\nDialog screenshot: /private/tmp/native-rich/fixture.png";
+    let inspector = PreservingComposer::new(
+        AgentKind::Claude,
+        payload.into(),
+        directory.clone(),
+        vec![
+            Bytes::from_static(b"\x13"),
+            Bytes::from_static(b"\x07"),
+            Bytes::from_static(b"\x7f"),
+        ],
+    );
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(payload.as_bytes()),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x15")],
+            Duration::ZERO,
+            None,
+            Box::new(inspector),
+        )
+        .unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x13");
+    paint(&runtime, "", true, "draft stashed");
+    assert_eq!(key(&mut writes).await.as_ref(), payload.as_bytes());
+    assert!(clock.wait_for_draft_wait_or_enter());
+    clock.advance(Duration::from_secs(3));
+    let mut response = tokio::task::spawn_blocking(move || {
+        completion.recv_timeout(Duration::from_secs(5)).unwrap()
+    });
+    let restored_before_resolving_paste;
+    let result;
+    tokio::select! {
+        bytes = writes.recv() => {
+            assert_eq!(bytes.unwrap().as_ref(), b"\x13");
+            // Finish the old fallback before failing the assertion, leaving
+            // no submission worker or paused clock waiting behind the probe.
+            paint(&runtime, ORIGINAL, false, "premature original restoration");
+            result = response.await.unwrap();
+            restored_before_resolving_paste = true;
+        }
+        completed = &mut response => {
+            result = completed.unwrap();
+            restored_before_resolving_paste = false;
+        }
+    }
+    assert!(result.is_err());
+    // The native reader may still apply the flushed payload after timeout.
+    paint(&runtime, payload, true, "late native paste");
+    let retained = std::fs::read_dir(&directory)
+        .unwrap()
+        .flatten()
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("draft-"));
+    std::fs::remove_dir_all(directory).unwrap();
+    assert!(
+        !restored_before_resolving_paste,
+        "stash restoration overtook a successfully flushed but unresolved paste"
+    );
+    assert!(
+        retained,
+        "retain recovery until the native draft is proven restored"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "no Enter or replay after timeout"
+    );
+}

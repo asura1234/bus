@@ -268,6 +268,23 @@ impl ObservedSubmission {
                 return Err(error);
             }
         }
+        // A flushed paste may still materialize after a pre-Enter readiness
+        // timeout. Empty is not proof of withdrawal: keep the native stash and
+        // recovery record instead of restoring into that unresolved write.
+        if self
+            .diagnostics
+            .pending_paste(&result)
+            .is_some_and(|(_, entered)| !entered)
+            && !self
+                .inspect
+                .native_draft_restored(&self.terminal.active_ansi())
+        {
+            self.recovery_log(
+                &exchange,
+                &io::Error::other("Native stash retained while a flushed paste is unresolved"),
+            );
+            return result;
+        }
         // Native stash pops at the next submit. On an unsubmitted attempt,
         // restore only into an empty composer; never toggle over another draft.
         if !self
