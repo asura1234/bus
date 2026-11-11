@@ -190,3 +190,37 @@ fn caption_png_mixed_read_results_account_for_each_exact_literal_path() {
         assert!(!payload_matches(&format!("[Image #4]{payload}"), typed));
     }
 }
+
+#[test]
+fn caption_png_keeps_prefix_bytes_and_rejects_ambiguous_paths() {
+    for caption in ["Dialog screenshot:", "截图:", "  Report: screenshot:"] {
+        let typed = format!("[Bus message 6 from you]\n{caption} /tmp/a.PNG\nKeep this text.");
+        let payload = format!("[Image #3][Bus message 6 from you]\n{caption}\nKeep this text.");
+        assert!(payload_matches(&payload, &typed));
+        assert!(!payload_matches(
+            &payload.replace("Keep this", "Keep that"),
+            &typed
+        ));
+    }
+    for literal in [
+        "relative.png",
+        "https://example.com/a.png",
+        "/tmp/a.pdf",
+        "/tmp/a.jpg",
+        "/tmp/a.png /tmp/b.png",
+        "/tmp/one image.png",
+        "/tmp/one\\ image.png",
+        "\"/tmp/a.png\"",
+        " /tmp/a.png",
+        "\t/tmp/a.png",
+    ] {
+        let typed = format!("[Bus message 6 from you]\nDialog screenshot: {literal}");
+        assert!(
+            !payload_matches(
+                "[Image #3][Bus message 6 from you]\nDialog screenshot:",
+                &typed
+            ),
+            "{literal}"
+        );
+    }
+}

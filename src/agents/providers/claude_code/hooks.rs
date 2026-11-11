@@ -166,8 +166,8 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
     (length, count)
 }
 
-/// Claude Code lifts quoted image paths and standalone unquoted absolute PNG
-/// paths into attachments. Its composer and its submit hook then show one
+/// Claude Code lifts quoted image paths and unquoted absolute PNG paths alone
+/// or after a caption into attachments. Its composer and submit hook show one
 /// `[Image #N]` placeholder per image first (N counts the session's images),
 /// followed by the remaining lines with blank ones dropped. Returns how many
 /// lines of `typed` it lifts and the text left behind.
@@ -180,10 +180,12 @@ pub(crate) fn lifted_images(typed: &str, unquoted_png: bool) -> (usize, String) 
     let mut lifted = 0;
     let remaining = typed
         .split('\n')
-        .filter(|line| {
-            let image = is_lifted_image_path(line, unquoted_png);
-            lifted += usize::from(image);
-            !image && !line.trim().is_empty()
+        .filter_map(|line| {
+            let text = image_line_text(line, unquoted_png).map_or(line, |text| {
+                lifted += 1;
+                text
+            });
+            (!text.trim().is_empty()).then_some(text)
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -209,25 +211,44 @@ pub(crate) fn text_after_image_reads(
 ) -> Option<String> {
     let mut unread: Vec<_> = typed
         .lines()
-        .filter(|line| is_lifted_image_path(line, unquoted_png))
+        .filter(|line| image_line_text(line, unquoted_png).is_some())
         .collect();
     if images == 0 || images > unread.len() {
         return None;
     }
     let mut text = Vec::new();
     for line in body.lines() {
-        if is_lifted_image_path(line, unquoted_png) {
+        let remaining = if let Some(caption) = image_line_text(line, unquoted_png) {
             let index = unread.iter().position(|path| *path == line)?;
             unread.remove(index);
-        } else if !line.trim().is_empty() {
-            text.push(line);
+            caption
+        } else {
+            line
+        };
+        if !remaining.trim().is_empty() {
+            text.push(remaining);
         }
     }
     (images == unread.len()).then(|| text.join("\n"))
 }
 
-fn is_lifted_image_path(line: &str, unquoted_png: bool) -> bool {
-    is_quoted_image_path(line) || (unquoted_png && is_unquoted_png_path(line))
+/// Text left after one image path is read. Measured caption form on 2.1.310:
+/// `Dialog screenshot: /absolute/fixture.png` becomes `Dialog screenshot:`.
+/// Keep the full line as the failed-read identity; never delete a substring
+/// merely because it resembles a path or an arbitrary part of the body.
+fn image_line_text(line: &str, unquoted_png: bool) -> Option<&str> {
+    if is_quoted_image_path(line) {
+        return Some("");
+    }
+    if !unquoted_png {
+        return None;
+    }
+    if is_unquoted_png_path(line) {
+        return Some("");
+    }
+    let (caption, path) = line.rsplit_once(": ")?;
+    (!caption.trim().is_empty() && is_unquoted_png_path(path))
+        .then_some(&line[..line.len() - path.len() - 1])
 }
 
 /// Measured with Claude Code 2.1.310. Keep prose, relative paths, whitespace
