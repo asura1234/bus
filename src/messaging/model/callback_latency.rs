@@ -37,13 +37,17 @@ impl BusState {
                             .as_ref()
                             .filter(|(key, _)| *key == activity_key(bound))
                             .and_then(|(_, activity)| activity.clone());
-                        bound.bound_turn_activity = Some(activity.unwrap_or(
-                            crate::messaging::model::types::BoundTurnActivity {
+                        let mut activity =
+                            activity.unwrap_or(crate::messaging::model::types::BoundTurnActivity {
                                 started_at_ms: occurred_at_ms,
                                 idle_since_ms: None,
                                 working_seen: false,
-                            },
-                        ));
+                            });
+                        // New accepted input is progress even if the pane
+                        // repeats Idle. Keep the Working latch, renew grace.
+                        activity.started_at_ms = activity.started_at_ms.max(occurred_at_ms);
+                        activity.idle_since_ms = None;
+                        bound.bound_turn_activity = Some(activity);
                     }
                 }
                 if reply_event {
@@ -73,7 +77,7 @@ impl BusState {
 }
 
 // Prompt IDs can change when input joins an existing native turn. Preserve
-// its Working evidence; only a distinct native turn starts a fresh watch.
+// its Working evidence; only a distinct native turn clears that latch.
 fn activity_key(request: &super::Request) -> (Option<String>, Option<String>, Option<String>) {
     (
         request.provider_session_id.clone(),

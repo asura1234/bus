@@ -500,8 +500,11 @@ pub(crate) struct DeliveryEpoch {
 /// Activity observed after an accepted Started, kept across coordinator reloads.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct BoundTurnActivity {
+    /// Latest accepted Started clock; never moves backwards within a turn.
     pub(crate) started_at_ms: u64,
+    /// First Idle after that input or after a break in the idle interval.
     pub(crate) idle_since_ms: Option<u64>,
+    /// Working seen during this native turn; additional input never clears it.
     pub(crate) working_seen: bool,
 }
 
