@@ -2,7 +2,7 @@
 use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase};
 
 impl BusState {
-    /// Recover old execution evidence before closing its unresolved inputs.
+    /// Recover old execution evidence before continuing its unresolved inputs.
     /// Current-generation inputs and provider retry ownership remain independent.
     pub(crate) fn settle_generation_request(
         &mut self,
@@ -14,9 +14,15 @@ impl BusState {
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
         let request = self.requests.get(&id)?.clone();
+        let resume_failed = owner.session_binding_invalidated
+            || owner.working_directory_error.is_some()
+            || owner.missing_binary.is_some()
+            || owner
+                .startup
+                .as_ref()
+                .is_some_and(|startup| startup.failure.is_some());
         if request.agent_id != agent
             || owner.deletion_pending
-            || owner.session_binding_invalidated
             || request
                 .delivery_epoch
                 .as_ref()
@@ -25,10 +31,11 @@ impl BusState {
                 request.phase,
                 RequestPhase::Submitting | RequestPhase::Active
             ) || request.phase == RequestPhase::Completed && request.pending_final.is_some())
-            || owner
-                .provider_retry
-                .as_ref()
-                .is_some_and(|hold| hold.lead == id || request.group == Some(hold.lead))
+            || !resume_failed
+                && owner
+                    .provider_retry
+                    .as_ref()
+                    .is_some_and(|hold| hold.lead == id || request.group == Some(hold.lead))
         {
             return None;
         }
@@ -80,18 +87,23 @@ impl BusState {
                 );
             }
         }
-        if !self.requests.get(&id)?.settled() {
-            self.consume_recorded_end(
-                agent,
-                id,
-                now_ms,
-                recorded_end(&request),
-                "restart",
-                false,
-                "Bus restarted before the request completed; inspect its terminal.",
-                Some("Bus restarted before a reply was captured; the in-flight turn was interrupted. Inspect its terminal and resend if needed."),
-            )?;
+        if (request.trusted_start_bound || request.restart_continuation)
+            && request.pending_final.is_none()
+            && recorded_end(&request).is_none()
+            && self.prepare_restart_continuation(agent, id, generation, now_ms)
+        {
+            if let Some(current) = current.filter(|current| *current != id).or(successor) {
+                self.agents.get_mut(&agent)?.current_request = Some(current);
+            }
+            return Some(id);
         }
+        self.settle_interrupted_generation_end(
+            agent,
+            id,
+            now_ms,
+            recorded_end(&request),
+            resume_failed,
+        )?;
         if let Some(mut answered) = self
             .requests
             .get(&id)
@@ -114,5 +126,37 @@ impl BusState {
             .or(successor)
             .or(owner.current_request);
         Some(id)
+    }
+
+    fn settle_interrupted_generation_end(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+        recorded: Option<RecordedTurnEnd>,
+        resume_failed: bool,
+    ) -> Option<()> {
+        let unresolved = !self.requests.get(&id)?.settled()
+            || self.group_members(id).iter().any(|member| {
+                self.requests
+                    .get(member)
+                    .is_some_and(|request| !request.settled())
+            });
+        if unresolved {
+            // A failed cold resume cannot retain a retry hold for a dead turn.
+            // Committed finals still settle before failure fallback.
+            let recorded = if resume_failed && matches!(&recorded, Some(RecordedTurnEnd::Error(_)))
+            {
+                None
+            } else {
+                recorded
+            };
+            self.consume_recorded_end(
+                agent, id, now_ms, recorded, "restart", false,
+                "Bus restarted before the request completed; inspect its terminal.",
+                Some("Bus restarted before a reply was captured; the in-flight turn was interrupted. Inspect its terminal and resend if needed."),
+            )?;
+        }
+        Some(())
     }
 }

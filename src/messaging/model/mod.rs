@@ -26,6 +26,7 @@ mod reply_routing;
 mod request_outcomes;
 mod requests;
 mod restart;
+mod restart_continuation;
 mod rooms;
 mod settlement;
 mod staffing;

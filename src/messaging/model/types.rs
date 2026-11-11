@@ -529,6 +529,10 @@ pub(crate) struct Request {
     pub(crate) queued_rejection: Option<QueuedRejection>,
     #[serde(default)]
     pub(crate) provider_retry_attempts: u32,
+    /// The original task is being continued after a cold provider resume.
+    /// Delivery sends a short notice, never the original prompt again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) restart_continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) delivery_epoch: Option<DeliveryEpoch>,
     pub(crate) expected_launch_id: Option<String>,

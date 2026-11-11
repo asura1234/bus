@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "restart_continuation_test.rs"]
+mod restart_continuation_tests;
+
 #[derive(Clone, Copy, Debug)]
 enum EpochMode {
     Server,
@@ -252,19 +255,32 @@ fn epoch_ordering(mode: EpochMode, current: bool, receipt: Receipt, queue_after:
                     );
                 } else if current {
                     let request = f.request(old.unwrap());
-                    assert_eq!(request.phase, RequestPhase::Abandoned);
-                    assert_eq!(
-                        request.delivery_epoch.as_ref().unwrap().generation,
-                        1,
-                        "{provider:?}/{mode:?} must close the generation-1 delivery"
-                    );
-                    assert_eq!(
-                        request.failure_reason.as_deref(),
-                        Some("reply_not_captured")
-                    );
+                    if bound {
+                        assert!(!request.settled(), "{provider:?}/{mode:?}: {request:?}");
+                        assert_eq!(delivery_generation(&f, request.id), 2);
+                        assert_eq!(
+                            f.worker.state.agent(f.agent).unwrap().current_request,
+                            Some(request.id)
+                        );
+                        let notice = f.typed().last().unwrap().0.clone();
+                        assert!(notice.contains("Bus restarted"), "{notice}");
+                        assert!(!notice.contains("old generation request"), "{notice}");
+                    } else {
+                        assert_eq!(request.phase, RequestPhase::Abandoned);
+                        assert_eq!(delivery_generation(&f, request.id), 1);
+                        assert_eq!(
+                            request.failure_reason.as_deref(),
+                            Some("reply_not_captured")
+                        );
+                    }
                 }
                 if !transient_hold {
                     if let Some(queued) = queued {
+                        if current && bound {
+                            assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+                            assert!(f.request(queued).delivery_epoch.is_none());
+                            continue;
+                        }
                         assert_ne!(
                             f.request(queued).phase,
                             RequestPhase::Queued,

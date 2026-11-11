@@ -59,7 +59,9 @@ impl BusState {
         }
         let submission_status_revision = agent.status_revision;
         let submitted_at_ms = agent.observed_at_ms;
-        if agent.current_request.is_some()
+        let resuming_owner =
+            request_state.restart_continuation && agent.current_request == Some(request);
+        if (agent.current_request.is_some() && !resuming_owner)
             || self
                 .queues
                 .get(&agent_id)
@@ -113,6 +115,7 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting {
             return Err(ModelError::InvalidTransition);
         }
+        let restart_continuation = request_state.restart_continuation;
         if matches!(
             &outcome,
             SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy
@@ -142,7 +145,7 @@ impl BusState {
                 request_state.latency.clear_attempt();
                 // Coalesced members go back behind their lead, in order.
                 let members = self.group_members(request);
-                for member in &members {
+                for member in members.iter().filter(|_| !restart_continuation) {
                     if let Some(member) = self.requests.get_mut(member) {
                         member.phase = RequestPhase::Queued;
                         member.group = None;
@@ -150,12 +153,16 @@ impl BusState {
                     }
                 }
                 let queue = self.queues.entry(agent_id).or_default();
-                queue.splice(0..0, std::iter::once(request).chain(members));
+                queue.splice(
+                    0..0,
+                    std::iter::once(request)
+                        .chain(members.into_iter().filter(|_| !restart_continuation)),
+                );
                 let agent = self
                     .agents
                     .get_mut(&agent_id)
                     .ok_or(ModelError::UnknownAgent(agent_id))?;
-                agent.current_request = None;
+                agent.current_request = restart_continuation.then_some(request);
                 agent.delivery_rejection = Some(
                     rejection
                         .as_deref()
@@ -175,7 +182,12 @@ impl BusState {
                 let Some(request_state) = self.requests.get_mut(&request) else {
                     return Err(ModelError::UnknownRequest(request));
                 };
-                request_state.phase = RequestPhase::Active;
+                request_state.phase = if restart_continuation && !request_state.trusted_start_bound
+                {
+                    RequestPhase::Submitting
+                } else {
+                    RequestPhase::Active
+                };
                 request_state.provider_session_id = provider_session_id;
                 request_state.provider_turn_id = provider_turn_id;
                 request_state.uncertain_outcome = false;
@@ -277,7 +289,12 @@ impl BusState {
             // The owned turn occupies delivery even when its composer is Idle.
             // Its settlement (or unconfirmed-write bound) releases this queue;
             // waiting behind it is not a failed submission opportunity.
-            RequestPhase::Queued if agent.current_request.is_some() => None,
+            RequestPhase::Queued
+                if agent.current_request.is_some()
+                    && !(lead.restart_continuation && agent.current_request == Some(lead.id)) =>
+            {
+                None
+            }
             RequestPhase::Queued => since(
                 QUEUED_STALL_MS,
                 lead.prompt
@@ -453,7 +470,8 @@ impl BusState {
             return None;
         }
         let lead = self.requests.get(&agent_state.current_request?)?;
-        if (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
+        if lead.restart_continuation
+            || (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
             || lead.phase != RequestPhase::Active
             || (!lead.trusted_start_bound && agent_state.status != RuntimeStatus::Working)
             || lead.pending_final.is_some()
@@ -607,6 +625,9 @@ impl BusState {
     /// `lead` goes alone.
     pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
         let request = self.requests.get(&lead)?;
+        if request.restart_continuation {
+            return None;
+        }
         let (agent_id, room) = (request.agent_id, request.room_id);
         let generated = request.bus_generated;
         let author = request.prompt.author.clone();
@@ -682,26 +703,6 @@ impl BusState {
                 .get(id)
                 .map_or_else(|| "an agent".into(), |agent| agent.name.clone()),
         }
-    }
-
-    /// The requests that joined `lead`'s group, oldest first.
-    pub(crate) fn group_members(&self, lead: RequestId) -> Vec<RequestId> {
-        self.requests()
-            .filter(|request| request.group == Some(lead))
-            .map(|request| request.id)
-            .collect()
-    }
-
-    pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
-        let agent_state = self.agents.get(&agent)?;
-        if agent_state.current_request.is_some() || agent_state.deletion_pending {
-            return None;
-        }
-        self.queues.get(&agent)?.first().copied()
-    }
-
-    pub(crate) fn queued_requests(&self, agent: AgentId) -> &[RequestId] {
-        self.queues.get(&agent).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
