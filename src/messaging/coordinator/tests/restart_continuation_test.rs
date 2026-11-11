@@ -11,7 +11,7 @@ fn restart_epoch_bound_codex_and_claude_resume_original_request_and_group() {
         f.started("turn-1", "ORIGINAL_STEERING_DO_NOT_REPLAY");
         f.consume();
         assert!(f.request(member).trusted_start_bound);
-        let queued = f.send("independent task after restart", false);
+        let queued = f.send("independent task after restart", true);
         let message = f.request(lead).prompt.id;
         let member_message = f.request(member).prompt.id;
         let before = f.typed().len();
@@ -433,4 +433,31 @@ fn restart_epoch_deleting_resumed_recipient_closes_originals_and_queued_work() {
         assert!(f.reply(id).is_none());
     }
     assert_eq!(f.typed().len(), before, "deleted work must never replay");
+}
+
+#[test]
+fn restart_epoch_resumed_turn_accepts_new_steering_normally() {
+    for provider in [Provider::Codex, Provider::ClaudeCode] {
+        let mut f = Fixture::new(provider);
+        observe_epoch(&mut f, 1);
+        let lead = running(&mut f, "original task", "turn-1");
+        epoch_reopen(&mut f, true, 2);
+        f.worker.tick().unwrap();
+        assert!(!f.request(lead).settled());
+        let notice = f.typed().last().unwrap().0.clone();
+        f.started("turn-2", &notice);
+        f.consume();
+        f.status(RuntimeStatus::Working);
+        let member = f.send("new correction after resume", false);
+        let before = f.typed().len();
+        f.deliver();
+        assert_eq!(f.typed().len(), before + 1, "{provider:?}");
+        assert_eq!(f.request(member).group, Some(lead));
+        f.started("turn-2", "new correction after resume");
+        f.consume();
+        f.stopped("turn-2", "finished resumed task and correction");
+        f.consume();
+        assert_completed_without_reply(&f, lead);
+        assert_completed_without_reply(&f, member);
+    }
 }
