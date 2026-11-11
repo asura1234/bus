@@ -46,6 +46,9 @@ impl BusState {
         {
             return None;
         }
+        if recorded.is_none() && self.idle_bound_turn_candidate(agent, now_ms) == Some(id) {
+            return self.settle_idle_bound_turn(agent, id, now_ms, None);
+        }
         if recorded.is_none() && (owner.dialog || !exited) {
             return None;
         }

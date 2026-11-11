@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "idle_backstop_test.rs"]
+mod idle_backstop_tests;
+
 // The callback spool gets a bounded grace period after the first settled poll.
 const CALLBACK_GRACE_MS: u64 = crate::messaging::model::TURN_SETTLE_MS;
 

@@ -4,6 +4,7 @@ use super::{
     RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
+mod idle_backstop;
 mod kimi;
 mod restart;
 
@@ -393,6 +394,10 @@ impl BusState {
     ) -> Option<RequestId> {
         if self.agents.get(&agent)?.provider == super::Provider::Kimi {
             return self.settle_kimi_ended_request(agent, now_ms, recorded_end);
+        }
+        if let Some(id) = self.idle_bound_turn_candidate(agent, now_ms) {
+            let recorded = recorded_end(self.requests.get(&id)?);
+            return self.settle_idle_bound_turn(agent, id, now_ms, recorded);
         }
         let request = self.settle_candidate(agent)?;
         let id = request.id;

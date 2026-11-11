@@ -9,6 +9,9 @@ impl BusState {
         let agent = callback.agent_id;
         let occurred_at_ms = callback.occurred_at_ms;
         let before = self.agents.get(&agent).and_then(|a| a.current_request);
+        let previous_turn = before
+            .and_then(|id| self.requests.get(&id))
+            .map(|request| (activity_key(request), request.bound_turn_activity.clone()));
         let final_event =
             matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
         let reply_event = final_event.is_some();
@@ -29,6 +32,19 @@ impl BusState {
             if let Some(request) = current {
                 if started_event {
                     self.record_provider_started(request, occurred_at_ms);
+                    if let Some(bound) = self.requests.get_mut(&request) {
+                        let activity = previous_turn
+                            .as_ref()
+                            .filter(|(key, _)| *key == activity_key(bound))
+                            .and_then(|(_, activity)| activity.clone());
+                        bound.bound_turn_activity = Some(activity.unwrap_or(
+                            crate::messaging::model::types::BoundTurnActivity {
+                                started_at_ms: occurred_at_ms,
+                                idle_since_ms: None,
+                                working_seen: false,
+                            },
+                        ));
+                    }
                 }
                 if reply_event {
                     self.record_reply_captured(request, occurred_at_ms);
@@ -39,10 +55,9 @@ impl BusState {
                 *progress = (*progress).max(occurred_at_ms);
             }
         }
-        // A provider turn event on a Bus request proves the agent was busy
-        // with it, even when the turn started and ended between two status
-        // polls that only ever saw Idle. Recording the edge here lets
-        // `turn_ended` (and so `send --async`) finish on the next Idle poll.
+        // An accepted provider event records ordering evidence for this request.
+        // It does not prove a subsequent Idle poll contains a fresh frame:
+        // unchanged pre-Started Idle cannot establish a bound turn's end.
         if matches!(
             disposition,
             CallbackDisposition::AcceptedBinding
@@ -55,4 +70,18 @@ impl BusState {
         }
         disposition
     }
+}
+
+// Prompt IDs can change when input joins an existing native turn. Preserve
+// its Working evidence; only a distinct native turn starts a fresh watch.
+fn activity_key(request: &super::Request) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        request.provider_session_id.clone(),
+        request.provider_turn_id.clone(),
+        if request.provider_turn_id.is_none() {
+            request.provider_prompt_id.clone()
+        } else {
+            None
+        },
+    )
 }

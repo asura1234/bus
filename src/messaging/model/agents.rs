@@ -731,6 +731,7 @@ impl BusState {
         if gone {
             self.complete_pending_final(agent, now_ms)?;
         }
+        self.observe_bound_turn_activity(agent, status, now_ms);
         Ok(())
     }
 }
