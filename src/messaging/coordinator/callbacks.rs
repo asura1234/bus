@@ -111,8 +111,10 @@ impl Worker {
         for (path, record) in &records {
             // Some gates require fresh native status/usage or committed wire
             // evidence; a wake cannot replace that existing poll boundary.
+            // Keep later turns behind it so their Started cannot steal the
+            // request before its earlier completion is reconciled.
             if wake && provider_turns::requires_fresh_poll(record) {
-                continue;
+                break;
             }
             if matches!(
                 self.consume_callback_record(id, dir, path, record, &records, &mut rollout)?,

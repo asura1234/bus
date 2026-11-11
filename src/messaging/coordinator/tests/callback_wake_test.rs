@@ -625,3 +625,84 @@ fn callback_wake_cursor_failure_with_its_own_quota_proof_still_runs_immediately(
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn later_turn_after_poll_boundary(provider: Provider) -> (Worker, AgentId, RequestId, PathBuf) {
+    let (mut worker, agent, request, dir) = prepared(provider);
+    record(&dir, provider, started(provider));
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    let (end, next) = match provider {
+        Provider::Grok => (
+            json!({"hookEventName":"stop", "sessionId":"session", "promptId":"turn", "reason":"end_turn"}),
+            json!({"hookEventName":"user_prompt_submit", "sessionId":"session", "promptId":"later", "prompt":"unrelated native input"}),
+        ),
+        Provider::Cursor => (
+            json!({"hook_event_name":"stop", "conversation_id":"session", "generation_id":"turn", "status":"error", "loop_count":0}),
+            json!({"hook_event_name":"beforeSubmitPrompt", "conversation_id":"session", "generation_id":"later", "prompt":"unrelated native input"}),
+        ),
+        _ => unreachable!(),
+    };
+    record(&dir, provider, end);
+    record(&dir, provider, next);
+    worker.queue_callback_wake("launch");
+    worker.consume_woken_callbacks().unwrap();
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .provider_turn_id
+            .as_deref(),
+        Some("turn"),
+        "{provider:?}: a later Started overtook the previous turn's deferred completion"
+    );
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.request(request).unwrap().provider_turn_id.as_deref(),
+        Some("turn")
+    );
+    assert_eq!(
+        callbacks::records(&dir.join("callbacks/launch"))
+            .unwrap()
+            .len(),
+        2
+    );
+    (worker, agent, request, dir)
+}
+
+#[test]
+fn callback_wake_keeps_grok_later_turn_behind_fresh_poll() {
+    let (worker, _, _, dir) = later_turn_after_poll_boundary(Provider::Grok);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn callback_wake_keeps_cursor_later_turn_behind_failure_enrichment() {
+    let (mut worker, agent, request, dir) = later_turn_after_poll_boundary(Provider::Cursor);
+    let error = crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR;
+    let mut info = native_info("pane", "cursor", "session");
+    info.interactive_ready = true;
+    info.provider_error = Some(error.into());
+    info.provider_quota_reset_at = Some(io::now_ms() / 1000 + 3600);
+    worker.transport = Box::new(CallbackNative { info });
+    worker.poll().unwrap();
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    let failed = worker.state.request(request).unwrap();
+    assert_eq!(failed.phase, RequestPhase::Abandoned);
+    assert_eq!(failed.provider_turn_id.as_deref(), Some("turn"));
+    assert_eq!(
+        failed.failure_reason.as_deref(),
+        Some(format!("provider_error: {error}").as_str())
+    );
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
