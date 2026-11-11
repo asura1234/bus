@@ -27,14 +27,21 @@ def verify_delivery(status, expected, token):
         assert request["reply"]["text"].strip() == token, request
 
 
+def explicit_reply_instruction(token, *, every_message=False):
+    messages = ("Repeat it separately for every Bus message ID in this turn, including the original task "
+                "and this correction. Each request needs its own explicit reply. " if every_message else "")
+    return ("Use your shell tool to run a foreground "
+            f"`bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text {token}`. "
+            "Replace MESSAGE_ID with this delivered Bus message ID and YOUR_AGENT_ID with your own agent ID. "
+            + messages +
+            'Require ok:true and stage:"replied" from that command. A native final alone is not a reply. '
+            "Then end your turn without sending another copy.")
+
+
 def round_trip_prompt(token):
     return ("We are only testing Bus message round trip. "
             "Do not perform project work, use skills, or modify files. "
-            "Use your shell tool only to run a foreground "
-            f"`bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text {token}`. "
-            "Replace MESSAGE_ID with this delivered Bus message ID and YOUR_AGENT_ID with your own agent ID. "
-            'Require ok:true and stage:"replied" from that command. A native final alone is not a reply. '
-            "Then end your turn without sending another copy.")
+            + explicit_reply_instruction(token))
 
 
 def read_agent_output(bus, agent_id, timeout=15):

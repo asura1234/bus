@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.acceptance import grok_provider  # noqa: E402
-from tools.acceptance.existing_instance_test import round_trip_prompt  # noqa: E402
+from tools.acceptance.existing_instance_test import explicit_reply_instruction, round_trip_prompt  # noqa: E402
 from tools.acceptance.harness_test import (  # noqa: E402
     Bus, CliError as CliError, E2E, WORKSPACE, SCRUB_PREFIXES as SCRUB_PREFIXES,
     SCRUB_NAMES as SCRUB_NAMES, find_binary, bus_argv as bus_argv, scrubbed_env,
@@ -170,7 +170,7 @@ def dialog_prompt(provider, token):
     if provider == "claude":
         return ("We are testing Bus delivery of dialogs. Do not use skills. Use your AskUserQuestion tool "
                 "once to ask \"Continue the Bus e2e check?\" with exactly two options, Yes and No. "
-                f"After the answer, reply with exactly {token} and nothing else.")
+                "After the answer, " + explicit_reply_instruction(token))
     if provider == "codex":
         command = f"ln -s README.md ../e2e-link-{token}"
         how = ("It writes outside the workspace, so run it with escalated sandbox permissions "
@@ -180,7 +180,7 @@ def dialog_prompt(provider, token):
         how = "Use your shell tool; wait for approval if asked."
     return ("We are testing Bus delivery of permission prompts. Do not use skills. "
             f"Run exactly this shell command once: `{command}`. {how} "
-            f"Then reply with exactly {token} and nothing else.")
+            "Then " + explicit_reply_instruction(token))
 
 
 # Orchestrator system prompts forbid running commands; this one is a test, not work.
@@ -192,38 +192,40 @@ def steering_task(token, orchestrator=False):
     # Claude Code refuses a bare foreground `sleep`; a Python sleep is an ordinary command.
     return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Run the shell command "
             "`python3 -c 'import time; time.sleep(40)'` in the foreground (not in the background) and "
-            f"wait for it to finish, then reply with exactly {token} and nothing else.")
+            "wait for it to finish. " + explicit_reply_instruction(token))
 
 
 def steering_correction(old, new):
-    return (f"Correction to your current task: when it is done, reply with exactly {new} instead of {old}, "
-            "and nothing else.")
+    return (f"Correction to your current task: use {new} instead of {old} for both requests when done. "
+            + explicit_reply_instruction(new, every_message=True))
 
 
-def background_prompt(token, orchestrator=False):
+def background_prompt(token, orchestrator=False, room=None):
     return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Start the shell command `sleep 20` "
             "with your Bash tool's run_in_background option. Do not wait for, poll, read or stop it. "
-            f"For this initial turn reply with exactly {token} and nothing else. "
+            "For this initial turn, " + explicit_reply_instruction(token) + " "
             "When this shell finishes and its task notification starts a later turn, "
-            f"reply with exactly FOLLOWUP_{token} and nothing else. This is a separate follow-up.")
+            f"run a foreground `bus send --room {room or 'YOUR_HOME_ROOM'} --as YOUR_AGENT_ID "
+            f"--to you --text FOLLOWUP_{token}`. Check ok:true and stage:\"posted\". "
+            "This is a separate follow-up; never replace the already stored initial reply.")
 
 
 def verify_background_reply(request, reply):
-    """The initial Stop answer is delivered without waiting for the shell wake."""
-    answer = request.get("pending_final")
-    assert request.get("phase") == "completed", "background Stop did not complete its request"
-    assert answer, "background Stop has no captured answer"
-    for key in ("text", "provider_session_id", "provider_turn_id", "received_at_ms"):
+    """An explicit initial answer is durable even while its native turn stays open."""
+    answer = (request.get("completed_reply") or {}).get("content")
+    assert answer, "background request has no stored explicit answer"
+    assert answer.get("callback_id", "").startswith("reply-to:"), "initial answer is not explicit"
+    for key in ("callback_id", "text", "provider_session_id", "provider_turn_id", "received_at_ms"):
         assert answer.get(key) == reply.get(key), f"background answer changed: {key}"
     assert reply.get("provider_session_id") and reply.get("provider_turn_id"), "answer has no provider identity"
-    return {"final": reply}
+    return {"initial_reply": reply}
 
 
 def attachment_prompt(token):
     # A blank line and one image path: Claude Code turns a pasted lone image
     # path into an [Image #N] attachment and drops blank lines from the prompt.
     return ("We are testing Bus delivery of attachments. Do not use skills.\n\n"
-            f"Reply with exactly {token} and nothing else.")
+            + explicit_reply_instruction(token))
 
 
 def orchestrator_key(provider):
@@ -464,7 +466,7 @@ class Run:
         assert received == sorted(received), f"replies out of order: {received}"
 
     def case_steering(self, provider, row, room=None, case="steering"):
-        """A correction sent while the agent works joins its turn and shares one reply."""
+        """A correction joins the turn; both messages need their own explicit answer."""
         old, new = self.token(provider, case, 1), self.token(provider, case, 2)
         first = self.send([provider], steering_task(old, room == "master"), row, room=room)["message_id"]
         deadline = time.monotonic() + 120
@@ -492,22 +494,29 @@ class Run:
 
     def case_background(self, provider, row, room=None, case="background"):
         status = self.round_trip(provider, row, case,
-                                 text=lambda token: background_prompt(token, room == "master"), room=room)
+                                 text=lambda token: background_prompt(token, room == "master", room or self.room), room=room)
         delivered = status["requests"][0]
         stored = json.loads((self.data / "state.json").read_text())["state"]["requests"][str(delivered["request_id"])]
         evidence = verify_background_reply(stored, delivered["reply"])
         row.setdefault("background", []).append({"case": case, "request_id": delivered["request_id"], **evidence})
-        # The initial answer is final; native readiness is independent of reply delivery.
+        followup = "FOLLOWUP_" + delivered["reply"]["text"]
         deadline = time.monotonic() + self.args.timeout
         while True:
             agent = next(a for a in self.bus.cli("diagnostics", row=row)["agents"]
                          if a["agent_id"] == self.agents[provider])
-            if agent["status"] == "idle" and agent["reason"] is None:
+            history = self.bus.cli("history", "--room", room or self.room, "--limit", 100, row=row)
+            matches = [m for m in history["messages"] if m["prompt"]["author"] == {"agent": self.agents[provider]}
+                       and m["prompt"]["text"] == followup]
+            assert len(matches) <= 1, "duplicate background follow-up"
+            if matches and agent["status"] == "idle" and agent["reason"] is None:
+                row["background"][-1]["followup_message_id"] = matches[0]["prompt"]["id"]
                 break
-            if agent["status"] != "working":
+            if agent["status"] == "blocked":
                 self.answer_dialogs(provider, "allow", row)
             assert time.monotonic() < deadline, f"agent stuck after background shell: {agent}"
             time.sleep(1)
+        stored = json.loads((self.data / "state.json").read_text())["state"]["requests"][str(delivered["request_id"])]
+        verify_background_reply(stored, delivered["reply"])
         self.round_trip(provider, row, case, n=2, room=room)
 
     def case_dialog(self, provider, row):

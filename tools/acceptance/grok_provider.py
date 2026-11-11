@@ -4,6 +4,8 @@ These are authored synthetic tasks for authenticated acceptance, not claims
 that Grok 1.0.5 turns/cards have been captured. Native background wake stays
 pending; orchestrators use ordinary Bus sends and durable Bus notifications.
 """
+from tools.acceptance.existing_instance_test import explicit_reply_instruction
+
 COMMAND = "grok"
 _CASES = {"single", "queued", "steering", "multi", "dialog", "orchestrator", "adoption", "resume"}
 
@@ -17,10 +19,10 @@ def case_support(case: str) -> str | None:
 
 
 def dialog_prompt(token: str) -> str:
-    return ("Synthetic Bus dialog acceptance. Do not use skills or shell commands. "
+    return ("Synthetic Bus dialog acceptance. Do not use skills or perform project work. "
             "Use ask_user_question once to ask 'Continue the Bus e2e check?' "
             "with exactly two options, Yes and No. Wait for the answer. "
-            f"Then reply with exactly {token} and nothing else.")
+            "Then " + explicit_reply_instruction(token))
 
 
 def _resume(run, row):

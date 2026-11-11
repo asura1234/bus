@@ -341,6 +341,18 @@ class EndToEndEnvironmentTests(unittest.TestCase):
 
 
 class EndToEndDialogTests(unittest.TestCase):
+    def test_every_case_prompt_requires_a_foreground_correlated_reply(self):
+        prompts = {provider: e2e.dialog_prompt(provider, "TOKEN") for provider in e2e.PROVIDERS}
+        prompts.update(steering=e2e.steering_task("TOKEN"),
+                       correction=e2e.steering_correction("OLD", "TOKEN"),
+                       background=e2e.background_prompt("TOKEN"),
+                       attachment=e2e.attachment_prompt("TOKEN"))
+        for name, prompt in prompts.items():
+            with self.subTest(case=name):
+                self.assertIn("bus send --reply-to", prompt)
+                self.assertIn("--text TOKEN", prompt)
+                self.assertIn("foreground", prompt)
+
     def test_dialog_answer_uses_driver_selection_bound_to_observed_terminal(self):
         run = e2e.Run.__new__(e2e.Run)
         run.answered_frames = {}
@@ -514,16 +526,21 @@ class EndToEndDialogTests(unittest.TestCase):
 
     def test_prompts_carry_the_token(self):
         for provider in e2e.PROVIDERS:
-            self.assertIn("reply with exactly TOKEN", e2e.dialog_prompt(provider, "TOKEN"))
+            self.assertIn("--text TOKEN", e2e.dialog_prompt(provider, "TOKEN"))
         self.assertIn("AskUserQuestion", e2e.dialog_prompt("claude", "T"))
         self.assertIn("escalated", e2e.dialog_prompt("codex", "T"))
         self.assertIn("run_in_background", e2e.background_prompt("T"))
         # Claude Code drops blank lines once it lifts an attached image; the prompt keeps one.
-        self.assertIn("\n\nReply with exactly T and nothing else.", e2e.attachment_prompt("T"))
+        self.assertEqual(e2e.attachment_prompt("T").count("\n\n"), 1)
+        self.assertIn("\n\nUse your shell tool", e2e.attachment_prompt("T"))
         # Orchestrators run the test command themselves only when the developer says so.
         for prompt in (e2e.steering_task, e2e.background_prompt):
             self.assertNotIn("I authorize", prompt("T"))
             self.assertIn("I authorize", prompt("T", True))
+        self.assertIn("every Bus message ID", e2e.steering_correction("OLD", "NEW"))
+        background = e2e.background_prompt("T", room="master")
+        self.assertIn("bus send --room master", background)
+        self.assertIn("--to you --text FOLLOWUP_T", background)
 
     def test_orchestrator_adoption_args_and_image(self):
         self.assertEqual(e2e.adopt_args("codex", "S"), "resume S")
@@ -671,12 +688,40 @@ class EndToEndReportTests(unittest.TestCase):
 
 
 class EndToEndBackgroundReplyTests(unittest.TestCase):
-    def test_background_stop_delivers_its_initial_answer(self):
-        reply = {"text": "TOKEN", "provider_session_id": "session",
+    def test_idle_without_an_authored_background_followup_does_not_pass(self):
+        reply = {"callback_id": "reply-to:44", "text": "TOKEN", "provider_session_id": "session",
                  "provider_turn_id": "initial-turn", "received_at_ms": 10}
-        request = {"phase": "completed", "pending_final": reply}
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            stored = {"completed_reply": {"content": reply}}
+            (root / "state.json").write_text(json.dumps({"state": {"requests": {"44": stored}}}))
+            run = e2e.Run.__new__(e2e.Run)
+            run.data, run.room, run.args, run.agents = root, 2, mock.Mock(timeout=1), {"claude": 3}
+            run.round_trip = mock.Mock(return_value={"requests": [{"request_id": 44, "reply": reply}]})
+            run.answer_dialogs = mock.Mock(side_effect=AssertionError("idle composer is not a dialog"))
+            run.bus = mock.Mock()
+            run.bus.cli.side_effect = lambda command, *a, **kw: (
+                {"agents": [{"agent_id": 3, "status": "idle", "reason": None}]}
+                if command == "diagnostics" else {"messages": []})
+            with mock.patch.object(e2e.time, "monotonic", side_effect=[0, 2]), \
+                    self.assertRaisesRegex(AssertionError, "agent stuck after background shell"):
+                run.case_background("claude", e2e.new_row("claude", "background"))
+            self.assertEqual(run.round_trip.call_count, 1)
+            run.answer_dialogs.assert_not_called()
+
+    def test_explicit_background_reply_is_valid_before_its_native_turn_ends(self):
+        reply = {"callback_id": "reply-to:44", "text": "TOKEN", "provider_session_id": "session",
+                 "provider_turn_id": "initial-turn", "received_at_ms": 10}
+        request = {"phase": "active", "pending_final": None,
+                   "completed_reply": {"content": reply, "group": None}}
+        self.assertEqual(e2e.verify_background_reply(request, reply), {"initial_reply": reply})
+
+    def test_background_explicit_answer_survives_native_completion(self):
+        reply = {"callback_id": "reply-to:44", "text": "TOKEN", "provider_session_id": "session",
+                 "provider_turn_id": "initial-turn", "received_at_ms": 10}
+        request = {"phase": "completed", "pending_final": None, "completed_reply": {"content": reply}}
         before = json.dumps(request, sort_keys=True)
-        self.assertEqual(e2e.verify_background_reply(request, reply), {"final": reply})
+        self.assertEqual(e2e.verify_background_reply(request, reply), {"initial_reply": reply})
         self.assertEqual(json.dumps(request, sort_keys=True), before)
         for change in ({"text": "FOLLOWUP_TOKEN"}, {"provider_turn_id": "wake-turn"},
                        {"provider_session_id": "other"}, {"received_at_ms": 20}):
