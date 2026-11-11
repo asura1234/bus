@@ -30,6 +30,20 @@ class GrokFakeSafetyTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "main checkout"):
                 Run(binary)
 
+    def test_driver_reobserves_only_after_a_proven_pre_input_rejection(self):
+        run = Run.__new__(Run)
+        observation = {"terminal_id": "fixture", "text": "◆ Choose an answer\n1. Alpha\n2. Beta"}
+        rejected = CliError({"code": "command_failed", "message": "Terminal is redrawing; observe it again"})
+        receipt = {"outcome": "selected", "selection_pending": False, "keys": ["1"]}
+        run.cli = Mock(side_effect=[rejected, observation, receipt])
+        self.assertEqual(run.driver_action(3, observation, "--key", "1")["outcome"], "selected")
+        self.assertEqual([c.args[:2] for c in run.cli.call_args_list],
+                         [("agent", "press"), ("agent", "observe"), ("agent", "press")])
+        run.cli = Mock(side_effect=[rejected, {**observation, "text": "different menu"}])
+        with self.assertRaisesRegex(AssertionError, "changed after rejection"):
+            run.driver_action(3, observation, "--key", "1")
+        self.assertEqual(run.cli.call_count, 2)
+
     def test_read_poll_reobserves_only_a_definitely_rejected_native_race(self):
         error = CliError({"code": "command_failed", "message": "Terminal is redrawing; observe it again"})
         read = Mock(side_effect=[error, {"ready": True}])

@@ -93,9 +93,10 @@ class Run:
         if self.bus.pump_thread is not None and self.bus.child.poll() is not None:
             self.bus.pump_thread.join(timeout=2)
         self.bus.start()
-        # The whole first-message bootstrap must remain visibly attributable;
-        # a synthetic paste-chip count is deliberately insufficient evidence.
-        fcntl.ioctl(self.bus.master, termios.TIOCSWINSZ, struct.pack("HHHH", 400, 400, 0, 0))
+        # Use the same realistic viewport as live acceptance. The old 400x400
+        # fixture continuously repainted faster than a coherent Grid read.
+        # Per-turn transcripts below retain exact payload/output attribution.
+        fcntl.ioctl(self.bus.master, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))
 
     def ready(self, agent):
         return poll(lambda: next(a for a in self.cli("diagnostics")["agents"] if a["agent_id"] == agent),
@@ -119,10 +120,22 @@ class Run:
         return self.cli(*args)["message_id"]
 
     def driver_action(self, agent, observation, *inputs):
-        result = self.cli("agent", "press", agent, "--terminal-id", observation["terminal_id"], *inputs)
+        deadline = time.monotonic() + 5
+        rejected = 0
+        while True:
+            try:
+                result = self.cli("agent", "press", agent, "--terminal-id", observation["terminal_id"], *inputs)
+                break
+            except CliError as error:
+                if not observation_race(error) or time.monotonic() >= deadline:
+                    raise
+                fresh = poll(lambda: self.cli("agent", "observe", agent), bool, timeout=5)
+                assert all(fresh[key] == observation[key] for key in ("terminal_id", "text")), \
+                    "menu or terminal changed after rejection; inspect before continuing"
+                rejected += 1
         assert result.get("outcome") in ("sent", "selected") and not result.get("selection_pending"), \
             f"driver input is pending or uncertain; inspect it without replaying: {result}"
-        return result
+        return {**result, "pre_input_reobservations": rejected}
 
     def settle(self, message, success=True, reply=None):
         status = poll(lambda: self.cli("message", "status", message), lambda s: s["complete"])
