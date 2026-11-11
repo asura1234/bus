@@ -91,6 +91,10 @@ pub(super) fn opaque(body: &str) -> bool {
 #[path = "../../tests/draft_policy_test.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "../../tests/claude_rich_draft_test.rs"]
+mod claude_rich_draft_tests;
+
 impl SubmissionInspector for PreservingComposer {
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()
@@ -105,7 +109,25 @@ impl SubmissionInspector for PreservingComposer {
         super::submission_available(self.kind, screen)
     }
     fn paste_ready(&self, screen: &str) -> bool {
-        super::paste_ready(self.kind, screen, &self.expected)
+        if !super::paste_ready(self.kind, screen, &self.expected) {
+            return false;
+        }
+        if self.kind != AgentKind::Claude {
+            return true;
+        }
+        let Ok(saved) = self.native_draft.lock() else {
+            return false;
+        };
+        let wait_for_input = match saved.as_ref() {
+            Some(NativeDraft::Captured(body)) => opaque(body),
+            Some(NativeDraft::ExistingStash) => true,
+            None => false,
+        };
+        drop(saved);
+        // A prior timeout may retain the native stash after its late paste is
+        // withdrawn. Both that retry and a fresh rich-draft swap need the new
+        // editable body, even for paths outside the attachment policy.
+        !wait_for_input || input(self.kind, screen).is_some_and(|body| !body.is_empty())
     }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         super::draft_ready(self.kind, screen, cursor, pristine)
