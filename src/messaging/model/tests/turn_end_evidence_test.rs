@@ -206,21 +206,59 @@ fn a_claude_orchestrators_developer_correction_joins_the_original_master_turn() 
 }
 
 #[test]
-fn an_older_busy_observation_cannot_revoke_a_newer_idle_end() {
-    let (mut state, room, agent, _) = state_with_room_and_agents();
-    let lead = submit_text(&mut state, room, agent, "command");
-    start_request(&mut state, lead, "launch-codex", 100);
-    state
-        .observe_status(agent, RuntimeStatus::Working, 200)
-        .unwrap();
-    state
-        .observe_status(agent, RuntimeStatus::Idle, 300)
-        .unwrap();
-    assert_eq!(state.request(lead).unwrap().turn_ended_at_ms, Some(300));
-    state
-        .observe_status(agent, RuntimeStatus::Working, 250)
-        .unwrap();
-    assert_eq!(state.request(lead).unwrap().turn_ended_at_ms, Some(300));
+fn busy_recovery_uses_observation_order_even_when_the_wall_clock_rolls_back() {
+    for working_at in [250, 300, 301] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let lead = submit_text(&mut state, room, agent, "command");
+        start_request(&mut state, lead, "launch-codex", 100);
+        state
+            .observe_status(agent, RuntimeStatus::Working, 200)
+            .unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 300)
+            .unwrap();
+        assert_eq!(state.request(lead).unwrap().turn_ended_at_ms, Some(300));
+        let revision = state.agent(agent).unwrap().status_revision;
+        state
+            .observe_status(agent, RuntimeStatus::Working, working_at)
+            .unwrap();
+        assert!(state.agent(agent).unwrap().status_revision > revision);
+        assert!(
+            state.request(lead).unwrap().turn_ended_at_ms.is_none(),
+            "latest Working must revoke idle inference despite wall-clock ordering"
+        );
+        assert!(!state.turn_ended(state.request(lead).unwrap()));
+    }
+}
+
+#[test]
+fn a_trusted_provider_error_end_survives_idle_and_working_observations() {
+    // Cursor completes errors rather than opening this native retry hold.
+    for provider in providers().into_iter().filter(|p| *p != Provider::Cursor) {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state.agents.get_mut(&agent).unwrap().provider = provider;
+        state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+        let lead = submit_text(&mut state, room, agent, "request held after native error");
+        start_request(&mut state, lead, "launch-codex", 100);
+        assert!(state.hold_provider_error(lead, "Model at capacity (server_overloaded)", 120));
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 121)
+            .unwrap();
+        assert_eq!(
+            state.request(lead).unwrap().turn_ended_at_ms,
+            Some(120),
+            "a provider-owned error is trusted end evidence: {provider:?}"
+        );
+        let mut state: BusState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Working, 122)
+            .unwrap();
+        assert_eq!(state.request(lead).unwrap().turn_ended_at_ms, Some(120));
+        assert!(state.turn_ended(state.request(lead).unwrap()));
+        submit_text(&mut state, room, agent, "queued during provider retry");
+        assert_eq!(state.next_steering(agent), None);
+    }
 }
 
 #[test]

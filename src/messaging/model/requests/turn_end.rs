@@ -50,8 +50,16 @@ impl BusState {
         // A visible dialog (Codex reports Idle while it waits on an approval)
         // means the turn is waiting on an answer, not finished.
         self.agents.get(&request.agent_id).is_some_and(|agent| {
+            // A retry hold was opened by an owned terminal error, not an
+            // inferred Idle frame. Keep that committed end authoritative.
+            let held_end = request.turn_ended_at_ms.is_some()
+                && agent
+                    .provider_retry
+                    .as_ref()
+                    .is_some_and(|hold| hold.lead == lead.id);
             !agent.dialog
-                && (agent.status != RuntimeStatus::Idle
+                && (held_end
+                    || agent.status != RuntimeStatus::Idle
                     || !lead.trusted_start_bound
                     || lead
                         .progress_at_ms
