@@ -70,6 +70,17 @@ fn a_claude_orchestrators_developer_correction_joins_the_original_master_turn() 
         )
         .unwrap();
     state.bind_orchestrator(agent, work).unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("orchestrator-terminal".into()),
+                pane_id: Some("orchestrator-pane".into()),
+                session_id: Some("provider-session".into()),
+            },
+        )
+        .unwrap();
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     let lead = submit_text(&mut state, master, agent, "run a forty second command");
     start_request(&mut state, lead, "launch", 100);
