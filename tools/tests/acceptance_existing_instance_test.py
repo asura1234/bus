@@ -463,6 +463,16 @@ class EndToEndDialogTests(unittest.TestCase):
             run.driver_action(9, {"terminal_id": "fixture-terminal"}, "--key", "1")
         self.assertEqual(calls, [("agent", "press", 9, "--terminal-id", "fixture-terminal", "--key", "1")])
 
+    def test_dialog_poll_reobserves_a_rejected_race_but_propagates_uncertainty(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"claude": 3}
+        run.bus = mock.Mock()
+        run.bus.cli.side_effect = e2e.CliError({"code": "command_failed", "message": "Terminal changed; observe it again"})
+        self.assertFalse(run.answer_dialogs("claude", "allow"))
+        run.bus.cli.side_effect = e2e.CliError({"code": "command_failed", "message": "outcome uncertain"})
+        with self.assertRaises(e2e.CliError):
+            run.answer_dialogs("claude", "allow")
+
     def test_visible_numbered_dialog_can_select_when_global_focus_is_ambiguous(self):
         run = e2e.Run.__new__(e2e.Run)
         run.answered_frames, run.agents = {}, {"claude": 3}

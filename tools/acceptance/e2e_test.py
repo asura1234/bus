@@ -40,7 +40,7 @@ from tools.acceptance.existing_instance_test import explicit_reply_instruction, 
 from tools.acceptance.harness_test import (  # noqa: E402
     Bus, CliError as CliError, E2E, WORKSPACE, SCRUB_PREFIXES as SCRUB_PREFIXES,
     SCRUB_NAMES as SCRUB_NAMES, find_binary, bus_argv as bus_argv, scrubbed_env,
-    pids_holding as pids_holding,
+    pids_holding as pids_holding, observation_race,
 )
 
 # Provider name -> the executable Bus launches for it.
@@ -306,6 +306,14 @@ class Run:
         subprocess.run(git + ["commit", "-q", "-m", "init"], check=True)
 
     def answer_dialogs(self, provider, purpose, row=None):
+        try:
+            return self._answer_dialogs(provider, purpose, row)
+        except CliError as error:
+            if observation_race(error):
+                return False  # No input was enqueued; the next poll observes afresh.
+            raise
+
+    def _answer_dialogs(self, provider, purpose, row=None):
         agent = self.agents[provider]
         found = self.bus.cli("agent", "observe", agent, row=row)
         # Old prompt markers can make the whole-screen focus ambiguous. The

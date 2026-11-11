@@ -25,6 +25,13 @@ class CliError(AssertionError):
     pass
 
 
+def observation_race(error):
+    """These native guard rejections occur before any input is enqueued."""
+    detail = error.args[0] if error.args else None
+    return isinstance(detail, dict) and detail.get("code") == "command_failed" and detail.get("message") in {
+        "Terminal is redrawing; observe it again", "Terminal changed; observe it again"}
+
+
 def find_binary(explicit=None, root=ROOT):
     candidates = [Path(explicit)] if explicit else [root / "target/debug/bus"]
     for path in candidates:
