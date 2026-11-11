@@ -4,6 +4,9 @@ use serde_json::json;
 #[path = "tests/driver_test.rs"]
 mod driver_tests;
 
+#[path = "tests/restart_wait_test.rs"]
+mod restart_wait_tests;
+
 fn command(args: &[&str]) -> Result<ParsedCommand, String> {
     parse(
         &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),

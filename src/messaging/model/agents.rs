@@ -366,6 +366,34 @@ impl BusState {
             return;
         };
         let detail = failure.notice();
+        let continuations: Vec<_> = self
+            .queued_requests(id)
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.requests
+                    .get(id)
+                    .is_some_and(|r| r.restart_continuation)
+            })
+            .collect();
+        for request in continuations {
+            let members: Vec<_> = std::iter::once(request)
+                .chain(self.group_members(request))
+                .collect();
+            let _ = self.recover_idle_request(request, now_ms);
+            for member in members {
+                if let Some(request) = self
+                    .requests
+                    .get_mut(&member)
+                    .filter(|r| r.reply().is_none())
+                {
+                    request.submission_error = Some(detail.clone());
+                }
+            }
+            if let Some(queue) = self.queues.get_mut(&id) {
+                queue.retain(|id| *id != request);
+            }
+        }
         if let Some(queue) = self.queues.get_mut(&id) {
             queue.retain(|request_id| {
                 let request = self

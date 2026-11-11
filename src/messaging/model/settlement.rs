@@ -744,6 +744,7 @@ impl BusState {
         now_ms: u64,
         reason: String,
     ) -> Result<bool, ModelError> {
+        let reason = self.restart_continuation_failure_reason(id, reason);
         let detail = (reason == "submission_unconfirmed")
             .then(|| {
                 self.requests

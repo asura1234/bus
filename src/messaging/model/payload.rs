@@ -57,6 +57,11 @@ impl BusState {
             if let Some(text) = &request.submitted_payload {
                 return Some(text.clone());
             }
+            if request.restart_continuation {
+                let text = self.restart_continuation_notice(id)?;
+                self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
+                return Some(text);
+            }
             (
                 request.prompt.rendered_payload(),
                 request.prompt.id.0,

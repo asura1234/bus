@@ -18,7 +18,8 @@ impl BusState {
 
     // Older saved queues may not have the implicit queue_only flag yet.
     pub(crate) fn can_join_turn(&self, request: &Request) -> bool {
-        !request.queue_only
+        !request.restart_continuation
+            && !request.queue_only
             && !self.agent_request_queues(
                 request.agent_id,
                 &request.prompt.author,

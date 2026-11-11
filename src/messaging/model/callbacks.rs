@@ -292,6 +292,10 @@ impl BusState {
                 request.pending_final = None;
                 request.turn_ended_at_ms = None;
                 request.awaiting_background = false;
+                let restart_continuation = request.restart_continuation;
+                if restart_continuation {
+                    self.bind_restart_continuation_group(request_id);
+                }
                 if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
                     agent.actionable_error = None;
                 }

@@ -253,6 +253,20 @@ impl BusState {
             .collect();
         let mut expired = Vec::new();
         for (id, reason) in expired_requests {
+            if self
+                .requests
+                .get(&id)
+                .is_some_and(|r| r.restart_continuation)
+            {
+                self.recover_idle_request(id, now_ms)?;
+                if let Some(request) = self.requests.get_mut(&id) {
+                    request.submission_error = Some(format!(
+                        "Restart continuation could not be delivered ({reason})."
+                    ));
+                }
+                expired.push(id);
+                continue;
+            }
             self.recover_idle_request(id, now_ms)?;
             let request = self
                 .requests
@@ -368,6 +382,26 @@ impl BusState {
             return Ok(());
         }
         if request_state.phase == RequestPhase::Queued {
+            if request_state.restart_continuation {
+                let owner = self
+                    .agents
+                    .get(&agent_id)
+                    .ok_or(ModelError::UnknownAgent(agent_id))?;
+                let current = owner.current_request.filter(|id| *id != request);
+                let hold = owner
+                    .provider_retry
+                    .clone()
+                    .filter(|hold| hold.lead != request);
+                self.close_turn_with_reason(request, recovered_at_ms, "reply_not_captured".into())?;
+                if let Some(owner) = self.agents.get_mut(&agent_id) {
+                    owner.current_request = current;
+                    owner.provider_retry = hold;
+                }
+                if let Some(queue) = self.queues.get_mut(&agent_id) {
+                    queue.retain(|id| *id != request);
+                }
+                return Ok(());
+            }
             let agent = self
                 .agents
                 .get(&agent_id)
