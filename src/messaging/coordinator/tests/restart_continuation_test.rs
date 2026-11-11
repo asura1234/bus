@@ -508,3 +508,39 @@ fn restart_epoch_second_restart_before_notice_delivery_preserves_group() {
         );
     }
 }
+
+#[test]
+fn restart_epoch_prior_provider_retry_does_not_remove_notice_delivery_bound() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 1);
+    let lead = running(
+        &mut f,
+        "original task after an earlier provider retry",
+        "turn-1",
+    );
+    // A successful retried attempt retains its historical attempt counter
+    // after begin_submission clears the due provider hold.
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["requests"][lead.0.to_string()]["provider_retry_attempts"] = json!(1);
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    epoch_reopen(&mut f, true, 2);
+    f.worker.transport = Box::new(RejectRestartNotice {
+        inner: epoch_transport(&f, true, 2),
+        methods: f.native.clone(),
+    });
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(lead).phase, RequestPhase::Queued);
+    f.expire_after_reconciliation(io::now_ms() + 2 * 60 * 1000 + 1);
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Abandoned,
+        "a prior completed retry must not retain an undeliverable restart notice forever"
+    );
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("reply_not_captured")
+    );
+    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
+}

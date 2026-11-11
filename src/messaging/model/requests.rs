@@ -242,7 +242,9 @@ impl BusState {
         };
         let agent = self.agents.get(&lead.agent_id)?;
         if agent.provider_retry.is_some()
-            || lead.phase == RequestPhase::Queued && lead.provider_retry_attempts > 0
+            || !lead.restart_continuation
+                && lead.phase == RequestPhase::Queued
+                && lead.provider_retry_attempts > 0
         {
             return None;
         }

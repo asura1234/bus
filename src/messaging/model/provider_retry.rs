@@ -21,7 +21,7 @@ impl BusState {
         let Some(request) = self
             .requests
             .get(&id)
-            .filter(|r| r.provider_retry_attempts > 0)
+            .filter(|r| r.provider_retry_attempts > 0 && !r.restart_continuation)
         else {
             return;
         };
