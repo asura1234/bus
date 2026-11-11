@@ -71,7 +71,8 @@ flowchart TD
     more -- no --> handback
     mergedok -- yes --> final["Owner: MERGED final with exact head, evidence and follow-ups to orchestrator"]
     final --> mainco{"PR worktree is the main checkout?"}
-    mainco -- no --> cleanup["Orchestrator: dispatch worktree-close outside PR worktree; preserve retained dependencies"]
+    mainco -- no --> retire["Orchestrator: collect final results; delete all agents launched inside PR worktree"]
+    retire --> cleanup["Orchestrator: dispatch guarded worktree-close from an unaffected session; preserve retained dependencies"]
     cleanup --> followups["Orchestrator: record and schedule follow-ups from finals"]
     mainco -- yes --> followups
     followups --> done(["PR merged"]):::success
@@ -151,6 +152,13 @@ Explicit holds and every other merge gate remain binding.
 character of the branch name outside `A-Za-z0-9_-` becomes `-`. It holds only
 findings outside the PR goal, each with what it is and why it is out of scope.
 worktree-close never removes the main checkout's `temp/`, so the link survives.
+
+After collecting the owner's final and any peer results, the orchestrator owns
+worktree closeout. Follow `skills/worktree-close/SKILL.md`: retire every live
+agent whose saved launch directory is inside the target, including Idle peers,
+before an unaffected session removes it. An owner launched there hands closeout
+back after non-destructive cleanup and its final report. Running a command from
+main does not move the owner's or peers' launch directories.
 
 For in-goal technical disagreements without a FLAG, the owner collects peer
 recommendations directly and runs best-of-n. The author applies the top-ranked
