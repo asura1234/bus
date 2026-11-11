@@ -443,7 +443,12 @@ fn restored_pane_cwd(saved_pane: Option<&super::schema::PaneSnapshot>) -> PathBu
         .map(|p| p.cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
 
-    if saved_cwd.exists() {
+    // An agent's saved cwd is its launch directory, not a shell convenience.
+    // Retain it even when absent so native restore can suspend without moving
+    // the provider into an unrelated directory (or changing its trust scope).
+    let agent_pane = saved_pane
+        .is_some_and(|pane| pane.agent_session.is_some() || pane.managed_agent_kind.is_some());
+    if agent_pane || saved_cwd.exists() {
         saved_cwd
     } else {
         warn!(
@@ -470,6 +475,13 @@ fn restored_pending_agent_terminal(
     saved_managed_agent: Option<crate::agents::AgentKind>,
 ) -> TerminalState {
     let initial_restore_agent = crate::agents::parse_agent_label(&plan.agent);
+    let directory_unavailable = match std::fs::metadata(&cwd) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+        ),
+    };
     let launch_argv = plan.argv.clone();
     let terminal_id = TerminalId::alloc();
     let mut terminal =
@@ -489,12 +501,30 @@ fn restored_pending_agent_terminal(
     if let Some(agent) = initial_restore_agent {
         let _ = terminal.set_detected_state_with_screen_signals_at(
             Some(agent),
-            AgentState::Idle,
+            if directory_unavailable {
+                AgentState::Unknown
+            } else {
+                AgentState::Idle
+            },
             false,
             false,
             None,
             std::time::Instant::now(),
         );
+    }
+    if directory_unavailable {
+        let error = format!(
+            "Working directory is unavailable: {}. Provider hooks may fail before Bus runs. Restore the worktree or remount its filesystem, or re-add the agent with an existing --pwd.",
+            terminal.cwd.display()
+        );
+        let command = crate::platform::interactive_shell_command(
+            terminal.launch_argv.as_deref().unwrap_or_default(),
+            "sh",
+        )
+        .unwrap_or_default();
+        terminal.begin_native_resume(command);
+        terminal.pending_agent_resume_plan = None;
+        terminal.suspend_native_resume(&error);
     }
     terminal
 }
