@@ -427,6 +427,14 @@ fn restore_tab_pane(
     if let Some(session) = restored_agent_session {
         terminal.set_persisted_agent_session(session);
     }
+    if restore_unavailable_agent(
+        &mut terminal,
+        saved_pane,
+        saved_agent_name.filter(|_| !startup.duplicate_agent_session),
+        saved_managed_agent,
+    ) {
+        return (PaneState::new(terminal_id), terminal, None);
+    }
     let launch = RestoreLaunch {
         pane_id: id,
         terminal_id: terminal_id.clone(),
@@ -443,7 +451,10 @@ fn restored_pane_cwd(saved_pane: Option<&super::schema::PaneSnapshot>) -> PathBu
         .map(|p| p.cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
 
-    if saved_cwd.exists() {
+    // An agent's saved cwd is its launch directory, not a shell convenience.
+    // Retain it even when absent so native restore can suspend without moving
+    // the provider into an unrelated directory (or changing its trust scope).
+    if saved_agent_pane(saved_pane) || saved_cwd.exists() {
         saved_cwd
     } else {
         warn!(
@@ -461,6 +472,54 @@ fn restored_pane_cwd(saved_pane: Option<&super::schema::PaneSnapshot>) -> PathBu
     }
 }
 
+fn saved_agent_pane(saved_pane: Option<&super::schema::PaneSnapshot>) -> bool {
+    saved_pane.is_some_and(|pane| pane.agent_session.is_some() || pane.managed_agent_kind.is_some())
+}
+
+fn launch_directory_unavailable(cwd: &std::path::Path) -> bool {
+    match std::fs::metadata(cwd) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+        ),
+    }
+}
+
+fn suspend_unavailable_directory(terminal: &mut TerminalState) {
+    let error = format!(
+        "Working directory is unavailable: {}. Provider hooks may fail before Bus runs. Restore the worktree or remount its filesystem, or re-add the agent with an existing --pwd.",
+        terminal.cwd.display()
+    );
+    let command = crate::platform::interactive_shell_command(
+        terminal.launch_argv.as_deref().unwrap_or_default(),
+        "sh",
+    )
+    .unwrap_or_default();
+    terminal.begin_native_resume(command);
+    terminal.pending_agent_resume_plan = None;
+    terminal.suspend_native_resume(&error);
+}
+
+fn restore_unavailable_agent(
+    terminal: &mut TerminalState,
+    saved_pane: Option<&super::schema::PaneSnapshot>,
+    saved_agent_name: Option<String>,
+    saved_managed_agent: Option<crate::agents::AgentKind>,
+) -> bool {
+    if !saved_agent_pane(saved_pane) || !launch_directory_unavailable(&terminal.cwd) {
+        return false;
+    }
+    // Retain the unavailable agent even when automatic provider resume is off;
+    // a shell launch can otherwise fall back and overwrite the saved cwd.
+    terminal.launch_argv = saved_pane.and_then(|pane| pane.launch_argv.clone());
+    if let (Some(name), Some(kind)) = (saved_agent_name, saved_managed_agent) {
+        terminal.restore_managed_agent(name, kind);
+    }
+    suspend_unavailable_directory(terminal);
+    true
+}
+
 fn restored_pending_agent_terminal(
     cwd: PathBuf,
     plan: crate::agents::resume::catalog::AgentResumePlan,
@@ -470,6 +529,7 @@ fn restored_pending_agent_terminal(
     saved_managed_agent: Option<crate::agents::AgentKind>,
 ) -> TerminalState {
     let initial_restore_agent = crate::agents::parse_agent_label(&plan.agent);
+    let directory_unavailable = launch_directory_unavailable(&cwd);
     let launch_argv = plan.argv.clone();
     let terminal_id = TerminalId::alloc();
     let mut terminal =
@@ -489,12 +549,19 @@ fn restored_pending_agent_terminal(
     if let Some(agent) = initial_restore_agent {
         let _ = terminal.set_detected_state_with_screen_signals_at(
             Some(agent),
-            AgentState::Idle,
+            if directory_unavailable {
+                AgentState::Unknown
+            } else {
+                AgentState::Idle
+            },
             false,
             false,
             None,
             std::time::Instant::now(),
         );
+    }
+    if directory_unavailable {
+        suspend_unavailable_directory(&mut terminal);
     }
     terminal
 }
