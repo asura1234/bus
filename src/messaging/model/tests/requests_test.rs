@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "turn_end_evidence_test.rs"]
+mod turn_end_evidence;
+
 #[test]
 fn pure_wait_reason_preserves_precedence_and_codex_first_session_exception() {
     let (state, id, request) = idle_with_queued(1_000, "go");
@@ -445,14 +448,13 @@ fn a_long_block_is_reported_after_its_grace() {
 }
 
 #[test]
-fn a_turn_between_two_idle_polls_still_ends_through_its_provider_start() {
+fn a_turn_between_two_idle_polls_needs_end_evidence_beyond_its_provider_start() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     let request = submit_text(&mut state, room, agent, "quick task");
     submit_request(&mut state, request, "launch-codex", 5);
-    // The whole turn runs between two polls: every poll sees Idle, and
-    // the reply is never captured. Only the provider's turn start says
-    // the agent took the message.
+    // Every poll sees Idle. Started proves acceptance, but cannot tell a
+    // completed fast turn from an old idle frame before the turn repaints.
     state.observe_status(agent, RuntimeStatus::Idle, 2).unwrap();
     assert_eq!(
         state.accept_callback(ProviderCallback {
@@ -476,6 +478,18 @@ fn a_turn_between_two_idle_polls_still_ends_through_its_provider_start() {
         .observe_status(agent, RuntimeStatus::Idle, 13)
         .unwrap();
     assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+    assert!(!ended(&state));
+    assert!(state.request(request).unwrap().turn_ended_at_ms.is_none());
+    state.accept_callback(ProviderCallback::final_event(
+        "fast-final",
+        14,
+        agent,
+        "launch-codex",
+        "provider-session",
+        "turn-1",
+        "quick task",
+        "done",
+    ));
     assert!(ended(&state));
 }
 

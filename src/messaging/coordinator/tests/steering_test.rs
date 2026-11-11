@@ -239,7 +239,17 @@ impl Fixture {
     }
 
     fn status(&mut self, status: RuntimeStatus) {
-        self.now += 1;
+        // Spool callbacks use the wall clock. Catch the fixture clock up to
+        // accepted progress, without spending synthetic grace time on disk IO.
+        let progress = self
+            .worker
+            .state
+            .agent(self.agent)
+            .and_then(|agent| agent.current_request)
+            .and_then(|id| self.worker.state.request(id))
+            .and_then(|request| request.progress_at_ms)
+            .unwrap_or(0);
+        self.now = (self.now + 1).max(progress + 1);
         let mut state = self.worker.state.clone();
         state.observe_status(self.agent, status, self.now).unwrap();
         self.worker.save(state).unwrap();

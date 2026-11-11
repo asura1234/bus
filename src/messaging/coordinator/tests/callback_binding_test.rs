@@ -177,7 +177,11 @@ fn empty_stop_retained_abandoned_turn_is_consumed_after_restart_without_rebindin
         "session_id":"session","turn_id":"old","prompt":"old task"}),
     );
     consume(&mut worker, agent, &dir);
-    let at = io::now_ms();
+    let at = io::now_ms() + 2;
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, at - 1)
+        .unwrap();
     worker
         .state
         .observe_status(agent, RuntimeStatus::Idle, at)
@@ -783,7 +787,9 @@ fn abandoned_request_does_not_spend_its_turn_on_a_first_interim_late_final() {
         authored_start(&worker, orch, "p1", "open work"),
     );
     consume(&mut worker, agent, &dir);
-    let now = io::now_ms();
+    // Keep the synthetic end after its just-spooled Started, then advance
+    // settlement past the grace period without sleeping.
+    let now = io::now_ms() + 10_000;
     worker
         .state
         .observe_status(agent, RuntimeStatus::Working, now - 9_000)

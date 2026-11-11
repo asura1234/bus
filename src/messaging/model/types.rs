@@ -497,6 +497,17 @@ pub(crate) struct DeliveryEpoch {
     pub(crate) pane_id: String,
 }
 
+/// Activity observed after an accepted Started, kept across coordinator reloads.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct BoundTurnActivity {
+    /// Latest accepted Started clock; never moves backwards within a turn.
+    pub(crate) started_at_ms: u64,
+    /// First Idle after that input or after a break in the idle interval.
+    pub(crate) idle_since_ms: Option<u64>,
+    /// Working seen during this native turn; additional input never clears it.
+    pub(crate) working_seen: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
@@ -572,6 +583,8 @@ pub(crate) struct Request {
     /// Recovery deadlines counts idle time from here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) progress_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bound_turn_activity: Option<BoundTurnActivity>,
     /// When the provider turn ended. Settlement waits `TURN_SETTLE_MS` so a
     /// late error or final hook can still land, then closes the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]

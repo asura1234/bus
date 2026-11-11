@@ -37,7 +37,14 @@ fn callback(f: &Fixture, turn: &str, sequence: u64, kind: CallbackEventKind) -> 
     ProviderCallback {
         callback_id: format!("worker-{turn}-{sequence}"),
         sequence,
-        occurred_at_ms: io::now_ms() - 4_000,
+        // Lost-Stop tests observe the ended turn at now-8s. Its Started
+        // must precede that observation, just as it does in a real turn.
+        occurred_at_ms: io::now_ms()
+            - if matches!(kind, CallbackEventKind::PromptStarted) {
+                9_500
+            } else {
+                4_000
+            },
         agent_id: f.agent,
         launch_id: "worker".into(),
         provider_session_id: Some("worker-session".into()),
@@ -102,7 +109,7 @@ fn running(f: &mut Fixture, author: Author) -> RequestId {
         CallbackDisposition::AcceptedBinding
     );
     state
-        .observe_status(f.agent, RuntimeStatus::Working, io::now_ms() - 4_000)
+        .observe_status(f.agent, RuntimeStatus::Working, io::now_ms() - 9_000)
         .unwrap();
     f.worker.save(state).unwrap();
     id

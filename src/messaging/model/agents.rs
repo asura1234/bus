@@ -681,6 +681,29 @@ impl BusState {
             agent_state.interrupt_pending = false;
         }
         agent_state.observed_at_ms = now_ms;
+        // Idle inference is provisional: a later busy observation of this
+        // same unfinished request disproves it, even if the wall clock went
+        // backwards. Captured finals and provider-owned error holds retain
+        // their completion even if shells run on.
+        let held_end = agent_state
+            .provider_retry
+            .as_ref()
+            .is_some_and(|hold| agent_state.current_request == Some(hold.lead));
+        if matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) && !held_end {
+            let inferred = agent_state.current_request.filter(|id| {
+                self.requests.get(id).is_some_and(|request| {
+                    request.turn_ended_at_ms.is_some()
+                        && matches!(
+                            request.phase,
+                            RequestPhase::Submitting | RequestPhase::Active
+                        )
+                        && request.pending_final.is_none()
+                })
+            });
+            if let Some(request) = inferred.and_then(|id| self.requests.get_mut(&id)) {
+                request.turn_ended_at_ms = None;
+            }
+        }
         // Deletion and an invalidated session close the request their own way.
         let gone = status == RuntimeStatus::Unavailable
             && !agent_state.deletion_pending
@@ -708,6 +731,7 @@ impl BusState {
         if gone {
             self.complete_pending_final(agent, now_ms)?;
         }
+        self.observe_bound_turn_activity(agent, status, now_ms);
         Ok(())
     }
 }

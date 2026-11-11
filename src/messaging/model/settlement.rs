@@ -4,6 +4,7 @@ use super::{
     RequestPhase, RuntimeStatus, TURN_SETTLE_MS,
 };
 
+mod idle_backstop;
 mod kimi;
 mod restart;
 
@@ -233,6 +234,20 @@ impl BusState {
             if let Some(request) = self.requests.get_mut(&id) {
                 request.turn_ended_at_ms.get_or_insert(now_ms);
             }
+        } else if agent_state.status == RuntimeStatus::Idle
+            && agent_state.provider != super::Provider::Kimi
+        {
+            // Older builds persisted an end on an unchanged pre-Started
+            // frame. Do not renew that inference after a coordinator reload.
+            if let Some(request) = self.requests.get_mut(&id).filter(|request| {
+                matches!(
+                    request.phase,
+                    RequestPhase::Submitting | RequestPhase::Active
+                ) && !request.awaiting_background
+                    && request.pending_final.is_none()
+            }) {
+                request.turn_ended_at_ms = None;
+            }
         }
     }
 
@@ -348,7 +363,8 @@ impl BusState {
         let request = self.requests.get(&agent_state.current_request?)?;
         (!request.awaiting_background
             && request.pending_final.is_none()
-            && request.turn_ended_at_ms.is_some())
+            && request.turn_ended_at_ms.is_some()
+            && self.turn_ended(request))
         .then_some(request)
     }
 
@@ -378,6 +394,10 @@ impl BusState {
     ) -> Option<RequestId> {
         if self.agents.get(&agent)?.provider == super::Provider::Kimi {
             return self.settle_kimi_ended_request(agent, now_ms, recorded_end);
+        }
+        if let Some(id) = self.idle_bound_turn_candidate(agent, now_ms) {
+            let recorded = recorded_end(self.requests.get(&id)?);
+            return self.settle_idle_bound_turn(agent, id, now_ms, recorded);
         }
         let request = self.settle_candidate(agent)?;
         let id = request.id;

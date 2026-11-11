@@ -212,6 +212,7 @@ impl BusState {
                     submitted_payload: None,
                     foreign_turn_settled_at_ms: None,
                     progress_at_ms: None,
+                    bound_turn_activity: None,
                     turn_ended_at_ms: None,
                     awaiting_background: false,
                 },
