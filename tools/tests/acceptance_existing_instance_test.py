@@ -341,6 +341,40 @@ class EndToEndEnvironmentTests(unittest.TestCase):
 
 
 class EndToEndDialogTests(unittest.TestCase):
+    def test_grok_busy_followup_checks_queued_separate_turns_and_both_tokens(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"grok": 3}
+        run.wait_ready, run.verify = mock.Mock(), mock.Mock()
+        run.token = mock.Mock(side_effect=["OLD", "NEW"])
+        run.send = mock.Mock(side_effect=[{"message_id": 10}, {"message_id": 12}])
+        run.bus = mock.Mock()
+        first = {"agent_id": 3, "request_id": 11, "stage": "delivered", "turn_id": "first"}
+        second = {"agent_id": 3, "request_id": 13, "group": None,
+                  "turn_id": "second", "start_bound": True}
+        run.bus.cli.side_effect = [{"complete": False, "requests": [first]},
+                                   {"agents": [{"agent_id": 3, "status": "working"}]}]
+        statuses = {10: {"requests": [first]}, 12: {"requests": [second]}}
+        run.settle = mock.Mock(return_value=statuses)
+        with mock.patch.object(e2e.time, "sleep"):
+            run.case_steering("grok", {})
+        self.assertIn("--text NEW", run.send.call_args.args[1])
+        self.assertEqual([call.args[1] for call in run.verify.call_args_list], [{3: "OLD"}, {3: "NEW"}])
+
+    def test_new_round_trip_waits_for_the_previous_native_turn_to_end(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"claude": 3}
+        run.token = mock.Mock(return_value="TOKEN")
+        active = [True]  # The previous explicit reply settled before its native turn ended.
+        run.wait_ready = mock.Mock(side_effect=lambda *a, **kw: active.__setitem__(0, False))
+        def send(*a, **kw):
+            self.assertFalse(active[0], "new task would steer the previous native turn")
+            return {"message_id": 4}
+        run.send = mock.Mock(side_effect=send)
+        status = {"complete": True, "requests": []}
+        run.settle = mock.Mock(return_value={4: status})
+        run.verify = mock.Mock()
+        self.assertIs(run.round_trip("claude", {}, "single"), status)
+
     def test_every_case_prompt_requires_a_foreground_correlated_reply(self):
         prompts = {provider: e2e.dialog_prompt(provider, "TOKEN") for provider in e2e.PROVIDERS}
         prompts.update(steering=e2e.steering_task("TOKEN"),

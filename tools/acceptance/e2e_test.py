@@ -439,6 +439,9 @@ class Run:
         assert not errors, f"agent error: {errors}"
 
     def round_trip(self, provider, row, case, text=None, n=1, room=None, files=()):
+        # Explicit reply settlement may precede native turn completion. A new task
+        # must start from idle rather than accidentally steering that earlier turn.
+        self.wait_ready([provider], row.setdefault("ready", {}))
         token = self.token(provider, case, n)
         receipt = self.send([provider], text(token) if text else round_trip_prompt(token), row, room=room,
                             files=files)
@@ -452,6 +455,7 @@ class Run:
         self.round_trip(provider, row, "single")
 
     def case_queued(self, provider, row):
+        self.wait_ready([provider], row.setdefault("ready", {}))
         tokens, ids = [], []
         for n in range(1, 4):
             tokens.append(self.token(provider, "queued", n))
@@ -466,7 +470,8 @@ class Run:
         assert received == sorted(received), f"replies out of order: {received}"
 
     def case_steering(self, provider, row, room=None, case="steering"):
-        """A correction joins the turn; both messages need their own explicit answer."""
+        """Check joined corrections, or Grok's intentionally queued busy follow-up."""
+        self.wait_ready([provider], row.setdefault("ready", {}))
         old, new = self.token(provider, case, 1), self.token(provider, case, 2)
         first = self.send([provider], steering_task(old, room == "master"), row, room=room)["message_id"]
         deadline = time.monotonic() + 120
@@ -482,15 +487,20 @@ class Run:
             assert time.monotonic() < deadline, f"task never started working: {agent}"
             time.sleep(0.5)
         time.sleep(3)
-        second = self.send([provider], steering_correction(old, new), row, room=room)["message_id"]
+        queued_followup = provider in {"grok", orchestrator_key("grok")}
+        correction = round_trip_prompt(new) if queued_followup else steering_correction(old, new)
+        second = self.send([provider], correction, row, room=room)["message_id"]
         statuses = self.settle([first, second], row)
         first_request = statuses[first]["requests"][0]
         joined = statuses[second]["requests"][0]
         row["steering"] = {"group": joined.get("group"), "first_turn": first_request.get("turn_id"),
                            "joined_turn": joined.get("turn_id"), "start_bound": joined.get("start_bound")}
-        assert joined.get("group") == first_request["request_id"], f"correction did not join the turn: {joined}"
-        for status in (statuses[first], statuses[second]):
-            self.verify(status, {self.agents[provider]: new}, row)
+        if queued_followup:
+            assert joined.get("group") is None and joined["turn_id"] != first_request["turn_id"], joined
+        else:
+            assert joined.get("group") == first_request["request_id"], f"correction did not join the turn: {joined}"
+        self.verify(statuses[first], {self.agents[provider]: old if queued_followup else new}, row)
+        self.verify(statuses[second], {self.agents[provider]: new}, row)
 
     def case_background(self, provider, row, room=None, case="background"):
         status = self.round_trip(provider, row, case,
@@ -617,6 +627,7 @@ class Run:
                 raise Skip(case_support(providers[0], "multi", providers))
             token = self.token("all", "multi")
             row = rows[providers[0]]
+            self.wait_ready(providers, row.setdefault("ready", {}))
             receipt = self.send(providers, round_trip_prompt(token), row)
             statuses = self.settle([receipt["message_id"]], row)
             status = statuses[receipt["message_id"]]
