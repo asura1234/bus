@@ -432,3 +432,38 @@ fn removed_directory_background_wait_closes_after_proved_process_exit() {
         .current_request
         .is_none());
 }
+
+#[test]
+fn removed_directory_never_working_turn_outlives_the_idle_backstop() {
+    let (mut f, cwd, rollout) = workspace();
+    let lead = f.send("keep this living turn open", false);
+    f.deliver();
+    f.record(json!({"hook_event_name":"UserPromptSubmit","session_id":"session",
+        "turn_id":"never-working-turn","prompt":"keep this living turn open","transcript_path":rollout}));
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    assert!(f.request(lead).trusted_start_bound);
+    assert!(
+        !f.request(lead)
+            .bound_turn_activity
+            .as_ref()
+            .unwrap()
+            .working_seen
+    );
+    std::fs::remove_dir(&cwd).unwrap();
+    f.worker.check_launch_directory(f.agent).unwrap().unwrap();
+    f.now += 35_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Active,
+        "missing-directory turns need terminal evidence even after the healthy-cwd Idle bound"
+    );
+    assert!(f.request(lead).failure_reason.is_none());
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(lead)
+    );
+    assert!(reply(&mut f, lead, "valid late reply after 35 seconds of Idle").ok);
+}
