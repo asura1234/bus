@@ -624,6 +624,126 @@ async fn native_agent_restore_defers_runtime_launch() {
         "native agent restore should not spawn a fallback-size runtime during snapshot restore"
     );
 }
+#[test]
+fn cold_restore_does_not_resume_an_agent_from_a_missing_launch_directory() {
+    let cwd = crate::utils::test_temp::unique_temp_path("bus-restore-removed-cwd");
+    std::fs::create_dir(&cwd).unwrap();
+    let (mut snapshot, history) = snapshot_with_saved_pane_history();
+    let pane = snapshot.workspaces[0].tabs[0].panes.get_mut(&0).unwrap();
+    pane.cwd = cwd.clone();
+    pane.label = Some("saved-worker".into());
+    pane.agent_name = Some("bus-r1-a2".into());
+    pane.managed_agent_kind = Some("codex".into());
+    pane.agent_session = Some(super::super::schema::PaneAgentSessionSnapshot {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Id,
+        value: "saved-codex-session".into(),
+    });
+    std::fs::remove_dir(&cwd).unwrap();
+    let (events, _event_rx) = mpsc::channel(4);
+
+    let restored = restore(
+        &snapshot,
+        Some(&history),
+        true,
+        events,
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+    );
+
+    let terminal = restored.terminals.values().next().unwrap();
+    assert_eq!(
+        terminal.cwd, cwd,
+        "never substitute HOME for the launch cwd"
+    );
+    assert!(
+        restored.launches.is_empty(),
+        "must not launch a shell elsewhere"
+    );
+    assert!(
+        terminal.pending_agent_resume_plan.is_none(),
+        "must not resume the provider"
+    );
+    assert_eq!(terminal.agent_name.as_deref(), Some("bus-r1-a2"));
+    assert_eq!(terminal.manual_label.as_deref(), Some("saved-worker"));
+    assert!(!terminal.managed_agent_interactive_ready());
+    let resume = terminal
+        .native_resume
+        .as_ref()
+        .expect("keep actionable restore failure");
+    assert_eq!(resume.error.as_deref(), Some(format!(
+        "Working directory is unavailable: {}. Provider hooks may fail before Bus runs. Restore the worktree or remount its filesystem, or re-add the agent with an existing --pwd.",
+        cwd.display()
+    ).as_str()));
+    assert_eq!(
+        resume.session.as_ref().unwrap().session_ref.value,
+        "saved-codex-session"
+    );
+
+    // Another save/restart must keep the original conversation and launch cwd.
+    let saved_again = super::super::capture::capture(
+        &restored.workspaces,
+        &restored.terminals,
+        &crate::terminal::TerminalRuntimeRegistry::new(),
+        Some(0),
+        0,
+    );
+    let pane = saved_again.workspaces[0].tabs[0]
+        .panes
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(pane.cwd, cwd);
+    assert_eq!(pane.agent_name.as_deref(), Some("bus-r1-a2"));
+    assert_eq!(
+        pane.agent_session.as_ref().unwrap().value,
+        "saved-codex-session"
+    );
+}
+
+#[test]
+fn cold_restore_does_not_start_a_sessionless_agent_when_launch_cwd_is_a_file() {
+    let cwd = crate::utils::test_temp::unique_temp_path("bus-restore-cwd-is-file");
+    std::fs::write(&cwd, "not a directory").unwrap();
+    let (mut snapshot, _) = snapshot_with_saved_pane_history();
+    let pane = snapshot.workspaces[0].tabs[0].panes.get_mut(&0).unwrap();
+    pane.cwd = cwd.clone();
+    pane.agent_name = Some("bus-r1-a2".into());
+    pane.managed_agent_kind = Some("codex".into());
+    pane.launch_argv = Some(vec!["codex".into()]);
+    let (events, _event_rx) = mpsc::channel(4);
+
+    let restored = restore(
+        &snapshot,
+        None,
+        true,
+        events,
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+    );
+
+    let terminal = restored.terminals.values().next().unwrap();
+    assert_eq!(terminal.cwd, cwd);
+    assert!(restored.launches.is_empty());
+    assert!(
+        terminal.pending_agent_resume_plan.is_none(),
+        "must not start a provider in a file"
+    );
+    assert!(!terminal.managed_agent_interactive_ready());
+    let resume = terminal
+        .native_resume
+        .as_ref()
+        .expect("keep actionable launch failure");
+    assert!(resume
+        .error
+        .as_deref()
+        .unwrap()
+        .starts_with("Working directory is unavailable: "));
+    assert!(resume.session.is_none());
+    std::fs::remove_file(cwd).unwrap();
+}
+
 #[tokio::test]
 async fn restore_seeds_saved_pane_history_into_runtime() {
     let (snapshot, history) = snapshot_with_saved_pane_history();
