@@ -12,6 +12,85 @@ fn providers() -> [Provider; 6] {
 }
 
 #[test]
+fn codex_resumed_started_turn_cannot_settle_from_the_pre_resume_idle_frame() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state
+        .observe_status(agent, RuntimeStatus::Unavailable, 2_000)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 2_239)
+        .unwrap();
+    // Reloaded native identity is ready for delivery, but that idle frame is
+    // not proof that the subsequently accepted model turn has finished.
+    let mut state: BusState = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    let lead = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "reply with the unique resume token".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Developer,
+            15_206,
+            false,
+        )
+        .unwrap()[0];
+    submit_request(&mut state, lead, "launch-codex", 15);
+    let payload = state.request(lead).unwrap().prompt.rendered_payload();
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "resumed-start".into(),
+            sequence: 17,
+            occurred_at_ms: 16_871,
+            agent_id: agent,
+            launch_id: "launch-codex".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(payload.clone()),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    // Reproduce request80: unchanged Idle 538 ms after genuine Started.
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 17_409)
+        .unwrap();
+    assert!(
+        state.request(lead).unwrap().turn_ended_at_ms.is_none(),
+        "resumed Started cannot end from unchanged Idle"
+    );
+    let mut state: BusState = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 22_900)
+        .unwrap();
+    assert!(state
+        .settle_ended_request(agent, 22_900, |_| None)
+        .is_none());
+    assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Active);
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(lead));
+    // A delayed genuine final remains attributable instead of becoming a
+    // detached result after a false no-reply completion.
+    let mut final_event = ProviderCallback::final_event(
+        "resumed-final",
+        18,
+        agent,
+        "launch-codex",
+        "provider-session",
+        "turn-1",
+        &payload,
+        "resume token",
+    );
+    final_event.occurred_at_ms = 24_000;
+    assert_eq!(
+        state.accept_callback(final_event),
+        CallbackDisposition::AcceptedCompleted
+    );
+    assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Completed);
+}
+
+#[test]
 fn started_on_an_idle_frame_does_not_end_the_turn_or_disable_steering() {
     for provider in providers() {
         for restart in [false, true] {
