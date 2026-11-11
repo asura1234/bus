@@ -3,7 +3,8 @@ use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase
 
 impl BusState {
     /// Recover old execution evidence before continuing its unresolved inputs.
-    /// Current-generation inputs and provider retry ownership remain independent.
+    /// Current-generation inputs remain independent. A failed cold resume
+    /// cannot keep its interrupted provider retry hold.
     pub(crate) fn settle_generation_request(
         &mut self,
         agent: AgentId,
@@ -30,7 +31,8 @@ impl BusState {
             || !(matches!(
                 request.phase,
                 RequestPhase::Submitting | RequestPhase::Active
-            ) || request.phase == RequestPhase::Completed && request.pending_final.is_some())
+            ) || request.restart_continuation && request.phase == RequestPhase::Queued
+                || request.phase == RequestPhase::Completed && request.pending_final.is_some())
             || !resume_failed
                 && owner
                     .provider_retry

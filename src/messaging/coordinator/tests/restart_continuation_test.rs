@@ -462,3 +462,49 @@ fn restart_epoch_resumed_turn_accepts_new_steering_normally() {
         assert_completed_without_reply(&f, member);
     }
 }
+
+#[test]
+fn restart_epoch_second_restart_before_notice_delivery_preserves_group() {
+    for provider in [Provider::Codex, Provider::ClaudeCode] {
+        let mut f = Fixture::new(provider);
+        observe_epoch(&mut f, 1);
+        let lead = running(&mut f, "original interrupted task", "turn-1");
+        let member = f.send("joined interrupted input", false);
+        f.deliver();
+        f.started("turn-1", "joined interrupted input");
+        f.consume();
+        let queued = f.send("later independent task", true);
+
+        epoch_reopen(&mut f, true, 2);
+        f.worker.transport = Box::new(RejectRestartNotice {
+            inner: epoch_transport(&f, true, 2),
+            methods: f.native.clone(),
+        });
+        f.worker.tick().unwrap();
+        assert_eq!(f.request(lead).phase, RequestPhase::Queued);
+        assert_eq!(f.request(member).group, Some(lead));
+
+        epoch_reopen(&mut f, true, 3);
+        f.worker.tick().unwrap();
+        assert_eq!(
+            f.request(member).group,
+            Some(lead),
+            "{provider:?}: another restart before notice delivery must retain the original group"
+        );
+        assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+        let notice = f.typed().last().unwrap().0.clone();
+        f.started("turn-3", &notice);
+        f.consume();
+        f.stopped("turn-3", "finished the interrupted group");
+        f.consume();
+        assert_completed_without_reply(&f, lead);
+        assert_completed_without_reply(&f, member);
+        f.status(RuntimeStatus::Idle);
+        f.deliver();
+        assert_eq!(
+            f.worker.state.agent(f.agent).unwrap().current_request,
+            Some(queued),
+            "there must be no second continuation for the original group member"
+        );
+    }
+}
