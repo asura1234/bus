@@ -38,6 +38,7 @@ impl RestartReconnect {
         let root = RESTART_TEST_ROOT.with_borrow(Clone::clone);
         #[cfg(not(test))]
         let root = crate::utils::env::bus_data_dir();
+        let root = root.map(|root| std::fs::canonicalize(&root).unwrap_or(root));
         let generation = root.as_deref().and_then(Self::generation);
         Self {
             root,
@@ -94,7 +95,9 @@ impl RestartReconnect {
                 })
                 .flatten()
         };
-        let Some(plan) = pending.or_else(active).filter(|plan| plan.root == *root) else {
+        let Some(plan) = pending.or_else(active).filter(|plan| {
+            std::fs::canonicalize(&plan.root).unwrap_or_else(|_| plan.root.clone()) == *root
+        }) else {
             return false;
         };
         let Some(generation) = Self::generation(root) else {

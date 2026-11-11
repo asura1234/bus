@@ -231,3 +231,44 @@ fn async_follower_follows_consumed_handoff_only_during_active_restart() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn async_follower_matches_the_same_data_directory_through_a_path_alias() {
+    struct Alias(std::path::PathBuf);
+    impl Drop for Alias {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let fixture = PlannedRestartFixture::new();
+    let alias = Alias(crate::utils::test_temp::unique_temp_path(
+        "restart-parent-alias",
+    ));
+    std::os::unix::fs::symlink(fixture.root.parent().unwrap(), &alias.0).unwrap();
+    let selected = alias.0.join(fixture.root.file_name().unwrap());
+    assert_eq!(
+        selected.canonicalize().unwrap(),
+        fixture.root.canonicalize().unwrap()
+    );
+    wait::RESTART_TEST_ROOT.with(|slot| slot.replace(Some(selected)));
+    let mut reads = 0;
+    let response = follow_message(
+        "root-alias",
+        &json!(19),
+        &mut |request, _| {
+            reads += 1;
+            if reads <= 6 {
+                return Err("connection refused".into());
+            }
+            fixture.generation(3);
+            Ok(Response::success(
+                &request.id,
+                status(vec![recipient(1, "replied", true)]),
+            ))
+        },
+        &mut |_| {},
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(reads, 7);
+}
