@@ -745,6 +745,76 @@ fn cold_restore_does_not_start_a_sessionless_agent_when_launch_cwd_is_a_file() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn cold_restore_without_auto_resume_keeps_unavailable_agent() {
+    let cwd = crate::utils::test_temp::unique_temp_path("bus-restore-disabled-missing-cwd");
+    let (mut snapshot, _) = snapshot_with_saved_pane_history();
+    let pane = snapshot.workspaces[0].tabs[0].panes.get_mut(&0).unwrap();
+    pane.cwd = cwd.clone();
+    pane.agent_name = Some("bus-r1-a2".into());
+    pane.managed_agent_kind = Some("codex".into());
+    pane.launch_argv = Some(vec!["codex".into()]);
+    pane.agent_session = Some(super::super::schema::PaneAgentSessionSnapshot {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Id,
+        value: "saved-codex-session".into(),
+    });
+    let (events, _events_rx) = mpsc::channel(8);
+    let restored = restore(
+        &snapshot,
+        None,
+        false,
+        events.clone(),
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+    );
+    let (workspaces, terminals, runtimes) = crate::server::terminals::restore_launch::execute(
+        restored,
+        crate::server::terminals::restore_launch::RestoreLaunchContext {
+            rows: 5,
+            cols: 40,
+            scrollback_limit_bytes: 4096,
+            shell_config: crate::terminal::runtime::PaneShellConfig::new(
+                "/bin/sh",
+                crate::utils::config::ShellModeConfig::NonLogin,
+            ),
+            events,
+            render_notify: Arc::new(Notify::new()),
+            render_dirty: Arc::new(RenderSignal::new()),
+        },
+    );
+    assert_eq!(workspaces.len(), 1, "keep the saved agent pane");
+    assert_eq!(terminals.len(), 1, "keep the saved native session");
+    assert!(
+        runtimes.is_empty(),
+        "unavailable cwd must not start a shell elsewhere"
+    );
+    let terminal = terminals.values().next().unwrap();
+    assert_eq!(terminal.cwd, cwd);
+    assert_eq!(terminal.agent_name.as_deref(), Some("bus-r1-a2"));
+    assert!(terminal.pending_agent_resume_plan.is_none());
+    assert!(!terminal.managed_agent_interactive_ready());
+    assert_eq!(
+        terminal
+            .persisted_agent_session
+            .as_ref()
+            .unwrap()
+            .session_ref
+            .value,
+        "saved-codex-session"
+    );
+    assert!(terminal
+        .native_resume
+        .as_ref()
+        .unwrap()
+        .error
+        .as_deref()
+        .unwrap()
+        .starts_with("Working directory is unavailable: "));
+}
+
+#[tokio::test]
 async fn restore_seeds_saved_pane_history_into_runtime() {
     let (snapshot, history) = snapshot_with_saved_pane_history();
     crate::server::terminals::restore_launch::tests::assert_history_restore(
