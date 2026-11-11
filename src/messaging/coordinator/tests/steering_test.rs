@@ -28,6 +28,9 @@ mod turn_settlement_tests;
 #[path = "rollout_attribution_test.rs"]
 mod rollout_attribution_tests;
 
+#[path = "missing_directory_running_test.rs"]
+mod missing_directory_running_tests;
+
 #[path = "interrupt_test.rs"]
 mod interrupt_tests;
 
