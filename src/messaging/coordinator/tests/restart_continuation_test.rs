@@ -544,3 +544,65 @@ fn restart_epoch_prior_provider_retry_does_not_remove_notice_delivery_bound() {
     );
     assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
 }
+
+#[test]
+fn restart_epoch_failed_notice_logs_only_durable_canonical_reason() {
+    let mut observations = Vec::new();
+    for rejected in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        observe_epoch(&mut f, 1);
+        let lead = running(&mut f, "interrupted task with failed notice", "turn-1");
+        epoch_reopen(&mut f, true, 2);
+        if rejected {
+            f.worker.transport = Box::new(RejectRestartNotice {
+                inner: epoch_transport(&f, true, 2),
+                methods: f.native.clone(),
+            });
+        }
+        f.worker.tick().unwrap();
+        let deadline = io::now_ms() + 2 * 60 * 1000 + 1;
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        f.worker
+            .store
+            .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+        let expire = |f: &mut Fixture| {
+            if rejected {
+                f.worker.expire_queued_requests(deadline)
+            } else {
+                f.worker.expire_unconfirmed_submissions(deadline)
+            }
+        };
+        capture.run(|| assert!(expire(&mut f).is_err()));
+        assert!(!f.request(lead).settled());
+        let before_save = capture.text();
+        capture.run(|| {
+            expire(&mut f).unwrap();
+            expire(&mut f).unwrap();
+        });
+        assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            f.request(lead).failure_reason.as_deref(),
+            Some("reply_not_captured")
+        );
+        observations.push((rejected, lead, before_save, capture.text()));
+    }
+    for (rejected, lead, before_save, log) in observations {
+        let is_closure = |line: &&str| {
+            line.contains(&format!("request_id={}", lead.0))
+                && (line.contains("bus.message.recovered") || line.contains("bus.message.failed"))
+        };
+        assert!(
+            !before_save.lines().any(|line| is_closure(&line)),
+            "no failed-notice outcome before persistence, rejected={rejected}: {before_save}"
+        );
+        let rows: Vec<_> = log.lines().filter(is_closure).collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "one durable notice failure, rejected={rejected}: {log}"
+        );
+        assert!(rows[0].contains("reply_not_captured"), "{log}");
+        assert!(!rows[0].contains("submission_unconfirmed"), "{log}");
+        assert!(!rows[0].contains("queued_stalled"), "{log}");
+    }
+}

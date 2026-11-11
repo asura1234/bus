@@ -17,6 +17,12 @@ impl Worker {
             self.save(state)?;
         }
         for id in expired {
+            // Durable recoveries already reported this continuation's closure.
+            if self.state.request(id).is_some_and(|request| {
+                request.failure_reason.as_deref() == Some("reply_not_captured")
+            }) {
+                continue;
+            }
             diagnostics::request(&self.state, id, "bus.message.failed", "queued_stalled");
         }
         Ok(())

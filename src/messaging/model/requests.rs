@@ -438,13 +438,18 @@ impl BusState {
             if let Some(error) = self.request_failure_error(request, message) {
                 self.set_agent_error(agent, Some(error))?;
             }
-            tracing::info!(
-                event = "bus.message.recovered",
-                request_id = request.0,
-                agent_id = agent.0,
-                reason = "submission_unconfirmed",
-                "Unconfirmed submission failed"
-            );
+            // Canonical restart closures are reported only after durable save.
+            if self.requests.get(&request).is_some_and(|request| {
+                request.failure_reason.as_deref() == Some("submission_unconfirmed")
+            }) {
+                tracing::info!(
+                    event = "bus.message.recovered",
+                    request_id = request.0,
+                    agent_id = agent.0,
+                    reason = "submission_unconfirmed",
+                    "Unconfirmed submission failed"
+                );
+            }
         }
         Ok(())
     }
