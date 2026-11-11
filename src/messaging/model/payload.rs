@@ -1,5 +1,5 @@
 //! Native delivery text and its exact callback-matching payload.
-use super::{AgentId, Author, BusState, RequestId, RoomId, RoomKind};
+use super::{AgentId, Author, BusState, Provider, RequestId, RoomId, RoomKind};
 
 impl BusState {
     pub(super) fn message_sender(&self, author: &Author) -> Option<(String, RoomId)> {
@@ -174,10 +174,14 @@ fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
 /// Whether a provider's submit hook reports the prompt Bus typed as `typed`:
 /// the typed text itself, or image chips with the remaining text. Claude drops
 /// blank lines while lifting images; Codex's separate text paste preserves them.
+#[cfg(test)]
 pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
+    payload_matches_for_provider(payload, typed, Provider::ClaudeCode)
+}
+
+pub(super) fn payload_matches_for_provider(payload: &str, typed: &str, provider: Provider) -> bool {
     use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_lifted_images, claude_text_after_image_reads,
-        claude_text_matches,
+        claude_image_placeholders, claude_text_matches, lifted_images, text_after_image_reads,
     };
     let payload = normalized_payload(payload);
     let typed = normalized_payload(typed);
@@ -185,13 +189,16 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
         return true;
     }
     let (length, images) = claude_image_placeholders(&payload);
-    let (_, remaining) = claude_lifted_images(&typed);
+    let claude = provider.uses_claude_harness();
+    let (_, remaining) = lifted_images(&typed, claude);
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    if claude_text_after_image_reads(images, &payload[length..], &typed).is_some_and(|text| {
-        claude_text_matches(
-            text.trim_end_matches(|c: char| c.is_ascii_whitespace()),
-            remaining,
-        )
+    if text_after_image_reads(images, &payload[length..], &typed, claude).is_some_and(|text| {
+        let text = text.trim_end_matches(|c: char| c.is_ascii_whitespace());
+        if claude {
+            claude_text_matches(text, remaining)
+        } else {
+            text == remaining
+        }
     }) {
         return true;
     }

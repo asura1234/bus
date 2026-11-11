@@ -225,13 +225,13 @@ fn claude_unquoted_image_callback_binds_and_ends_only_its_frozen_request() {
 
 #[test]
 fn each_provider_keeps_literal_image_text_and_rejects_foreign_payloads() {
-    for provider in [
-        Provider::ClaudeCode,
-        Provider::ClaudeDs,
-        Provider::Codex,
-        Provider::Cursor,
-        Provider::Grok,
-        Provider::Kimi,
+    for (provider, claude_images) in [
+        (Provider::ClaudeCode, true),
+        (Provider::ClaudeDs, true),
+        (Provider::Codex, false),
+        (Provider::Cursor, false),
+        (Provider::Grok, false),
+        (Provider::Kimi, false),
     ] {
         let mut state = BusState::default();
         let room = state.create_room("images").unwrap();
@@ -259,14 +259,85 @@ fn each_provider_keeps_literal_image_text_and_rejects_foreign_payloads() {
         assert!(state
             .request(request)
             .unwrap()
-            .matches_callback_payload(&typed));
+            .matches_callback_payload(&typed, provider));
         assert!(!state
             .request(request)
             .unwrap()
-            .matches_callback_payload("Literal image text"));
+            .matches_callback_payload("Literal image text", provider));
         assert!(!state
             .request(request)
             .unwrap()
-            .matches_callback_payload(&format!("{typed} extra")));
+            .matches_callback_payload(&format!("{typed} extra"), provider));
+        let lifted = format!(
+            "[Image #3]{}",
+            typed.strip_suffix("\n/private/tmp/fixture.png").unwrap()
+        );
+        assert_eq!(
+            state
+                .request(request)
+                .unwrap()
+                .matches_callback_payload(&lifted, provider),
+            claude_images,
+            "standalone PNG policy: {provider:?}"
+        );
+
+        let reflow = submit_text(
+            &mut state,
+            room,
+            agent,
+            "Look here /tmp/escaped\\ name.png now\n\"/tmp/attached.jpeg\"",
+        );
+        let frozen = state.render_request_payload(reflow).unwrap();
+        let payload = format!(
+            "[Image #3]{}",
+            frozen.strip_suffix("\n\"/tmp/attached.jpeg\"").unwrap()
+        )
+        .replace("here /tmp/", "here\n/tmp/");
+        assert_eq!(
+            state
+                .request(reflow)
+                .unwrap()
+                .matches_callback_payload(&payload, provider),
+            claude_images,
+            "escaped literal path reflow policy: {provider:?}"
+        );
     }
+}
+
+#[test]
+fn codex_literal_unquoted_png_rejects_claude_only_lifted_callback() {
+    let (mut state, room, codex, _) = state_with_room_and_agents();
+    let request = submit_text(
+        &mut state,
+        room,
+        codex,
+        "Literal image text\n/private/tmp/fixture.png",
+    );
+    let frozen = state.render_request_payload(request).unwrap();
+    let (images, remaining) = crate::agents::providers::codex::hooks::image_paste_parts(&frozen);
+    assert!(images.is_empty());
+    assert_eq!(remaining, frozen);
+    submit_request(&mut state, request, "launch-codex", 10);
+    let foreign = format!(
+        "[Image #3]{}",
+        frozen.strip_suffix("\n/private/tmp/fixture.png").unwrap()
+    );
+    assert_ne!(foreign, frozen);
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "foreign-image-substitution".into(),
+            sequence: 11,
+            occurred_at_ms: 11,
+            agent_id: codex,
+            launch_id: "launch-codex".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: Some("prompt-1".into()),
+            prompt_payload: Some(foreign),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::Rejected(CallbackRejection::WrongPrompt),
+        "Codex did not turn the literal unquoted path into an image"
+    );
+    assert!(!state.request(request).unwrap().trusted_start_bound);
 }

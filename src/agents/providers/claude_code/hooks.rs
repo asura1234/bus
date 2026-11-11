@@ -172,11 +172,16 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
 /// followed by the remaining lines with blank ones dropped. Returns how many
 /// lines of `typed` it lifts and the text left behind.
 pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
+    lifted_images(typed, true)
+}
+
+/// Other providers retain the historical quoted-path equivalence only.
+pub(crate) fn lifted_images(typed: &str, unquoted_png: bool) -> (usize, String) {
     let mut lifted = 0;
     let remaining = typed
         .split('\n')
         .filter(|line| {
-            let image = is_lifted_image_path(line);
+            let image = is_lifted_image_path(line, unquoted_png);
             lifted += usize::from(image);
             !image && !line.trim().is_empty()
         })
@@ -193,16 +198,25 @@ pub(crate) fn claude_text_after_image_reads(
     body: &str,
     typed: &str,
 ) -> Option<String> {
+    text_after_image_reads(images, body, typed, true)
+}
+
+pub(crate) fn text_after_image_reads(
+    images: usize,
+    body: &str,
+    typed: &str,
+    unquoted_png: bool,
+) -> Option<String> {
     let mut unread: Vec<_> = typed
         .lines()
-        .filter(|line| is_lifted_image_path(line))
+        .filter(|line| is_lifted_image_path(line, unquoted_png))
         .collect();
     if images == 0 || images > unread.len() {
         return None;
     }
     let mut text = Vec::new();
     for line in body.lines() {
-        if is_lifted_image_path(line) {
+        if is_lifted_image_path(line, unquoted_png) {
             let index = unread.iter().position(|path| *path == line)?;
             unread.remove(index);
         } else if !line.trim().is_empty() {
@@ -212,8 +226,8 @@ pub(crate) fn claude_text_after_image_reads(
     (images == unread.len()).then(|| text.join("\n"))
 }
 
-fn is_lifted_image_path(line: &str) -> bool {
-    is_quoted_image_path(line) || is_unquoted_png_path(line)
+fn is_lifted_image_path(line: &str, unquoted_png: bool) -> bool {
+    is_quoted_image_path(line) || (unquoted_png && is_unquoted_png_path(line))
 }
 
 /// Measured with Claude Code 2.1.310. Keep prose, relative paths, whitespace

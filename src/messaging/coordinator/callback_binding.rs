@@ -26,7 +26,7 @@ pub(super) fn span(state: &BusState, callback: &ProviderCallback) -> tracing::Sp
         expected_prompt_id = ?request.and_then(|request| request.provider_prompt_id.as_deref()),
         callback_prompt_id = ?callback.provider_prompt_id,
         raw_payload_matches = ?request.and_then(|request| callback.prompt_payload.as_deref()
-            .map(|payload| request.matches_callback_payload(payload))),
+            .and_then(|payload| agent.map(|agent| request.matches_callback_payload(payload, agent.provider)))),
         compactions = agent.map_or(0, |agent| agent.compactions.count),
     )
 }

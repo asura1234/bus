@@ -1,6 +1,10 @@
 //! Persisted DTOs, identities and payload representation.
+#[cfg(test)]
+use super::payload::payload_matches;
 pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
-use super::{payload::payload_matches, DeliveryLatency, DialogNoticeDelivery, QueuedRejection};
+use super::{
+    payload::payload_matches_for_provider, DeliveryLatency, DialogNoticeDelivery, QueuedRejection,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -119,6 +123,7 @@ impl Prompt {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn matches_callback_payload(&self, payload: &str) -> bool {
         payload_matches(payload, &self.rendered_payload())
     }
@@ -585,10 +590,12 @@ impl Request {
                 .starts_with(crate::utils::error_pipe::NOTICE_PREFIX)
     }
 
-    pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
+    pub(crate) fn matches_callback_payload(&self, payload: &str, provider: Provider) -> bool {
         match &self.submitted_payload {
-            Some(typed) => payload_matches(payload, typed),
-            None => self.prompt.matches_callback_payload(payload),
+            Some(typed) => payload_matches_for_provider(payload, typed, provider),
+            None => {
+                payload_matches_for_provider(payload, &self.prompt.rendered_payload(), provider)
+            }
         }
     }
 
