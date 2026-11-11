@@ -31,6 +31,12 @@ fn claude_unquoted_image_path_matches_its_exact_remaining_payload() {
         "/tmp/a.png /tmp/b.png",
         "Look at /tmp/a.png",
         "/tmp/one image.png",
+        "/tmp/one\timage.png",
+        "/tmp/one\u{a0}image.png",
+        "/tmp/one\"image.png",
+        "/tmp/one'image.png",
+        "/tmp/one\\image.png",
+        "/tmp/fixture.jpg",
     ] {
         assert!(
             !payload_matches(&format!("[Image #3]{body}"), &format!("{body}\n{literal}")),
@@ -125,7 +131,12 @@ fn claude_unquoted_image_callback_binds_and_ends_only_its_frozen_request() {
             .unwrap();
         let settled = state.request(request).unwrap();
         assert_eq!(settled.phase, RequestPhase::Completed);
-        assert!(settled.trusted_start_bound && settled.turn_ended_at_ms.is_some());
+        assert!(settled.trusted_start_bound && state.turn_ended(settled));
+        assert_eq!(
+            settled.provider_session_id.as_deref(),
+            Some("provider-session")
+        );
+        assert_eq!(settled.provider_turn_id.as_deref(), Some("turn-1"));
         assert!(settled.failure_reason.is_none());
         assert!(
             settled.reply().is_none(),

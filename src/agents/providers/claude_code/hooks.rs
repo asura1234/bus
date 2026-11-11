@@ -166,8 +166,8 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
     (length, count)
 }
 
-/// Claude Code turns each typed line that is one quoted image path into an
-/// image attachment. Its composer and its submit hook then show one
+/// Claude Code lifts quoted image paths and standalone unquoted absolute PNG
+/// paths into attachments. Its composer and its submit hook then show one
 /// `[Image #N]` placeholder per image first (N counts the session's images),
 /// followed by the remaining lines with blank ones dropped. Returns how many
 /// lines of `typed` it lifts and the text left behind.
@@ -176,7 +176,7 @@ pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
     let remaining = typed
         .split('\n')
         .filter(|line| {
-            let image = is_quoted_image_path(line);
+            let image = is_quoted_image_path(line) || is_unquoted_png_path(line);
             lifted += usize::from(image);
             !image && !line.trim().is_empty()
         })
@@ -210,6 +210,18 @@ pub(crate) fn claude_text_after_image_reads(
         }
     }
     (images == unread.len()).then(|| text.join("\n"))
+}
+
+/// Measured with Claude Code 2.1.310. Keep prose, relative paths, whitespace
+/// and quote-bearing lines literal; durable callbacks cannot rely on stat.
+fn is_unquoted_png_path(line: &str) -> bool {
+    Path::new(line).is_absolute()
+        && !line
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+        && Path::new(line)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
 }
 
 /// Whether `line` is exactly one path quoted the way Bus quotes attachments
