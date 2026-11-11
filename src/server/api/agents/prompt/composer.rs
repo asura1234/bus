@@ -212,11 +212,21 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
     let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
     let (lifted, remaining) = claude_lifted_images(&expected);
     // Claude inserts the whole text remainder atomically after all reads finish.
-    // In a mixed result its collapsed chip also contains one line per failed
-    // path. Those paths need not be visible to prove the paste has completed.
+    // A failed standalone path adds one text line; a caption keeps its line
+    // whether its image read succeeds or fails. Bound both read distributions
+    // without counting a retained caption twice inside the collapsed chip.
     if images > 0 && images < lifted {
-        let text_lines = remaining.lines().count() + lifted - images;
-        if pasted_text_count(rest) == Some(text_lines.saturating_sub(1)) {
+        let text_lines = remaining.lines().count();
+        let standalone = expected
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+            - text_lines;
+        let captions = lifted - standalone;
+        let failed = lifted - images;
+        let minimum = (text_lines + failed.saturating_sub(captions)).saturating_sub(1);
+        let maximum = (text_lines + failed.min(standalone)).saturating_sub(1);
+        if pasted_text_count(rest).is_some_and(|count| (minimum..=maximum).contains(&count)) {
             return true;
         }
     }

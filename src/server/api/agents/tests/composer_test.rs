@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn claude_completed_mixed_caption_read_accepts_a_collapsed_text_chip() {
+    let expected = format!(
+        "[Bus message 5 from you]\nfrom bus\nDialog screenshot: /tmp/a.png\n\"/tmp/b.jpg\"\n{}",
+        (0..100)
+            .map(|index| format!("Controlled filler line {index}: ignore this timing fixture."))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    // The caption PNG read fails, retaining its full line; the quoted JPEG
+    // succeeds. Removing only the JPEG leaves 103 text lines, or 102 newlines.
+    let complete = "────────────────\n❯ [Image #1][Pasted text #2 +102 lines]\n────────────────";
+    assert!(paste_ready(AgentKind::Claude, complete, &expected));
+    assert_eq!(
+        observe(AgentKind::Claude, complete, &expected),
+        InputObservation::Pending
+    );
+    // The other distribution reads the caption image and retains the failed
+    // standalone JPEG as one additional line, for 104 text lines.
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    let other = frame("[Image #1][Pasted text #2 +103 lines]");
+    assert!(paste_ready(AgentKind::Claude, &other, &expected));
+    assert_eq!(
+        observe(AgentKind::Claude, &other, &expected),
+        InputObservation::Pending
+    );
+    for body in [
+        "[Image #1][Pasted text #2 +101 lines]",
+        "[Image #1][Pasted text #2 +104 lines]",
+        "[Image #1][Image #2][Image #3][Pasted text #2 +102 lines]",
+    ] {
+        assert!(
+            !paste_ready(AgentKind::Claude, &frame(body), &expected),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn claude_mixed_caption_reads_keep_each_caption_line_once() {
+    let expected = format!(
+        "[Bus message 5 from you]\nfrom bus\nFirst screenshot: /tmp/a.png\nSecond screenshot: /tmp/b.png\n{}",
+        (0..100)
+            .map(|index| format!("Controlled filler line {index}: ignore this timing fixture."))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    // One image succeeds and one fails. Both captions remain among exactly
+    // 104 text lines regardless of which read failed.
+    let complete = frame("[Image #1][Pasted text #2 +103 lines]");
+    assert!(paste_ready(AgentKind::Claude, &complete, &expected));
+    assert_eq!(
+        observe(AgentKind::Claude, &complete, &expected),
+        InputObservation::Pending
+    );
+    for body in [
+        "[Image #1][Pasted text #2 +102 lines]",
+        "[Image #1][Pasted text #2 +104 lines]",
+        "[Image #1][Image #2][Image #3][Pasted text #2 +103 lines]",
+    ] {
+        assert!(
+            !paste_ready(AgentKind::Claude, &frame(body), &expected),
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn claude_completed_mixed_image_read_accepts_a_collapsed_text_chip() {
     let expected = format!(
         "[Bus message 5 from you]\nfrom bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"\n{}",
