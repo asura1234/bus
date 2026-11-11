@@ -6,6 +6,7 @@ use super::{
 
 mod idle_backstop;
 mod kimi;
+mod missing_directory;
 mod restart;
 
 /// How the provider's own record says a turn ended, for a turn whose
@@ -392,6 +393,9 @@ impl BusState {
         now_ms: u64,
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
     ) -> Option<RequestId> {
+        if let Some(request) = self.missing_directory_turn(agent) {
+            return self.settle_missing_directory_turn(agent, request.id, now_ms, recorded_end);
+        }
         if self.agents.get(&agent)?.provider == super::Provider::Kimi {
             return self.settle_kimi_ended_request(agent, now_ms, recorded_end);
         }
@@ -466,7 +470,9 @@ impl BusState {
                     .turn_ended_at_ms
                     .get_or_insert(now_ms);
             }
-            if self.hold_provider_error(id, message, now_ms) {
+            if !self.missing_directory_exit(agent, id, now_ms)
+                && self.hold_provider_error(id, message, now_ms)
+            {
                 return Some(id);
             }
         }

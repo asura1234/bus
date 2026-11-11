@@ -129,12 +129,7 @@ fn record_missing_directory(
         "Agent launch directory removed: {}; replace the agent with an existing --pwd.",
         cwd.display()
     );
-    let changed = state.agent(id).is_some_and(|agent| {
-        agent.working_directory_error.as_ref() != Some(&error) || agent.current_request.is_some()
-    }) || state
-        .unsettled_requests()
-        .any(|request| request.agent_id == id);
-    state
+    let changed = state
         .fail_missing_launch_directory(id, error.clone(), super::io::now_ms())
         .map_err(|e| e.to_string())?;
     if changed {

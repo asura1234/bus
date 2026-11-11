@@ -65,13 +65,15 @@ fn read_rollout_tail(path: &Path) -> std::io::Result<String> {
 pub(crate) enum CodexTurnEnd {
     /// The error that ended the turn. Codex fires no Stop hook for it.
     Error(String),
+    /// The matching turn committed its end without a final text item.
+    NoReply,
     /// The turn's final answer: what its Stop hook would have reported, for
     /// when that hook never ran (Codex runs none once its cwd is removed).
     Final(String),
 }
 
 /// How Codex turn `turn_id` ended; `Ok(None)` while the rollout tail records
-/// no end for it, or its end carries neither an error nor an answer.
+/// no matching end for it. A textless committed end is `NoReply`.
 pub(crate) fn read_codex_turn_end(
     path: &Path,
     turn_id: &str,
@@ -109,7 +111,9 @@ pub(crate) fn read_codex_turn_end(
                     .find_map(|event| completed_final_text(event, turn_id))
             })
         });
-    Ok(answer.map(CodexTurnEnd::Final))
+    Ok(Some(
+        answer.map_or(CodexTurnEnd::NoReply, CodexTurnEnd::Final),
+    ))
 }
 
 /// Codex 0.164.0 writes final text separately from `task_complete`. The

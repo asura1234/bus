@@ -61,6 +61,7 @@ impl BusState {
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
         if owner.status != RuntimeStatus::Idle
+            || owner.working_directory_error.is_some()
             || owner.dialog
             || owner.deletion_pending
             || owner.session_binding_invalidated

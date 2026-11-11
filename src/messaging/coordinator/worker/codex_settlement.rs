@@ -70,6 +70,7 @@ pub(super) fn recorded_codex_end(
     };
     Some(match end {
         CodexTurnEnd::Error(message) => RecordedTurnEnd::Error(message),
+        CodexTurnEnd::NoReply => RecordedTurnEnd::NoReply,
         CodexTurnEnd::Final(text) => {
             let prompts = codex_turn_prompts(rollout, &turn_id, sent_ms)
                 .inspect_err(unreadable)

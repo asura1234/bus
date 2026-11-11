@@ -517,27 +517,48 @@ impl BusState {
         Ok(())
     }
 
-    /// A missing launch directory makes further turn tracking impossible.
-    /// Close only unanswered requests; a captured reply remains immutable.
+    /// Refuse future delivery without discarding an already-bound live turn.
+    /// Its native record and explicit replies remain usable outside the cwd.
     pub(crate) fn fail_missing_launch_directory(
         &mut self,
         id: AgentId,
         error: String,
         now_ms: u64,
-    ) -> Result<(), ModelError> {
-        let previous_error = self
-            .agent(id)
-            .ok_or(ModelError::UnknownAgent(id))?
-            .actionable_error
-            .clone();
+    ) -> Result<bool, ModelError> {
+        let agent = self.agent(id).ok_or(ModelError::UnknownAgent(id))?;
+        let previous_error = agent.actionable_error.clone();
+        let mut changed = agent.working_directory_error.as_ref() != Some(&error);
+        let running = agent.current_request.filter(|current| {
+            self.request(*current).is_some_and(|request| {
+                request.phase == RequestPhase::Active && request.trusted_start_bound
+            })
+        });
         let requests: Vec<_> = self
             .unsettled_requests()
-            .filter(|request| request.agent_id == id)
+            .filter(|request| {
+                request.agent_id == id && Some(request.group.unwrap_or(request.id)) != running
+            })
             .map(|request| request.id)
             .collect();
         for request in requests {
             if self.request(request).is_some_and(|r| !r.settled()) {
-                self.close_turn_with_reason(request, now_ms, "launch_directory_removed".into())?;
+                if self
+                    .request(request)
+                    .is_some_and(|r| r.phase == RequestPhase::Queued)
+                {
+                    // Closing queued work must not clear the running turn's owner.
+                    self.recover_idle_request(request, now_ms)?;
+                    if let Some(request) = self.requests.get_mut(&request) {
+                        request.failure_reason = Some("launch_directory_removed".into());
+                    }
+                } else {
+                    self.close_turn_with_reason(
+                        request,
+                        now_ms,
+                        "launch_directory_removed".into(),
+                    )?;
+                }
+                changed = true;
             }
         }
         if let Some(queue) = self.queues.get_mut(&id) {
@@ -547,10 +568,13 @@ impl BusState {
             .agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
-        agent.current_request = None;
-        agent.provider_retry = None;
+        agent.current_request = running;
+        if running.is_none() {
+            agent.provider_retry = None;
+        }
         agent.actionable_error = previous_error;
-        self.observe_working_directory_error(id, Some(error))
+        self.observe_working_directory_error(id, Some(error))?;
+        Ok(changed)
     }
 
     /// Directory warnings never replace another error, and recovering the
