@@ -612,21 +612,40 @@ older dated testing lessons refer to automatic capture.
   Never infer success from the command receipt.
 - [ ] Ctrl+Q the scratch UI, then relaunch `sbus --dev` in the same environment
   and data root. Confirm paths, binary, saved provider session/context and a
-  fresh reply. For a mid-request restart, run `sbus stop` during the turn.
+  fresh reply. For a mid-request cold restore, run `sbus stop` during the turn.
   Expect `{"stopped":true}` and no `ok` field, then relaunch `sbus --dev` and
   inspect `sbus message status MESSAGE_ID`.
   Explicit `BUS_DATA_DIR` cannot be combined with `bus resume`; this is an
   explicit-root relaunch, not a registry-resume test. Scratch relaunch is
-  `sbus --dev` on that private root. `bus --dev restart --confirm` (or `--binary PATH` with no source checkout)
-  saves/quits and relaunches the whole Bus and is not a step in this scratch test. Do not point
-  it at the live session. Before any such live restart, commit and push, stop
-  builds and tests, and release slot locks. The real-HOME section below is
-  that same private-root relaunch, not `bus resume`. A new server generation settles unfinished submitted requests from older
-  generations as `reply_not_captured` after reconciling durable callbacks and
-  provider records; an existing answer or transient-error retry hold wins.
-  Pending messages remain queued and deliver after restore. Restart receipts
-  are notices only, including delayed or replayed receipts. A coordinator
-  reconnect to the same serving generation preserves the live turn.
+  `sbus --dev` on that private root. Separately test the immediate restart with
+  `sbus --dev restart --binary "$scratch/bin/bus" --confirm` while real Codex
+  and Claude recipients have start-bound requests in progress. Never point
+  this acceptance at the live session. Restart saves/quits and relaunches the
+  whole Bus; provider processes and their executing turns are interrupted.
+  After reconciling durable callbacks and provider records, retain each
+  interrupted start-bound request and its unanswered group under the same
+  agent and original message/request IDs. Deliver one short resume notice
+  naming the original message and sender, asking the recipient to check prior
+  effects and continue. Do not paste the original task or attachments again.
+  Require the resumed turn's explicit `--reply-to` to answer the original
+  message and complete its sender's `--async` wait. Separately prove a resumed
+  native end settles the original unanswered group without storing a reply.
+  Keep both `send --async` and `wait --async` running across the planned
+  handoff. Reconnect grace requires the selected root's live restart helper,
+  matching handoff and generation; an ordinary dead Bus still reports
+  `bus_down` after four consecutive transport failures. A planned handoff
+  that never recovers also has a bounded reconnect budget.
+  Test late old-turn callbacks, repeated coordinator reopen, and a later
+  restart without duplicate notice delivery or lost correlation. Existing
+  answers and transient-error retry holds remain intact. Deleted agents,
+  failed resumes and resume notices that exhaust normal delivery bounds close
+  their unanswered work; failed continuation delivery uses `reply_not_captured`.
+  Unbound old submissions retain generation-failure recovery. A missing saved
+  cwd must never resume the provider elsewhere.
+  Pending, not-yet-started messages keep FIFO and deliver after the resumed
+  task ends. Restart receipts are notices only, including delayed or replayed
+  receipts. A coordinator reconnect to the same serving generation preserves
+  the live turn without a continuation notice.
   For unrelated acceptance interrupted by sleep or restart, rerun from a fresh
   scratch instance instead of counting the interrupted scenario as a pass.
 - [ ] Test provider flags through `agent add --args`: Claude
@@ -682,7 +701,9 @@ that default. Do not call `sbus resume` or `bus resume` in this test.
 Check the provider recalls the prior marker and replies to a new task. Both
 terminals must use `sbus`. Stop if `data`, `logs`, `config`, or `state`
 leaves the private root. Repeat with `--yolo` on both launches for a
-run-scoped bypass. This relaunch does not rescue an interrupted run.
+run-scoped bypass. An interrupted start-bound task resumes through a short
+continuation notice and keeps its original request IDs; its previous native
+turn did not survive the relaunch.
 
 ## Gate, review and mandatory live smoke
 
