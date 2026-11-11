@@ -186,13 +186,14 @@ the wrapper remains held.
   posts nothing. Startup failures remain in lifecycle state and logs.
   Pending events survive waiter and Bus restarts, and each event routes once.
   You can rely on these notifications without room polling or self-timers.
-  A live author waiter defers its own reply/outcome components and marks only
-  flushed replies and exact printed event keys seen; use `wait --message ID
+  A live author waiter defers its own outcome components and marks only
+  exact printed event keys seen; use `wait --message ID
   --as YOUR_NAME` to resume that behavior. Other-message and autonomous events
   remain independent. Unchanged polls and restarts never replay an event. Seeing
-  one part of a queued batch preserves its other events. Shared-turn replies
-  route once per group. Submitted events are never replayed. The first upgrade
-  recovers retained older replies/outcomes once.
+  one part of a queued batch preserves its other events. Explicit replies are
+  stored for status/wait reads and never queue a requester turn. If the requester
+  must act, deliver the result with a fresh normal send to that agent instead.
+  Submitted outcome events are never replayed.
   Never sit idle waiting for a worker. *Why:* `--async` has no time limit for a
   healthy Bus and returns once the message is complete, or exits
   early on an error such as `bus_down` after four consecutive transport failures,

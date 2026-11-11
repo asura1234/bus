@@ -77,7 +77,7 @@ fn argument_help(id: &str) -> &'static str {
         "async" => "Wait without an overall deadline for agent replies or settlement",
         "message" => "Message ID returned by send",
         "reply-to" => {
-            "Answer this message and complete only your recipient request, without ending your turn. Excludes --room, --to, --queue, --async and --file. Run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status N before resending"
+            "Answer this message and complete only your recipient request, without ending your turn. No requester turn is queued; use a fresh normal send if the requester must act. Excludes --room, --to, --queue, --async and --file. Run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status N before resending"
         }
         "request" => "Request ID returned by message status",
         "timeout" => "Wait deadline in seconds, from 1 through 600",

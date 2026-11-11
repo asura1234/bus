@@ -129,6 +129,9 @@ For verdicts and results, use [the recipient rule above](#verdicts-and-results).
 `--reply-to` settles only that recipient's request and cannot be combined with `--to`;
 a multi-recipient send delivers the result but does not settle the original request.
 Do not send a second copy to obtain a correlated reply.
+The `--reply-to` receipt reports `requester_turn_queued:false`: no requester turn
+was queued. If the requester must act, deliver the result with a fresh normal
+`bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT` instead.
 
 To settle a request before its turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check `ok:true` and `stage:"replied"`. A deliverable message starts with `[Bus message N from NAME]`; that N is the message ID. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header.
 

@@ -33,6 +33,26 @@ fn status(f: &mut Fixture, id: RequestId) -> Value {
 }
 
 #[test]
+fn reply_to_receipt_explains_no_requester_turn_and_how_to_request_action() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let request = start(&mut f, "inspect this change");
+    let message = f.request(request).prompt.id;
+    let agent = f.agent;
+    let response = answer(&mut f, message, agent, "inspection complete");
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result["message_id"], message.0);
+    assert_eq!(response.result["request_ids"], json!([request.0]));
+    assert_eq!(response.result["stage"], "replied");
+    assert_eq!(response.result["requester_turn_queued"], false);
+    let notice = response.result["notice"].as_str().unwrap();
+    assert!(notice.contains("No requester turn was queued"), "{notice}");
+    assert!(notice.contains("fresh normal send"), "{notice}");
+    assert!(notice.contains("requester must act"), "{notice}");
+    assert!(notice.contains("bus send --room"), "{notice}");
+    assert_eq!(f.worker.state.requests().count(), 1);
+}
+
+#[test]
 fn master_guard_worker_explicit_and_turn_final_replies_land_in_the_request_room() {
     for explicit in [false, true] {
         let mut f = Fixture::new(Provider::ClaudeCode);
@@ -348,18 +368,16 @@ fn reply_to_survives_a_fresh_coordinator_and_is_still_idempotent() {
     consume(&mut worker, agent, &dir);
     let message = worker.state.request(id).unwrap().prompt.id;
     let params = json!({"reply_to":message.0.to_string(),"as":agent.0.to_string(),"text":"persisted answer"});
-    assert!(
-        worker
-            .control_response_with_events(
-                &ControlRequest {
-                    id: "before-restart".into(),
-                    method: "message.send".into(),
-                    params: params.clone(),
-                },
-                None
-            )
-            .ok
+    let receipt = worker.control_response_with_events(
+        &ControlRequest {
+            id: "before-restart".into(),
+            method: "message.send".into(),
+            params: params.clone(),
+        },
+        None,
     );
+    assert!(receipt.ok, "{receipt:?}");
+    assert_eq!(receipt.result["requester_turn_queued"], false);
     drop(worker);
     let mut reopened = reopen_saved(&dir);
     assert_eq!(
@@ -372,18 +390,16 @@ fn reply_to_survives_a_fresh_coordinator_and_is_still_idempotent() {
     assert_eq!(status["complete"], true);
     assert_eq!(status["requests"][0]["reply"]["text"], "persisted answer");
     let before = reopened.state.clone();
-    assert!(
-        reopened
-            .control_response_with_events(
-                &ControlRequest {
-                    id: "after-restart".into(),
-                    method: "message.send".into(),
-                    params,
-                },
-                None
-            )
-            .ok
+    let repeated = reopened.control_response_with_events(
+        &ControlRequest {
+            id: "after-restart".into(),
+            method: "message.send".into(),
+            params,
+        },
+        None,
     );
+    assert!(repeated.ok, "{repeated:?}");
+    assert_eq!(repeated.result, receipt.result);
     assert_eq!(reopened.state, before);
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();

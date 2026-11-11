@@ -87,6 +87,11 @@ fn explicit(f: &mut Fixture, source: RequestId, text: &str) {
     );
     assert!(response.ok, "{response:?}");
     assert_eq!(response.result["stage"], "replied");
+    assert_eq!(response.result["requester_turn_queued"], false);
+    assert!(response.result["notice"]
+        .as_str()
+        .unwrap()
+        .contains("fresh normal send"));
     // Advance the batching clock without sleeps or changing the reply.
     let mut state = f.worker.state.clone();
     state
