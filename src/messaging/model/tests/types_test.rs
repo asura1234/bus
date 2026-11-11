@@ -787,3 +787,6 @@ mod explicit_replies_tests;
 
 #[path = "image_payload_test.rs"]
 mod image_payload_tests;
+
+#[path = "caption_image_payload_test.rs"]
+mod caption_image_payload_tests;

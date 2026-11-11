@@ -11,7 +11,7 @@ pub(crate) fn image_paste_parts(text: &str) -> (Vec<&str>, String) {
         .filter(|line| {
             let path = line.strip_suffix('\r').unwrap_or(line);
             if path.starts_with('"')
-                && super::super::claude_code::hooks::claude_lifted_images(path).0 == 1
+                && super::super::claude_code::hooks::lifted_images(path, false).0 == 1
             {
                 images.push(path);
                 false
