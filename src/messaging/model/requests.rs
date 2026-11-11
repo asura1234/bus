@@ -470,8 +470,7 @@ impl BusState {
             return None;
         }
         let lead = self.requests.get(&agent_state.current_request?)?;
-        if lead.restart_continuation
-            || (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
+        if (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
             || lead.phase != RequestPhase::Active
             || (!lead.trusted_start_bound && agent_state.status != RuntimeStatus::Working)
             || lead.pending_final.is_some()

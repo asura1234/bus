@@ -642,8 +642,9 @@ older dated testing lessons refer to automatic capture.
   their unanswered work; failed continuation delivery uses `reply_not_captured`.
   Unbound old submissions retain generation-failure recovery. A missing saved
   cwd must never resume the provider elsewhere.
-  Pending, not-yet-started messages keep FIFO and deliver after the resumed
-  task ends. Restart receipts are notices only, including delayed or replayed
+  Pending, not-yet-started messages keep FIFO and follow the ordinary queue
+  and steering rules. Messages sent with `--queue` wait for the resumed task
+  to end. Restart receipts are notices only, including delayed or replayed
   receipts. A coordinator reconnect to the same serving generation preserves
   the live turn without a continuation notice.
   For unrelated acceptance interrupted by sleep or restart, rerun from a fresh
