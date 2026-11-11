@@ -463,6 +463,18 @@ class EndToEndDialogTests(unittest.TestCase):
             run.driver_action(9, {"terminal_id": "fixture-terminal"}, "--key", "1")
         self.assertEqual(calls, [("agent", "press", 9, "--terminal-id", "fixture-terminal", "--key", "1")])
 
+    def test_visible_numbered_dialog_can_select_when_global_focus_is_ambiguous(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames, run.agents = {}, {"claude": 3}
+        run.lock, run.report = threading.Lock(), {"dialogs": []}
+        run.bus = mock.Mock()
+        observation = {"text": "❯ Earlier prompt\nContinue the Bus e2e check?\n❯ 1. Yes\n  2. No\nEnter to select",
+                       "focus": None, "terminal_id": "private-menu", "content_revision": 8}
+        run.bus.cli.side_effect = [observation, {"outcome": "selected", "selection_pending": False}]
+        self.assertTrue(run.answer_dialogs("claude", "allow"))
+        self.assertEqual(run.bus.cli.call_args.args, ("agent", "press", 3, "--select", "Yes",
+                                                    "--terminal-id", "private-menu"))
+
     def test_idle_observation_enqueues_no_input(self):
         run = e2e.Run.__new__(e2e.Run)
         run.answered_frames = {}

@@ -308,7 +308,10 @@ class Run:
     def answer_dialogs(self, provider, purpose, row=None):
         agent = self.agents[provider]
         found = self.bus.cli("agent", "observe", agent, row=row)
-        if not found.get("focus"):
+        # Old prompt markers can make the whole-screen focus ambiguous. The
+        # driver's label-scoped --select still resolves a visible numbered menu.
+        numbered = re.findall(r"(?m)^\s*[❯›>●◉▶→]?\s*\d+[.):]\s+", found["text"])
+        if not found.get("focus") and len(numbered) < 2:
             self.answered_frames.pop(agent, None)
             return False
         frame = (found["terminal_id"], found["content_revision"])
