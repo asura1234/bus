@@ -47,7 +47,10 @@ impl BusState {
             activity.idle_since_ms = None;
         }
         if request.bound_turn_activity.as_ref() != Some(&activity) {
-            self.requests.get_mut(&id).unwrap().bound_turn_activity = Some(activity);
+            let Some(request) = self.requests.get_mut(&id) else {
+                return;
+            };
+            request.bound_turn_activity = Some(activity);
         }
     }
 
