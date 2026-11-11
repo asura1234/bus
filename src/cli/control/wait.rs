@@ -3,6 +3,11 @@ use super::{next_request_id, ParsedCommand, Request, Response};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static RESTART_TEST_ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The control server rejects a connection over its shared client limit with
 /// `server_busy` before reading the request, so the same request can be sent
 /// again. Retries back off from the first delay up to the cap.
@@ -15,6 +20,111 @@ const BUSY_RETRIES: u32 = 5;
 const TRANSPORT_FAILURE_LIMIT: u32 = 4;
 // Long-lived followers should not keep the short-poll rate for a whole turn.
 const ASYNC_POLL_MAX_DELAY: Duration = Duration::from_secs(2);
+
+/// A planned quit plus a new-build and rollback health budget. The helper's
+/// live process and the observed server generation must still match the plan.
+const RESTART_RECONNECT_LIMIT: Duration = Duration::from_secs(150);
+
+struct RestartReconnect {
+    root: Option<std::path::PathBuf>,
+    generation: Option<u64>,
+    attempt: Option<(String, Instant)>,
+    paused: Duration,
+}
+
+impl RestartReconnect {
+    fn new() -> Self {
+        #[cfg(test)]
+        let root = RESTART_TEST_ROOT.with_borrow(Clone::clone);
+        #[cfg(not(test))]
+        let root = crate::utils::env::bus_data_dir();
+        let generation = root.as_deref().and_then(Self::generation);
+        Self {
+            root,
+            generation,
+            attempt: None,
+            paused: Duration::ZERO,
+        }
+    }
+
+    fn generation(root: &std::path::Path) -> Option<u64> {
+        let path = root.join("herdr-config/sessions/bus/restarts/generation.json");
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
+
+    fn observed_server(&mut self) {
+        self.generation = self
+            .root
+            .as_deref()
+            .and_then(Self::generation)
+            .or(self.generation);
+        self.attempt = None;
+        self.paused = Duration::ZERO;
+    }
+
+    fn permits_retry(&mut self) -> bool {
+        use crate::utils::restart_record as restart;
+        let (Some(root), Some(previous)) = (&self.root, self.generation) else {
+            return false;
+        };
+        if self.paused >= RESTART_RECONNECT_LIMIT
+            || self
+                .attempt
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() >= RESTART_RECONNECT_LIMIT)
+        {
+            return false;
+        }
+        let Some(helper) = restart::read_live_pid(&restart::restart_lock_path(root)) else {
+            return false;
+        };
+        if !crate::platform::process_still_live(helper.pid, helper.birth) {
+            return false;
+        }
+        let pending = restart::read_handoff(&restart::handoff_path(root))
+            .ok()
+            .flatten();
+        let active = || {
+            restart::marker_path(root)
+                .is_file()
+                .then(|| {
+                    restart::read_handoff(&root.join("restarts/active.json"))
+                        .ok()
+                        .flatten()
+                })
+                .flatten()
+        };
+        let Some(plan) = pending.or_else(active).filter(|plan| plan.root == *root) else {
+            return false;
+        };
+        let Some(generation) = Self::generation(root) else {
+            return false;
+        };
+        // A rollback may start one further generation with the saved old build.
+        let rollback = generation == previous.saturating_add(2)
+            && std::fs::read(restart::build_path(root))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|build| build["sha"].as_str() == Some(plan.old_sha.as_str()));
+        if generation != previous && generation != previous.saturating_add(1) && !rollback {
+            return false;
+        }
+        match &self.attempt {
+            Some((id, _)) if id != &plan.id => false,
+            Some(_) => true,
+            None => {
+                self.attempt = Some((plan.id, Instant::now()));
+                true
+            }
+        }
+    }
+
+    fn pause(&mut self, pause: &mut impl FnMut(Duration)) {
+        let delay = Duration::from_secs(1);
+        self.paused += delay;
+        pause(delay);
+    }
+}
 
 fn bus_down_response(id: &str, message: String) -> Response {
     Response::failure(
@@ -78,6 +188,7 @@ pub(super) fn follow_message(
     let mut busy_delay = BUSY_FIRST_DELAY;
     let mut transport_failures = 0;
     let mut poll_delay = Duration::from_millis(200);
+    let mut restart = RestartReconnect::new();
     loop {
         let mut params = json!({ "message": message });
         if let Some(author) = &author {
@@ -98,6 +209,11 @@ pub(super) fn follow_message(
                 continue;
             }
             Err(message) => {
+                if restart.permits_retry() {
+                    transport_failures = 0;
+                    restart.pause(pause);
+                    continue;
+                }
                 transport_failures += 1;
                 if transport_failures >= TRANSPORT_FAILURE_LIMIT {
                     return bus_down_response(id, message);
@@ -106,6 +222,7 @@ pub(super) fn follow_message(
                 continue;
             }
             Ok(response) => {
+                restart.observed_server();
                 transport_failures = 0;
                 response
             }
@@ -338,6 +455,7 @@ pub(super) fn execute_with_pause(
     let mut busy_retries = 0;
     let mut transport_failures = 0;
     let mut poll_delay = Duration::from_millis(200);
+    let mut restart = RestartReconnect::new();
     loop {
         let remaining = remaining_time(deadline);
         if remaining == Some(Duration::ZERO) {
@@ -345,6 +463,7 @@ pub(super) fn execute_with_pause(
         }
         let mut response = match send(&request, remaining) {
             Ok(response) => {
+                restart.observed_server();
                 transport_failures = 0;
                 response
             }
@@ -357,6 +476,12 @@ pub(super) fn execute_with_pause(
             }
             Err(message) => {
                 if waiting && deadline.is_none() {
+                    if restart.permits_retry() {
+                        transport_failures = 0;
+                        restart.pause(pause);
+                        request.id = next_request_id();
+                        continue;
+                    }
                     transport_failures += 1;
                     if transport_failures >= TRANSPORT_FAILURE_LIMIT {
                         let mut response = bus_down_response(&id, message);
