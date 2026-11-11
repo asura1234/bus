@@ -33,5 +33,7 @@ agent reads and observe/press are the allowed corroborating CLI surfaces.
 3. Run `bus agent press worker --select 'Yes, proceed (y)' --terminal-id TERMINAL_ID`
    using the observed terminal ID. Require `selected` and no pending selection.
    Wait for the synchronized redraw to finish and observe the ordinary composer.
-   The worker becomes idle and history contains `fake reply: fake:dialog-null`.
+   The worker becomes idle; its native pane contains `fake reply: fake:dialog-null`.
+   Its request is complete with `stage:ended`, `reply:null` and no failure reason;
+   history retains the original prompt without a stored reply.
    Stop the session. The selection receipt alone does not prove this result.

@@ -7,7 +7,7 @@ Train tip for #365. One scratch session. This case locks the Find contract while
 - Fresh isolated fake-provider scratch Bus at 100×32. Never connect to live Bus, never use `target/debug/bus`, never start a real provider. Open every evidence screenshot. Graphics may stay the driver default.
 - Setup may use scratch CLI only: `bus room create`, `bus agent add --consent-hooks` with the session work directory as PWD, and `bus send`. Drive the filter toggle and every Find query through the TUI. Read-only `bus history` may corroborate that all 270 directs settled; it does not replace the screen.
 - Header checks read `[x] * → You` and `[ ] You → *`. The incoming hit is `filter-to-you`. Find is Ctrl+F. A selected Find match uses background `#f0be46`.
-- Let every fake reply settle before judging match counts. Do not press Up or Down except where a step says so.
+- The 270 direct posts are `stage:posted` with `requests:[]`; no provider turn or reply is required. Wait for their durable receipts before judging match counts. Do not press Up or Down except where a step says so.
 - Numbered steps are action, then expected result. A mismatch is FAIL. Do not skip.
 
 ## Cases

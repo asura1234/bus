@@ -4,7 +4,9 @@ Run only on a fresh scratch Bus through the TUI driver, at 140x40, with fake
 providers. No desktop automation or real model use is needed. CLI commands below
 are agent-authored message fixtures and read-only evidence; room and agent setup
 also uses the scratch CLI. Record receipts, message status, history, terminal
-reads and screen text. No steps may be skipped.
+reads and screen text. No steps may be skipped. Ordinary fake native finals
+settle requests with `complete:true`, `stage:ended`, `reply:null` and no failure
+reason; their exact output is native evidence, never an invented chat reply.
 
 ## Cases (run order)
 
@@ -22,22 +24,22 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    inspect history and the orchestrator's terminal → one normal worker-authored
    work-room message addressed to the bound orchestrator, delivered into its
    session with the `qa-worker (room ROOM_ID):` attribution header,
-   with a `fake reply:` answering that text; both message and reply
-   show in the work-room chat. MASTER history remains empty.
+   with matching `fake reply:` output in the native pane. Only the authored
+   message shows in work-room chat; its request meets the ended/null contract above. MASTER history remains empty.
 2. Fixture: send `WOC name ready` the same way, targeting `libtv-app master` by
    name, then send `WOC id question` targeting its numeric ID. Wait for both
    messages to settle → both use the same orchestrator agent/session and each
-   has its own normal reply in `qa-work` history.
+   has its own ended request in `qa-work` history and matching native output, with no stored reply.
 3. Fixture: send `fake:work 8 WOC MASTER busy` as the developer in MASTER to
    the bound orchestrator. Wait until it is working, then send `WOC queued verify`
    from the worker in `qa-work` to `orchestrator`, without `--queue`. Inspect its
    status while busy, then wait for both to settle → the worker message stays
-   queued until the MASTER turn ends and receives its own attributed reply;
-   the MASTER reply contains only the MASTER request, and neither reply is
-   substituted for the other.
+   queued until the MASTER turn ends and then gets its own attributed turn;
+   both requests settle ended/null. The two original prompts stay in their own
+   conversations and each has matching native output, with no cross-attributed reply.
 4. Fixture: send from `qa-worker` to `other-orch` by name and ID in `qa-work` →
-   both reach that unrelated MASTER orchestrator, receive distinct replies in
-   `qa-work`, and carry the worker's attribution. Send without `--as` to
+   both reach that unrelated MASTER orchestrator, settle as distinct ended
+   requests in `qa-work`, and carry the worker's attribution. Send without `--as` to
    `orchestrator` in a newly created unbound room → clear missing-binding error,
    no history row. Add an agent named `duplicate` to MASTER (bound to a new `qa-duplicate` room)
    then try to add the same name in `qa-other` → the add is rejected with the
@@ -49,12 +51,12 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    All shows checked, and the orchestrator remains unchecked. Click All again →
    the worker clears. Select `recipient:libtv-app master`,
    close the picker with Esc, click the composer, type `WOC picker verify` and
-   press Enter. Wait for its reply → the developer-authored message and its
-   orchestrator reply appear in `qa-work` history, proving selection persists
-   and submits to the orchestrator.
+   press Enter. Wait for native completion → the developer-authored message
+   appears in `qa-work` history once, with an ended/null request and matching
+   native output, proving selection persists and submits to the orchestrator.
 
 6. Fixture: send `qa-worker here —` followed by a newline and `WOC already
-   identified` to `orchestrator` as `qa-worker` → its reply carries one canonical `qa-worker (room ROOM_ID):` header followed
+   identified` to `orchestrator` as `qa-worker` → the delivered payload and its native echo carry one canonical `qa-worker (room ROOM_ID):` header followed
    by `WOC already identified`, without the legacy identity line.
 
 **Evidence:** CLI receipts and status/history JSON, orchestrator terminal text,

@@ -43,12 +43,13 @@ Enter, then draws a 350ms synchronized redraw. It executes nothing.
    a cell screenshot.
 2. Observe again and run `bus agent press worker --select 'Yes, proceed (y)'
    --terminal-id TERMINAL_ID`. Require outcome `selected`; wait for a completed
-   redraw, idle state and the fake reply. Observation shows the ordinary composer.
+   redraw, idle state, matching native fake output and `complete:true`,
+   `stage:ended`, `reply:null`, no failure reason for that request. Observation shows the ordinary composer.
    The episode retires quietly: exactly one Blocked and zero Resolved notices.
    Recheck after stable chat rows for 1500ms.
 3. Submit `fake:dialog-null` again. Wait for a second Blocked notice, observe
    and select the same label through `agent press`, bound to the fresh terminal
-   observation. Prove idle and a second fake reply. History has exactly two
+   observation. Prove idle, the second matching native output and a second ended/null request. History has exactly two
    Blocked and zero Resolved notices. Capture/open a screenshot; stop the session.
 
 ### DA-03 — Numbered Codex composer edits do not request help
