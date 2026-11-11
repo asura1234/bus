@@ -50,11 +50,16 @@ class AcceptanceProfileTests(unittest.TestCase):
                                       "--cursor-pwd", "/tmp/cursor"])
         self.assertEqual(args.message_delay, 5.0)
 
-    def test_round_trip_prompt_explicitly_forbids_skills_tools_and_work(self):
+    def test_round_trip_prompt_requires_a_foreground_correlated_reply(self):
         prompt = acceptance.round_trip_prompt("TOKEN")
         self.assertIn("only testing Bus message round trip", prompt)
-        self.assertIn("Do not use skills, tools, or modify files", prompt)
-        self.assertIn("Reply with exactly TOKEN", prompt)
+        self.assertIn("bus send --reply-to", prompt)
+        self.assertIn("foreground", prompt)
+        self.assertIn("--text TOKEN", prompt)
+        self.assertIn("message ID", prompt)
+        self.assertIn('stage:"replied"', prompt)
+        self.assertNotIn("Do not use skills, tools", prompt)
+        self.assertIn("Do not perform project work", prompt)
 
     def test_original_four_agent_profile_is_preserved(self):
         profile = acceptance.profiles()["claude-codex"]
@@ -237,6 +242,55 @@ class EndToEndArgumentTests(unittest.TestCase):
 
 
 class EndToEndEnvironmentTests(unittest.TestCase):
+    def test_provider_path_exposes_selected_executables_and_bus_without_lark(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            providers = root / "providers"
+            providers.mkdir()
+            for name in ("claude", "codex", "node", "lark-cli"):
+                executable = providers / name
+                executable.write_text("#!/bin/sh\nexit 0\n")
+                executable.chmod(0o700)
+            run = e2e.Run.__new__(e2e.Run)
+            run.args = mock.Mock(providers=["claude", "codex"])
+            run.binary, run.run_dir = root / "copied-bus", root / "report"
+            run.run_dir.mkdir()
+            run.env = {"PATH": str(providers)}
+            run.bus, run.report = mock.Mock(env=dict(run.env)), {}
+            run.prepare_provider_path()
+            self.assertIsNone(e2e.shutil.which("lark-cli", path=run.env["PATH"]))
+            self.assertEqual(run.bus.env["PATH"], run.env["PATH"])
+            for name in ("claude", "codex", "node"):
+                selected = Path(e2e.shutil.which(name, path=run.env["PATH"]))
+                self.assertEqual(selected.resolve(), (providers / name).resolve())
+            self.assertEqual((run.run_dir / "bin/bus").resolve(), run.binary.resolve())
+
+    def test_live_run_preserves_login_home_and_uses_only_private_bus_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            login_home = root / "login-home"
+            login_home.mkdir()
+            args = mock.Mock(binary="stub-bus", providers=["claude", "codex"], cases=["single"])
+            inherited = {"HOME": str(login_home), "USERPROFILE": str(login_home), "PATH": "/bin",
+                         "BUS_DATA_DIR": "/live-bus", "BUS_TUI_FAKE_AGENT": "1",
+                         "TEST_BUS_PROTECTED_HOME": str(login_home), "CODEX_HOME": "/other-login"}
+            with mock.patch.dict(e2e.os.environ, inherited, clear=True), \
+                    mock.patch.object(e2e, "E2E", root / "reports"), \
+                    mock.patch.object(e2e, "find_binary", return_value=Path("/stub/bus")):
+                run = e2e.Run(args)
+                try:
+                    self.assertEqual(run.env["HOME"], str(login_home))
+                    self.assertEqual(run.env["USERPROFILE"], str(login_home))
+                    self.assertNotIn("TEST_BUS_PROTECTED_HOME", run.env)
+                    self.assertNotIn("CODEX_HOME", run.env)
+                    self.assertNotIn("BUS_TUI_FAKE_AGENT", run.env)
+                    self.assertNotEqual(run.env["BUS_DATA_DIR"], "/live-bus")
+                    self.assertEqual(run.data.stat().st_mode & 0o777, 0o700)
+                    run.bus.prepare_skills()
+                    self.assertEqual(list(login_home.iterdir()), [])
+                finally:
+                    run.data.rmdir()
+
     def test_inherited_bus_herdr_and_claude_code_variables_are_scrubbed(self):
         with mock.patch("tools.acceptance.harness_test.uuid.uuid4") as owner:
             owner.return_value.hex = "scratch-owner"

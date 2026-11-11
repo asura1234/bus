@@ -29,8 +29,12 @@ def verify_delivery(status, expected, token):
 
 def round_trip_prompt(token):
     return ("We are only testing Bus message round trip. "
-            "Do not use skills, tools, or modify files. Do not perform project work. "
-            f"Reply with exactly {token} and nothing else.")
+            "Do not perform project work, use skills, or modify files. "
+            "Use your shell tool only to run a foreground "
+            f"`bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text {token}`. "
+            "Replace MESSAGE_ID with this delivered Bus message ID and YOUR_AGENT_ID with your own agent ID. "
+            'Require ok:true and stage:"replied" from that command. A native final alone is not a reply. '
+            "Then end your turn without sending another copy.")
 
 
 def read_agent_output(bus, agent_id, timeout=15):

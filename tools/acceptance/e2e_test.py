@@ -271,14 +271,14 @@ class Run:
         self.run_dir = E2E / time.strftime("%Y%m%d-%H%M%S")
         self.run_dir.mkdir(parents=True, mode=0o700)
         self.data = short_data_dir()
-        self.env = scrubbed_env(os.environ, self.data)
+        self.env = scrubbed_env(os.environ, self.data, real_providers=True)
         self.lock = threading.Lock()
         self.rows = []
         self.report = {"started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "binary": str(self.binary),
                        "data_dir": str(self.data), "workspace": str(WORKSPACE),
                        "providers": args.providers, "cases": args.cases, "versions": {},
                        "setup": {}, "dialogs": [], "rows": self.rows}
-        self.bus = Bus(self.binary, self.run_dir, self.env)
+        self.bus = Bus(self.binary, self.run_dir, self.env, real_providers=True)
         self.answered_frames = {}  # agent -> exact completed observation already answered
         self.agents = {}  # provider, or orchestrator_key(provider) -> agent id
         self.sessions = {}  # same keys -> last provider session id
@@ -353,10 +353,30 @@ class Run:
             time.sleep(1)
         self.save()
 
+    def prepare_provider_path(self):
+        """Expose real provider executables and this Bus, without notification CLIs."""
+        commands = {PROVIDERS[p] for p in self.args.providers}
+        commands.add("node")  # The installed Codex/Cursor launchers may use env node.
+        executables = {}
+        for command in sorted(commands):
+            resolved = shutil.which(command, path=self.env.get("PATH", ""))
+            if resolved:
+                executables[command] = str(Path(resolved).resolve())
+            elif command != "node":
+                raise AssertionError(f"provider executable unavailable: {command}")
+        directory = self.run_dir / "bin"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        for command, path in {**executables, "bus": self.binary}.items():
+            (directory / command).symlink_to(path)
+        self.env["PATH"] = os.pathsep.join([str(directory), "/usr/bin", "/bin"])
+        self.bus.env["PATH"] = self.env["PATH"]
+        self.report["executables"] = executables
+
     def setup(self):
+        self.prepare_provider_path()
         for provider in self.args.providers:
             out = subprocess.run([PROVIDERS[provider], "--version"], capture_output=True, text=True,
-                                 timeout=20, check=False)
+                                 timeout=20, check=False, env=self.env)
             self.report["versions"][provider] = (out.stdout or out.stderr).strip()[:200]
         self.make_workspace()
         self.bus.start()
