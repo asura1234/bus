@@ -137,6 +137,8 @@ pub(crate) enum BusCommand {
         directories_only: bool,
     },
     Control(control::ControlCall),
+    /// A durable spool hint, never provider event data or ownership proof.
+    CallbackReady(String),
     Shutdown,
 }
 

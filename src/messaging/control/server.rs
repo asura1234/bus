@@ -322,6 +322,12 @@ impl Client {
                     }
                     Err(FrameError::Io(_)) => return false,
                 };
+                // A notification may outlive its bounded publisher. Unlike a
+                // mutation it only requests a scan of an already durable spool.
+                if let Some(launch) = crate::agents::providers::spool::ready_launch(&bytes) {
+                    let _ = commands.try_send((0, BusCommand::CallbackReady(launch)));
+                    return self.respond(Response::success("callback-wake", serde_json::json!({})));
+                }
                 // A caller that gave up while its request waited in the listen
                 // backlog has reported a failure; running it now would apply it
                 // behind that report, so a closed peer's request never runs.

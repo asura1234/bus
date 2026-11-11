@@ -13,9 +13,11 @@ use std::{
 
 #[path = "spool/files.rs"]
 mod files;
+mod wake;
 pub(crate) use super::parse;
 use files::append_lock;
 pub(crate) use files::try_append_lock;
+pub(crate) use wake::ready_launch;
 
 #[path = "spool/parsed_event.rs"]
 mod parsed_event;
@@ -135,7 +137,9 @@ pub(crate) fn append(
         }
     };
     files::atomic_write(&pending, &serde_json::to_vec(&record)?)?;
-    try_publish_pending(dir, Some(&pending))
+    let result = try_publish_pending(dir, Some(&pending));
+    wake::notify(dir, launch);
+    result
 }
 
 pub(crate) fn records(dir: &Path) -> io::Result<Vec<(PathBuf, Record)>> {
