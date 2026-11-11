@@ -94,6 +94,13 @@ impl BusState {
         {
             if let Some(current) = current.filter(|current| *current != id).or(successor) {
                 self.agents.get_mut(&agent)?.current_request = Some(current);
+                if self.requests.get(&current).is_some_and(|request| {
+                    request.restart_continuation && request.phase == RequestPhase::Queued
+                }) {
+                    let queue = self.queues.entry(agent).or_default();
+                    queue.retain(|request| *request != current);
+                    queue.insert(0, current);
+                }
             }
             return Some(id);
         }
