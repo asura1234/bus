@@ -681,6 +681,24 @@ impl BusState {
             agent_state.interrupt_pending = false;
         }
         agent_state.observed_at_ms = now_ms;
+        // Idle inference is provisional: a later busy observation of this
+        // same unfinished request disproves it. Captured finals and already
+        // settled requests retain their completion even if shells run on.
+        if matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) {
+            if let Some(request) = agent_state
+                .current_request
+                .and_then(|id| self.requests.get_mut(&id))
+                .filter(|request| {
+                    matches!(
+                        request.phase,
+                        RequestPhase::Submitting | RequestPhase::Active
+                    ) && request.pending_final.is_none()
+                        && request.turn_ended_at_ms.is_some_and(|at| now_ms > at)
+                })
+            {
+                request.turn_ended_at_ms = None;
+            }
+        }
         // Deletion and an invalidated session close the request their own way.
         let gone = status == RuntimeStatus::Unavailable
             && !agent_state.deletion_pending

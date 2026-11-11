@@ -344,8 +344,9 @@ impl BusState {
 
     /// Whether `request`'s agent took the message and finished its turn: the
     /// agent was seen Working or Blocked, or its provider reported the turn,
-    /// after Bus submitted the message, and has been seen Idle since. A captured provider final also counts. Status
-    /// transitions decide it, not reply capture, which can miss a reply.
+    /// after Bus submitted the message, and has transitioned to Idle since
+    /// its latest provider progress. Re-reading the pre-Started Idle frame
+    /// does not prove completion. A captured provider final also counts.
     pub(crate) fn turn_ended(&self, request: &Request) -> bool {
         if request.phase == RequestPhase::Completed {
             return true;
@@ -393,6 +394,10 @@ impl BusState {
                 && (request.turn_ended_at_ms.is_some()
                     || (agent.busy_revision > request.submission_status_revision
                         && agent.status == RuntimeStatus::Idle
+                        && (!lead.trusted_start_bound
+                            || lead
+                                .progress_at_ms
+                                .is_some_and(|started| agent.status_since_ms > started))
                         && agent.status_revision > agent.busy_revision))
         })
     }

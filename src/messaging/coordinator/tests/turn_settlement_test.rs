@@ -614,7 +614,7 @@ fn a_turn_end_without_visible_reply_text_unblocks_the_next_request() {
 }
 
 #[test]
-fn ended_codex_turn_closes_existing_joins_and_cannot_collect_new_joins() {
+fn completed_codex_turn_closes_existing_joins_and_cannot_collect_new_joins() {
     let mut fixture = Fixture::new(Provider::Codex);
     let lead = running(&mut fixture, "implement the change", "turn-1");
     let mut joined = Vec::new();
@@ -626,7 +626,10 @@ fn ended_codex_turn_closes_existing_joins_and_cannot_collect_new_joins() {
         fixture.consume();
     }
     fixture.status(RuntimeStatus::Idle);
-    // Another activity can make the terminal Working again before reply capture.
+    // A trusted final distinguishes unrelated later activity from a stale
+    // Idle observation in the same still-running turn.
+    fixture.stopped("turn-1", "implemented");
+    fixture.consume();
     fixture.status(RuntimeStatus::Working);
     let next = fixture.send("an independent task", false);
     fixture.deliver();
