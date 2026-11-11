@@ -233,6 +233,20 @@ impl BusState {
             if let Some(request) = self.requests.get_mut(&id) {
                 request.turn_ended_at_ms.get_or_insert(now_ms);
             }
+        } else if agent_state.status == RuntimeStatus::Idle
+            && agent_state.provider != super::Provider::Kimi
+        {
+            // Older builds persisted an end on an unchanged pre-Started
+            // frame. Do not renew that inference after a coordinator reload.
+            if let Some(request) = self.requests.get_mut(&id).filter(|request| {
+                matches!(
+                    request.phase,
+                    RequestPhase::Submitting | RequestPhase::Active
+                ) && !request.awaiting_background
+                    && request.pending_final.is_none()
+            }) {
+                request.turn_ended_at_ms = None;
+            }
         }
     }
 
@@ -348,7 +362,8 @@ impl BusState {
         let request = self.requests.get(&agent_state.current_request?)?;
         (!request.awaiting_background
             && request.pending_final.is_none()
-            && request.turn_ended_at_ms.is_some())
+            && request.turn_ended_at_ms.is_some()
+            && self.turn_ended(request))
         .then_some(request)
     }
 

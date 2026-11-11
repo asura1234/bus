@@ -632,10 +632,9 @@ fn completed_codex_turn_closes_existing_joins_and_cannot_collect_new_joins() {
     fixture.consume();
     fixture.status(RuntimeStatus::Working);
     let next = fixture.send("an independent task", false);
-    fixture.deliver();
     assert_eq!(
-        fixture.typed().len(),
-        9,
+        fixture.worker.state.next_steering(fixture.agent),
+        None,
         "a finished request must not take another join"
     );
     assert_eq!(fixture.request(next).phase, RequestPhase::Queued);

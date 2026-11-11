@@ -12,6 +12,36 @@ fn providers() -> [Provider; 6] {
 }
 
 #[test]
+fn a_legacy_false_idle_marker_cannot_settle_a_reloaded_active_turn() {
+    // Kimi's old implementation already required wire evidence for this
+    // marker; its committed end must keep that separate trust contract.
+    for provider in providers().into_iter().filter(|p| *p != Provider::Kimi) {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state.agents.get_mut(&agent).unwrap().provider = provider;
+        state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+        let lead = submit_text(&mut state, room, agent, "running across reload");
+        start_request(&mut state, lead, "launch-codex", 100);
+        state.requests.get_mut(&lead).unwrap().turn_ended_at_ms = Some(283);
+        let mut state: BusState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        assert!(
+            !state.turn_ended(state.request(lead).unwrap()),
+            "legacy stale Idle marker: {provider:?}"
+        );
+        assert!(!state.settling(state.request(lead).unwrap()));
+        assert!(state
+            .settle_ended_request(agent, 100_000, |_| None)
+            .is_none());
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 100_001)
+            .unwrap();
+        assert!(state.request(lead).unwrap().turn_ended_at_ms.is_none());
+        assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Active);
+        assert_eq!(state.agent(agent).unwrap().current_request, Some(lead));
+    }
+}
+
+#[test]
 fn codex_resumed_started_turn_cannot_settle_from_the_pre_resume_idle_frame() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state

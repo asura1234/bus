@@ -11,6 +11,7 @@ mod policy;
 mod queue_order;
 mod rejection;
 mod submit;
+mod turn_end;
 
 impl BusState {
     pub(crate) fn stamp_delivery_epoch(
@@ -339,66 +340,6 @@ impl BusState {
                 .max(request.prompt.submitted_at_ms);
             agent.status == RuntimeStatus::Blocked
                 && now_ms.saturating_sub(from) >= BLOCKED_STALL_MS
-        })
-    }
-
-    /// Whether `request`'s agent took the message and finished its turn: the
-    /// agent was seen Working or Blocked, or its provider reported the turn,
-    /// after Bus submitted the message, and has transitioned to Idle since
-    /// its latest provider progress. Re-reading the pre-Started Idle frame
-    /// does not prove completion. A captured provider final also counts.
-    pub(crate) fn turn_ended(&self, request: &Request) -> bool {
-        if request.phase == RequestPhase::Completed {
-            return true;
-        }
-        // Kimi can briefly paint an empty, idle composer while its bound
-        // turn is still executing tools. Only its owned terminal wire (or a
-        // captured reply) can establish that the turn actually finished.
-        if self
-            .agents
-            .get(&request.agent_id)
-            .is_some_and(|agent| agent.provider == super::Provider::Kimi)
-        {
-            let lead = request
-                .group
-                .and_then(|lead| self.requests.get(&lead))
-                .unwrap_or(request);
-            return lead.trusted_start_bound && lead.turn_ended_at_ms.is_some();
-        }
-        // An uncertain write without a matching provider start may be a
-        // startup dialog or unrelated activity, not work on this message.
-        if request.uncertain_outcome && !request.trusted_start_bound {
-            return false;
-        }
-        // Background work without a captured answer will wake
-        // the turn with the real reply, for its joined messages too.
-        let lead = request
-            .group
-            .and_then(|lead| self.requests.get(&lead))
-            .unwrap_or(request);
-        if lead.awaiting_background {
-            return false;
-        }
-        // Screen activity alone cannot confirm an uncertain submission;
-        // a confirmed write may finish without a captured start hook.
-        if !matches!(
-            request.phase,
-            RequestPhase::Submitting | RequestPhase::Active
-        ) {
-            return false;
-        }
-        // A visible dialog (Codex reports Idle while it waits on an approval)
-        // means the turn is waiting on an answer, not finished.
-        self.agents.get(&request.agent_id).is_some_and(|agent| {
-            !agent.dialog
-                && (request.turn_ended_at_ms.is_some()
-                    || (agent.busy_revision > request.submission_status_revision
-                        && agent.status == RuntimeStatus::Idle
-                        && (!lead.trusted_start_bound
-                            || lead
-                                .progress_at_ms
-                                .is_some_and(|started| agent.status_since_ms > started))
-                        && agent.status_revision > agent.busy_revision))
         })
     }
 
