@@ -9,7 +9,9 @@ The launch-directory guard belongs to `scripts/worktree_remove.py`. It reads the
 Bus CLI on PATH with `bus state`; the verified schema exposes saved launch paths
 as `result.agents[].cwd`. Every agent still in that roster holds its directory,
 regardless of activity or pending deletion. The helper compares resolved path
-ancestry, so aliases and nested launch directories receive the same protection.
+ancestry with filesystem identity, so symlinks, case aliases and nested launch
+directories receive the same protection without conflating distinct directories
+on case-sensitive volumes.
 The helper also checks the caller's supplied original launch directory.
 
 Do not bypass a refusal with raw Git, `rm`, force, a shell cwd change, or an

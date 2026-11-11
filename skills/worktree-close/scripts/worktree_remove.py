@@ -29,6 +29,21 @@ def absolute_path(value: str) -> Path:
     return path.resolve()
 
 
+def same_directory(left: Path, right: Path) -> bool:
+    if left == right:
+        return True
+    try:
+        return left.samefile(right)
+    except FileNotFoundError:
+        return False
+
+
+def inside(directory: Path, target: Path) -> bool:
+    # resolve() follows symlinks but can preserve aliases on case-insensitive volumes.
+    # Walk existing ancestors too: a saved launch directory may already be missing.
+    return any(same_directory(ancestor, target) for ancestor in (directory, *directory.parents))
+
+
 def live_holders(repo: Path, target: Path) -> list[tuple[int, str, Path]]:
     """Read the current roster; every retained agent holds its saved launch cwd."""
     try:
@@ -71,7 +86,7 @@ def live_holders(repo: Path, target: Path) -> list[tuple[int, str, Path]]:
         seen.add(agent_id)
         # The CLI serializes the saved Agent.cwd as `cwd`, not `pwd`.
         cwd = absolute_path(agent.get("cwd"))
-        if cwd.is_relative_to(target):
+        if inside(cwd, target):
             holders.append((agent_id, name, cwd))
     return sorted(holders)
 
@@ -88,14 +103,14 @@ def main() -> int:
         repo = absolute_path(args.repo)
         target = absolute_path(args.worktree)
         session = absolute_path(args.session_cwd)
-        if target == repo:
+        if same_directory(target, repo):
             raise ValueError("Cannot remove the main worktree.")
         holders = live_holders(repo, target)
         if holders:
             names = "\n".join(f"  {name} ({agent_id}): {cwd}" for agent_id, name, cwd in holders)
             raise ValueError(f"Refusing to remove {target}: live Bus agents have launch directories "
                              f"inside it:\n{names}\n{NEXT}")
-        if session.is_relative_to(target):
+        if inside(session, target):
             raise ValueError(f"Refusing to remove {target}: it contains this agent session's launch "
                              f"directory ({session}). {NEXT}")
         if args.check:
