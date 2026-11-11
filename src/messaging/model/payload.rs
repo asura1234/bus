@@ -177,6 +177,7 @@ fn identity_only_line(first: &str, name: &str, id: u64) -> bool {
 pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
     use crate::agents::providers::claude_code::hooks::{
         claude_image_placeholders, claude_lifted_images, claude_text_after_image_reads,
+        claude_text_matches,
     };
     let payload = normalized_payload(payload);
     let typed = normalized_payload(typed);
@@ -186,9 +187,12 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
     let (length, images) = claude_image_placeholders(&payload);
     let (_, remaining) = claude_lifted_images(&typed);
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    if claude_text_after_image_reads(images, &payload[length..], &typed)
-        .is_some_and(|text| text.trim_end_matches(|c: char| c.is_ascii_whitespace()) == remaining)
-    {
+    if claude_text_after_image_reads(images, &payload[length..], &typed).is_some_and(|text| {
+        claude_text_matches(
+            text.trim_end_matches(|c: char| c.is_ascii_whitespace()),
+            remaining,
+        )
+    }) {
         return true;
     }
     let (expected_images, expected_text) =

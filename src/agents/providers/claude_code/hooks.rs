@@ -228,6 +228,51 @@ fn is_unquoted_png_path(line: &str) -> bool {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
 }
 
+/// Claude 2.1.310 can move an inline escaped PNG token onto a new line even
+/// when its read fails. Only that preceding space may change; the path and
+/// all surrounding text must remain exact, including any Unicode whitespace.
+pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
+    let mut copied = 0;
+    for (index, _) in expected.match_indices(" /") {
+        if expected[..index].ends_with('\\') || !escaped_png_token(&expected[index + 1..]) {
+            continue;
+        }
+        let Some(tail) = actual.strip_prefix(&expected[copied..index]) else {
+            return false;
+        };
+        let Some(tail) = tail.strip_prefix(' ').or_else(|| tail.strip_prefix('\n')) else {
+            return false;
+        };
+        actual = tail;
+        copied = index + 1;
+    }
+    actual == &expected[copied..]
+}
+
+fn escaped_png_token(text: &str) -> bool {
+    let mut end = text.len();
+    let mut escaped_space = false;
+    let mut characters = text.char_indices();
+    while let Some((index, character)) = characters.next() {
+        if character.is_ascii_whitespace() {
+            end = index;
+            break;
+        }
+        if character == '\\' {
+            if characters.next().map(|(_, c)| c) != Some(' ') {
+                return false;
+            }
+            escaped_space = true;
+        } else if matches!(character, '"' | '\'') {
+            return false;
+        }
+    }
+    escaped_space
+        && Path::new(&text[..end])
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
 /// Whether `line` is exactly one path quoted the way Bus quotes attachments
 /// (`"path"`, with `\\` and `\"` escaped), naming an image Claude Code attaches.
 fn is_quoted_image_path(line: &str) -> bool {

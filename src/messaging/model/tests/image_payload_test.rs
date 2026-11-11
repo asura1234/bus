@@ -74,17 +74,68 @@ fn claude_unquoted_image_mixed_read_results_keep_each_exact_path() {
 }
 
 #[test]
+fn claude_escaped_inline_png_reflow_preserves_the_entire_literal_path() {
+    let header = "[Bus message 6 from you]";
+    let line = "After the user taps this /tmp/Screenshot\\ 2026-11-10\\ at\\ 6.12.49\u{202f}PM.png disconnect button";
+    let body = format!("{header}\n{line}\nKeep the selected edge highlighted.");
+    let typed = format!("{body}\n\"/tmp/attached.jpeg\"");
+    let reflowed = body.replace("this /tmp/", "this\n/tmp/");
+    let accepted = format!("[Image #42]{reflowed}");
+    assert!(payload_matches(&accepted, &typed));
+    assert!(payload_matches(&format!("[Image #42]{body}"), &typed));
+    for wrong in [
+        accepted.replace("message 6", "message 7"),
+        accepted.replace("2026-11-10", "2026-11-11"),
+        accepted.replace("disconnect button", "disconnect"),
+        accepted.replace("6.12.49\u{202f}PM", "6.12.49 PM"),
+        accepted.replace("this\n/tmp/", "this\n /tmp/"),
+        format!("[Image #43]{accepted}"),
+        reflowed,
+    ] {
+        assert!(!payload_matches(&wrong, &typed), "changed prompt: {wrong}");
+    }
+    for literal in [
+        "/tmp/plain.png",
+        "/tmp/escaped\\ name.pdf",
+        "\"/tmp/escaped\\ name.png\"",
+        "/tmp/escaped\\xname.png",
+    ] {
+        assert!(!payload_matches(
+            &format!("[Image #42]{header}\nLook here\n{literal} now"),
+            &format!("{header}\nLook here {literal} now\n\"/tmp/attached.jpeg\""),
+        ));
+    }
+}
+
+#[test]
+fn codex_unquoted_png_remains_in_its_literal_text_paste() {
+    let typed = "[Bus message 6 from you]\nLiteral image text\n/private/tmp/fixture.png";
+    let (images, remaining) = crate::agents::providers::codex::hooks::image_paste_parts(typed);
+    assert!(images.is_empty());
+    assert_eq!(remaining, typed);
+}
+
+#[test]
 fn claude_unquoted_image_callback_binds_and_ends_only_its_frozen_request() {
-    for framed in [false, true] {
+    for (framed, escaped_inline) in [(false, false), (true, false), (false, true), (true, true)] {
         let (mut state, room, _, claude) = state_with_room_and_agents();
-        let body = "Reply with only IMAGE_CORRELATION_MARKER. Do not use tools.";
-        let typed = format!("{body}\n/private/tmp/bus-test/fixture.png");
+        let mut body = "Reply with only IMAGE_CORRELATION_MARKER. Do not use tools.".to_owned();
+        let image = if escaped_inline {
+            body.push_str("\nAfter the user taps this /tmp/Screenshot\\ 2026-11-10\\ at\\ 6.12.49\u{202f}PM.png disconnect button");
+            "\"/tmp/attached.jpeg\""
+        } else {
+            "/private/tmp/bus-test/fixture.png"
+        };
+        let typed = format!("{body}\n{image}");
         let request = submit_text(&mut state, room, claude, &typed);
         let queued = submit_text(&mut state, room, claude, "queued next");
         let id = state.request(request).unwrap().prompt.id.0;
         let frozen = state.render_request_payload(request).unwrap();
         submit_request(&mut state, request, "launch-claude", 10);
-        let remaining = format!("[Bus message {id} from you]\n{body}");
+        let mut remaining = format!("[Bus message {id} from you]\n{body}");
+        if escaped_inline {
+            remaining = remaining.replace("this /tmp/", "this\n/tmp/");
+        }
         let raw = if framed {
             format!("[Image #3]\n\n<pasted_content id=\"a1\">\n{remaining}\n</pasted_content id=\"a1\">\n")
         } else {
