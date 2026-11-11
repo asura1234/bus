@@ -166,17 +166,22 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
     (length, count)
 }
 
-/// Claude Code turns each typed line that is one quoted image path into an
-/// image attachment. Its composer and its submit hook then show one
+/// Claude Code lifts quoted image paths and standalone unquoted absolute PNG
+/// paths into attachments. Its composer and its submit hook then show one
 /// `[Image #N]` placeholder per image first (N counts the session's images),
 /// followed by the remaining lines with blank ones dropped. Returns how many
 /// lines of `typed` it lifts and the text left behind.
 pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
+    lifted_images(typed, true)
+}
+
+/// Other providers retain the historical quoted-path equivalence only.
+pub(crate) fn lifted_images(typed: &str, unquoted_png: bool) -> (usize, String) {
     let mut lifted = 0;
     let remaining = typed
         .split('\n')
         .filter(|line| {
-            let image = is_quoted_image_path(line);
+            let image = is_lifted_image_path(line, unquoted_png);
             lifted += usize::from(image);
             !image && !line.trim().is_empty()
         })
@@ -193,16 +198,25 @@ pub(crate) fn claude_text_after_image_reads(
     body: &str,
     typed: &str,
 ) -> Option<String> {
+    text_after_image_reads(images, body, typed, true)
+}
+
+pub(crate) fn text_after_image_reads(
+    images: usize,
+    body: &str,
+    typed: &str,
+    unquoted_png: bool,
+) -> Option<String> {
     let mut unread: Vec<_> = typed
         .lines()
-        .filter(|line| is_quoted_image_path(line))
+        .filter(|line| is_lifted_image_path(line, unquoted_png))
         .collect();
     if images == 0 || images > unread.len() {
         return None;
     }
     let mut text = Vec::new();
     for line in body.lines() {
-        if is_quoted_image_path(line) {
+        if is_lifted_image_path(line, unquoted_png) {
             let index = unread.iter().position(|path| *path == line)?;
             unread.remove(index);
         } else if !line.trim().is_empty() {
@@ -210,6 +224,67 @@ pub(crate) fn claude_text_after_image_reads(
         }
     }
     (images == unread.len()).then(|| text.join("\n"))
+}
+
+fn is_lifted_image_path(line: &str, unquoted_png: bool) -> bool {
+    is_quoted_image_path(line) || (unquoted_png && is_unquoted_png_path(line))
+}
+
+/// Measured with Claude Code 2.1.310. Keep prose, relative paths, whitespace
+/// and quote-bearing lines literal; durable callbacks cannot rely on stat.
+fn is_unquoted_png_path(line: &str) -> bool {
+    Path::new(line).is_absolute()
+        && !line
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+        && Path::new(line)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
+/// Claude 2.1.310 can move an inline escaped PNG token onto a new line even
+/// when its read fails. Only that preceding space may change; the path and
+/// all surrounding text must remain exact, including any Unicode whitespace.
+pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
+    let mut copied = 0;
+    for (index, _) in expected.match_indices(" /") {
+        if expected[..index].ends_with('\\') || !escaped_png_token(&expected[index + 1..]) {
+            continue;
+        }
+        let Some(tail) = actual.strip_prefix(&expected[copied..index]) else {
+            return false;
+        };
+        let Some(tail) = tail.strip_prefix(' ').or_else(|| tail.strip_prefix('\n')) else {
+            return false;
+        };
+        actual = tail;
+        copied = index + 1;
+    }
+    actual == &expected[copied..]
+}
+
+fn escaped_png_token(text: &str) -> bool {
+    let mut end = text.len();
+    let mut escaped_space = false;
+    let mut characters = text.char_indices();
+    while let Some((index, character)) = characters.next() {
+        if character.is_ascii_whitespace() {
+            end = index;
+            break;
+        }
+        if character == '\\' {
+            if characters.next().map(|(_, c)| c) != Some(' ') {
+                return false;
+            }
+            escaped_space = true;
+        } else if matches!(character, '"' | '\'') {
+            return false;
+        }
+    }
+    escaped_space
+        && Path::new(&text[..end])
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
 }
 
 /// Whether `line` is exactly one path quoted the way Bus quotes attachments

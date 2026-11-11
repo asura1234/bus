@@ -1,7 +1,7 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Request, RequestId, RequestPhase,
+    PendingFinal, Provider, ProviderCallback, Request, RequestId, RequestPhase,
 };
 
 #[path = "callback_latency.rs"]
@@ -37,7 +37,7 @@ impl BusState {
             .as_deref()
             .and_then(crate::agents::providers::claude_code::hooks::claude_paste_candidate);
         if let Some(candidate) = candidate.filter(|text| {
-            request.matches_callback_payload(text)
+            request.matches_callback_payload(text, agent.provider)
                 || self.group_members(request.id).iter().any(|id| {
                     self.requests.get(id).is_some_and(|member| {
                         member.steered
@@ -45,7 +45,7 @@ impl BusState {
                                 member.phase,
                                 RequestPhase::Submitting | RequestPhase::Active
                             )
-                            && member.matches_callback_payload(text)
+                            && member.matches_callback_payload(text, agent.provider)
                     })
                 })
         }) {
@@ -86,6 +86,7 @@ impl BusState {
         if agent.deletion_pending {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         }
+        let provider = agent.provider;
         let turn_key = provider_turn_key(
             &callback.launch_id,
             callback.provider_session_id.as_deref(),
@@ -115,10 +116,9 @@ impl BusState {
                             && request
                                 .submission_boundary
                                 .is_some_and(|boundary| callback.sequence > boundary)
-                            && callback
-                                .prompt_payload
-                                .as_deref()
-                                .is_some_and(|payload| request.matches_callback_payload(payload))
+                            && callback.prompt_payload.as_deref().is_some_and(|payload| {
+                                request.matches_callback_payload(payload, provider)
+                            })
                     });
             let bound = self
                 .agents
@@ -168,6 +168,7 @@ impl BusState {
         let Some(agent) = self.agents.get(&callback.agent_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
+        let provider = agent.provider;
         let Some(request_id) = agent.current_request else {
             if matches!(callback.kind, CallbackEventKind::PromptStarted) {
                 self.unrelated_provider_turns.extend(turn_key);
@@ -194,7 +195,7 @@ impl BusState {
         if self.is_unrelated_turn(&callback) {
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
-        if self.apply_callback_steering(request_id, &mut callback) {
+        if self.apply_callback_steering(request_id, &mut callback, provider) {
             let _ = self.complete_pending_final(callback.agent_id, callback.occurred_at_ms);
             return CallbackDisposition::AcceptedSteering;
         }
@@ -210,7 +211,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.matches_callback_payload(payload))
+                .is_some_and(|payload| !request.matches_callback_payload(payload, provider))
         {
             return CallbackDisposition::AcceptedProgress;
         }
@@ -229,7 +230,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.matches_callback_payload(payload));
+                .is_some_and(|payload| !request.matches_callback_payload(payload, provider));
         if matches!(callback.kind, CallbackEventKind::PromptStarted)
             && !continuation
             && callback.provider_turn_id.is_some()
@@ -237,7 +238,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.matches_callback_payload(payload))
+                .is_some_and(|payload| !request.matches_callback_payload(payload, provider))
         {
             // A new turn of its own after one already finished: the typed
             // request is not coming, so the queue moves on.
@@ -247,11 +248,11 @@ impl BusState {
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
-        if let Err(reason) = check_callback_turn(request, &callback, continuation) {
+        if let Err(reason) = check_callback_turn(request, &callback, continuation, provider) {
             return CallbackDisposition::Rejected(reason);
         }
 
-        self.apply_callback_kind(request_id, callback, turn_key, continuation)
+        self.apply_callback_kind(request_id, callback, turn_key, continuation, provider)
     }
 
     fn apply_callback_kind(
@@ -260,6 +261,7 @@ impl BusState {
         callback: ProviderCallback,
         turn_key: Option<String>,
         continuation: bool,
+        provider: Provider,
     ) -> CallbackDisposition {
         let Some(request) = self.requests.get(&request_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
@@ -273,7 +275,7 @@ impl BusState {
                     && !callback
                         .prompt_payload
                         .as_deref()
-                        .is_some_and(|payload| request.matches_callback_payload(payload))
+                        .is_some_and(|payload| request.matches_callback_payload(payload, provider))
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
@@ -360,6 +362,7 @@ impl BusState {
         &mut self,
         request_id: RequestId,
         callback: &mut ProviderCallback,
+        provider: Provider,
     ) -> bool {
         let Some(request) = self.requests.get(&request_id) else {
             return false;
@@ -378,7 +381,7 @@ impl BusState {
                     m.steered
                         && !m.trusted_start_bound
                         && matches!(m.phase, RequestPhase::Submitting | RequestPhase::Active)
-                        && m.matches_callback_payload(payload)
+                        && m.matches_callback_payload(payload, provider)
                 })
             });
             if let Some(member) = steered {
@@ -440,8 +443,8 @@ impl BusState {
         let lead = self
             .agents
             .get(&callback.agent_id)
-            .and_then(|a| a.current_request);
-        if let Some(lead) = lead {
+            .and_then(|agent| agent.current_request.map(|lead| (lead, agent.provider)));
+        if let Some((lead, provider)) = lead {
             let owned = std::iter::once(lead)
                 .chain(self.group_members(lead))
                 .any(|id| {
@@ -449,7 +452,7 @@ impl BusState {
                         (matches!(
                             request.phase,
                             RequestPhase::Submitting | RequestPhase::Active
-                        ) && request.matches_callback_payload(payload))
+                        ) && request.matches_callback_payload(payload, provider))
                             || (id == lead && bound_callback_turn(request, callback))
                     })
                 });
@@ -623,6 +626,7 @@ fn check_callback_turn(
     request: &Request,
     callback: &ProviderCallback,
     continuation: bool,
+    provider: Provider,
 ) -> Result<(), CallbackRejection> {
     if let Some(expected) = request.provider_turn_id.as_deref() {
         if !continuation && callback.provider_turn_id.as_deref() != Some(expected) {
@@ -643,7 +647,7 @@ fn check_callback_turn(
         && callback
             .prompt_payload
             .as_deref()
-            .is_some_and(|payload| !request.matches_callback_payload(payload))
+            .is_some_and(|payload| !request.matches_callback_payload(payload, provider))
     {
         return Err(CallbackRejection::WrongPrompt);
     }

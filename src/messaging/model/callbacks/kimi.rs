@@ -41,10 +41,9 @@ impl BusState {
                     && !member.trusted_start_bound
                     && !member.settled()
                     && check_callback_identity(member, callback).is_ok()
-                    && callback
-                        .prompt_payload
-                        .as_deref()
-                        .is_some_and(|payload| member.matches_callback_payload(payload))
+                    && callback.prompt_payload.as_deref().is_some_and(|payload| {
+                        member.matches_callback_payload(payload, Provider::Kimi)
+                    })
             })
         });
         // A legacy group can contain more submitted inputs whose native

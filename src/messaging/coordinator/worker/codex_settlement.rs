@@ -1,5 +1,5 @@
 //! Read Codex terminal evidence before settling a request.
-use crate::messaging::model::{AgentId, BusState};
+use crate::messaging::model::{AgentId, BusState, Provider};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -42,7 +42,7 @@ pub(super) fn recorded_codex_end(
     let turn_id = match &request.provider_turn_id {
         Some(turn) => turn.clone(),
         None => match codex_prompt_turn(rollout, sent_ms, |prompt| {
-            request.matches_callback_payload(prompt)
+            request.matches_callback_payload(prompt, Provider::Codex)
         }) {
             Ok(PromptTurn::Found(turn)) => turn,
             Ok(outcome) => {

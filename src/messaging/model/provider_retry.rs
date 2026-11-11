@@ -158,7 +158,7 @@ impl BusState {
                 && callback
                     .prompt_payload
                     .as_deref()
-                    .is_some_and(|text| r.matches_callback_payload(text))
+                    .is_some_and(|text| r.matches_callback_payload(text, owner.provider))
         });
         let Some(member) = member else {
             return Some(CallbackDisposition::Rejected(CallbackRejection::WrongTurn));

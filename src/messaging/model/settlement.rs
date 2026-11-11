@@ -601,7 +601,11 @@ impl BusState {
         members: &[RequestId],
         prompts: &[String],
     ) -> bool {
-        let own = |prompt: &&String| member.matches_callback_payload(prompt);
+        let Some(agent) = self.agents.get(&member.agent_id) else {
+            return false;
+        };
+        let provider = agent.provider;
+        let own = |prompt: &&String| member.matches_callback_payload(prompt, provider);
         let recorded = prompts.iter().filter(own).count();
         let others = std::iter::once(&lead)
             .chain(members)
@@ -611,7 +615,7 @@ impl BusState {
                 prompts
                     .iter()
                     .filter(own)
-                    .any(|prompt| other.matches_callback_payload(prompt))
+                    .any(|prompt| other.matches_callback_payload(prompt, provider))
             })
             .count();
         recorded > others
