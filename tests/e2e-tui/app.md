@@ -31,6 +31,13 @@ driver documentation was used. Results are tracked separately for each run.
 - Fixed incoming-message fixtures may be arranged through the supported scratch
   developer CLI described by `bus --help`, with a named agent author. They are
   test inputs, not model output; do not rewrite live storage to manufacture a pass.
+- A fake provider native final is terminal output, not a stored Bus reply. For
+  ordinary fake turns require `complete:true`, `stage:ended`, `reply:null` and no
+  failure reason; verify any expected output marker in the native pane. History
+  retains the authored prompt without inventing a reply. A case testing an explicit
+  reply must run `bus send --reply-to MESSAGE_ID --as RECIPIENT --text TEXT` while
+  the request is active and require `ok:true`, `stage:replied`; it cannot infer this
+  from a native final. Agent-authored posts to You are separate message fixtures.
 
 **R(name), create a work room:** press Ctrl+Shift+R → `Room name` form; type the
 name and press Enter → room appears and opens with `# name`. Verify its ID/name
@@ -383,7 +390,7 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 ### APP-16 — New-message sound notifications
 
-**Preconditions/setup:** R(`qa-ring`), A with **alpha and beta, two distinct fake workers in qa-ring**; R(`qa-view`). Arrange each fixed incoming post through the supported scratch CLI as `bus send --room qa-ring --as alpha --to beta --text TEXT`, with TEXT respectively `ring-one`, `silent-two`, and `ring-three`, triggered individually at the numbered steps. Alpha is the author and beta is the non-author recipient; no reply is required to satisfy the post assertion. Start observation after startup has settled for >2 seconds; leave >2 seconds between triggers so sounds are not grouped. Let prior deliveries settle before each observation window, and attribute any fake-worker reply separately from the authored post or developer send. For the final developer send, select **only alpha** with P(alpha). Steps 1–3 sound assertions: SKIP with reason if the runner cannot capture recorded sound effects; view/message checks remain independent.
+**Preconditions/setup:** R(`qa-ring`), A with **alpha and beta, two distinct fake workers in qa-ring**; R(`qa-view`). Arrange each fixed incoming post through the supported scratch CLI as `bus send --room qa-ring --as alpha --to beta --text TEXT`, with TEXT respectively `ring-one`, `silent-two`, and `ring-three`, triggered individually at the numbered steps. Alpha is the author and beta is the non-author recipient; no reply is required to satisfy the post assertion. Start observation after startup has settled for >2 seconds; leave >2 seconds between triggers so sounds are not grouped. Let prior deliveries settle before each observation window, and do not count a native worker final as another authored post or developer send. For the final developer send, select **only alpha** with P(alpha). Steps 1–3 sound assertions: SKIP with reason if the runner cannot capture recorded sound effects; view/message checks remain independent.
 
 1. In Settings enable qa-ring sound, close and view qa-view; allow ring-one to arrive → one notification sound; current view is not stolen. Click qa-ring → fixed message is visible, attributed to alpha.
 2. Disable qa-ring sound, return to qa-view; allow silent-two → message reaches qa-ring history; no notification sound from trigger through two seconds after confirmed arrival.

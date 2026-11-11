@@ -36,11 +36,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.acceptance import grok_provider  # noqa: E402
-from tools.acceptance.existing_instance_test import round_trip_prompt  # noqa: E402
+from tools.acceptance.existing_instance_test import explicit_reply_instruction, round_trip_prompt  # noqa: E402
 from tools.acceptance.harness_test import (  # noqa: E402
     Bus, CliError as CliError, E2E, WORKSPACE, SCRUB_PREFIXES as SCRUB_PREFIXES,
     SCRUB_NAMES as SCRUB_NAMES, find_binary, bus_argv as bus_argv, scrubbed_env,
-    pids_holding as pids_holding,
+    pids_holding as pids_holding, observation_race,
 )
 
 # Provider name -> the executable Bus launches for it.
@@ -170,7 +170,7 @@ def dialog_prompt(provider, token):
     if provider == "claude":
         return ("We are testing Bus delivery of dialogs. Do not use skills. Use your AskUserQuestion tool "
                 "once to ask \"Continue the Bus e2e check?\" with exactly two options, Yes and No. "
-                f"After the answer, reply with exactly {token} and nothing else.")
+                "After the answer, " + explicit_reply_instruction(token))
     if provider == "codex":
         command = f"ln -s README.md ../e2e-link-{token}"
         how = ("It writes outside the workspace, so run it with escalated sandbox permissions "
@@ -180,7 +180,7 @@ def dialog_prompt(provider, token):
         how = "Use your shell tool; wait for approval if asked."
     return ("We are testing Bus delivery of permission prompts. Do not use skills. "
             f"Run exactly this shell command once: `{command}`. {how} "
-            f"Then reply with exactly {token} and nothing else.")
+            "Then " + explicit_reply_instruction(token))
 
 
 # Orchestrator system prompts forbid running commands; this one is a test, not work.
@@ -192,38 +192,40 @@ def steering_task(token, orchestrator=False):
     # Claude Code refuses a bare foreground `sleep`; a Python sleep is an ordinary command.
     return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Run the shell command "
             "`python3 -c 'import time; time.sleep(40)'` in the foreground (not in the background) and "
-            f"wait for it to finish, then reply with exactly {token} and nothing else.")
+            "wait for it to finish. " + explicit_reply_instruction(token))
 
 
 def steering_correction(old, new):
-    return (f"Correction to your current task: when it is done, reply with exactly {new} instead of {old}, "
-            "and nothing else.")
+    return (f"Correction to your current task: use {new} instead of {old} for both requests when done. "
+            + explicit_reply_instruction(new, every_message=True))
 
 
-def background_prompt(token, orchestrator=False):
+def background_prompt(token, orchestrator=False, room=None):
     return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Start the shell command `sleep 20` "
             "with your Bash tool's run_in_background option. Do not wait for, poll, read or stop it. "
-            f"For this initial turn reply with exactly {token} and nothing else. "
+            "For this initial turn, " + explicit_reply_instruction(token) + " "
             "When this shell finishes and its task notification starts a later turn, "
-            f"reply with exactly FOLLOWUP_{token} and nothing else. This is a separate follow-up.")
+            f"run a foreground `bus send --room {room or 'YOUR_HOME_ROOM'} --as YOUR_AGENT_ID "
+            f"--to you --text FOLLOWUP_{token}`. Check ok:true and stage:\"posted\". "
+            "This is a separate follow-up; never replace the already stored initial reply.")
 
 
 def verify_background_reply(request, reply):
-    """The initial Stop answer is delivered without waiting for the shell wake."""
-    answer = request.get("pending_final")
-    assert request.get("phase") == "completed", "background Stop did not complete its request"
-    assert answer, "background Stop has no captured answer"
-    for key in ("text", "provider_session_id", "provider_turn_id", "received_at_ms"):
+    """An explicit initial answer is durable even while its native turn stays open."""
+    answer = (request.get("completed_reply") or {}).get("content")
+    assert answer, "background request has no stored explicit answer"
+    assert answer.get("callback_id", "").startswith("reply-to:"), "initial answer is not explicit"
+    for key in ("callback_id", "text", "provider_session_id", "provider_turn_id", "received_at_ms"):
         assert answer.get(key) == reply.get(key), f"background answer changed: {key}"
     assert reply.get("provider_session_id") and reply.get("provider_turn_id"), "answer has no provider identity"
-    return {"final": reply}
+    return {"initial_reply": reply}
 
 
 def attachment_prompt(token):
     # A blank line and one image path: Claude Code turns a pasted lone image
     # path into an [Image #N] attachment and drops blank lines from the prompt.
     return ("We are testing Bus delivery of attachments. Do not use skills.\n\n"
-            f"Reply with exactly {token} and nothing else.")
+            + explicit_reply_instruction(token))
 
 
 def orchestrator_key(provider):
@@ -271,14 +273,14 @@ class Run:
         self.run_dir = E2E / time.strftime("%Y%m%d-%H%M%S")
         self.run_dir.mkdir(parents=True, mode=0o700)
         self.data = short_data_dir()
-        self.env = scrubbed_env(os.environ, self.data)
+        self.env = scrubbed_env(os.environ, self.data, real_providers=True)
         self.lock = threading.Lock()
         self.rows = []
         self.report = {"started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "binary": str(self.binary),
                        "data_dir": str(self.data), "workspace": str(WORKSPACE),
                        "providers": args.providers, "cases": args.cases, "versions": {},
                        "setup": {}, "dialogs": [], "rows": self.rows}
-        self.bus = Bus(self.binary, self.run_dir, self.env)
+        self.bus = Bus(self.binary, self.run_dir, self.env, real_providers=True)
         self.answered_frames = {}  # agent -> exact completed observation already answered
         self.agents = {}  # provider, or orchestrator_key(provider) -> agent id
         self.sessions = {}  # same keys -> last provider session id
@@ -304,9 +306,20 @@ class Run:
         subprocess.run(git + ["commit", "-q", "-m", "init"], check=True)
 
     def answer_dialogs(self, provider, purpose, row=None):
+        try:
+            return self._answer_dialogs(provider, purpose, row)
+        except CliError as error:
+            if observation_race(error):
+                return False  # No input was enqueued; the next poll observes afresh.
+            raise
+
+    def _answer_dialogs(self, provider, purpose, row=None):
         agent = self.agents[provider]
         found = self.bus.cli("agent", "observe", agent, row=row)
-        if not found.get("focus"):
+        # Old prompt markers can make the whole-screen focus ambiguous. The
+        # driver's label-scoped --select still resolves a visible numbered menu.
+        numbered = re.findall(r"(?m)^\s*[❯›>●◉▶→]?\s*\d+[.):]\s+", found["text"])
+        if not found.get("focus") and len(numbered) < 2:
             self.answered_frames.pop(agent, None)
             return False
         frame = (found["terminal_id"], found["content_revision"])
@@ -353,10 +366,30 @@ class Run:
             time.sleep(1)
         self.save()
 
+    def prepare_provider_path(self):
+        """Expose real provider executables and this Bus, without notification CLIs."""
+        commands = {PROVIDERS[p] for p in self.args.providers}
+        commands.add("node")  # The installed Codex/Cursor launchers may use env node.
+        executables = {}
+        for command in sorted(commands):
+            resolved = shutil.which(command, path=self.env.get("PATH", ""))
+            if resolved:
+                executables[command] = str(Path(resolved).resolve())
+            elif command != "node":
+                raise AssertionError(f"provider executable unavailable: {command}")
+        directory = self.run_dir / "bin"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        for command, path in {**executables, "bus": self.binary}.items():
+            (directory / command).symlink_to(path)
+        self.env["PATH"] = os.pathsep.join([str(directory), "/usr/bin", "/bin"])
+        self.bus.env["PATH"] = self.env["PATH"]
+        self.report["executables"] = executables
+
     def setup(self):
+        self.prepare_provider_path()
         for provider in self.args.providers:
             out = subprocess.run([PROVIDERS[provider], "--version"], capture_output=True, text=True,
-                                 timeout=20, check=False)
+                                 timeout=20, check=False, env=self.env)
             self.report["versions"][provider] = (out.stdout or out.stderr).strip()[:200]
         self.make_workspace()
         self.bus.start()
@@ -417,6 +450,9 @@ class Run:
         assert not errors, f"agent error: {errors}"
 
     def round_trip(self, provider, row, case, text=None, n=1, room=None, files=()):
+        # Explicit reply settlement may precede native turn completion. A new task
+        # must start from idle rather than accidentally steering that earlier turn.
+        self.wait_ready([provider], row.setdefault("ready", {}))
         token = self.token(provider, case, n)
         receipt = self.send([provider], text(token) if text else round_trip_prompt(token), row, room=room,
                             files=files)
@@ -430,6 +466,7 @@ class Run:
         self.round_trip(provider, row, "single")
 
     def case_queued(self, provider, row):
+        self.wait_ready([provider], row.setdefault("ready", {}))
         tokens, ids = [], []
         for n in range(1, 4):
             tokens.append(self.token(provider, "queued", n))
@@ -444,7 +481,8 @@ class Run:
         assert received == sorted(received), f"replies out of order: {received}"
 
     def case_steering(self, provider, row, room=None, case="steering"):
-        """A correction sent while the agent works joins its turn and shares one reply."""
+        """Check joined corrections, or Grok's intentionally queued busy follow-up."""
+        self.wait_ready([provider], row.setdefault("ready", {}))
         old, new = self.token(provider, case, 1), self.token(provider, case, 2)
         first = self.send([provider], steering_task(old, room == "master"), row, room=room)["message_id"]
         deadline = time.monotonic() + 120
@@ -460,34 +498,46 @@ class Run:
             assert time.monotonic() < deadline, f"task never started working: {agent}"
             time.sleep(0.5)
         time.sleep(3)
-        second = self.send([provider], steering_correction(old, new), row, room=room)["message_id"]
+        queued_followup = provider in {"grok", orchestrator_key("grok")}
+        correction = round_trip_prompt(new) if queued_followup else steering_correction(old, new)
+        second = self.send([provider], correction, row, room=room)["message_id"]
         statuses = self.settle([first, second], row)
         first_request = statuses[first]["requests"][0]
         joined = statuses[second]["requests"][0]
         row["steering"] = {"group": joined.get("group"), "first_turn": first_request.get("turn_id"),
                            "joined_turn": joined.get("turn_id"), "start_bound": joined.get("start_bound")}
-        assert joined.get("group") == first_request["request_id"], f"correction did not join the turn: {joined}"
-        for status in (statuses[first], statuses[second]):
-            self.verify(status, {self.agents[provider]: new}, row)
+        if queued_followup:
+            assert joined.get("group") is None and joined["turn_id"] != first_request["turn_id"], joined
+        else:
+            assert joined.get("group") == first_request["request_id"], f"correction did not join the turn: {joined}"
+        self.verify(statuses[first], {self.agents[provider]: old if queued_followup else new}, row)
+        self.verify(statuses[second], {self.agents[provider]: new}, row)
 
     def case_background(self, provider, row, room=None, case="background"):
         status = self.round_trip(provider, row, case,
-                                 text=lambda token: background_prompt(token, room == "master"), room=room)
+                                 text=lambda token: background_prompt(token, room == "master", room or self.room), room=room)
         delivered = status["requests"][0]
         stored = json.loads((self.data / "state.json").read_text())["state"]["requests"][str(delivered["request_id"])]
         evidence = verify_background_reply(stored, delivered["reply"])
         row.setdefault("background", []).append({"case": case, "request_id": delivered["request_id"], **evidence})
-        # The initial answer is final; native readiness is independent of reply delivery.
+        followup = "FOLLOWUP_" + delivered["reply"]["text"]
         deadline = time.monotonic() + self.args.timeout
         while True:
             agent = next(a for a in self.bus.cli("diagnostics", row=row)["agents"]
                          if a["agent_id"] == self.agents[provider])
-            if agent["status"] == "idle" and agent["reason"] is None:
+            history = self.bus.cli("history", "--room", room or self.room, "--limit", 100, row=row)
+            matches = [m for m in history["messages"] if m["prompt"]["author"] == {"agent": self.agents[provider]}
+                       and m["prompt"]["text"] == followup]
+            assert len(matches) <= 1, "duplicate background follow-up"
+            if matches and agent["status"] == "idle" and agent["reason"] is None:
+                row["background"][-1]["followup_message_id"] = matches[0]["prompt"]["id"]
                 break
-            if agent["status"] != "working":
+            if agent["status"] == "blocked":
                 self.answer_dialogs(provider, "allow", row)
             assert time.monotonic() < deadline, f"agent stuck after background shell: {agent}"
             time.sleep(1)
+        stored = json.loads((self.data / "state.json").read_text())["state"]["requests"][str(delivered["request_id"])]
+        verify_background_reply(stored, delivered["reply"])
         self.round_trip(provider, row, case, n=2, room=room)
 
     def case_dialog(self, provider, row):
@@ -588,6 +638,7 @@ class Run:
                 raise Skip(case_support(providers[0], "multi", providers))
             token = self.token("all", "multi")
             row = rows[providers[0]]
+            self.wait_ready(providers, row.setdefault("ready", {}))
             receipt = self.send(providers, round_trip_prompt(token), row)
             statuses = self.settle([receipt["message_id"]], row)
             status = statuses[receipt["message_id"]]

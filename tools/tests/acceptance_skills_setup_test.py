@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
+from unittest.mock import Mock, patch
 
 from tools.acceptance.harness_test import Bus
 
@@ -27,3 +28,27 @@ def test_acceptance_setup_refuses_the_protected_home_before_creating_anything(tm
     with pytest.raises(AssertionError, match="test isolation refused"):
         bus.prepare_skills()
     assert list(protected.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["public", "live", "relative"])
+def test_real_provider_login_home_still_requires_private_non_live_bus_data(tmp_path, monkeypatch, kind):
+    home = tmp_path / "login-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    data = home / ".local/share/bus" if kind == "live" else tmp_path / "data"
+    data.mkdir(parents=True, mode=0o755 if kind == "public" else 0o700)
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin",
+           "BUS_DATA_DIR": "relative" if kind == "relative" else str(data)}
+    bus = Bus(Path("must-not-execute"), tmp_path, env, real_providers=True)
+    with pytest.raises(AssertionError, match="private 0700 BUS_DATA_DIR"):
+        bus.prepare_skills()
+
+
+def test_cleanup_reports_only_processes_holding_its_own_custom_workspace(tmp_path):
+    work = tmp_path / "private-work"
+    bus = Bus(Path("private-bus"), tmp_path, {"BUS_DATA_DIR": str(tmp_path / "data")}, work)
+    bus.cli = Mock()
+    with patch("tools.acceptance.harness_test.subprocess.run", return_value=Mock(returncode=0, stdout='{"stopped":false}')), \
+            patch("tools.acceptance.harness_test.pids_holding", return_value=set()) as holding:
+        assert bus.stop()["leftover"] == []
+    assert holding.call_args.args == ([bus.data, work],)

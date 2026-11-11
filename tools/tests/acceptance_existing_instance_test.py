@@ -50,11 +50,16 @@ class AcceptanceProfileTests(unittest.TestCase):
                                       "--cursor-pwd", "/tmp/cursor"])
         self.assertEqual(args.message_delay, 5.0)
 
-    def test_round_trip_prompt_explicitly_forbids_skills_tools_and_work(self):
+    def test_round_trip_prompt_requires_a_foreground_correlated_reply(self):
         prompt = acceptance.round_trip_prompt("TOKEN")
         self.assertIn("only testing Bus message round trip", prompt)
-        self.assertIn("Do not use skills, tools, or modify files", prompt)
-        self.assertIn("Reply with exactly TOKEN", prompt)
+        self.assertIn("bus send --reply-to", prompt)
+        self.assertIn("foreground", prompt)
+        self.assertIn("--text TOKEN", prompt)
+        self.assertIn("message ID", prompt)
+        self.assertIn('stage:"replied"', prompt)
+        self.assertNotIn("Do not use skills, tools", prompt)
+        self.assertIn("Do not perform project work", prompt)
 
     def test_original_four_agent_profile_is_preserved(self):
         profile = acceptance.profiles()["claude-codex"]
@@ -237,6 +242,55 @@ class EndToEndArgumentTests(unittest.TestCase):
 
 
 class EndToEndEnvironmentTests(unittest.TestCase):
+    def test_provider_path_exposes_selected_executables_and_bus_without_lark(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            providers = root / "providers"
+            providers.mkdir()
+            for name in ("claude", "codex", "node", "lark-cli"):
+                executable = providers / name
+                executable.write_text("#!/bin/sh\nexit 0\n")
+                executable.chmod(0o700)
+            run = e2e.Run.__new__(e2e.Run)
+            run.args = mock.Mock(providers=["claude", "codex"])
+            run.binary, run.run_dir = root / "copied-bus", root / "report"
+            run.run_dir.mkdir()
+            run.env = {"PATH": str(providers)}
+            run.bus, run.report = mock.Mock(env=dict(run.env)), {}
+            run.prepare_provider_path()
+            self.assertIsNone(e2e.shutil.which("lark-cli", path=run.env["PATH"]))
+            self.assertEqual(run.bus.env["PATH"], run.env["PATH"])
+            for name in ("claude", "codex", "node"):
+                selected = Path(e2e.shutil.which(name, path=run.env["PATH"]))
+                self.assertEqual(selected.resolve(), (providers / name).resolve())
+            self.assertEqual((run.run_dir / "bin/bus").resolve(), run.binary.resolve())
+
+    def test_live_run_preserves_login_home_and_uses_only_private_bus_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            login_home = root / "login-home"
+            login_home.mkdir()
+            args = mock.Mock(binary="stub-bus", providers=["claude", "codex"], cases=["single"])
+            inherited = {"HOME": str(login_home), "USERPROFILE": str(login_home), "PATH": "/bin",
+                         "BUS_DATA_DIR": "/live-bus", "BUS_TUI_FAKE_AGENT": "1",
+                         "TEST_BUS_PROTECTED_HOME": str(login_home), "CODEX_HOME": "/other-login"}
+            with mock.patch.dict(e2e.os.environ, inherited, clear=True), \
+                    mock.patch.object(e2e, "E2E", root / "reports"), \
+                    mock.patch.object(e2e, "find_binary", return_value=Path("/stub/bus")):
+                run = e2e.Run(args)
+                try:
+                    self.assertEqual(run.env["HOME"], str(login_home))
+                    self.assertEqual(run.env["USERPROFILE"], str(login_home))
+                    self.assertNotIn("TEST_BUS_PROTECTED_HOME", run.env)
+                    self.assertNotIn("CODEX_HOME", run.env)
+                    self.assertNotIn("BUS_TUI_FAKE_AGENT", run.env)
+                    self.assertNotEqual(run.env["BUS_DATA_DIR"], "/live-bus")
+                    self.assertEqual(run.data.stat().st_mode & 0o777, 0o700)
+                    run.bus.prepare_skills()
+                    self.assertEqual(list(login_home.iterdir()), [])
+                finally:
+                    run.data.rmdir()
+
     def test_inherited_bus_herdr_and_claude_code_variables_are_scrubbed(self):
         with mock.patch("tools.acceptance.harness_test.uuid.uuid4") as owner:
             owner.return_value.hex = "scratch-owner"
@@ -287,6 +341,52 @@ class EndToEndEnvironmentTests(unittest.TestCase):
 
 
 class EndToEndDialogTests(unittest.TestCase):
+    def test_grok_busy_followup_checks_queued_separate_turns_and_both_tokens(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"grok": 3}
+        run.wait_ready, run.verify = mock.Mock(), mock.Mock()
+        run.token = mock.Mock(side_effect=["OLD", "NEW"])
+        run.send = mock.Mock(side_effect=[{"message_id": 10}, {"message_id": 12}])
+        run.bus = mock.Mock()
+        first = {"agent_id": 3, "request_id": 11, "stage": "delivered", "turn_id": "first"}
+        second = {"agent_id": 3, "request_id": 13, "group": None,
+                  "turn_id": "second", "start_bound": True}
+        run.bus.cli.side_effect = [{"complete": False, "requests": [first]},
+                                   {"agents": [{"agent_id": 3, "status": "working"}]}]
+        statuses = {10: {"requests": [first]}, 12: {"requests": [second]}}
+        run.settle = mock.Mock(return_value=statuses)
+        with mock.patch.object(e2e.time, "sleep"):
+            run.case_steering("grok", {})
+        self.assertIn("--text NEW", run.send.call_args.args[1])
+        self.assertEqual([call.args[1] for call in run.verify.call_args_list], [{3: "OLD"}, {3: "NEW"}])
+
+    def test_new_round_trip_waits_for_the_previous_native_turn_to_end(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"claude": 3}
+        run.token = mock.Mock(return_value="TOKEN")
+        active = [True]  # The previous explicit reply settled before its native turn ended.
+        run.wait_ready = mock.Mock(side_effect=lambda *a, **kw: active.__setitem__(0, False))
+        def send(*a, **kw):
+            self.assertFalse(active[0], "new task would steer the previous native turn")
+            return {"message_id": 4}
+        run.send = mock.Mock(side_effect=send)
+        status = {"complete": True, "requests": []}
+        run.settle = mock.Mock(return_value={4: status})
+        run.verify = mock.Mock()
+        self.assertIs(run.round_trip("claude", {}, "single"), status)
+
+    def test_every_case_prompt_requires_a_foreground_correlated_reply(self):
+        prompts = {provider: e2e.dialog_prompt(provider, "TOKEN") for provider in e2e.PROVIDERS}
+        prompts.update(steering=e2e.steering_task("TOKEN"),
+                       correction=e2e.steering_correction("OLD", "TOKEN"),
+                       background=e2e.background_prompt("TOKEN"),
+                       attachment=e2e.attachment_prompt("TOKEN"))
+        for name, prompt in prompts.items():
+            with self.subTest(case=name):
+                self.assertIn("bus send --reply-to", prompt)
+                self.assertIn("--text TOKEN", prompt)
+                self.assertIn("foreground", prompt)
+
     def test_dialog_answer_uses_driver_selection_bound_to_observed_terminal(self):
         run = e2e.Run.__new__(e2e.Run)
         run.answered_frames = {}
@@ -362,6 +462,28 @@ class EndToEndDialogTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "without replaying"):
             run.driver_action(9, {"terminal_id": "fixture-terminal"}, "--key", "1")
         self.assertEqual(calls, [("agent", "press", 9, "--terminal-id", "fixture-terminal", "--key", "1")])
+
+    def test_dialog_poll_reobserves_a_rejected_race_but_propagates_uncertainty(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.agents = {"claude": 3}
+        run.bus = mock.Mock()
+        run.bus.cli.side_effect = e2e.CliError({"code": "command_failed", "message": "Terminal changed; observe it again"})
+        self.assertFalse(run.answer_dialogs("claude", "allow"))
+        run.bus.cli.side_effect = e2e.CliError({"code": "command_failed", "message": "outcome uncertain"})
+        with self.assertRaises(e2e.CliError):
+            run.answer_dialogs("claude", "allow")
+
+    def test_visible_numbered_dialog_can_select_when_global_focus_is_ambiguous(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.answered_frames, run.agents = {}, {"claude": 3}
+        run.lock, run.report = threading.Lock(), {"dialogs": []}
+        run.bus = mock.Mock()
+        observation = {"text": "❯ Earlier prompt\nContinue the Bus e2e check?\n❯ 1. Yes\n  2. No\nEnter to select",
+                       "focus": None, "terminal_id": "private-menu", "content_revision": 8}
+        run.bus.cli.side_effect = [observation, {"outcome": "selected", "selection_pending": False}]
+        self.assertTrue(run.answer_dialogs("claude", "allow"))
+        self.assertEqual(run.bus.cli.call_args.args, ("agent", "press", 3, "--select", "Yes",
+                                                    "--terminal-id", "private-menu"))
 
     def test_idle_observation_enqueues_no_input(self):
         run = e2e.Run.__new__(e2e.Run)
@@ -460,16 +582,21 @@ class EndToEndDialogTests(unittest.TestCase):
 
     def test_prompts_carry_the_token(self):
         for provider in e2e.PROVIDERS:
-            self.assertIn("reply with exactly TOKEN", e2e.dialog_prompt(provider, "TOKEN"))
+            self.assertIn("--text TOKEN", e2e.dialog_prompt(provider, "TOKEN"))
         self.assertIn("AskUserQuestion", e2e.dialog_prompt("claude", "T"))
         self.assertIn("escalated", e2e.dialog_prompt("codex", "T"))
         self.assertIn("run_in_background", e2e.background_prompt("T"))
         # Claude Code drops blank lines once it lifts an attached image; the prompt keeps one.
-        self.assertIn("\n\nReply with exactly T and nothing else.", e2e.attachment_prompt("T"))
+        self.assertEqual(e2e.attachment_prompt("T").count("\n\n"), 1)
+        self.assertIn("\n\nUse your shell tool", e2e.attachment_prompt("T"))
         # Orchestrators run the test command themselves only when the developer says so.
         for prompt in (e2e.steering_task, e2e.background_prompt):
             self.assertNotIn("I authorize", prompt("T"))
             self.assertIn("I authorize", prompt("T", True))
+        self.assertIn("every Bus message ID", e2e.steering_correction("OLD", "NEW"))
+        background = e2e.background_prompt("T", room="master")
+        self.assertIn("bus send --room master", background)
+        self.assertIn("--to you --text FOLLOWUP_T", background)
 
     def test_orchestrator_adoption_args_and_image(self):
         self.assertEqual(e2e.adopt_args("codex", "S"), "resume S")
@@ -617,12 +744,40 @@ class EndToEndReportTests(unittest.TestCase):
 
 
 class EndToEndBackgroundReplyTests(unittest.TestCase):
-    def test_background_stop_delivers_its_initial_answer(self):
-        reply = {"text": "TOKEN", "provider_session_id": "session",
+    def test_idle_without_an_authored_background_followup_does_not_pass(self):
+        reply = {"callback_id": "reply-to:44", "text": "TOKEN", "provider_session_id": "session",
                  "provider_turn_id": "initial-turn", "received_at_ms": 10}
-        request = {"phase": "completed", "pending_final": reply}
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            stored = {"completed_reply": {"content": reply}}
+            (root / "state.json").write_text(json.dumps({"state": {"requests": {"44": stored}}}))
+            run = e2e.Run.__new__(e2e.Run)
+            run.data, run.room, run.args, run.agents = root, 2, mock.Mock(timeout=1), {"claude": 3}
+            run.round_trip = mock.Mock(return_value={"requests": [{"request_id": 44, "reply": reply}]})
+            run.answer_dialogs = mock.Mock(side_effect=AssertionError("idle composer is not a dialog"))
+            run.bus = mock.Mock()
+            run.bus.cli.side_effect = lambda command, *a, **kw: (
+                {"agents": [{"agent_id": 3, "status": "idle", "reason": None}]}
+                if command == "diagnostics" else {"messages": []})
+            with mock.patch.object(e2e.time, "monotonic", side_effect=[0, 2]), \
+                    self.assertRaisesRegex(AssertionError, "agent stuck after background shell"):
+                run.case_background("claude", e2e.new_row("claude", "background"))
+            self.assertEqual(run.round_trip.call_count, 1)
+            run.answer_dialogs.assert_not_called()
+
+    def test_explicit_background_reply_is_valid_before_its_native_turn_ends(self):
+        reply = {"callback_id": "reply-to:44", "text": "TOKEN", "provider_session_id": "session",
+                 "provider_turn_id": "initial-turn", "received_at_ms": 10}
+        request = {"phase": "active", "pending_final": None,
+                   "completed_reply": {"content": reply, "group": None}}
+        self.assertEqual(e2e.verify_background_reply(request, reply), {"initial_reply": reply})
+
+    def test_background_explicit_answer_survives_native_completion(self):
+        reply = {"callback_id": "reply-to:44", "text": "TOKEN", "provider_session_id": "session",
+                 "provider_turn_id": "initial-turn", "received_at_ms": 10}
+        request = {"phase": "completed", "pending_final": None, "completed_reply": {"content": reply}}
         before = json.dumps(request, sort_keys=True)
-        self.assertEqual(e2e.verify_background_reply(request, reply), {"final": reply})
+        self.assertEqual(e2e.verify_background_reply(request, reply), {"initial_reply": reply})
         self.assertEqual(json.dumps(request, sort_keys=True), before)
         for change in ({"text": "FOLLOWUP_TOKEN"}, {"provider_turn_id": "wake-turn"},
                        {"provider_session_id": "other"}, {"received_at_ms": 20}):

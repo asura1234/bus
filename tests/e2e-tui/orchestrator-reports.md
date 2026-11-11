@@ -3,10 +3,10 @@
 Apply app.md's [run contract and setup recipes](app.md#run-contract-and-setup-recipes)
 (R, A, P and the fixture rule). Source: `src/messaging/coordinator/reports.rs`.
 
-An orchestrator's turn final shows in exactly one room. A turn that answers a
-message ends in that message's reply, under it in the message's room: MASTER for
-the developer's message, the work room for a worker's (such as Bus's "Blocked,
-needs help to continue." for a worker's open dialog). A turn no message started
+An orchestrator turn started by a message settles that request as `ended`
+without storing or posting the native final as a reply. Its authored message
+remains in the original conversation: MASTER for a developer's MASTER message,
+the work room for a worker's message or Bus's Blocked notice. A turn no message started
 (a background command exiting, or text typed into the orchestrator's own
 terminal) is routine status: Bus posts it in the work room the orchestrator runs,
 as `ORCH → You`, never in MASTER. Progress, questions and blockers reach MASTER
@@ -15,7 +15,7 @@ only when the orchestrator posts them with `bus send --room master --as ORCH
 
 ## Cases (run order)
 
-### ORCH-01 — Routine status stays in the work room; progress reports and MASTER replies show in MASTER
+### ORCH-01 — Native completion stays out of replies; autonomous status and explicit posts use their rooms
 
 **Preconditions/setup:** R(`qa-work`); A(`qa-work`, `qa-worker`, Claude Code);
 then the orchestrator `qa-orch` with APP-04's UI recipe (Claude Code, scratch PWD,
@@ -25,8 +25,8 @@ then the orchestrator `qa-orch` with APP-04's UI recipe (Claude Code, scratch PW
 Step 1 opens an inert approval fixture on the worker's screen using the fake
 agent's `fake:dialog-settle redraw` command. This renders native menu controls and
 waits for input; the displayed shell command is never executed. The generic driver
-reports the controls as blocked. The fake orchestrator replies to Bus's Blocked
-notice, exercising reply routing without answering the approval. Step 8's progress
+reports the controls as blocked. The fake orchestrator completes Bus's Blocked
+notice without a stored reply or an answer to the approval. Step 8's progress
 report is an agent-authored post through the scratch CLI, as the fixture rule
 allows: it is what `send --to human` does when an orchestrator follows its prompt.
 
@@ -39,9 +39,11 @@ allows: it is what `send --to human` does when an orchestrator follows its promp
    numbered Yes/No options. Wait until `bus state` shows `qa-worker` blocked, then
    press F6 → `qa-worker` shows `Blocked` in the sidebar, and the qa-work history
    shows Bus's notice to `qa-orch`: `qa-worker. Blocked, needs help to continue.`
-2. Wait until `bus state` shows `qa-orch` idle → in qa-work, `qa-orch`'s reply
-   `fake reply: qa-worker. Blocked, needs help to continue. …` shows
-   under the Blocked message, and qa-work has no `qa-orch → You` message.
+2. Wait until `bus state` shows `qa-orch` idle → its Blocked-notice request is
+   complete with `stage:ended`, `reply:null` and no failure reason. Its native
+   pane shows `fake reply: qa-worker. Blocked, needs help to continue. …`.
+   In qa-work the original Blocked message has no reply card, and no `qa-orch → You`
+   message was synthesized from that accepted final.
 3. Click `# MASTER` → MASTER history shows no `Blocked, needs help to continue.`
    text and no message from `qa-orch`.
 4. Click the `qa-orch` agent → its fake terminal opens. Type `ORCH01 background done`
@@ -51,9 +53,10 @@ allows: it is what `send --to human` does when an orchestrator follows its promp
 5. Click `# qa-work` → its history ends with a `qa-orch → You` message
    `fake reply: ORCH01 background done`.
 6. Click `# MASTER`, P(`qa-orch`), type `ORCH01 status please` and press Enter →
-   once the delivery settles, MASTER history shows the developer's
-   `ORCH01 status please` and `qa-orch`'s reply `fake reply: ORCH01 status please`
-   under it.
+   once the delivery settles, its request is complete with `stage:ended`,
+   `reply:null` and no failure reason. MASTER history contains the developer's
+   `ORCH01 status please` exactly once with no reply card; the exact fake output
+   is visible only in `qa-orch`'s native pane.
 7. Click `# qa-work` → its history does not contain `ORCH01 status please`, and
    step 5's message is still its only `qa-orch → You` message.
 8. Fixture: `bus send --room master --as qa-orch --to human --text "ORCH01 progress: PR merged"`
@@ -63,8 +66,9 @@ allows: it is what `send --to human` does when an orchestrator follows its promp
 
 **Evidence:** screen text (`find`, `snapshot --plain`) of each room after each step,
 a cells screenshot of each room's history, `bus state` agent status, and
-`bus history --room master` for the step-6 reply, and the step-8 send receipt.
+`bus history --room master` and message status for step 6, and the step-8 send receipt.
 
-**Pass criteria:** the reply to the worker's Blocked notice and the unprompted
-status show only in the work room; the reply to the developer's MASTER message and
-the orchestrator's `send --to human` progress report show only in MASTER.
+**Pass criteria:** message-owned native finals settle as ended without replies
+or synthesized posts; original messages remain in their conversations. The
+unprompted status shows only in the work room, and the explicit `send --to human`
+progress report shows only in MASTER.

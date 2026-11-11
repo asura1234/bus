@@ -22,11 +22,12 @@ Preconditions: create work rooms `dot-very-long-room-name` and `dot-other` with
 the scratch CLI. Add fake Claude workers `dot-worker` and `dot-peer` to the long-named room,
 using the session's scratch work directory and consenting to their hooks. Wait
 for both to be idle. Send each one a developer `DOT bootstrap` prompt with the
-scratch CLI and wait for both fake replies, so both provider conversations have
+scratch CLI and require both requests to complete with `stage:ended`, `reply:null`, no
+failure reason and matching native output, so both provider conversations have
 completed a turn before restart. Record IDs and select `dot-other` through the sidebar.
 
 1. Fixture: send `DOT peer` as dot-worker to dot-peer in the long-named
-   room and wait for its fake reply to settle. Assert its `unread_count` is
+   room and wait for its ended/null native completion. Assert its `unread_count` is
    positive but `unseen_to_developer` is false and no sidebar dot appears.
 2. Fixture: send `DOT decision` as dot-worker to `you` in the long-named room
    and `DOT MASTER decision` as dot-worker to `human` in MASTER. Assert both
@@ -58,7 +59,7 @@ completed a turn before restart. Record IDs and select `dot-other` through the s
    and MASTER markers/dots retained, and the default first work room (`bus`)
    visible after startup. Wait for both fake agents to be idle, then send a
    developer fixture `DOT after restart` to dot-peer in the long-named room
-   and wait for its fake reply. Assert no session invalidation and both unseen
+   and verify its ended/null completion and matching native output. Assert no session invalidation and both unseen
    markers retained. Capture/open
    a screenshot of the persisted dots.
 6. Click MASTER and assert its decision displays with a You recipient and its

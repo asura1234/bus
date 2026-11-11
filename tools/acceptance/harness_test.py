@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import shutil
 import signal
 import socket
 import struct
@@ -24,6 +25,13 @@ class CliError(AssertionError):
     pass
 
 
+def observation_race(error):
+    """These native guard rejections occur before any input is enqueued."""
+    detail = error.args[0] if error.args else None
+    return isinstance(detail, dict) and detail.get("code") == "command_failed" and detail.get("message") in {
+        "Terminal is redrawing; observe it again", "Terminal changed; observe it again"}
+
+
 def find_binary(explicit=None, root=ROOT):
     candidates = [Path(explicit)] if explicit else [root / "target/debug/bus"]
     for path in candidates:
@@ -37,13 +45,19 @@ def bus_argv(binary):
     return [str(binary), "--dev"]
 
 
-def scrubbed_env(environ, data_dir):
+def scrubbed_env(environ, data_dir, *, real_providers=False):
     env = {k: v for k, v in environ.items() if not k.startswith(SCRUB_PREFIXES) and k not in SCRUB_NAMES}
-    home = str(Path(data_dir).with_name(Path(data_dir).name + "-home"))
+    home = (environ.get("HOME", "") if real_providers
+            else str(Path(data_dir).with_name(Path(data_dir).name + "-home")))
+    if real_providers and not Path(home).is_absolute():
+        raise AssertionError("real-provider acceptance requires the real absolute HOME")
     env.update(BUS_DATA_DIR=str(data_dir), HOME=home, USERPROFILE=home, TERM="xterm-256color")
     # Dev-tools scratch servers sample their fixture, including real-provider runs.
     env["BUS_TUI_OWNER"] = uuid.uuid4().hex
-    env.setdefault("TEST_BUS_PROTECTED_HOME", environ.get("HOME", str(Path.home())))
+    if real_providers:
+        env.pop("TEST_BUS_PROTECTED_HOME", None)
+    else:
+        env.setdefault("TEST_BUS_PROTECTED_HOME", environ.get("HOME", str(Path.home())))
     return env
 
 
@@ -59,9 +73,11 @@ def pids_holding(paths):
 class Bus:
     """One throwaway Bus: a TUI client in a pty plus the dev CLI against its data dir."""
 
-    def __init__(self, binary, run_dir, env, workspace=None):
+    def __init__(self, binary, run_dir, env, workspace=None, *, real_providers=False):
         self.binary, self.run_dir, self.env = binary, run_dir, dict(env)
-        self.env.setdefault("TEST_BUS_PROTECTED_HOME", os.environ.get("TEST_BUS_PROTECTED_HOME", str(Path.home())))
+        self.real_providers = real_providers
+        if not real_providers:
+            self.env.setdefault("TEST_BUS_PROTECTED_HOME", os.environ.get("TEST_BUS_PROTECTED_HOME", str(Path.home())))
         self.workspace = Path(workspace) if workspace is not None else WORKSPACE
         self.data = Path(env["BUS_DATA_DIR"])
         self.child = None
@@ -69,8 +85,18 @@ class Bus:
         self.pump_thread = None
 
     def prepare_skills(self):
-        """Refuse the developer's HOME. Skill install is never part of launching a test Bus."""
+        """Validate isolation without installing skills or editing the login home."""
         home = Path(self.env["HOME"])
+        if self.real_providers:
+            if not home.is_absolute() or home.resolve() != Path.home().resolve():
+                raise AssertionError("real-provider acceptance must read the real HOME in place")
+            live_root = home / ".local/share/bus"
+            if (not self.data.is_absolute() or self.data.resolve().is_relative_to(live_root.resolve())
+                    or not self.data.is_dir() or self.data.stat().st_mode & 0o777 != 0o700):
+                raise AssertionError("real-provider acceptance requires a private 0700 BUS_DATA_DIR")
+            if shutil.which("lark-cli", path=self.env.get("PATH", "")):
+                raise AssertionError("real-provider scratch PATH must not resolve lark-cli")
+            return
         protected = Path(self.env["TEST_BUS_PROTECTED_HOME"])
         if not home.is_absolute() or home.resolve() == protected.resolve():
             raise AssertionError("test isolation refused: acceptance Bus needs its own HOME")
@@ -203,5 +229,5 @@ class Bus:
                 pass
             self.master = None
         report["killed"] = sorted(set(killed))
-        report["leftover"] = sorted(pids_holding([self.data, WORKSPACE]))
+        report["leftover"] = sorted(pids_holding([self.data, self.workspace]))
         return report

@@ -32,7 +32,10 @@ end marker and verifies the complete draft before removing that marker.
 such a draft directly in the native pane, its fake reply is `fake draft bytes:`
 followed by a JSON string of the exact submitted prompt, before whitespace
 trimming. Compare the decoded JSON string, including every space, tab, and LF.
-The ordinary incoming messages use their usual `fake reply:` response.
+The ordinary incoming messages show their usual `fake reply:` output only in
+the native pane. Every incoming completion below requires its exact request to
+be `complete:true`, `stage:ended`, `reply:null`, `reason:null`, with a trusted
+start, and its matching native output exactly once. No stored reply is expected.
 
 Record PASS/FAIL for every step; no skips or failed-step retries. Capture the
 native composer before sending, while a message waits, and after restoration.
@@ -42,7 +45,8 @@ end cursor after restoration without depending on a scheduler race.
 
 ### STASH-01 — Claude native stash preserves an image and a collapsed paste
 
-Preconditions: all setup bootstrap messages have replied. Prepare the driver's
+Preconditions: all setup bootstrap requests are complete with `stage:ended`,
+`reply:null`, `reason:null` and trusted starts; each matching native output was observed. Prepare the driver's
 fixture image path in the scratch workspace. Open `stash-claude`.
 
 1. With driver `paste`, enter one draft containing the quoted absolute fixture
@@ -51,8 +55,8 @@ fixture image path in the scratch workspace. Open `stash-claude`.
    composer contains one `[Image #N]` and one `[Pasted text #M +K lines]` chip.
    Save the complete fixture text and the visible chip labels.
 2. Fixture: send `STASH native delivery` to `stash-claude` while its pane stays
-   open. Wait for that exact request to reply with the incoming message's fake
-   reply. Assert the original image and paste chip labels are back in the
+   open. Wait for that exact request to meet the native-completion checkpoint
+   above and observe the incoming message's matching output in the native pane. Assert the original image and paste chip labels are back in the
    composer, and history contains no occupied-input failure notice.
 3. Type `-END` and press Enter. Read the native fake reply and decode its JSON
    string. Assert it contains the original image chip and every original rich
@@ -67,8 +71,7 @@ Preconditions: open idle `stash-codex`. Define D as the decoded JSON string
 1. Use driver `type` to enter D, without submitting it. Assert the native
    composer is occupied and is not an image or pasted-block chip. Record D's
    exact bytes; its leading spaces, tabs, blank line, and trailing LF matter.
-2. Fixture: send `STASH codex delivery`. Wait for that request's ordinary fake
-   reply, then assert the original plaintext draft is back in the composer.
+2. Fixture: send `STASH codex delivery`. Wait for that request's native-completion checkpoint, then assert the original plaintext draft is back in the composer.
    Assert no `__BUS_DRAFT_END_` marker or failure notice is present.
 3. Type `END` and press Enter. Decode the `fake draft bytes:` JSON response and
    assert it equals D followed by `END` byte for byte. This proves both exact
@@ -82,8 +85,7 @@ Preconditions: open idle `stash-cursor`. Define D as the decoded JSON string
 1. Use driver `type` to enter D without submitting it. Assert the native
    composer is occupied and contains no image or pasted-block chip. Record the
    exact fixture bytes, including its trailing whitespace and newline.
-2. Fixture: send `STASH cursor delivery`. Wait for that request's ordinary fake
-   reply. Assert the original plaintext draft is back, with no end marker or
+2. Fixture: send `STASH cursor delivery`. Wait for that request's native-completion checkpoint. Assert the original plaintext draft is back, with no end marker or
    occupied-input failure notice.
 3. Type `END` and press Enter. Decode the `fake draft bytes:` JSON response and
    assert it equals D followed by `END` byte for byte. Assert the incoming Bus
@@ -106,7 +108,8 @@ message text for each provider.
    submitted the developer's opaque draft.
 3. Press Enter to submit the developer's opaque draft. Decode its native
    `fake draft bytes:` reply and compare it with the complete raw fixture.
-   Then wait for the original queued incoming message to reply automatically.
+   Then wait for the original queued incoming request to meet the native-completion
+   checkpoint automatically, with its exact output visible in the native pane.
    Assert it occurs exactly once, has no occupied-input failure notice, and
    leaves an empty composer. No resend is permitted.
 
@@ -121,11 +124,12 @@ open and idle. Use `PROVIDER` in both fixtures to keep receipts distinct.
    inspect request status and screen: the request remains queued and the draft
    contains every typed suffix. No stash, clear, submit, or failure notice has
    interrupted the typing burst.
-2. Stop typing. Wait for the same incoming request to reply automatically.
+2. Stop typing. Wait for the same incoming request to meet the native-completion
+   checkpoint automatically.
    Assert the original draft plus `-1-2-3` is restored, without Bus message text
    or an end marker. Type `-END` and press Enter; decode the native JSON reply
    and assert the exact payload is `fake:draft-bytes ACTIVE PROVIDER-1-2-3-END`.
-   There is one incoming message and one incoming reply, without a resend.
+   There is one incoming message and one native completion, no stored reply and no resend.
 
 ### STASH-06 — Claude keeps an existing native stash while another draft is visible
 
@@ -141,6 +145,7 @@ Preconditions: open idle `stash-claude`.
 3. Press Ctrl+U to clear only the visible single-line fixture, then Ctrl+S to
    restore the hidden fixture. Assert it is `fake:draft-bytes HIDDEN`, press
    Enter, and decode its native reply to prove the hidden draft survived.
-   Wait for the original incoming message to reply once automatically; assert
+   Wait for the original incoming request to meet the native-completion checkpoint
+   once automatically; assert
    the composer is empty and no end marker or failure notice remains. Stop
    the scratch session after recording status and cleanup evidence.
