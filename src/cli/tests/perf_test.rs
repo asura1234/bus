@@ -413,7 +413,7 @@ fn perf_prints_and_flushes_root_and_window_before_opening_a_blocked_archive() {
     let (send, receive) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if line.starts_with("perf:") {
+            if line.contains("perf: ") {
                 let _ = send.send(line);
                 break;
             }
