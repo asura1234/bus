@@ -276,3 +276,159 @@ fn removed_directory_proved_process_exit_closes_only_unanswered_work() {
         .current_request
         .is_none());
 }
+
+#[test]
+fn removed_directory_transient_error_and_process_exit_close_unanswered_work() {
+    let (mut f, cwd, rollout, lead) = started();
+    let member = f.send("unanswered grouped request", false);
+    f.deliver();
+    assert_eq!(f.request(member).group, Some(lead));
+    std::fs::remove_dir(&cwd).unwrap();
+    f.worker.check_launch_directory(f.agent).unwrap().unwrap();
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout)
+            .unwrap(),
+        "{}",
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"living-turn",
+            "error":{"message":"HTTP 503 Service Unavailable"}}})
+    )
+    .unwrap();
+    f.status(RuntimeStatus::Unavailable);
+    let mut state = f.worker.state.clone();
+    state
+        .record_exit_snapshot(
+            f.agent,
+            ExitSnapshot {
+                launch_id: Some("launch".into()),
+                terminal_id: "terminal".into(),
+                path: None,
+                error: Some("verified native process exit".into()),
+                tail: String::new(),
+                at_ms: f.now,
+                terminal_closed: Some(true),
+            },
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.now += TURN_SETTLE_MS + 1;
+    f.status(RuntimeStatus::Unavailable);
+    f.consume();
+    for id in [lead, member] {
+        assert_eq!(f.request(id).phase, RequestPhase::Abandoned,
+            "verified process exit must terminate unanswered work even when its final native error is retryable");
+    }
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .provider_retry
+        .is_none());
+}
+
+#[test]
+fn removed_directory_textless_native_completion_closes_unanswered_work() {
+    let (mut f, cwd, rollout, lead) = started();
+    std::fs::remove_dir(&cwd).unwrap();
+    f.worker.check_launch_directory(f.agent).unwrap().unwrap();
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout)
+            .unwrap(),
+        "{}",
+        json!({"type":"event_msg","payload":{"type":"task_complete",
+            "turn_id":"living-turn","last_agent_message":null}})
+    )
+    .unwrap();
+    f.status(RuntimeStatus::Idle);
+    f.now += TURN_SETTLE_MS + 1;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Completed,
+        "owned task_complete is a verified turn end even when Codex records no final text"
+    );
+    assert!(f.request(lead).failure_reason.is_none());
+    assert!(f.reply(lead).is_none());
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+}
+
+#[test]
+fn removed_directory_background_wait_closes_after_proved_process_exit() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let cwd = f.dir.join("background-launch-worktree");
+    std::fs::create_dir(&cwd).unwrap();
+    let mut state = f.worker.state.clone();
+    state
+        .update_agent_runtime_metadata(f.agent, cwd.clone(), None)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let lead = running(&mut f, "wait for the background agent", "living-turn");
+    f.record(
+        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"living-turn",
+        "background_tasks":[{"type":"agent"}]}),
+    );
+    f.consume();
+    assert!(f.request(lead).awaiting_background);
+    std::fs::remove_dir(&cwd).unwrap();
+    f.worker.check_launch_directory(f.agent).unwrap().unwrap();
+    f.worker.settle_requests().unwrap();
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Active,
+        "a living provider's background wait must stay open"
+    );
+    f.status(RuntimeStatus::Unavailable);
+    let mut state = f.worker.state.clone();
+    state
+        .record_exit_snapshot(
+            f.agent,
+            ExitSnapshot {
+                launch_id: Some("launch".into()),
+                terminal_id: "terminal".into(),
+                path: None,
+                error: Some("verified native process exit".into()),
+                tail: String::new(),
+                at_ms: f.now,
+                terminal_closed: Some(true),
+            },
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.now += TURN_SETTLE_MS + 1;
+    f.status(RuntimeStatus::Unavailable);
+    f.consume();
+    assert_eq!(
+        f.request(lead).phase,
+        RequestPhase::Abandoned,
+        "a proved process exit must terminate a background wait after launch-directory loss"
+    );
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("agent_unavailable")
+    );
+    assert!(f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+}

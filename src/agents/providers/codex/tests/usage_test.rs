@@ -100,7 +100,11 @@ fn rollout_reports_the_error_that_ended_a_given_codex_turn() {
                 .into()
         ))
     );
-    assert_eq!(read_codex_turn_end(&path, "turn-2").unwrap(), None);
+    // A committed textless end differs from an absent or still-running turn.
+    assert_eq!(
+        read_codex_turn_end(&path, "turn-2").unwrap(),
+        Some(CodexTurnEnd::NoReply)
+    );
     assert_eq!(read_codex_turn_end(&path, "turn-9").unwrap(), None);
     assert!(read_codex_turn_end(&dir.join("missing.jsonl"), "turn-1").is_err());
     std::fs::remove_dir_all(dir).unwrap();
@@ -455,7 +459,16 @@ fn rollout_0164_requires_a_completed_final_for_the_same_turn_before_its_end() {
                 .join("\n"),
         )
         .unwrap();
-        assert_eq!(read_codex_turn_end(&path, turn).unwrap(), None, "{case}");
+        let expected = if case == "running" {
+            None
+        } else {
+            Some(CodexTurnEnd::NoReply)
+        };
+        assert_eq!(
+            read_codex_turn_end(&path, turn).unwrap(),
+            expected,
+            "{case}"
+        );
     }
     let mut lines = final_0164_records();
     lines[3]["payload"]["error"] = json!({"message":"failed", "codex_error_info":"provider_error"});
