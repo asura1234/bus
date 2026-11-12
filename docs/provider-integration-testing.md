@@ -1092,7 +1092,11 @@ idle then deliver, and an approval card without `--yolo`.
   Wait for the owned plain composer before the first Enter, then require a
   fresh cleared composer or native stash restoration. Working chrome alone
   cannot confirm this message. If the unchanged owned Bus draft remains after
-  250 ms, allow one extra Enter under the content and developer-input guards;
+  250 ms in a fresh post-Enter frame, allow one extra Enter under the content
+  and developer-input guards. Never retry when a native draft was stashed,
+  including a stash that already existed before delivery. Plain-paste readiness
+  may use the hard deadline minus the withdrawal grace; on pre-Enter expiry,
+  withdraw only the still-owned Bus draft through the guarded cleanup transaction;
   never paste again or replay a lost Enter receipt. Edited or blocked input
   stays untouched. Run `just test-one claude_plain_paste`, then isolated real
   Claude and Codex round trips with owned start binding and separate native

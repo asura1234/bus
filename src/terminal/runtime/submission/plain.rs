@@ -9,6 +9,20 @@ use std::{
 };
 
 impl ObservedSubmission {
+    pub(super) fn await_submit_key_or_withdraw(
+        &self,
+        lease: Option<&DraftInputLease>,
+    ) -> io::Result<()> {
+        match self.await_submit_key() {
+            Err(error)
+                if self.inspect.retry_owned_enter() && !self.diagnostics.enter_attempted() =>
+            {
+                self.withdraw_before_enter(error, lease)
+            }
+            result => result,
+        }
+    }
+
     pub(super) fn confirm_plain_submission(
         &self,
         lease: Option<&DraftInputLease>,

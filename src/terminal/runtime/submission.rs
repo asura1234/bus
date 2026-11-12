@@ -572,7 +572,11 @@ impl ObservedSubmission {
             )
         };
         let completion = match lease {
-            Some(lease) if self.inspect.confirm_consumption() => lease.with_unedited(queue),
+            Some(lease)
+                if self.inspect.confirm_consumption() || self.inspect.retry_owned_enter() =>
+            {
+                lease.with_unedited(queue)
+            }
             Some(lease) => lease.with_uninvalidated(queue),
             None => queue(),
         }?;
@@ -730,6 +734,9 @@ impl ObservedSubmission {
                 return Err(io::Error::other(PromptNotShown::NotSubmitted));
             }
         }
+        if self.inspect.retry_owned_enter() {
+            self.deadline.set(self.hard_deadline - self.withdraw_grace);
+        }
         if let Err(error) = self.write(text, delay) {
             return if PromptNotShown::is(&error) {
                 Err(error)
@@ -740,7 +747,7 @@ impl ObservedSubmission {
         // The pane lease buffers developer input. Claude waits for its owned
         // plain draft or attachment registration before the first Enter;
         // other providers keep their existing availability guard.
-        self.await_submit_key()?;
+        self.await_submit_key_or_withdraw(lease)?;
         let entered_at = self.clock.now();
         #[cfg(test)]
         self.clock.entered();

@@ -146,6 +146,82 @@ async fn claude_plain_paste_lost_enter_receipt_is_never_retried() {
 }
 
 #[tokio::test]
+async fn claude_plain_paste_readiness_expiry_withdraws_without_enter() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let expiry = confirmation_expiry(&method);
+    let receipt = clock(&app).hold_next_write_completion();
+    let response = start(&mut app, method);
+    next_write(&mut writes).await;
+    // The paste is rendered when readiness expires, before any Enter. Hold
+    // its flush receipt so observation and expiry cannot race the probe.
+    clock(&app).advance(expiry);
+    redraw(&app, AgentKind::Claude, "from bus");
+    receipt.send(()).unwrap();
+    let result = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+    tokio::pin!(result);
+    tokio::select! {
+        reply = &mut result => {
+            panic!("readiness expiry stranded the Bus draft without withdrawal: {}", reply.unwrap());
+        }
+        bytes = next_write(&mut writes) => {
+            assert_eq!(bytes.as_ref(), b"\x01", "withdrawal must begin without Enter");
+        }
+    };
+    redraw(&app, AgentKind::Claude, "");
+    let reply = result.await.unwrap();
+    assert!(reply.contains("prompt_not_shown"), "{reply}");
+    assert!(writes.try_recv().is_err(), "no Enter and no paste replay");
+}
+
+#[tokio::test]
+async fn claude_plain_paste_readiness_expiry_preserves_foreign_or_edited_input() {
+    for buffered in [false, true] {
+        let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+        let expiry = confirmation_expiry(&method);
+        let receipt = clock(&app).hold_next_write_completion();
+        let response = start(&mut app, method);
+        next_write(&mut writes).await;
+        clock(&app).advance(expiry);
+        redraw(
+            &app,
+            AgentKind::Claude,
+            if buffered {
+                "from bus"
+            } else {
+                "foreign draft"
+            },
+        );
+        if buffered {
+            let pane = app.state.workspaces[0].tabs[0].root_pane;
+            app.lookup_runtime_sender(0, pane)
+                .unwrap()
+                .try_send_developer_bytes(Bytes::from_static(b" developer edit"))
+                .unwrap();
+        }
+        receipt.send(()).unwrap();
+        let mut result = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+        let (reply, unexpected) = tokio::select! {
+            reply = &mut result => (reply.unwrap(), None),
+            bytes = next_write(&mut writes) => {
+                // Complete the unsafe old clear path before reporting its key;
+                // the failing probe must not leave a paused writer behind.
+                redraw(&app, AgentKind::Claude, "");
+                (result.await.unwrap(), Some(bytes))
+            }
+        };
+        assert!(
+            unexpected.is_none(),
+            "buffered={buffered}: expiry sent {unexpected:?} after ownership was revoked"
+        );
+        assert!(!reply.contains("agent_prompted"), "{reply}");
+        assert!(
+            writes.try_recv().is_err(),
+            "expiry sent input after ownership was revoked"
+        );
+    }
+}
+
+#[tokio::test]
 async fn claude_plain_paste_does_not_confirm_unrelated_background_activity() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
     let receipt = clock(&app).hold_next_write_completion();
