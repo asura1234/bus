@@ -96,6 +96,7 @@ pub(crate) struct InboxRecord {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct FeishuState {
     pub(crate) outbox: BTreeMap<String, OutboxRecord>,
+    #[serde(default)]
     pub(crate) inbox: BTreeMap<String, InboxRecord>,
 }
 

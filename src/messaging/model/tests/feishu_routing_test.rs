@@ -78,6 +78,30 @@ fn feishu_outbox_keeps_each_request_and_worker_home_binding_before_send() {
 }
 
 #[test]
+fn feishu_parent_outbox_loads_when_inbound_receipts_are_absent() {
+    let (mut state, work, _, worker) = fixture();
+    let code = prepare(&mut state, work, worker);
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    let mut saved = serde_json::to_value(&state).unwrap();
+    saved["feishu"].as_object_mut().unwrap().remove("inbox");
+    let mut restored: BusState = serde_json::from_value(saved).unwrap();
+    assert!(restored.feishu.inbox.is_empty());
+    assert_eq!(restored.feishu.outbox, state.feishu.outbox);
+    assert!(matches!(
+        restored
+            .ingest_feishu_reply(
+                incoming("om_in", Some("om_out"), None, "Proceed"),
+                "ou_developer",
+                21,
+            )
+            .unwrap(),
+        IngestOutcome::Delivered { .. }
+    ));
+}
+
+#[test]
 fn feishu_mapping_and_parked_reply_changes_require_a_durable_save() {
     let (mut state, work, _, worker) = fixture();
     let code = prepare(&mut state, work, worker);
