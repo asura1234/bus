@@ -10,6 +10,7 @@ use std::{
 
 #[derive(Deserialize, Serialize)]
 struct Receipt {
+    accepted_order: u64,
     input: IncomingReply,
     event: Value,
     outcome: Value,
@@ -70,9 +71,17 @@ pub(super) fn ingest(
             Target::Session(target) => dispatch(&target, app, event, send)?,
             Target::Parked(reason) => {
                 let outcome = json!({"stage":"parked", "reason":reason});
+                let accepted_order = receipts
+                    .values()
+                    .map(|receipt| receipt.accepted_order)
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or("Feishu registry acceptance order exhausted")?;
                 receipts.insert(
                     key.clone(),
                     Receipt {
+                        accepted_order,
                         input,
                         event,
                         outcome: outcome.clone(),
@@ -93,7 +102,12 @@ pub(super) fn ingest(
     // journal remains the durable acceptance owner until its coordinator acks.
     for _ in 0..receipts.len() {
         let mut progress = false;
-        for receipt in receipts.values_mut().filter(|r| r.target.is_none()) {
+        let mut pending: Vec<_> = receipts
+            .values_mut()
+            .filter(|r| r.target.is_none())
+            .collect();
+        pending.sort_by_key(|receipt| receipt.accepted_order);
+        for receipt in pending {
             let target = match select_instance(root, &receipt.input) {
                 Ok(Target::Session(target)) => target,
                 Ok(Target::Parked(_)) => continue,

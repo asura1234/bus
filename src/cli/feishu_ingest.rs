@@ -558,4 +558,81 @@ mod tests {
         assert_eq!(response.result["stage"], "delivered");
     }
 
+    #[test]
+    fn feishu_registry_reconciles_parked_siblings_in_acceptance_order() {
+        let f = Fixture::new();
+        // Message IDs are opaque. Their lexical order is unrelated to the serial
+        // bridge lane: the first accepted sibling can sort after the second.
+        for (id, text, created) in [
+            ("om_z_first", "Use option A", "20"),
+            ("om_a_second", "Use option B instead", "30"),
+        ] {
+            let mut event: Value = serde_json::from_slice(&wire(Some("om_parent"), text)).unwrap();
+            event["message_id"] = json!(id);
+            event["root_id"] = json!("om_parent");
+            event["create_time"] = json!(created);
+            let response = ingest_with(
+                &f.base,
+                "cli_test",
+                serde_json::to_vec(&event).unwrap().as_slice(),
+                |_, _| panic!("unknown parent"),
+            )
+            .unwrap();
+            assert_eq!(response.result["stage"], "parked");
+        }
+        let mut parent: Value =
+            serde_json::from_slice(&wire(None, &format!("bus:{} Parent", f.code_second))).unwrap();
+        parent["message_id"] = json!("om_parent");
+        parent["create_time"] = json!("10");
+        let mut control = |root: &Path, request: &Request| {
+            assert_eq!(root, std::fs::canonicalize(&f.second).unwrap());
+            let store = JsonStore::new(root.join("state.json"));
+            let mut state = store.load().unwrap().unwrap();
+            let input = serde_json::from_value::<Message>(request.params["event"].clone())
+                .unwrap()
+                .normalize("cli_test")
+                .unwrap();
+            let outcome = state
+                .ingest_feishu_reply(input, "ou_developer", 50)
+                .unwrap();
+            store.save(&state).unwrap();
+            Ok(Response::success(
+                &request.id,
+                serde_json::to_value(outcome).unwrap(),
+            ))
+        };
+        let response = ingest_with(
+            &f.base,
+            "cli_test",
+            serde_json::to_vec(&parent).unwrap().as_slice(),
+            &mut control,
+        )
+        .unwrap();
+        assert_eq!(response.result["stage"], "delivered");
+        let state = JsonStore::new(f.second.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        let mut queued: Vec<_> = state
+            .requests()
+            .map(|r| {
+                (
+                    r.prompt.id,
+                    r.prompt
+                        .in_reply_to
+                        .as_ref()
+                        .unwrap()
+                        .feishu_message_id
+                        .clone(),
+                )
+            })
+            .collect();
+        queued.sort_by_key(|(id, _)| *id);
+        let ids: Vec<_> = queued.into_iter().map(|(_, external)| external).collect();
+        assert_eq!(
+            ids,
+            ["om_parent", "om_z_first", "om_a_second"],
+            "late ancestry must preserve the original bridge acceptance order among siblings"
+        );
+    }
 }
