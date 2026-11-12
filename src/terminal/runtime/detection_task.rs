@@ -1049,7 +1049,7 @@ mod blocked_tests {
                 super::super::InputObservation::Unavailable
             })),
         );
-        feed_pty(&runtime, b"\x1b[?2026hTool output is still arriving\r\n");
+        feed_pty(&runtime, b"Tool output is still arriving\r\n\x1b[?2026h");
         let (events, _received) = mpsc::channel(16);
         let task = DetectionTask {
             pane_id: runtime.pane_id,
@@ -1067,7 +1067,7 @@ mod blocked_tests {
         let started = Instant::now();
         let mut status = DetectionState::new(Some(AgentKind::Kimi));
         status.state = AgentState::Working;
-        for elapsed_ms in [0, 100, 200] {
+        for elapsed_ms in [0, 100, 200, 1800, 1900, 2000, 2100] {
             task.scan_screen(
                 &mut status,
                 Some(AgentKind::Kimi),
@@ -1086,6 +1086,11 @@ mod blocked_tests {
                 .cached_screen_detection(Some(AgentKind::Kimi))
                 .is_none());
         }
+        assert_eq!(
+            status.state,
+            AgentState::Blocked,
+            "quiet partial-frame retries must allow the Working hold to expire"
+        );
         assert!(writes.try_recv().is_err());
     }
 
