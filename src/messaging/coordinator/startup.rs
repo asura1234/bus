@@ -15,6 +15,10 @@ fn startup_failure(reason: &str, evidence: &str) -> StartupFailure {
         .any(|line| line.starts_with("> No conversation found with session ID:"))
     {
         "The provider reported a missing conversation; delete this agent, recreate it with its launch settings and system prompt, and rebrief it. Resend this message to the replacement agent."
+    } else if evidence.contains("unauthorized (401)")
+        || evidence.contains("requires a ChatGPT account id")
+    {
+        "Run `codex login` to repair the account, then recreate the agent and resend this message."
     } else {
         "Inspect the agent's terminal and repair shell/provider setup before resuming. Resend this message after startup is confirmed."
     };
@@ -93,7 +97,19 @@ impl Worker {
                     reported: false,
                     process_observed: false,
                     native_terminal_id: None,
-                    recovery: None,
+                    recovery: state
+                        .agent(id)
+                        .filter(|a| {
+                            a.provider == super::Provider::Codex
+                                && a.runtime_identity.session_id.is_none()
+                        })
+                        .map(|_| StartupRecovery::CodexBootstrap {
+                            args: argv[1..].to_vec(),
+                            attempts: 0,
+                            retry_at_ms: None,
+                            uncertain: false,
+                            exhausted: false,
+                        }),
                     failure: None,
                 }),
             )
@@ -265,7 +281,15 @@ impl Worker {
                 state
                     .set_agent_startup(agent.id, None)
                     .map_err(|e| e.to_string())?;
-                if startup.reported {
+                if startup.reported
+                    || matches!(
+                        startup.recovery,
+                        Some(StartupRecovery::CodexBootstrap {
+                            uncertain: true,
+                            ..
+                        })
+                    )
+                {
                     state
                         .set_agent_error(agent.id, None)
                         .map_err(|e| e.to_string())?;
@@ -279,7 +303,14 @@ impl Worker {
                     .as_deref()
                     .is_some_and(|label| agent.provider.observes_label(label))
             });
-            let process_exited = startup.process_observed && !process_present;
+            let process_exited = !process_present
+                && (startup.process_observed
+                    || !startup.reported
+                        && terminal_info.is_none_or(|info| !info.launch_pending)
+                        && self.startup_process_exited(&agent));
+            if self.handle_codex_startup_retry(&agent, &mut startup, process_exited, now_ms)? {
+                continue;
+            }
             // Startup confirmation is bounded independently of native ownership;
             // only exit/replacement releases it. A failed list request never
             // reaches here, so silence is not failure.
@@ -304,14 +335,32 @@ impl Worker {
                 let diagnostics = self.startup_diagnostics(&agent);
                 let reason = if let Some(reason) = native_error {
                     reason
-                } else if expired {
-                    "no provider session or interactive confirmation within 30 seconds"
-                } else {
+                } else if process_exited {
                     "the native provider launch ended before startup was confirmed"
+                } else {
+                    "no provider session or interactive confirmation within 30 seconds"
                 };
-                let failure = startup_failure(reason, &evidence);
+                if process_exited {
+                    self.capture_startup_exit(&agent)?;
+                }
+                let mut failure = startup_failure(reason, &evidence);
+                if let Some(StartupRecovery::CodexBootstrap {
+                    attempts,
+                    exhausted: true,
+                    ..
+                }) = &startup.recovery
+                {
+                    failure.reason = format!("{reason}; Codex couldn't reach the ChatGPT backend (workspace routing discovery failed) after {} tries", attempts + 1);
+                    failure.recovery = "This is usually a short network or OpenAI outage. The message text is retained in history; recreate the agent and resend this message.".into();
+                }
+                let snapshot = self
+                    .state
+                    .agent(agent.id)
+                    .and_then(|a| a.exit_snapshot.as_ref())
+                    .map(crate::messaging::model::ExitSnapshot::notice)
+                    .unwrap_or_default();
                 let text = format!(
-                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
+                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\n{snapshot}\nStartup diagnostics:\n{diagnostics}",
                     failure.notice(), launch::provider_kind(agent.provider), startup.command
                 );
                 startup.failure = Some(failure);
@@ -327,6 +376,21 @@ impl Worker {
                     "Agent startup failed; identity retained and never-submitted queued requests closed"
                 );
                 startup.reported = true;
+                super::launch_metrics::settle_current(
+                    &mut state,
+                    agent.id,
+                    crate::messaging::model::LaunchOutcome::Failed,
+                    Some(if process_exited {
+                        "unavailable_at_launch"
+                    } else if input_error.is_some() {
+                        "launch_input_failed"
+                    } else if native_error.is_some() {
+                        "native_resume_failed"
+                    } else {
+                        "startup_timeout"
+                    }),
+                    now_ms,
+                );
                 state
                     .set_agent_startup(agent.id, Some(startup))
                     .map_err(|e| e.to_string())?;

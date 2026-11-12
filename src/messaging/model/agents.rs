@@ -351,7 +351,28 @@ impl BusState {
             // interval even if the runtime remained Idle throughout the hold.
             agent.status_since_ms = agent.status_since_ms.max(agent.observed_at_ms);
         }
+        if startup.is_none() && agent.startup.is_some() {
+            // Startup snapshots remain as files. The now-running provider must
+            // get its own fresh snapshot if it exits later on this same terminal.
+            agent.exit_snapshot = None;
+        }
+        let attempts = startup
+            .as_ref()
+            .or(agent.startup.as_ref())
+            .and_then(|s| match &s.recovery {
+                Some(super::StartupRecovery::CodexBootstrap { attempts, .. }) => Some(*attempts),
+                _ => None,
+            })
+            .unwrap_or(0);
         agent.startup = startup;
+        for request in self.queues.get(&id).into_iter().flatten() {
+            if let Some(request) = self.requests.get_mut(request) {
+                let added = attempts.saturating_sub(request.startup_retry_attempts);
+                request.provider_retry_attempts =
+                    request.provider_retry_attempts.saturating_add(added);
+                request.startup_retry_attempts = request.startup_retry_attempts.max(attempts);
+            }
+        }
         Ok(())
     }
 
@@ -366,6 +387,23 @@ impl BusState {
             return;
         };
         let detail = failure.notice();
+        let reason = if self
+            .agents
+            .get(&id)
+            .and_then(|a| a.startup.as_ref())
+            .is_some_and(|s| {
+                matches!(
+                    s.recovery,
+                    Some(super::StartupRecovery::CodexBootstrap {
+                        exhausted: true,
+                        ..
+                    })
+                )
+            }) {
+            super::CODEX_BOOTSTRAP_FAILED
+        } else {
+            super::AGENT_STARTUP_FAILED
+        };
         let continuations: Vec<_> = self
             .queued_requests(id)
             .iter()
@@ -404,7 +442,7 @@ impl BusState {
                     return true;
                 }
                 request.phase = RequestPhase::Abandoned;
-                request.failure_reason = Some(super::AGENT_STARTUP_FAILED.into());
+                request.failure_reason = Some(reason.into());
                 request.submission_error = Some(detail.clone());
                 request.completed_at_ms = Some(now_ms);
                 false

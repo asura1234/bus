@@ -351,9 +351,12 @@ impl BusState {
             .collect::<Vec<_>>()
             .join("\n");
         let detail = if steered.is_empty() {
-            (request.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED))
-                .then_some(request.submission_error.as_deref())
-                .flatten()
+            (matches!(
+                request.failure_reason.as_deref(),
+                Some(super::AGENT_STARTUP_FAILED | super::CODEX_BOOTSTRAP_FAILED)
+            ))
+            .then_some(request.submission_error.as_deref())
+            .flatten()
         } else {
             Some(steered.as_str())
         };

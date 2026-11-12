@@ -24,12 +24,14 @@ pub(super) fn save(
     terminal: &str,
 ) -> Result<(), String> {
     let launch_id = agent.runtime_identity.launch_id.clone();
-    if agent.startup.is_some()
-        || agent
-            .exit_snapshot
-            .as_ref()
-            .is_some_and(|saved| saved.launch_id == launch_id && saved.terminal_id == terminal)
-    {
+    if agent.exit_snapshot.as_ref().is_some_and(|saved| {
+        saved.launch_id == launch_id
+            && saved.terminal_id == terminal
+            && agent
+                .startup
+                .as_ref()
+                .is_none_or(|s| saved.at_ms >= s.started_at_ms)
+    }) {
         return Ok(());
     }
     let at_ms = io::now_ms();
@@ -47,7 +49,7 @@ pub(super) fn save(
         error: None,
         tail: String::new(),
         at_ms,
-        terminal_closed: agent.orchestrates.map(|_| false),
+        terminal_closed: (agent.orchestrates.is_some() || agent.startup.is_some()).then_some(false),
     };
     match (&visible, &recent) {
         (Err(visible), Err(recent)) => {
