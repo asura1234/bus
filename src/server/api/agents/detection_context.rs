@@ -8,12 +8,13 @@ impl App {
         id: String,
         params: AgentDetectionContexts,
     ) -> String {
+        let infos = self.reconciled_cached_agent_infos();
         let mut updated = std::collections::HashSet::new();
         for context in params.agents {
             let Some((ws, pane)) = self.parse_current_public_pane_id(&context.pane_id) else {
                 continue;
             };
-            let Some(info) = self.agent_info(ws, pane) else {
+            let Some(info) = infos.iter().find(|info| info.pane_id == context.pane_id) else {
                 continue;
             };
             if info.terminal_id != context.terminal_id
@@ -49,6 +50,9 @@ impl App {
                 }
             }
         }
-        self.handle_agent_list(id)
+        crate::server::api::errors::encode_success(
+            id,
+            crate::protocol::api::schema::ResponseResult::AgentList { agents: infos },
+        )
     }
 }

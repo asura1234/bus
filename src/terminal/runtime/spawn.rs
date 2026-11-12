@@ -1,3 +1,4 @@
+use super::{detection_task::spawn_detection_task, screen_detection::ScreenDetectionCache};
 use crate::agents::AgentKind;
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::terminal::emulator::PaneTerminal;
@@ -7,7 +8,6 @@ use crate::terminal::pty::actor::PtyIoActorConfig;
 #[cfg(unix)]
 use crate::terminal::pty::fd;
 use crate::terminal::runtime::compression::TerminalCompressionTask;
-use crate::terminal::runtime::detection_task::spawn_detection_task;
 use crate::terminal::runtime::io::PaneRuntimeIo;
 use crate::terminal::runtime::read::{pty_read_callback, PtyReadContext};
 use crate::terminal::runtime::AgentDetection;
@@ -747,6 +747,7 @@ impl TerminalRuntime {
             })?)
         };
 
+        let screen_detection = Arc::new(ScreenDetectionCache::new(content_seq.clone()));
         let (managed_launch_pending, detection_context, detect_handle) = spawn_detection_task(
             pane_id,
             agent_detection,
@@ -755,6 +756,7 @@ impl TerminalRuntime {
             terminal.clone(),
             events.clone(),
             detection_content_seq.clone(),
+            screen_detection.clone(),
             render_notify.clone(),
             render_dirty.clone(),
             kimi_code_home.clone(),
@@ -779,6 +781,7 @@ impl TerminalRuntime {
             detection_content_seq,
             managed_launch_pending,
             detection_context,
+            screen_detection,
             kimi_code_home,
             #[cfg(unix)]
             shared_codex: Arc::new(Mutex::new(None)),

@@ -332,7 +332,17 @@ impl HeadlessServer {
             busy.stage("schedule");
             self.schedule_loop_work(now, &mut needs_render, &mut needs_full_render);
             busy.stage("render");
-            if self.render_pending_loop_work(now, &mut needs_render, &mut needs_full_render) {
+            let rendered =
+                self.render_pending_loop_work(now, &mut needs_render, &mut needs_full_render);
+            busy.stage("api");
+            let api_changed = self.drain_api_requests_with_shutdown_check();
+            if api_changed {
+                needs_render = true;
+                needs_full_render = true;
+                crate::utils::render::prof::event("full_render_cause.api_requests");
+            }
+            if rendered || api_changed || !self.app.api_rx.is_empty() || self.app.state.should_quit
+            {
                 continue;
             }
             drop(busy);
@@ -348,6 +358,16 @@ impl HeadlessServer {
 
         info!("headless server exiting");
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_loop_work(&mut self) {
+        let (mut render, mut full) = (false, false);
+        self.drain_loop_inputs(&mut render, &mut full).unwrap();
+        let now = Instant::now();
+        self.schedule_loop_work(now, &mut render, &mut full);
+        self.render_pending_loop_work(now, &mut render, &mut full);
+        self.drain_api_requests_with_shutdown_check();
     }
 
     fn drain_loop_inputs(
@@ -370,23 +390,13 @@ impl HeadlessServer {
         if self.should_quit.load(Ordering::Acquire) {
             return Ok(false);
         }
-        // 3. Drain API requests.
-        if self.drain_api_requests_with_shutdown_check() {
-            *needs_render = true;
-            *needs_full_render = true;
-            crate::utils::render::prof::event("full_render_cause.api_requests");
-        }
-        if self.should_quit.load(Ordering::Acquire) {
-            return Ok(false);
-        }
-
         self.app.sync_focus_events();
         self.app.sync_session_save_schedule();
 
-        // 4. Accept new client connections.
+        // 3. Accept new client connections.
         self.accept_client_connections()?;
 
-        // 5. Drain server events from client threads.
+        // 4. Drain pane input and other events before API work.
         if self.drain_server_events() {
             *needs_render = true;
             *needs_full_render = true;
@@ -526,20 +536,21 @@ impl HeadlessServer {
             });
         {
             tokio::select! {
-                maybe_api = self.app.api_rx.recv() => match maybe_api {
-                    Some(msg) => LoopEvent::Api(Box::new(msg)),
+                biased;
+                maybe_server_ev = self.server_event_rx.recv() => match maybe_server_ev {
+                    Some(ev) => LoopEvent::ServerEvent(ev),
                     None => LoopEvent::Timer,
                 },
                 maybe_ev = self.app.event_rx.recv() => match maybe_ev {
                     Some(ev) => LoopEvent::Internal(ev),
                     None => LoopEvent::Timer,
                 },
-                maybe_server_ev = self.server_event_rx.recv() => match maybe_server_ev {
-                    Some(ev) => LoopEvent::ServerEvent(ev),
-                    None => LoopEvent::Timer,
-                },
                 _ = sleep_until_or_pending(next_deadline) => LoopEvent::Timer,
                 _ = self.app.render_notify.notified() => LoopEvent::RenderRequested,
+                maybe_api = self.app.api_rx.recv() => match maybe_api {
+                    Some(msg) => LoopEvent::Api(Box::new(msg)),
+                    None => LoopEvent::Timer,
+                },
             }
         }
     }

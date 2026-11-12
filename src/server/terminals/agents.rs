@@ -1,3 +1,5 @@
+mod info;
+
 use std::time::{Duration, Instant};
 
 use crate::protocol::api::schema::AgentStartParams;
@@ -100,6 +102,19 @@ impl App {
     pub(in crate::server) fn collect_agent_infos(
         &self,
     ) -> Vec<crate::protocol::api::schema::AgentInfo> {
+        self.collect_agent_infos_with_detection(false)
+    }
+
+    pub(in crate::server) fn collect_cached_agent_infos(
+        &self,
+    ) -> Vec<crate::protocol::api::schema::AgentInfo> {
+        self.collect_agent_infos_with_detection(true)
+    }
+
+    fn collect_agent_infos_with_detection(
+        &self,
+        cached: bool,
+    ) -> Vec<crate::protocol::api::schema::AgentInfo> {
         self.state
             .workspaces
             .iter()
@@ -109,7 +124,9 @@ impl App {
                     tab.layout
                         .pane_ids()
                         .into_iter()
-                        .filter_map(move |pane_id| self.agent_info(ws_idx, pane_id))
+                        .filter_map(move |pane_id| {
+                            self.agent_info_with_detection(ws_idx, pane_id, cached)
+                        })
                 })
             })
             .collect()
@@ -510,106 +527,6 @@ impl App {
                 }
             }
         }
-    }
-
-    pub(in crate::server) fn agent_info(
-        &self,
-        ws_idx: usize,
-        pane_id: crate::utils::ids::PaneId,
-    ) -> Option<crate::protocol::api::schema::AgentInfo> {
-        let ws = self.state.workspaces.get(ws_idx)?;
-        let pane_state = ws.pane_state(pane_id)?;
-        let terminal = self.state.terminals.get(&pane_state.attached_terminal_id)?;
-        if !terminal.is_agent_terminal() && terminal.native_resume.is_none() {
-            return None;
-        }
-        let pane = self.pane_info(ws_idx, pane_id)?;
-        let observed = self
-            .lookup_runtime_sender(ws_idx, pane_id)
-            .and_then(|runtime| crate::terminal::driver::observe(runtime).ok());
-        let screen_detection_skipped = observed.is_none();
-        let compaction_banner = observed.as_ref().is_some_and(|(grid, _)| {
-            crate::agents::compaction_banner::visible(pane.agent.as_deref(), &grid.text())
-        });
-        let provider_quota = observed.as_ref().and_then(|(grid, _)| {
-            (pane.agent.as_deref() == Some("cursor")
-                && crate::agents::providers::cursor::usage::is_restored_monthly_usage_limit(
-                    &grid.text(),
-                ))
-            .then(|| {
-                (
-                    crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR,
-                    crate::agents::providers::cursor::usage::monthly_reset_at(
-                        crate::utils::time::now_ms(),
-                    ),
-                )
-            })
-        });
-        let dialog = observed.as_ref().and_then(|(grid, _)| {
-            crate::terminal::driver::blocker(
-                grid,
-                pane.agent_status == crate::protocol::api::schema::AgentStatus::Working,
-            )
-        });
-        Some(crate::protocol::api::schema::AgentInfo {
-            generation: self.state.generation,
-            launch_input_error: self
-                .lookup_runtime_sender(ws_idx, pane_id)
-                .and_then(|runtime| runtime.definite_launch_input_error()),
-            native_resume: terminal.native_resume.as_ref().map(|resume| {
-                crate::protocol::api::schema::NativeResumeInfo {
-                    name: resume.name.clone(),
-                    agent: crate::agents::agent_label(resume.kind).into(),
-                    session_id: resume
-                        .session
-                        .as_ref()
-                        .map(|session| session.session_ref.value.clone()),
-                    command: resume.command.clone(),
-                    error: resume.error.clone(),
-                }
-            }),
-            terminal_id: pane.terminal_id,
-            name: terminal.agent_name.clone(),
-            agent: pane.agent,
-            title: pane.title,
-            terminal_title: pane.terminal_title,
-            terminal_title_stripped: pane.terminal_title_stripped,
-            display_agent: pane.display_agent,
-            agent_status: pane.agent_status,
-            screen_detection_skipped,
-            compaction_banner,
-            dialog_id: dialog,
-            update_error: None,
-            provider_error: provider_quota.map(|(error, _)| error.to_owned()),
-            provider_quota_reset_at: provider_quota.map(|(_, reset)| reset),
-            state_labels: pane.state_labels,
-            tokens: pane.tokens,
-            agent_session: pane.agent_session,
-            workspace_id: pane.workspace_id,
-            tab_id: pane.tab_id,
-            pane_id: pane.pane_id,
-            focused: pane.focused,
-            launch_pending: terminal.pending_agent_resume_plan.is_some()
-                || terminal.managed_agent_launch_pending(),
-            interactive_ready: terminal.pending_agent_resume_plan.is_none()
-                && terminal.managed_agent_interactive_ready(),
-            native_ready: terminal.pending_agent_resume_plan.is_none()
-                && !terminal.managed_agent_launch_pending()
-                && terminal.effective_known_agent().is_some_and(|expected| {
-                    self.lookup_runtime_sender(ws_idx, pane_id)
-                        .is_some_and(|runtime| {
-                            let hosts = runtime_hosts_agent(runtime, expected);
-                            if hosts {
-                                runtime.reconcile_launch_attempt(true);
-                            }
-                            hosts
-                        })
-                }),
-            state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
-            cwd: pane.cwd,
-            foreground_cwd: pane.foreground_cwd,
-            revision: pane.revision,
-        })
     }
 
     fn agent_name_conflicts(

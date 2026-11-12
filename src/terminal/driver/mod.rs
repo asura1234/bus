@@ -8,7 +8,8 @@ mod press;
 mod selection;
 
 pub(crate) use blocker::{
-    blocker, editable_composer_region, has_blocking_input_controls, has_input_controls,
+    blocker, blocker_from_text, editable_composer_region, has_blocking_input_controls,
+    has_input_controls,
 };
 pub(crate) use grid::Grid;
 pub(super) use press::DriverState;

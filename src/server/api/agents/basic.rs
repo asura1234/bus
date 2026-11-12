@@ -7,6 +7,13 @@ use crate::server::app::App;
 
 impl App {
     pub(in crate::server::api) fn handle_agent_list(&mut self, id: String) -> String {
+        let agents = self.reconciled_cached_agent_infos();
+        encode_success(id, ResponseResult::AgentList { agents })
+    }
+
+    pub(super) fn reconciled_cached_agent_infos(
+        &mut self,
+    ) -> Vec<crate::protocol::api::schema::AgentInfo> {
         let pending: Vec<_> = self
             .state
             .terminals
@@ -17,12 +24,7 @@ impl App {
         for name in pending {
             self.reconcile_managed_agent_target(&name);
         }
-        encode_success(
-            id,
-            ResponseResult::AgentList {
-                agents: self.collect_agent_infos(),
-            },
-        )
+        self.collect_cached_agent_infos()
     }
 
     pub(in crate::server::api) fn handle_agent_get(

@@ -157,6 +157,7 @@ pub(super) fn spawn_detection_task(
     terminal: Arc<PaneTerminal>,
     events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    screen_detection: Arc<super::screen_detection::ScreenDetectionCache>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
@@ -183,6 +184,7 @@ pub(super) fn spawn_detection_task(
         render_dirty,
         kimi_code_home,
         detection_context: detection_context.clone(),
+        screen_detection,
     };
     let handle = tokio::spawn(task.run(initial_agent));
     (
@@ -202,6 +204,7 @@ struct DetectionTask {
     terminal: Arc<PaneTerminal>,
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    screen_detection: Arc<super::screen_detection::ScreenDetectionCache>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
     render_notify: Arc<Notify>,
@@ -592,10 +595,16 @@ impl DetectionTask {
             DetectionScreenReadDecision::Skip => return,
         }
 
-        let content = self.terminal.detection_text();
+        let (content, coherent) =
+            self.screen_detection
+                .observe(&self.terminal, agent, process_exited);
         let pty_activity = current_detection_content_seq
             .is_some_and(|seq| seq != status.last_screen_scan_detection_content_seq.unwrap_or(0));
-        status.last_screen_scan_detection_content_seq = current_detection_content_seq;
+        status.last_screen_scan_detection_content_seq = if coherent {
+            current_detection_content_seq
+        } else {
+            None
+        };
         let content_changed = content != status.last_detection_text;
         status.last_detection_text.clone_from(&content);
         if pty_activity && status.state == AgentState::Working {
@@ -866,6 +875,7 @@ mod blocked_tests {
                 detection_content_seq: self.detection_content_seq.clone(),
                 managed_launch_pending: self.managed_launch_pending.clone(),
                 detection_context: self.detection_context.clone(),
+                screen_detection: self.screen_detection.clone(),
                 render_notify: Arc::new(Notify::new()),
                 render_dirty: Arc::new(RenderSignal::default()),
                 kimi_code_home: Arc::new(Mutex::new(None)),
@@ -988,6 +998,7 @@ mod blocked_tests {
             detection_content_seq: runtime.detection_content_seq.clone(),
             managed_launch_pending: runtime.managed_launch_pending.clone(),
             detection_context: runtime.detection_context.clone(),
+            screen_detection: runtime.screen_detection.clone(),
             render_notify: Arc::new(Notify::new()),
             render_dirty: Arc::new(RenderSignal::default()),
             kimi_code_home: Arc::new(Mutex::new(None)),
