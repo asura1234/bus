@@ -6,18 +6,29 @@ use crate::messaging::{
 };
 
 fn transient(screen: &str) -> bool {
-    let screen = screen
+    let lines: Vec<_> = screen
         .lines()
         .map(|line| line.trim().trim_start_matches("> "))
-        .collect::<Vec<_>>()
-        .join(" ");
-    screen.contains("account/read failed")
-        && (screen.contains("workspace routing discovery failed")
-            || screen.contains("workspace routing discovery timed out"))
-        && !screen.contains("unauthorized")
-        && !screen.contains("401")
-        && !screen.contains("requires a ChatGPT account id")
-        && !screen.contains("configuration changed")
+        .collect();
+    // This pane is reused. Earlier attempts remain in scrollback and cannot
+    // classify a later configuration error as another transient failure.
+    let last_error = lines
+        .iter()
+        .rposition(|line| {
+            let line = line.to_ascii_lowercase();
+            line.starts_with("error:") || line.starts_with("fatal:")
+        })
+        .unwrap_or(0);
+    let latest = lines[last_error..].join(" ");
+    let Some((_, failure)) = latest.rsplit_once("account/read failed") else {
+        return false;
+    };
+    (failure.contains("workspace routing discovery failed")
+        || failure.contains("workspace routing discovery timed out"))
+        && !failure.contains("unauthorized")
+        && !failure.contains("401")
+        && !failure.contains("requires a ChatGPT account id")
+        && !failure.contains("configuration changed")
 }
 
 impl Worker {

@@ -118,6 +118,7 @@ fn codex_bootstrap_retry_excludes_auth_config_other_providers_and_unproven_exit(
         (Provider::Codex, true, "account/read failed during TUI bootstrap: workspace routing discovery unauthorized (401)"),
         (Provider::Codex, true, "account/read failed during TUI bootstrap: workspace routing requires a ChatGPT account id"),
         (Provider::Codex, true, "account/read failed during TUI bootstrap: configuration changed during workspace routing discovery; retry account/read"),
+        (Provider::Codex, true, "Error: account/read failed during TUI bootstrap: workspace routing discovery failed\nscratch% codex\nError: invalid configuration: workspace backend must use an HTTPS origin"),
         (Provider::Codex, false, "account/read failed during TUI bootstrap: workspace routing discovery failed"),
         (Provider::ClaudeCode, true, "account/read failed during TUI bootstrap: workspace routing discovery failed"),
     ] {
