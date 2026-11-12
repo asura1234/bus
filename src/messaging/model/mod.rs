@@ -1,5 +1,6 @@
 //! Messaging model facade; state operations are owned by their round-trip domain.
 mod agent_names;
+mod agent_startup;
 mod agents;
 mod attention;
 mod callbacks;
