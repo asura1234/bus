@@ -144,7 +144,7 @@ fn feishu_distinct_asks_have_their_own_dm_and_durable_mapping_before_and_after_t
 }
 
 #[test]
-fn feishu_missing_plugin_turns_notifications_off_without_a_tui_error() {
+fn feishu_missing_plugin_turns_both_transport_directions_off_without_a_tui_error() {
     let mut f = Fixture::new();
     f.settings(|s| s.feishu_bridge_path = Some("/missing/feishu-bridge".into()));
     f.post("[waiting-on-you] Choose");
