@@ -171,7 +171,111 @@ fn feishu_replay_after_store_reload_returns_the_same_request() {
         first
     );
     assert_eq!(reloaded.requests().count(), count);
+    let mut changed = incoming("om_in", Some("om_out"), None, "Different instruction");
+    changed.create_time = 100;
+    assert_eq!(
+        reloaded
+            .ingest_feishu_reply(changed, "ou_developer", 101)
+            .unwrap(),
+        first
+    );
+    assert_eq!(reloaded.requests().last().unwrap().prompt.text, "Proceed");
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn feishu_completed_worker_reply_keeps_its_request_source_and_room_binding() {
+    let (mut state, work, orch, worker) = fixture();
+    let original = state
+        .submit_message_from(
+            work,
+            Draft {
+                text: "Inspect access".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Developer,
+            1,
+        )
+        .unwrap()[0];
+    let before = state.clone();
+    state.finish_for_test(original, "[waiting-on-you] Approve access", 10);
+    state.prepare_feishu_alerts(&before, "/tmp/private-bus-session", "ou_developer", 11);
+    assert_eq!(state.feishu.outbox.len(), 1);
+    let record = state.feishu.outbox.values().next().unwrap();
+    assert_eq!(record.room, work);
+    assert_eq!(record.raising_agent, Some(worker));
+    assert_eq!(record.orchestrator, Some(orch));
+    let code = record.code.clone();
+    let source = record.source.clone();
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    let outcome = state
+        .ingest_feishu_reply(
+            incoming("om_in", Some("om_out"), None, "Approved"),
+            "ou_developer",
+            21,
+        )
+        .unwrap();
+    let IngestOutcome::Delivered { request_id, .. } = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(
+        state
+            .request(request_id)
+            .unwrap()
+            .prompt
+            .in_reply_to
+            .as_ref()
+            .unwrap()
+            .source,
+        source
+    );
+}
+
+#[test]
+fn feishu_bus_attention_notice_keeps_the_originating_orchestrator() {
+    let (mut state, _, orch, _) = fixture();
+    let before = state.clone();
+    state
+        .attention_episode("episode".into(), Some(true), orch, "Unlock terminal", 10)
+        .unwrap();
+    state.prepare_feishu_alerts(&before, "/tmp/private-bus-session", "ou_developer", 11);
+    let record = state.feishu.outbox.values().next().unwrap();
+    assert_eq!(record.raising_agent, Some(orch));
+    assert_eq!(record.orchestrator, Some(orch));
+}
+
+#[test]
+fn feishu_unbound_worker_reply_is_parked_without_selecting_another_orchestrator() {
+    let (mut state, _, _, _) = fixture();
+    let unbound = state.create_room("unbound").unwrap();
+    let worker = state
+        .create_agent(
+            unbound,
+            "unbound-worker",
+            Provider::Codex,
+            "/tmp".into(),
+            None,
+        )
+        .unwrap();
+    let code = prepare(&mut state, unbound, worker);
+    assert_eq!(state.feishu.outbox[&code].orchestrator, None);
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    assert!(matches!(
+        state
+            .ingest_feishu_reply(
+                incoming("om_in", Some("om_out"), None, "Proceed"),
+                "ou_developer",
+                21
+            )
+            .unwrap(),
+        IngestOutcome::Parked { .. }
+    ));
+    assert_eq!(state.requests().count(), 0);
 }
 
 #[test]
