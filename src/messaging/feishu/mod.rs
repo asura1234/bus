@@ -4,6 +4,10 @@ pub(crate) mod waiting;
 pub(crate) use process::Cancellation;
 use process::Process;
 
+#[cfg(all(test, unix))]
+#[path = "tests/bridge_test.rs"]
+mod bridge_tests;
+
 #[derive(Clone, Default)]
 pub(crate) struct Client {
     process: Process,
