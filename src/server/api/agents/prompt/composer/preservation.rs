@@ -99,6 +99,11 @@ impl SubmissionInspector for PreservingComposer {
     fn retry_owned_enter(&self) -> bool {
         self.owned.retry_owned_enter()
     }
+    fn native_draft_preserved(&self) -> bool {
+        self.native_draft
+            .lock()
+            .map_or(true, |draft| draft.is_some())
+    }
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()
     }

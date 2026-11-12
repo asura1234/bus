@@ -106,6 +106,10 @@ pub(crate) trait SubmissionInspector: Send {
     fn retry_owned_enter(&self) -> bool {
         false
     }
+    /// Native restoration can replace the composer without passing through Bus input.
+    fn native_draft_preserved(&self) -> bool {
+        false
+    }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
     }

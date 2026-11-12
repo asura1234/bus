@@ -38,7 +38,11 @@ impl ObservedSubmission {
             // only a cleared composer or restored native stash proves consumption.
             // A changed draft loses ownership in the inspector permanently.
             self.check_deadline().map_err(Self::uncertain_submission)?;
+            // Claude restores a stash outside the input lease; a held repaint
+            // must never authorize Enter against that developer draft.
             let retry = !retried
+                && fresh
+                && !self.inspect.native_draft_preserved()
                 && observation == InputObservation::Pending
                 && screen
                     .as_ref()

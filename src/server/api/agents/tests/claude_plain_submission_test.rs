@@ -57,6 +57,7 @@ async fn claude_plain_paste_represses_enter_for_the_same_unconsumed_draft() {
     receipt.send(()).unwrap();
     assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
     clock(&app).wait_for_enters(1);
+    redraw(&app, AgentKind::Claude, "from bus");
     clock(&app).advance(Duration::from_millis(300));
     let response = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
     tokio::pin!(response);
