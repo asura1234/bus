@@ -181,6 +181,7 @@ impl BusState {
                     provider_retry_attempts: 0,
                     startup_retry_attempts: 0,
                     restart_continuation: false,
+                    restart_resume: None,
                     delivery_epoch: None,
                     expected_launch_id: None,
                     submission_boundary: None,

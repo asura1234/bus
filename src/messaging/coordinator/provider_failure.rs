@@ -97,6 +97,7 @@ impl Worker {
 }
 
 fn clear_stale_pane(state: &mut BusState, agent: &RoomAgent) -> Result<(), String> {
+    state.await_restart_resume(agent.id);
     let mut identity = agent.runtime_identity.clone();
     identity.pane_id = None;
     state

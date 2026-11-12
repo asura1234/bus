@@ -74,7 +74,8 @@ impl BusState {
             return None;
         }
         let request = self.requests.get(&owner.current_request?)?;
-        if !request.trusted_start_bound
+        if request.restart_resume.is_some()
+            || !request.trusted_start_bound
             || request.awaiting_background
             || request.pending_final.is_some()
             || !matches!(

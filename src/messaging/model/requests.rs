@@ -88,6 +88,7 @@ impl BusState {
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
         request_state.phase = RequestPhase::Submitting;
+        request_state.restart_resume = None;
         request_state.submission_error = None;
         request_state.expected_launch_id = Some(launch_id.to_owned());
         request_state.submission_boundary = Some(callback_boundary);

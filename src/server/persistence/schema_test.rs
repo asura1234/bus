@@ -682,3 +682,70 @@ fn restore_falls_back_to_home_when_cwd_missing() {
         PathBuf::from("/tmp/this-directory-does-not-exist-for-bus-test")
     );
 }
+
+#[test]
+fn provider_exit_before_native_save_restores_a_shell_without_managed_ownership() {
+    use crate::agents::resume::catalog::{AgentSessionRef, PersistedAgentSession};
+    use crate::agents::{AgentKind, AgentState};
+    let mut state = state_with_workspaces(&["exited-before-save"]);
+    let pane_id = state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = state.workspaces[0].tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+    let now = std::time::Instant::now();
+    terminal.begin_managed_agent(
+        "bus-r1-a2".into(),
+        AgentKind::Codex,
+        now,
+        std::time::Duration::ZERO,
+        std::time::Duration::from_secs(30),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    terminal.reconcile_managed_agent_at(now, false);
+    terminal.set_persisted_agent_session(PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: AgentSessionRef::id("saved-session").unwrap(),
+    });
+    terminal.set_detected_state_with_screen_signals_at(
+        Some(AgentKind::Codex),
+        AgentState::Unknown,
+        false,
+        true,
+        None,
+        now,
+    );
+    let captured = capture_from_state(&state);
+    let saved = parse_snapshot(&serde_json::to_string(&captured).unwrap()).unwrap();
+    let pane = &saved.workspaces[0].tabs[0].panes[&pane_id.raw()];
+    assert!(pane.agent_name.is_none());
+    assert!(pane.managed_agent_kind.is_none());
+    assert!(pane.agent_session.is_none());
+    let (events, _event_rx) = tokio::sync::mpsc::channel(4);
+    let restored = super::super::restore(
+        &saved,
+        None,
+        true,
+        events,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
+    );
+    assert_eq!(restored.launches.len(), 1);
+    assert_eq!(
+        restored.launches[0].identity.as_ref().unwrap().pane_id,
+        crate::server::workspaces::public_pane_id_for_number(
+            &state.workspaces[0].id,
+            state.workspaces[0].public_pane_number(pane_id).unwrap()
+        )
+    );
+    assert_ne!(restored.launches[0].terminal_id, terminal_id);
+    assert!(restored
+        .terminals
+        .values()
+        .all(|terminal| terminal.agent_name.is_none()
+            && terminal.persisted_agent_session.is_none()
+            && terminal.pending_agent_resume_plan.is_none()));
+    // Coordinator detached_continuation_test presents this unowned shell at
+    // the old public pane with a fresh terminal; it must never be adopted.
+}

@@ -1,4 +1,4 @@
-//! Observe launch outcomes without changing native launch or delivery behavior.
+//! Observe launch outcomes and latch conclusive resume preparation failures.
 use super::{io, resume, schema, AgentId, BusState, Provider, RoomAgent, RoomId, Worker};
 use crate::messaging::model::{AgentRuntimeIdentity, LaunchAttempt, LaunchKind, LaunchOutcome};
 
@@ -43,18 +43,25 @@ impl Worker {
             Err(error) => {
                 let mut state = self.state.clone();
                 let record = state.launch_attempt(id).ok_or("Unknown launch attempt")?;
+                let failed_resume = (record.kind == LaunchKind::Resume
+                    && cause == "resume_preparation_failed")
+                    .then_some(record.agent_id)
+                    .flatten();
                 let identity = AgentRuntimeIdentity {
                     launch_id: record.launch_id.clone(),
                     terminal_id: record.terminal_id.clone(),
                     ..Default::default()
                 };
-                state.settle_launch_attempt(
+                let settled = state.settle_launch_attempt(
                     id,
                     &identity,
                     LaunchOutcome::Failed,
                     Some(cause),
                     io::now_ms(),
                 );
+                if let Some(agent) = failed_resume.filter(|_| settled) {
+                    state.fail_restart_resume(agent);
+                }
                 self.save(state)?;
                 Err(error)
             }

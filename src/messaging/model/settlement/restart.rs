@@ -1,4 +1,5 @@
-//! Reconcile requests interrupted by a newer native-server generation.
+//! Reconcile tasks interrupted by a server restart or proven runtime loss.
+use super::super::{restart_continuation::ContinuationPreparation, RestartResume};
 use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase};
 
 impl BusState {
@@ -15,7 +16,8 @@ impl BusState {
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
         let request = self.requests.get(&id)?.clone();
-        let resume_failed = owner.session_binding_invalidated
+        let resume_failed = request.restart_resume == Some(RestartResume::Failed)
+            || owner.session_binding_invalidated
             || owner.working_directory_error.is_some()
             || owner.missing_binary.is_some()
             || owner
@@ -24,10 +26,18 @@ impl BusState {
                 .is_some_and(|startup| startup.failure.is_some());
         if request.agent_id != agent
             || owner.deletion_pending
-            || request
-                .delivery_epoch
-                .as_ref()
-                .is_none_or(|epoch| epoch.generation >= generation)
+            || request.restart_resume.is_none()
+                && request
+                    .delivery_epoch
+                    .as_ref()
+                    .is_none_or(|epoch| epoch.generation >= generation)
+            || request.group.is_some_and(|lead| {
+                owner.current_request == Some(lead)
+                    && self
+                        .requests
+                        .get(&lead)
+                        .is_some_and(|r| r.restart_resume.is_some())
+            })
             || !(matches!(
                 request.phase,
                 RequestPhase::Submitting | RequestPhase::Active
@@ -51,6 +61,10 @@ impl BusState {
         for member in self.group_members(id) {
             let member = self.requests.get_mut(&member)?;
             if !member.settled()
+                && request
+                    .delivery_epoch
+                    .as_ref()
+                    .is_some_and(|epoch| epoch.generation < generation)
                 && member
                     .delivery_epoch
                     .as_ref()
@@ -92,19 +106,19 @@ impl BusState {
         if (request.trusted_start_bound || request.restart_continuation)
             && request.pending_final.is_none()
             && recorded_end(&request).is_none()
-            && self.prepare_restart_continuation(agent, id, generation, now_ms)
+            && !resume_failed
         {
-            if let Some(current) = current.filter(|current| *current != id).or(successor) {
-                self.agents.get_mut(&agent)?.current_request = Some(current);
-                if self.requests.get(&current).is_some_and(|request| {
-                    request.restart_continuation && request.phase == RequestPhase::Queued
-                }) {
-                    let queue = self.queues.entry(agent).or_default();
-                    queue.retain(|request| *request != current);
-                    queue.insert(0, current);
+            let preparation = self.prepare_restart_continuation(agent, id, generation, now_ms);
+            if preparation != ContinuationPreparation::Refused {
+                if preparation == ContinuationPreparation::AwaitingResume {
+                    self.requests
+                        .get_mut(&id)?
+                        .restart_resume
+                        .get_or_insert(RestartResume::Awaiting);
                 }
+                self.restore_interrupted_owner(agent, id, current, successor)?;
+                return Some(id);
             }
-            return Some(id);
         }
         self.settle_interrupted_generation_end(
             agent,
@@ -135,6 +149,27 @@ impl BusState {
             .or(successor)
             .or(owner.current_request);
         Some(id)
+    }
+
+    /// Reconciliation of older work cannot release a newer delivery's owner.
+    fn restore_interrupted_owner(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        current: Option<RequestId>,
+        successor: Option<RequestId>,
+    ) -> Option<()> {
+        if let Some(current) = current.filter(|current| *current != id).or(successor) {
+            self.agents.get_mut(&agent)?.current_request = Some(current);
+            if self.requests.get(&current).is_some_and(|request| {
+                request.restart_continuation && request.phase == RequestPhase::Queued
+            }) {
+                let queue = self.queues.entry(agent).or_default();
+                queue.retain(|request| *request != current);
+                queue.insert(0, current);
+            }
+        }
+        Some(())
     }
 
     fn settle_interrupted_generation_end(

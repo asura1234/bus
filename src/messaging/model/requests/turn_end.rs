@@ -11,6 +11,14 @@ impl BusState {
         if request.phase == RequestPhase::Completed {
             return true;
         }
+        if request.restart_resume.is_some()
+            || request
+                .group
+                .and_then(|id| self.requests.get(&id))
+                .is_some_and(|lead| lead.restart_resume.is_some())
+        {
+            return false;
+        }
         // Kimi can briefly paint an empty, idle composer while its bound
         // turn is still executing tools. Only its owned terminal wire (or a
         // captured reply) can establish that the turn actually finished.
