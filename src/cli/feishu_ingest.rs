@@ -186,7 +186,7 @@ fn references_session(state: &BusState, input: &IncomingReply) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::model::{Provider, RoomId};
+    use crate::messaging::model::feishu_fixture;
 
     struct Fixture {
         base: PathBuf,
@@ -203,23 +203,7 @@ mod tests {
             let mut codes = Vec::new();
             for (root, outbound) in [(&first, "om_first"), (&second, "om_second")] {
                 std::fs::create_dir_all(root).unwrap();
-                let mut state = BusState::new();
-                let master = state.ensure_master_room();
-                let room = state.create_room("work").unwrap();
-                assert_eq!(room, RoomId(1), "numeric IDs deliberately overlap");
-                let orch = state
-                    .create_agent(master, "orch", Provider::Codex, root.clone(), None)
-                    .unwrap();
-                state.bind_orchestrator(orch, room).unwrap();
-                let before = state.clone();
-                state
-                    .post_to_developer(master, orch, "[waiting-on-you] Choose".into(), vec![], 10)
-                    .unwrap();
-                state.prepare_feishu_alerts(&before, root.to_str().unwrap(), "ou_developer", 11);
-                let code = state.feishu.outbox.keys().next().unwrap().clone();
-                state
-                    .complete_feishu_send(&code, outbound, "oc_dm")
-                    .unwrap();
+                let (state, code) = feishu_fixture::mapped(root, outbound);
                 JsonStore::new(root.join("state.json"))
                     .save(&state)
                     .unwrap();
