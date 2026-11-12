@@ -285,6 +285,9 @@ Result: {agent_id,name,status,current_request,runtime:{launch_id,session_id,
   returned_lines,viewport?:{rows,columns},requested_lines?,available_lines?,
   exhausted?,note?},text:STRING}.
   Identity is checked before/after reading; launching session_verified is false.
+  A confirmed startup exit returns saved evidence with capture.source="exit_snapshot",
+  its capture time and exit_snapshot metadata/path. The current terminal is not read
+  and session_verified is false; the saved evidence grants no input/adoption authority.
   Busy alternate-screen Codex may return its visible screen for a recent read,
   exhausted:false and an explanatory note; retry idle for older lines.
 Errors: invalid_arguments for visible+lines or recent without lines;
