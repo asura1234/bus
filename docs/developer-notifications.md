@@ -70,18 +70,24 @@ sink_command = ["/absolute/path/to/bus", "feishu", "ingest", "--instance", "/abs
 
 `--instance` names an exact private Bus session root or its local session registry
 base. It is required: the sink never targets the last opened session or inherits
-an agent's author identity. The bridge passes one v1 JSON object on stdin. The sink
+an agent's author identity. Registry inputs without one exact session are saved
+in the registry's private `feishu-inbox.json` journal. Later ingress reconsiders
+those original inputs when new exact mappings become available. A session root
+must be the original path recorded in its outbox; copied state does not transfer
+the recorded session's authority. The bridge passes one v1 JSON object on stdin. The sink
 validates the configured app ID, user sender type and p2p chat type, then Bus
 checks the sender against its configured recipient and the recorded recipient/chat.
 Reply ancestry (`reply_to`, then `root_id`, including accepted inbound ancestry)
 or an explicit `bus:CODE` must identify exactly one request. Conflicting references
-are refused. There is no matching by time, display name or most recent alert.
+stay parked. There is no matching by time, display name or most recent alert.
 
 Accepted replies become developer-authored Bus messages with structured
 `in_reply_to` provenance in history and the provider payload. They queue an
 independent turn for the exact recorded orchestrator. Unknown/ambiguous replies
 stay undelivered; deleted rooms/orchestrators are parked without selecting a
 replacement. The deduplication receipt and queued message commit together.
+Authenticated replies that conflict with the original recipient or chat are
+parked with a receipt; unauthenticated senders are refused before consuming an ID.
 Replays return the original receipt, including after restart; edited text does
 not create a second instruction. Exit 0 from the sink means durable acceptance
 (delivered or parked). An unavailable session or failed commit returns nonzero

@@ -1,4 +1,5 @@
 //! Bridge sink: select the recorded private instance without caller inference.
+mod registry;
 use crate::messaging::{
     control::{self, Request, Response},
     feishu::ingest::Message,
@@ -79,7 +80,23 @@ fn ingest_with(
     mut send: impl FnMut(&Path, &Request) -> Result<Response, String>,
 ) -> Result<Response, String> {
     let (event, normalized) = read_input(input, app)?;
-    let target = select_instance(instance, &normalized)?;
+    if !instance.is_absolute() {
+        return Err("Feishu sink instance must be absolute".into());
+    }
+    let instance =
+        std::fs::canonicalize(instance).map_err(|_| "Feishu sink instance does not exist")?;
+    if instance.join("state.json").is_file() {
+        return dispatch(&instance, app, event, &mut send);
+    }
+    registry::ingest(&instance, app, event, normalized, &mut send)
+}
+
+fn dispatch(
+    target: &Path,
+    app: &str,
+    event: Value,
+    send: &mut impl FnMut(&Path, &Request) -> Result<Response, String>,
+) -> Result<Response, String> {
     // Every sink invocation can recover after a cached refusal. Durable app/message
     // receipts own replay protection; transport retries within this call keep this ID.
     let request = Request {
@@ -87,7 +104,7 @@ fn ingest_with(
         method: "feishu.ingest".into(),
         params: json!({"app_id":app, "event":event}),
     };
-    let response = send(&target, &request)?;
+    let response = send(target, &request)?;
     if !response.ok {
         return Err(response.error.as_ref().map_or_else(
             || "Bus did not acknowledge Feishu ingestion".into(),
@@ -97,15 +114,12 @@ fn ingest_with(
     Ok(response)
 }
 
-fn select_instance(instance: &Path, input: &IncomingReply) -> Result<PathBuf, String> {
-    if !instance.is_absolute() {
-        return Err("Feishu sink instance must be absolute".into());
-    }
-    let instance =
-        std::fs::canonicalize(instance).map_err(|_| "Feishu sink instance does not exist")?;
-    if instance.join("state.json").is_file() {
-        return Ok(instance);
-    }
+enum Target {
+    Session(PathBuf),
+    Parked(&'static str),
+}
+
+fn select_instance(instance: &Path, input: &IncomingReply) -> Result<Target, String> {
     let entries = std::fs::read_dir(instance.join("sessions"))
         .map_err(|_| "Feishu sink instance is neither a session nor a registry")?;
     let mut receipts = BTreeSet::new();
@@ -140,16 +154,16 @@ fn select_instance(instance: &Path, input: &IncomingReply) -> Result<PathBuf, St
         receipts
     };
     if candidates.len() != 1 {
-        return Err(if candidates.is_empty() {
+        return Ok(Target::Parked(if candidates.is_empty() {
             "Unknown Feishu reply; no mapped Bus session"
         } else {
             "Ambiguous Feishu reply; multiple Bus sessions match"
-        }
-        .into());
+        }));
     }
     candidates
         .into_iter()
         .next()
+        .map(Target::Session)
         .ok_or_else(|| "Unknown Feishu reply".into())
 }
 
@@ -205,6 +219,15 @@ mod tests {
                 codes.push(code);
             }
             std::fs::write(base.join("last-session"), "second").unwrap();
+            crate::messaging::prefs::settings::save(
+                &base.join("settings.json"),
+                &crate::messaging::prefs::settings::BusSettings {
+                    feishu_recipient: "ou_developer".into(),
+                    feishu_bridge_path: Some("/usr/bin/true".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             Self {
                 base,
                 first,
@@ -250,22 +273,165 @@ mod tests {
     }
 
     #[test]
-    fn feishu_sink_refuses_cross_session_conflicts_and_unknown_replies_before_dispatch() {
+    fn feishu_sink_durably_parks_cross_session_conflicts_and_unknown_replies_before_dispatch() {
         let fixture = Fixture::new();
-        for event in [
+        for (index, event) in [
             wire(None, "Unknown"),
             wire(
                 Some("om_first"),
                 &format!("bus:{} Proceed", fixture.code_second),
             ),
-        ] {
-            assert!(
-                ingest_with(&fixture.base, "cli_test", event.as_slice(), |_, _| panic!(
-                    "ambiguous or unknown input cannot reach a control socket"
-                ))
-                .is_err()
-            );
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut event: Value = serde_json::from_slice(&event).unwrap();
+            event["message_id"] = json!(format!("om_parked_{index}"));
+            let bytes = serde_json::to_vec(&event).unwrap();
+            let response = ingest_with(&fixture.base, "cli_test", bytes.as_slice(), |_, _| {
+                panic!("ambiguous or unknown input cannot reach a control socket")
+            })
+            .unwrap();
+            assert_eq!(response.result["stage"], "parked");
         }
+        let journal: Value =
+            serde_json::from_slice(&std::fs::read(fixture.base.join("feishu-inbox.json")).unwrap())
+                .unwrap();
+        assert_eq!(journal.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn feishu_registry_parked_first_version_survives_reload_without_blocking_a_mapped_reply() {
+        let f = Fixture::new();
+        let unknown = wire(None, "Unmapped original");
+        assert_eq!(
+            ingest_with(&f.base, "cli_test", unknown.as_slice(), |_, _| panic!(
+                "unknown"
+            ))
+            .unwrap()
+            .result["stage"],
+            "parked"
+        );
+        let edited = wire(Some("om_first"), "Edited replay must not run");
+        assert_eq!(
+            ingest_with(&f.base, "cli_test", edited.as_slice(), |_, _| panic!(
+                "edited replay"
+            ))
+            .unwrap()
+            .result["stage"],
+            "parked"
+        );
+        let mut valid: Value = serde_json::from_slice(&edited).unwrap();
+        valid["message_id"] = json!("om_valid");
+        let mut routed = Vec::new();
+        let response = ingest_with(
+            &f.base,
+            "cli_test",
+            serde_json::to_vec(&valid).unwrap().as_slice(),
+            |target, request| {
+                routed.push(target.to_owned());
+                assert_eq!(request.params["event"]["message_id"], "om_valid");
+                Ok(Response::success(&request.id, json!({"stage":"delivered"})))
+            },
+        )
+        .unwrap();
+        assert_eq!(response.result["stage"], "delivered");
+        assert_eq!(routed, [std::fs::canonicalize(&f.first).unwrap()]);
+        let journal: Value =
+            serde_json::from_slice(&std::fs::read(f.base.join("feishu-inbox.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            journal["cli_test:om_reply"]["input"]["text"],
+            "Unmapped original"
+        );
+    }
+
+    #[test]
+    fn feishu_registry_parked_child_follows_its_backfilled_parent_exactly_once() {
+        let f = Fixture::new();
+        let child = wire(Some("om_parent"), "Original child instruction");
+        assert_eq!(
+            ingest_with(&f.base, "cli_test", child.as_slice(), |_, _| panic!(
+                "unknown child"
+            ))
+            .unwrap()
+            .result["stage"],
+            "parked"
+        );
+        let mut parent: Value =
+            serde_json::from_slice(&wire(None, &format!("bus:{} Parent", f.code_second))).unwrap();
+        parent["message_id"] = json!("om_parent");
+        let mut control = |root: &Path, request: &Request| {
+            assert_eq!(root, std::fs::canonicalize(&f.second).unwrap());
+            let store = JsonStore::new(root.join("state.json"));
+            let mut state = store.load().unwrap().unwrap();
+            let input = serde_json::from_value::<Message>(request.params["event"].clone())
+                .unwrap()
+                .normalize("cli_test")
+                .unwrap();
+            let outcome = state
+                .ingest_feishu_reply(input, "ou_developer", 30)
+                .unwrap();
+            store.save(&state).unwrap();
+            Ok(Response::success(
+                &request.id,
+                serde_json::to_value(outcome).unwrap(),
+            ))
+        };
+        assert_eq!(
+            ingest_with(
+                &f.base,
+                "cli_test",
+                serde_json::to_vec(&parent).unwrap().as_slice(),
+                &mut control
+            )
+            .unwrap()
+            .result["stage"],
+            "delivered"
+        );
+        let replay = ingest_with(&f.base, "cli_test", child.as_slice(), &mut control).unwrap();
+        assert_eq!(replay.result["stage"], "delivered");
+        assert_eq!(
+            ingest_with(&f.base, "cli_test", child.as_slice(), &mut control)
+                .unwrap()
+                .result,
+            replay.result
+        );
+        let state = JsonStore::new(f.second.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.requests().count(), 2);
+        assert!(JsonStore::new(f.first.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap()
+            .feishu
+            .inbox
+            .is_empty());
+    }
+
+    #[test]
+    fn feishu_registry_does_not_acknowledge_failed_storage_or_unauthenticated_input() {
+        let f = Fixture::new();
+        let mut unknown: Value = serde_json::from_slice(&wire(None, "Unknown")).unwrap();
+        unknown["sender"]["open_id"] = json!("ou_impostor");
+        assert!(ingest_with(
+            &f.base,
+            "cli_test",
+            serde_json::to_vec(&unknown).unwrap().as_slice(),
+            |_, _| panic!("unauthenticated")
+        )
+        .is_err());
+        assert!(!f.base.join("feishu-inbox.json").exists());
+        std::fs::create_dir(f.base.join("feishu-inbox.json")).unwrap();
+        assert!(ingest_with(
+            &f.base,
+            "cli_test",
+            wire(None, "Unknown").as_slice(),
+            |_, _| panic!("uncommitted")
+        )
+        .is_err());
     }
 
     #[test]
