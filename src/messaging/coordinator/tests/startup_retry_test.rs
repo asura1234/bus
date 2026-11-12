@@ -1,6 +1,127 @@
 use super::super::launch_metrics_tests::{ledger, seed_launch};
 use super::*;
 
+// A lost retry result must not hold the startup watch open forever. After the
+// retried launch exits again without a session, the episode must still end
+// within the normal startup bound: reported, queue closed, launch settled.
+#[test]
+fn codex_bootstrap_uncertain_retry_that_exits_is_still_bounded() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let request = queue(&mut worker, room, agent, "must not wait forever");
+    let calls = Arc::new(Mutex::new(0));
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        exited: true,
+        uncertain_retry: true,
+        screen: Some(
+            "account/read failed during TUI bootstrap: workspace routing discovery failed".into(),
+        ),
+        retry_calls: Some(calls.clone()),
+        ..Default::default()
+    });
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    seed_launch(&mut worker, agent, start + 30_000);
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    let _ = worker.cleanup_failed_startups(&[], &mpsc::channel().0, start + 35_000);
+    assert_eq!(*calls.lock().unwrap(), 1);
+    for now in [start + 70_000, start + 300_000] {
+        let _ = worker.cleanup_failed_startups(&[], &mpsc::channel().0, now);
+    }
+    let a = worker.state.agent(agent).unwrap();
+    assert!(
+        a.startup.as_ref().is_none_or(|s| s.reported),
+        "startup watch still open 265 s after the uncertain retry: {:?}",
+        a.startup
+    );
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let error = a.actionable_error.as_deref().unwrap();
+    assert!(
+        error.contains("never-submitted queued requests closed"),
+        "{error}"
+    );
+    assert!(error.contains("Inspect the agent's terminal"), "{error}");
+    assert_ne!(ledger(&worker)["1"]["outcome"], "pending");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn codex_bootstrap_consumed_retry_before_send_expires_after_restart() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let request = queue(&mut worker, room, agent, "crash before retry write");
+    let retry_start = io::now_ms() + 35_000;
+    seed_launch(&mut worker, agent, retry_start);
+    let mut state = worker.state.clone();
+    let mut startup = state.agent(agent).unwrap().startup.clone().unwrap();
+    startup.started_at_ms = retry_start;
+    startup.recovery = Some(crate::messaging::model::StartupRecovery::CodexBootstrap {
+        args: vec![],
+        attempts: 1,
+        retry_at_ms: None,
+        uncertain: true,
+        exhausted: false,
+    });
+    state.set_agent_startup(agent, Some(startup)).unwrap();
+    state.watch_launch_command(agent, retry_start);
+    worker.save(state).unwrap();
+    drop(worker);
+    let calls = Arc::new(Mutex::new(0));
+    let mut worker = Worker::open(
+        dir.clone(),
+        Box::new(FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            retry_calls: Some(calls.clone()),
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, retry_start + 29_999)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, retry_start + 30_000)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let agent_state = worker.state.agent(agent).unwrap();
+    assert!(agent_state.startup.as_ref().unwrap().reported);
+    assert!(agent_state
+        .actionable_error
+        .as_deref()
+        .unwrap()
+        .contains("Inspect the agent's terminal"));
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(ledger(&worker)["1"]["cause"], "startup_timeout");
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, retry_start + 300_000)
+        .unwrap();
+    assert_eq!(
+        *calls.lock().unwrap(),
+        0,
+        "consumed authority must not replay after restart"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn codex_transient_bootstrap_exit_retries_without_closing_queued_work() {
     let (mut worker, agent, room, dir) = pending(Provider::Codex);
@@ -310,7 +431,7 @@ fn codex_bootstrap_retry_never_replays_uncertain_launch_input() {
     );
     assert_eq!(
         worker.state.request(request).unwrap().phase,
-        RequestPhase::Queued
+        RequestPhase::Abandoned
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

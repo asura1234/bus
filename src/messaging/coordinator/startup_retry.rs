@@ -102,7 +102,9 @@ impl Worker {
             return Ok(false);
         }
         if uncertain {
-            return Ok(true);
+            // Consumed launch authority forbids replay, not settlement. Normal
+            // readiness, confirmed-exit and timeout handling still apply.
+            return Ok(false);
         }
         if agent.provider != Provider::Codex
             || agent.session_binding_invalidated
