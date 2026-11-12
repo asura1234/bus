@@ -590,9 +590,6 @@ async fn idle_agent_poll_server_loop_p99_under_50ms() {
         terminal.set_agent_name(format!("idle-{ws}"));
         let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(180, 65);
         runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
-        runtime
-            .test_scan_detection_context(AgentKind::Claude, AgentState::Unknown)
-            .await;
         receivers.push(writes);
         server.app.state.insert_test_runtime(pane, runtime);
         contexts.push(AgentDetectionContext {
@@ -602,6 +599,17 @@ async fn idle_agent_poll_server_loop_p99_under_50ms() {
             obligation: false,
             activity_age_ms: None,
         });
+    }
+    // Settle initial geometry before publishing the detector's idle snapshots.
+    server.render_and_stream();
+    for ws in 0..20 {
+        let pane = server.app.state.workspaces[ws].tabs[0].root_pane;
+        server
+            .app
+            .lookup_runtime_sender(ws, pane)
+            .unwrap()
+            .test_scan_detection_context(AgentKind::Claude, AgentState::Unknown)
+            .await;
     }
     let mut samples = Vec::new();
     for sample in 0..45 {
@@ -629,6 +637,10 @@ async fn idle_agent_poll_server_loop_p99_under_50ms() {
         };
         assert_eq!(agents.len(), 20);
         if sample >= 5 {
+            assert!(
+                agents.iter().all(|agent| !agent.screen_detection_skipped),
+                "the budget must measure current detector publications for all 20 panes"
+            );
             samples.push(elapsed);
         }
     }
