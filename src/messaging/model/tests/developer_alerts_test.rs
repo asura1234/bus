@@ -1,36 +1,8 @@
-use super::*;
-use crate::messaging::model::{AgentId, Author, Provider, RoomId};
-
-#[test]
-fn feishu_each_request_has_its_own_dm_instead_of_a_cross_request_burst() {
-    let (before, master, _, agent) = fixture();
-    let mut next = before.clone();
-    next.post_to_developer(
-        master,
-        agent,
-        "[waiting-on-you] First decision".into(),
-        vec![],
-        1,
-    )
-    .unwrap();
-    next.post_to_developer(
-        master,
-        agent,
-        "[waiting-on-you] Second decision".into(),
-        vec![],
-        2,
-    )
-    .unwrap();
-    let mut policy = enabled();
-    policy.observe(&before, &next, 1000);
-    let first = policy.take(3000).unwrap();
-    assert!(
-        !first.contains("Second decision"),
-        "one reply cannot identify a request inside a burst: {first}"
-    );
-    policy.finish(true);
-    assert!(policy.take(3000).unwrap().contains("Second decision"));
-}
+//! Regression coverage for shared TUI/Feishu alert extraction. Scheduling lives in the persisted outbox.
+use crate::messaging::attention::{plain_line, waiting_action};
+use crate::messaging::model::{
+    developer_alerts, new_developer_notifications, AgentId, Author, BusState, Provider, RoomId,
+};
 
 fn fixture() -> (BusState, RoomId, RoomId, AgentId) {
     let mut state = BusState::default();
@@ -99,14 +71,13 @@ fn waiting_choices_and_next_line_reach_both_alert_routes() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn waiting_multiline_body_is_one_literal_feishu_text_argument() {
     use std::os::unix::fs::PermissionsExt;
     let root = crate::utils::test_temp::unique_temp_path("waiting-multiline");
     std::fs::create_dir_all(&root).unwrap();
-    let script = root.join("lark-cli");
-    std::fs::write(&script, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--text' ]; then shift; printf '%s' \"$1\" > \"${0%/*}/text\"; break; fi\n  shift\ndone\nprintf '{\"ok\":true}'\n").unwrap();
+    let script = root.join("feishu-bridge");
+    std::fs::write(&script, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--text' ]; then shift; printf '%s' \"$1\" > \"${0%/*}/text\"; break; fi\n  shift\ndone\nprintf '{\"message_id\":\"om_out\",\"chat_id\":\"oc_dm\"}'\n").unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (before, master, _, agent) = fixture();
     let mut next = before.clone();
@@ -136,10 +107,23 @@ fn waiting_multiline_body_is_one_literal_feishu_text_argument() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-fn enabled() -> WaitingNotifications {
-    let mut policy = WaitingNotifications::default();
-    policy.configure(true);
-    policy
+// Collect the real extractor's results without introducing a transport or scheduler.
+#[derive(Default)]
+struct Extracted(std::collections::VecDeque<String>);
+impl Extracted {
+    fn observe(&mut self, before: &BusState, next: &BusState, _: u64) {
+        self.0.extend(
+            developer_alerts(before, next, true)
+                .into_iter()
+                .map(|alert| alert.line),
+        );
+    }
+    fn take(&mut self, _: u64) -> Option<String> {
+        self.0.pop_front()
+    }
+}
+fn enabled() -> Extracted {
+    Extracted::default()
 }
 
 #[test]
@@ -157,7 +141,6 @@ fn developer_notification_to_human_keeps_following_action_lines() {
     let now = 1000_u64;
     let mut policy = enabled();
     policy.observe(&before, &next, now);
-    assert!(policy.take(now + 1000).is_none());
     assert_eq!(
         policy.take(now + 2000).as_deref(),
         Some("libtv-app master is waiting on you: - Need Figma access\n- Grant project access too")
@@ -187,49 +170,6 @@ fn developer_notification_final_reply_to_developer_triggers_once() {
 }
 
 #[test]
-fn developer_notification_coalesces_messages_without_extending_window() {
-    let (before, master, _, agent) = fixture();
-    let mut first = before.clone();
-    first
-        .post_to_developer(master, agent, "[waiting-on-you] first".into(), vec![], 1)
-        .unwrap();
-    let mut second = first.clone();
-    second
-        .post_to_developer(master, agent, "[waiting-on-you] second".into(), vec![], 2)
-        .unwrap();
-    let now = 1000_u64;
-    let mut policy = enabled();
-    policy.observe(&before, &first, now);
-    policy.observe(&first, &second, now + 1900);
-    assert_eq!(
-        policy.take(now + 2000).as_deref(),
-        Some(
-            "libtv-app master is waiting on you: first\nlibtv-app master is waiting on you: second"
-        )
-    );
-    assert!(policy.take(now + 5000).is_none());
-}
-
-#[test]
-fn developer_notification_toggle_discards_pending_without_replay() {
-    let (before, master, _, agent) = fixture();
-    let mut next = before.clone();
-    next.post_to_developer(master, agent, "[waiting-on-you] hello".into(), vec![], 1)
-        .unwrap();
-    let now = 1000_u64;
-    let mut policy = enabled();
-    policy.observe(&before, &next, now);
-    policy.configure(false);
-    policy.configure(true);
-    assert!(policy.take(now + 3000).is_none());
-    policy.observe(&next, &next, now + 4000);
-    assert!(policy.take(now + 7000).is_none());
-    policy.configure(false);
-    policy.observe(&before, &next, now);
-    assert!(policy.take(now + 3000).is_none());
-}
-
-#[test]
 fn developer_notification_includes_work_rooms_and_tagged_agent_directed_prompts() {
     let (before, master, work, agent) = fixture();
     let mut next = before.clone();
@@ -249,7 +189,10 @@ fn developer_notification_includes_work_rooms_and_tagged_agent_directed_prompts(
     let now = 1000_u64;
     let mut policy = enabled();
     policy.observe(&before, &next, now);
-    assert_eq!(policy.take(now + 3000).as_deref(), Some("libtv-app master is waiting on you: work room\nlibtv-app master is waiting on you: agent directed"));
+    assert_eq!(
+        policy.take(now + 3000).as_deref(),
+        Some("libtv-app master is waiting on you: work room")
+    );
 }
 
 #[test]
@@ -528,7 +471,7 @@ fn developer_notification_untagged_peer_messages_and_partial_phrases_are_quiet()
 }
 
 #[test]
-fn developer_notification_untagged_direct_messages_join_a_burst() {
+fn developer_notification_untagged_direct_messages_stay_out_of_feishu() {
     let (before, master, _, agent) = fixture();
     let mut next = before.clone();
     next.post_to_developer(master, agent, "Untagged".into(), vec![], 1)
@@ -887,46 +830,4 @@ fn coalesced_developer_and_peer_requests_keep_developer_phrase_context() {
         tui(&before, &next),
         ["worker is waiting on you: Approve access"]
     );
-}
-
-#[test]
-fn repeated_tagged_ask_from_the_same_sender_pages_once_per_half_hour() {
-    let (before, master, _, agent) = fixture();
-    let mut first = before.clone();
-    first
-        .post_to_developer(
-            master,
-            agent,
-            "[waiting-on-you] Restart Bus".into(),
-            vec![],
-            1,
-        )
-        .unwrap();
-    let mut second = first.clone();
-    second
-        .post_to_developer(
-            master,
-            agent,
-            "[waiting-on-you] Restart Bus".into(),
-            vec![],
-            2,
-        )
-        .unwrap();
-    let mut policy = enabled();
-    policy.observe(&before, &first, 1000);
-    assert!(policy.take(3000).is_some());
-    policy.observe(&first, &second, 60_000);
-    assert!(policy.take(70_000).is_none(), "same ask within 30 minutes");
-    let mut third = second.clone();
-    third
-        .post_to_developer(
-            master,
-            agent,
-            "[waiting-on-you] Restart Bus".into(),
-            vec![],
-            3,
-        )
-        .unwrap();
-    policy.observe(&second, &third, 31 * 60_000 + 1000);
-    assert!(policy.take(31 * 60_000 + 4000).is_some());
 }

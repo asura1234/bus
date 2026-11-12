@@ -255,8 +255,13 @@ impl BusUi {
                 view.row(
                     rect,
                     format!(
-                        "lark-cli path: {}",
-                        display(self.settings.feishu_cli_path.as_deref().unwrap_or("PATH"))
+                        "feishu-bridge path: {}",
+                        display(
+                            self.settings
+                                .feishu_bridge_path
+                                .as_deref()
+                                .unwrap_or("PATH")
+                        )
                     ),
                     Some(Action::EditFeishuCli),
                     self.settings_field == *field,
@@ -390,7 +395,15 @@ impl BusUi {
         };
         view.row(
             rect,
-            format!("Feishu notifications (always on){}", suffix),
+            format!(
+                "Feishu notifications ({}){}",
+                if self.feishu_status.enabled {
+                    "on"
+                } else {
+                    "off"
+                },
+                suffix
+            ),
             Some(Action::ToggleFeishuNotifications),
             self.settings_field == field,
             false,

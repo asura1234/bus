@@ -163,12 +163,12 @@ fn queued_sound(ui: &BusUi) -> Vec<(RoomId, bool)> {
 }
 
 #[test]
-fn feishu_settings_row_is_always_on_then_pending_and_cannot_toggle() {
+fn feishu_settings_row_reflects_plugin_availability_and_pending_send() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.action(render::Action::Settings);
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("Feishu notifications (always on)")));
+        .any(|row| row.contains("Feishu notifications (off)")));
     ui.receive_event(BusEvent::FeishuStatusChanged(
         crate::messaging::coordinator::attention::Status {
             pending: true,
@@ -186,7 +186,7 @@ fn feishu_settings_row_is_always_on_then_pending_and_cannot_toggle() {
     ));
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("Feishu notifications (always on)")));
+        .any(|row| row.contains("Feishu notifications (on)")));
     ui.settings_field = ui.feishu_field();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(!ui
@@ -237,7 +237,7 @@ fn settings_lists_master_sound_above_every_work_room() {
     let notifications = below("NOTIFICATIONS");
     assert!(second < notifications && notifications < position("Feishu notifications"));
     assert!(notifications < position("Recipient open_id"));
-    assert!(notifications < position("lark-cli path"));
+    assert!(notifications < position("feishu-bridge path"));
 }
 
 #[test]
@@ -1123,7 +1123,7 @@ fn feishu_notifications_stay_on_without_changing_draft() {
         .any(|p| matches!(p.command, BusCommand::SetFeishuNotifications(false))));
     assert!(settings_rows(&mut ui, 40)
         .iter()
-        .any(|row| row.contains("Feishu notifications (always on)")));
+        .any(|row| row.contains("Feishu notifications (off)")));
 }
 
 #[test]

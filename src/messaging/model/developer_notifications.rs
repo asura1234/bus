@@ -1,5 +1,5 @@
 //! Shared developer alert sources: explicit notices and tagged agent messages in every room.
-use super::{AgentId, Author, BusState, Prompt, PromptId, RequestId};
+use super::{feishu::AlertSource, AgentId, Author, BusState, Prompt, PromptId, RequestId, RoomId};
 use crate::messaging::attention::{
     has_you_mention, plain_action, plain_line, waiting_action, waiting_tag_action,
 };
@@ -12,6 +12,8 @@ enum Key {
 }
 
 struct Message<'a> {
+    source: AlertSource,
+    room: RoomId,
     sender: &'a str,
     sender_id: Option<AgentId>,
     text: &'a str,
@@ -35,10 +37,11 @@ pub(crate) fn new_developer_notifications(
         .collect()
 }
 
-/// One developer alert. `sender` and `body` identify a repeated ask across renames.
+/// One alert with its durable Bus source and conversation room.
 pub(crate) struct DeveloperAlert {
+    pub(crate) source: AlertSource,
+    pub(crate) room: RoomId,
     pub(crate) sender: Option<AgentId>,
-    pub(crate) body: String,
     pub(crate) line: String,
 }
 
@@ -64,10 +67,9 @@ pub(crate) fn developer_alerts(
             } else {
                 waiting_tag_action(message.text)
             };
-            let (body, line) = if let Some(action) = action {
+            let line = if let Some(action) = action {
                 let body = plain_action(action);
-                let line = format!("{sender} is waiting on you: {body}");
-                (body, line)
+                format!("{sender} is waiting on you: {body}")
             } else if !waiting_only && (message.directed || has_you_mention(message.text)) {
                 let body = plain_line(message.text.trim_start());
                 let body = if body.is_empty() {
@@ -75,14 +77,14 @@ pub(crate) fn developer_alerts(
                 } else {
                     body
                 };
-                let line = format!("{sender} to you: {body}");
-                (body, line)
+                format!("{sender} to you: {body}")
             } else {
                 return None;
             };
             Some(DeveloperAlert {
+                source: message.source,
+                room: message.room,
                 sender: message.sender_id,
-                body,
                 line,
             })
         })
@@ -93,7 +95,7 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
     let mut result = BTreeMap::new();
     for room in state.rooms() {
         for notice in state.notices(room.id) {
-            insert_prompt(state, notice, &mut result);
+            insert_prompt(state, room.id, notice, &mut result);
         }
     }
     let forwarded: BTreeSet<_> = state
@@ -109,7 +111,7 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
         .collect();
     for request in state.requests() {
         // These prompts quote an already observed reply or room fact, not a new agent send.
-        insert_prompt(state, &request.prompt, &mut result);
+        insert_prompt(state, request.room_id, &request.prompt, &mut result);
         if forwarded.contains(&request.id) {
             if let Some(message) = result.get_mut(&Key::Prompt(request.prompt.id)) {
                 message.directed = false;
@@ -125,6 +127,13 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
             result.insert(
                 key,
                 Message {
+                    source: AlertSource {
+                        prompt_id: state
+                            .request(request.reply_key())
+                            .map_or(request.prompt.id, |source| source.prompt.id),
+                        request_id: Some(request.reply_key()),
+                    },
+                    room: request.room_id,
                     sender: state
                         .agent(request.agent_id)
                         .map_or("Bus", |a| a.name.as_str()),
@@ -142,6 +151,7 @@ fn messages(state: &BusState) -> BTreeMap<Key, Message<'_>> {
 
 fn insert_prompt<'a>(
     state: &'a BusState,
+    room: RoomId,
     prompt: &'a Prompt,
     messages: &mut BTreeMap<Key, Message<'a>>,
 ) {
@@ -160,6 +170,11 @@ fn insert_prompt<'a>(
     messages.insert(
         Key::Prompt(prompt.id),
         Message {
+            source: AlertSource {
+                prompt_id: prompt.id,
+                request_id: None,
+            },
+            room,
             sender,
             sender_id,
             text: crate::messaging::attention::text(&prompt.text).unwrap_or(&prompt.text),

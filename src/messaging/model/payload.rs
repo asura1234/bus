@@ -68,6 +68,12 @@ impl BusState {
                 request.prompt.author.clone(),
             )
         };
+        if let Some(provenance) = self.requests.get(&id)?.prompt.in_reply_to.as_ref() {
+            text = format!(
+                "in_reply_to: {}\n{text}",
+                serde_json::to_string(provenance).ok()?
+            );
+        }
         // Header suppression follows the notice kind. Bus-signed notices and
         // agent-signed outcome-only notices (No reply/abandoned, retired idle)
         // need no reply. Deliverable messages keep only a short header; the

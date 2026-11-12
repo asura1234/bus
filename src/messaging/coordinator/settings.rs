@@ -152,7 +152,7 @@ impl Worker {
             .settings_path
             .as_deref()
             .ok_or("Bus settings location unavailable")?;
-        let saved = settings::update(path, |settings| settings.feishu_cli_path = program)?;
+        let saved = settings::update(path, |settings| settings.feishu_bridge_path = program)?;
         let _ = events.send(BusEvent::SettingsChanged(saved));
         self.pump_feishu(events, crate::messaging::storage::io::now_ms())
     }

@@ -8,6 +8,7 @@ mod developer_notifications;
 mod disk_space;
 mod error;
 mod error_reports;
+pub(crate) mod feishu;
 mod history;
 mod history_index;
 mod idle_agents;

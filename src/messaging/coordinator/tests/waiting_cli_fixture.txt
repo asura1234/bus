@@ -1,12 +1,17 @@
 #!/usr/bin/python3
 import json, pathlib, sys, time
 root = pathlib.Path(__file__).parent
+args = sys.argv[1:]
+assert args[0:2] == ['send', '--open-id'] and args[3] == '--text' and args[5] == '--idempotency-key', args
+assert len(args[6]) <= 50 and args[6].isascii(), args[6]
+state = json.loads((root / 'session' / 'state.json').read_text())['state']
+records = [r for r in state['feishu']['outbox'].values() if r['key'] == args[6]]
+assert len(records) == 1 and records[0]['attempted'], 'outbox/key must be durable before the bridge starts'
+assert records[0]['recipient'] == args[2] and records[0]['text'] == args[4]
 with (root / 'calls.jsonl').open('a') as stream:
-    stream.write(json.dumps(sys.argv[1:]) + '\n')
+    stream.write(json.dumps(args) + '\n')
 mode = (root / 'mode').read_text() if (root / 'mode').exists() else ''
-if mode == 'hang':
-    time.sleep(60)
-if mode == 'fail':
-    print('{"ok":false,"error":{"type":"network","message":"network unavailable"}}', file=sys.stderr)
-    sys.exit(7)
-print('{"ok":true,"identity":"bot","data":{"message_id":"om_fake"}}')
+if mode == 'hang': time.sleep(60)
+if mode == 'fail': sys.exit(7)
+number = len((root / 'calls.jsonl').read_text().splitlines())
+print(json.dumps({'message_id': 'om_fake_' + str(number), 'chat_id': 'oc_dm'}))

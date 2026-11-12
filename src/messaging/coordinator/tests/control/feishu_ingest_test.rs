@@ -9,6 +9,7 @@ fn mapped_worker() -> (Worker, PathBuf, String) {
         worker.settings_path.as_ref().unwrap(),
         &settings::BusSettings {
             feishu_recipient: "ou_developer".into(),
+            feishu_bridge_path: Some("/usr/bin/true".into()),
             ..Default::default()
         },
     )

@@ -280,7 +280,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "developer_sound": {"enabled": true, "name": null},
             "feishu_waiting_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
-            "feishu_cli_path": null,
+            "feishu_bridge_path": null,
             "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
             "idle_agents_alert": 5,

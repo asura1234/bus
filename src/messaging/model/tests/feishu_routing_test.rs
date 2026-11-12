@@ -40,6 +40,7 @@ fn prepare(state: &mut BusState, room: RoomId, sender: AgentId) -> String {
 
 fn incoming(id: &str, parent: Option<&str>, root: Option<&str>, text: &str) -> IncomingReply {
     IncomingReply {
+        app_id: "cli_test".into(),
         message_id: id.into(),
         chat_id: "oc_dm".into(),
         sender_id: "ou_developer".into(),
@@ -92,6 +93,27 @@ fn feishu_mapping_and_parked_reply_changes_require_a_durable_save() {
         .unwrap();
     assert_eq!(state.requests().count(), 0);
     assert!(state.durable_poll_change_from(&before_park));
+}
+
+#[test]
+fn feishu_reply_arriving_before_send_completion_resolves_when_the_exact_mapping_commits() {
+    let (mut state, work, _, worker) = fixture();
+    let code = prepare(&mut state, work, worker);
+    let input = incoming("om_early", Some("om_out"), None, "Proceed");
+    assert!(matches!(
+        state
+            .ingest_feishu_reply(input.clone(), "ou_developer", 21)
+            .unwrap(),
+        IngestOutcome::Parked { .. }
+    ));
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    let result = state
+        .ingest_feishu_reply(input, "ou_developer", 22)
+        .unwrap();
+    assert!(matches!(result, IngestOutcome::Delivered { .. }));
+    assert_eq!(state.requests().count(), 1);
 }
 
 #[test]
@@ -239,7 +261,13 @@ fn feishu_bus_attention_notice_keeps_the_originating_orchestrator() {
     let (mut state, _, orch, _) = fixture();
     let before = state.clone();
     state
-        .attention_episode("episode".into(), Some(true), orch, "Unlock terminal", 10)
+        .attention_episode(
+            "episode".into(),
+            Some(true),
+            orch,
+            "[waiting-on-you] Unlock terminal",
+            10,
+        )
         .unwrap();
     state.prepare_feishu_alerts(&before, "/tmp/private-bus-session", "ou_developer", 11);
     let record = state.feishu.outbox.values().next().unwrap();
@@ -293,7 +321,7 @@ fn feishu_sender_and_chat_are_authenticated_before_consuming_the_message_id() {
         assert!(state
             .ingest_feishu_reply(forged, "ou_developer", 21)
             .is_err());
-        assert!(!state.feishu.inbox.contains_key("om_in"));
+        assert!(!state.feishu.inbox.contains_key("cli_test:om_in"));
     }
     assert!(matches!(
         state

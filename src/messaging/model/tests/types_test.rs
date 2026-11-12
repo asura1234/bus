@@ -5,6 +5,9 @@ use super::*;
 #[path = "feishu_routing_test.rs"]
 mod feishu_routing_tests;
 
+#[path = "developer_alerts_test.rs"]
+mod developer_alerts_tests;
+
 #[test]
 fn mixed_claude_image_success_and_failed_literal_path_correlate() {
     let typed = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
@@ -429,6 +432,7 @@ fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespac
             submitted_at_ms: 0,
             idle_agent_ids: Default::default(),
             attention_origin: None,
+            in_reply_to: None,
         };
         // Whether the hook keeps the trailing space or not, the lifted image
         // leaves the typed text line as the whole remaining prompt.

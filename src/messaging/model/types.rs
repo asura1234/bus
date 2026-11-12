@@ -93,6 +93,8 @@ pub(crate) struct Prompt {
     pub(crate) idle_agent_ids: BTreeSet<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) in_reply_to: Option<super::feishu::InReplyTo>,
 }
 
 fn developer_author() -> Author {

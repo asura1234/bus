@@ -16,18 +16,18 @@ impl Fixture {
         let lease = super::fixture_lease();
         let root = crate::utils::test_temp::unique_temp_path("feishu-process");
         std::fs::create_dir_all(&root).unwrap();
-        let program = root.join("lark-cli");
+        let program = root.join("feishu-bridge");
         std::fs::write(&program, include_str!("process_fixture.txt")).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(root, lease)
     }
 
     fn process(&self) -> Process {
-        Process::at(self.0.join("lark-cli"), Duration::from_secs(10))
+        Process::at(self.0.join("feishu-bridge"), Duration::from_secs(10))
     }
 
     fn hanging_wrapper(&self) -> Process {
-        let program = self.0.join("lark-wrapper");
+        let program = self.0.join("bridge-wrapper");
         std::fs::write(
             &program,
             "#!/bin/sh\nsleep 60 &\nprintf '%s' \"$!\" > \"${0%/*}/grandchild.pid\"\nprintf '%s\\n' \"$!\" > \"${0%/*}/grandchild.ready\"\nwait\n",
