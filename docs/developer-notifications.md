@@ -35,32 +35,29 @@ A missing or unplayable selection falls back to that system default, never a bun
 sound. If no system sounds are installed, Bus logs that playback is unavailable; the other
 notification routes remain active. No desktop popup is added.
 
-Feishu bot DMs remain under Settings → NOTIFICATIONS and are always on.
-A legacy `feishu_waiting_notifications: false` is read as true,
-and `bus settings feishu-notifications --off` is rejected. The Settings row says **always on**;
-it cannot toggle this route. Freeze diagnostics do not emit user notifications.
+Feishu is an optional local plugin. Install `feishu-bridge` on the same Mac and
+configure its bot transport separately. Bus discovers it through **feishu-bridge path**
+in Settings → NOTIFICATIONS (`feishu_bridge_path` in settings.json), or PATH when
+the field is empty. Without the executable, Feishu is off.
 The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
-Click **Recipient open_id** to edit it; **lark-cli path** overrides the executable,
-with an empty field using `lark-cli` from PATH. Bus stores no credentials.
-Configure bot authentication in lark-cli; sends explicitly use `--as bot`.
+Bus stores no credentials and does not invoke lark-cli directly.
 
-Only messages with the literal `[waiting-on-you]` or `[waiting_on_you]` tag reach Feishu;
-untagged posts, `@you` mentions and the legacy phrase stay in the TUI. A fixed two-second
-window combines tagged messages in a burst into one DM. Each contributes
-`sender is waiting on you: action`, taking the first line or bullet after the marker (same or
-following nonempty line), with Markdown closing markers skipped and the full action line
-preserved. The same action from the same agent (by ID, so a rename does not matter) is
-not resent within 30 minutes of when Bus first saw it; a failed send releases it, and a Bus
-restart starts a fresh window.
-Additional body lines and attachment paths are never added.
-Routing markers and terminal controls are filtered. Each source contributes its own line.
+Only literal `[waiting-on-you]` or `[waiting_on_you]` tags reach Feishu. Untagged
+posts, `@you` mentions and the legacy phrase stay in the TUI. Each Bus request gets
+its own DM, including repeated requests with identical action text. The message
+contains `sender is waiting on you: action` and a short `bus:CODE` request code.
+The complete action is preserved, with routing markers and terminal controls filtered.
+Attachment files are not uploaded.
 
-The coordinator runs `lark-cli im +messages-send --as bot --user-id OPEN_ID --text TEXT
---idempotency-key KEY --format json` in one background worker without a shell, with a
-ten-second timeout and cancellation. Failures log a warning and never block or crash Bus;
-there are no automatic retries. Destination edits preserve pending messages, using the new
-destination for the next send; an in-flight send completes with its captured destination.
-There is no Feishu reply channel.
+Bus persists the source prompt/request, conversation room, raising agent, exact
+orchestrator binding, session root, recipient and stable idempotency key before
+starting `feishu-bridge send --open-id OPEN_ID --text TEXT --idempotency-key KEY`.
+The returned `message_id` and `chat_id` are committed to that record. Sends run
+serially in a cancellable background worker. An attempted send is never replayed
+automatically after a timeout, failure or Bus restart because its outcome can be
+uncertain. Its request code and outbox record remain available for audit.
 
-Tests use only scratch sessions, fake providers, a closed PATH recording bot CLI and
-recorded sound effects. They never play audio, send real Feishu or automate the desktop.
+Outbound acceptance uses a private scratch Bus, fake providers and a recording
+bridge. The fake bridge reads the actual persisted outbox before returning IDs.
+Run the procedure in [Feishu outbound acceptance](../tests/e2e-tui/feishu-notify.md).
+Tests send no real Feishu messages.

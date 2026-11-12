@@ -98,9 +98,9 @@ It never runs the displayed command and needs no permission handler.
 
 `fake:raw-reply TEXT` returns TEXT verbatim as the fake's final instead of
 prepending `fake reply:`. This tests prefixes such as developer attention.
-For Feishu tests, put a recording `lark-cli` on a closed inherited PATH
+For Feishu tests, put a recording `feishu-bridge` on a closed inherited PATH
 containing only that fixture directory and system tools; never allow fallback
-to a real installed CLI. The Settings hit name is `feishu-notifications`.
+to a real installed bridge. The Settings hit name is `feishu-notifications`.
 
 `fake:dialog-null` uses the same inert chooser with a captured Codex permission
 layout whose long second option soft-wraps at 80 columns. It exercises dialog
@@ -154,9 +154,10 @@ not stand in for, so `start` refuses there.
 
 Agent messages addressed to `you` (or `human`) and all waiting-tagged agent messages
 notify from every room and sender. Explicit `@you` mentions also qualify. Bare waiting phrases
-qualify only in developer conversations, not peer traffic. Feishu notifications are mandatory; recipient and
-optional CLI path remain shared settings, and bursts combine over two seconds.
-Use a closed PATH recording shim to assert argv. Developer sends emit no alerts,
+qualify only in developer conversations, not peer traffic. Feishu uses the optional local
+`feishu-bridge` plugin and sends only literal waiting-tagged requests, one DM per source.
+The recipient and optional bridge path are shared settings. Without the plugin, Feishu is off.
+Use a closed PATH recording bridge to assert argv and persisted outbox admission. Developer sends emit no alerts,
 and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).
 Freezes are recorded only in diagnostics and emit no terminal notification.
 
