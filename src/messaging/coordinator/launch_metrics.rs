@@ -176,6 +176,17 @@ fn failure_cause(
     {
         return Some("native_resume_failed");
     }
+    // Startup cleanup owns the bounded bootstrap retry decision. A captured
+    // exit is evidence, not the final outcome of a recoverable launch.
+    if agent.startup.as_ref().is_some_and(|s| {
+        !s.reported
+            && matches!(
+                s.recovery,
+                Some(crate::messaging::model::StartupRecovery::CodexBootstrap { .. })
+            )
+    }) {
+        return None;
+    }
     if fresh_exit {
         return Some("unavailable_at_launch");
     }

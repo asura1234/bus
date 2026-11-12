@@ -149,8 +149,13 @@ fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
             // A closed startup-failed send never reached provider input either.
             request.agent_id == agent.id
                 && request.phase != super::RequestPhase::Queued
-                && request.failure_reason.as_deref()
-                    != Some(crate::messaging::model::AGENT_STARTUP_FAILED)
+                && !matches!(
+                    request.failure_reason.as_deref(),
+                    Some(
+                        crate::messaging::model::AGENT_STARTUP_FAILED
+                            | crate::messaging::model::CODEX_BOOTSTRAP_FAILED
+                    )
+                )
         })
 }
 

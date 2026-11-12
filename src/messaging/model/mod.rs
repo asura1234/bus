@@ -1,5 +1,6 @@
 //! Messaging model facade; state operations are owned by their round-trip domain.
 mod agent_names;
+mod agent_startup;
 mod agents;
 mod attention;
 mod callbacks;
@@ -77,8 +78,9 @@ pub(crate) use {
         DeliveryEpoch, DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId,
         Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, Room,
         RoomHistoryFilters, RoomId, RoomKind, RuntimeStatus, StartupFailure, StartupRecovery,
-        SubmissionOutcome, AGENT_STARTUP_FAILED, BLOCKED_STALL_MS, BUS_SENDER, DELIVERED_STALL_MS,
-        MASTER_ROOM_NAME, QUEUED_STALL_MS, TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
+        SubmissionOutcome, AGENT_STARTUP_FAILED, BLOCKED_STALL_MS, BUS_SENDER,
+        CODEX_BOOTSTRAP_FAILED, DELIVERED_STALL_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
+        TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };
 

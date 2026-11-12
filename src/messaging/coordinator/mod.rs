@@ -42,6 +42,7 @@ pub(crate) use restart_handoff::take_restart_plan;
 #[cfg(test)]
 pub(crate) use restart_handoff::test_restart_plan;
 mod startup_recovery;
+mod startup_retry;
 mod storage;
 mod worker;
 mod working_directory;

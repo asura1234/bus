@@ -367,6 +367,10 @@ fn observe_exit(
         && agent.exit_snapshot.as_ref().is_some_and(|s| {
             s.launch_id == agent.runtime_identity.launch_id
                 && Some(s.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+                && agent
+                    .startup
+                    .as_ref()
+                    .is_none_or(|startup| s.at_ms >= startup.started_at_ms)
         });
     let evidence = match (
         info,
@@ -401,6 +405,9 @@ pub(super) fn report_exit(
     id: AgentId,
     evidence: Option<bool>,
 ) -> Result<(), String> {
+    if state.agent(id).is_some_and(|a| a.startup.is_some()) {
+        return Ok(());
+    }
     if evidence == Some(true) {
         state.record_worker_exit(id, io::now_ms());
     }

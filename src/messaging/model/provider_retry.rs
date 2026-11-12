@@ -18,11 +18,9 @@ pub(crate) struct ProviderRetry {
 
 impl BusState {
     pub(super) fn retain_rejected_provider_retry(&mut self, id: RequestId) {
-        let Some(request) = self
-            .requests
-            .get(&id)
-            .filter(|r| r.provider_retry_attempts > 0 && !r.restart_continuation)
-        else {
+        let Some(request) = self.requests.get(&id).filter(|r| {
+            r.provider_retry_attempts > r.startup_retry_attempts && !r.restart_continuation
+        }) else {
             return;
         };
         let Some(owner) = self.agents.get_mut(&request.agent_id) else {

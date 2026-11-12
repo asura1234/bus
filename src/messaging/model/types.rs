@@ -243,6 +243,8 @@ pub(crate) struct AgentStartup {
 }
 
 pub(crate) const AGENT_STARTUP_FAILED: &str = "agent_startup_failed";
+pub(crate) const CODEX_BOOTSTRAP_FAILED: &str =
+    "provider_error: codex backend unreachable (account/read)";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct StartupFailure {
@@ -262,6 +264,15 @@ impl StartupFailure {
 pub(crate) enum StartupRecovery {
     Unsubmitted {
         args: Vec<String>,
+    },
+    /// Only an exited, sessionless Codex bootstrap may reuse this argv. Consume
+    /// the backoff before input so an uncertain result cannot replay the command.
+    CodexBootstrap {
+        args: Vec<String>,
+        attempts: u32,
+        retry_at_ms: Option<u64>,
+        uncertain: bool,
+        exhausted: bool,
     },
     /// Persisted before requesting input; uncertain outcomes cannot replay it.
     Requested,
@@ -529,6 +540,10 @@ pub(crate) struct Request {
     pub(crate) queued_rejection: Option<QueuedRejection>,
     #[serde(default)]
     pub(crate) provider_retry_attempts: u32,
+    /// Startup retries contribute to the total, but cannot authorize a replay
+    /// of a request whose first provider submission was rejected.
+    #[serde(default)]
+    pub(crate) startup_retry_attempts: u32,
     /// The original task is being continued after a cold provider resume.
     /// Delivery sends a short notice, never the original prompt again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

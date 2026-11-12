@@ -225,3 +225,23 @@ fn a_turn_boundary_between_begin_and_rejected_retry_does_not_renew_the_head() {
         }
     }
 }
+
+#[test]
+fn startup_retry_count_does_not_turn_rejected_first_input_into_provider_turn_replay() {
+    let (mut state, _, agent, head) = fixture(Provider::Codex);
+    let request = state.requests.get_mut(&head).unwrap();
+    request.provider_retry_attempts = 2;
+    request.startup_retry_attempts = 2;
+    reject(&mut state, head, 1_030);
+    assert!(state.agent(agent).unwrap().provider_retry.is_none());
+    assert_eq!(
+        state
+            .expire_stalled_queued_requests(1_020 + QUEUED_STALL_MS)
+            .unwrap(),
+        vec![head]
+    );
+    assert_eq!(
+        state.request(head).unwrap().failure_reason.as_deref(),
+        Some("prompt_not_shown")
+    );
+}

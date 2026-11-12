@@ -244,7 +244,7 @@ impl BusState {
         if agent.provider_retry.is_some()
             || !lead.restart_continuation
                 && lead.phase == RequestPhase::Queued
-                && lead.provider_retry_attempts > 0
+                && lead.provider_retry_attempts > lead.startup_retry_attempts
         {
             return None;
         }
@@ -732,7 +732,10 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 impl Request {
     /// Durable send outcome, never the agent's mutable latest error or a reply.
     pub(crate) fn submission_notice(&self) -> Option<String> {
-        if self.failure_reason.as_deref() == Some(super::AGENT_STARTUP_FAILED) {
+        if matches!(
+            self.failure_reason.as_deref(),
+            Some(super::AGENT_STARTUP_FAILED | super::CODEX_BOOTSTRAP_FAILED)
+        ) {
             return self.submission_error.clone();
         }
         let unconfirmed = self.failure_reason.as_deref() == Some("submission_unconfirmed")

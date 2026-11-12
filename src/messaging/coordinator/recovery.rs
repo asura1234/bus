@@ -146,6 +146,9 @@ impl Worker {
             Some(crate::messaging::model::StartupRecovery::Requested) => {
                 return Err("Previous launch input is unconfirmed; inspect the owned terminal before recovery; no retry was sent".into());
             }
+            Some(StartupRecovery::CodexBootstrap { .. }) => {
+                return Err("Codex startup recovery is watched; inspect its terminal before an explicit replacement".into());
+            }
             None => {}
         }
         if !agent.hook_setup_confirmed {

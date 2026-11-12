@@ -47,6 +47,11 @@ struct FailedLaunchNative {
     screen_terminal: Option<String>,
     shell_wait_code: Option<&'static str>,
     launch_args: Option<Arc<Mutex<Vec<String>>>>,
+    screen: Option<String>,
+    screen_columns: Option<usize>,
+    exited: bool,
+    retry_calls: Option<Arc<Mutex<usize>>>,
+    uncertain_retry: bool,
 }
 
 impl Transport for FailedLaunchNative {
@@ -63,6 +68,18 @@ impl Transport for FailedLaunchNative {
                     "agent_status":"unknown", "revision":1
                 })).unwrap(),
             }),
+            Method::AgentStartIfIdentity(params) => {
+                *self.retry_calls.as_ref().unwrap().lock().unwrap() += 1;
+                assert_eq!(params.expected_terminal_id, "terminal");
+                if self.uncertain_retry {
+                    return Err(TransportError { timestamps: Default::default(), code: None, message: "lost retry result".into(), definitely_rejected: false });
+                }
+                let mut info = native_info("pane", "codex", "unused");
+                info.name = Some(params.start.name);
+                info.agent_session = None;
+                info.launch_pending = true;
+                Ok(ResponseResult::AgentStarted { agent: info, argv: vec!["codex".into()] })
+            }
             Method::AgentStart(params) => {
                 if let Some(args) = &self.launch_args {
                     *args.lock().unwrap() = params.args.clone();
@@ -84,6 +101,7 @@ impl Transport for FailedLaunchNative {
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
                 pane: serde_json::from_value(json!({
                     "pane_id":"pane", "terminal_id":self.screen_terminal.as_deref().unwrap_or("terminal"),
+                    "agent_process_exited": self.exited,
                     "workspace_id":"w1", "tab_id":"t1", "focused":false,
                     "agent_status":"unknown", "revision":1
                 })).unwrap(),
@@ -102,14 +120,21 @@ impl Transport for FailedLaunchNative {
                     "osc_title":"⠋ Working", "osc_progress":"4;1;", "content_revision":2
                 })).unwrap() })
             }
-            Method::PaneRead(_) => Ok(ResponseResult::PaneRead {
-                read: serde_json::from_value(json!({
+            Method::PaneRead(params) => {
+                let screen = if let Some(screen) = &self.screen { screen.as_str() } else if self.shell_wait_code.is_some() { "STARTUP QUESTION [Y/n] " } else { "zsh: command not found: bus-provider-does-not-exist\nscratch% " };
+                let text = if params.source == schema::ReadSource::Recent {
+                    if let Some(columns) = self.screen_columns {
+                        screen.chars().collect::<Vec<_>>().chunks(columns)
+                            .map(|row| row.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
+                    } else { screen.into() }
+                } else { screen.into() };
+                Ok(ResponseResult::PaneRead { read: serde_json::from_value(json!({
                     "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1",
-                    "source":"recent", "format":"text", "revision":1,
-                    "text":if self.shell_wait_code.is_some() { "STARTUP QUESTION [Y/n] " } else { "zsh: command not found: bus-provider-does-not-exist\nscratch% " },
+                    "source":params.source, "format":"text", "revision":1,
+                    "text":text,
                     "truncated":false, "returned_lines":2
-                })).unwrap(),
-            }),
+                })).unwrap() })
+            }
             Method::PaneCloseIfIdentity(params) => {
                 let state = JsonStore::new(self.state_path.clone()).load().unwrap().unwrap();
                 let agent = state.agents().find(|agent| agent.runtime_identity.terminal_id.as_deref() == Some(&params.expected_terminal_id)).unwrap();
@@ -2033,3 +2058,6 @@ fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
         "the native rejection established that no input was sent: {result}"
     );
 }
+
+#[path = "startup_retry_test.rs"]
+mod startup_retry_tests;
