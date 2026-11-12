@@ -76,6 +76,11 @@ impl OwnedComposer {
 }
 
 impl SubmissionInspector for OwnedComposer {
+    fn retry_owned_enter(&self) -> bool {
+        self.kind == AgentKind::Claude
+            && crate::agents::providers::claude_code::hooks::claude_lifted_images(&self.expected).0
+                == 0
+    }
     fn confirm_consumption(&self) -> bool {
         self.kind == AgentKind::Codex
     }

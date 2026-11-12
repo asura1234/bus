@@ -69,7 +69,9 @@ impl ObservedSubmission {
         let preservation = self
             .inspect
             .draft_preservation_since_launch(&screen, cursor, pristine);
-        let withdrawal_lease = self.inspect.confirm_consumption().then_some(lease);
+        let withdrawal_lease = (self.inspect.confirm_consumption()
+            || self.inspect.retry_owned_enter())
+        .then_some(lease);
         match initial {
             InputObservation::Empty if preservation.is_none() => {
                 if self.inspect.always_use_editor() {
@@ -257,7 +259,11 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(text, delay, None);
+        let result = self.run(
+            text,
+            delay,
+            self.inspect.retry_owned_enter().then_some(lease),
+        );
         if result.is_ok() {
             if let Err(error) = self.wait_transfer(|| {
                 Ok(self

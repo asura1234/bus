@@ -99,6 +99,8 @@ async fn focused_delivery(draft: &str, image: bool) {
         );
         assert!(response.try_recv().is_err());
         redraw(&app, AgentKind::Claude, "[Image #7]from bus");
+    } else {
+        redraw(&app, AgentKind::Claude, text);
     }
     assert_eq!(step(&mut writes, &response, "submit").await.as_ref(), b"\r");
     // New developer input remains buffered until the native stash restores.
@@ -135,7 +137,7 @@ async fn focused_idle_claude_submits_image_and_restores_half_typed_draft() {
 }
 
 #[tokio::test]
-async fn focused_idle_claude_submits_text_without_waiting_for_a_paste_frame() {
+async fn focused_idle_claude_submits_text_after_the_owned_paste_frame() {
     focused_delivery("", false).await;
 }
 

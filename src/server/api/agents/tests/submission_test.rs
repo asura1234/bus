@@ -11,6 +11,9 @@ mod kimi_delivery_tests;
 #[path = "claude_image_submission_test.rs"]
 mod claude_image_submission_tests;
 
+#[path = "claude_plain_submission_test.rs"]
+mod claude_plain_submission_tests;
+
 fn clock(app: &App) -> crate::terminal::runtime::SubmissionClock {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     app.lookup_runtime_sender(0, pane)
@@ -400,7 +403,7 @@ async fn fake_provider_scheduling_pause_does_not_expire_a_submission() {
 
 #[tokio::test]
 async fn one_flushed_paste_is_submitted_once_without_a_render_readback() {
-    for (kind, bound) in [(AgentKind::Claude, true), (AgentKind::Cursor, true)] {
+    for (kind, bound) in [(AgentKind::Cursor, true)] {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, "");
         let receipt = clock(&app).hold_next_write_completion();
         let response = start(&mut app, method);

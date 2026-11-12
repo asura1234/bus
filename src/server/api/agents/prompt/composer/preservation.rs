@@ -96,6 +96,9 @@ mod tests;
 mod claude_rich_draft_tests;
 
 impl SubmissionInspector for PreservingComposer {
+    fn retry_owned_enter(&self) -> bool {
+        self.owned.retry_owned_enter()
+    }
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()
     }

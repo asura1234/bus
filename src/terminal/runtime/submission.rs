@@ -1,6 +1,7 @@
-//! Save the native draft, submit once behind a blocker guard, then restore it.
+//! Save the native draft, submit guarded owned input, then restore it.
 mod consumption;
 mod diagnostics;
+mod plain;
 mod preservation;
 mod recovery;
 pub(crate) use preservation::{DraftPreservation, EditorSubmission};
@@ -99,6 +100,11 @@ pub(crate) trait SubmissionInspector: Send {
     /// and of the developer draft already saved by the input lease.
     fn paste_ready(&self, _screen: &str) -> bool {
         true
+    }
+    /// Claude plain pastes need owned render and consumption evidence; a
+    /// still-owned draft may receive one extra Enter after a dropped key.
+    fn retry_owned_enter(&self) -> bool {
+        false
     }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
@@ -663,8 +669,10 @@ impl ObservedSubmission {
                         } else {
                             self.check_deadline()?;
                             let key = self.inspect.editor_submit_key(&screen, &self.enter);
-                            if self.inspect.confirm_consumption() {
-                                self.observe("legacy_enter_ownership");
+                            if self.inspect.confirm_consumption()
+                                || self.inspect.retry_owned_enter()
+                            {
+                                self.observe("enter_ownership");
                             }
                             self.enter_content_seq
                                 .set(self.content_seq.load(Ordering::Acquire));
@@ -725,12 +733,16 @@ impl ObservedSubmission {
                 self.withdraw_before_enter(error, lease)
             };
         }
-        // Do not read back or attribute the pasted text. The pane lease keeps
-        // developer input buffered. A complete blocker may refuse the one
-        // submit key; pending attachment registration and blank redraws wait.
+        // The pane lease buffers developer input. Claude waits for its owned
+        // plain draft or attachment registration before the first Enter;
+        // other providers keep their existing availability guard.
         self.await_submit_key()?;
+        let entered_at = self.clock.now();
         #[cfg(test)]
         self.clock.entered();
+        if self.inspect.retry_owned_enter() {
+            return self.confirm_plain_submission(lease, entered_at);
+        }
         // Native Started/Steered callbacks settle delivery asynchronously.
         // An unchanged empty frame here is not proof of provider acceptance.
         Ok(())
