@@ -82,7 +82,7 @@ pub(super) fn report_setup_failure(args: &[String], error: io::Error) -> io::Res
     std::process::exit(1)
 }
 
-fn next_request_id() -> String {
+pub(super) fn next_request_id() -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     format!(
         "bus-{}-{}-{}",

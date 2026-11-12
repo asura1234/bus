@@ -5,6 +5,7 @@ pub(crate) mod control;
 #[cfg(test)]
 #[path = "tests/dashboard_test.rs"]
 mod dashboard_tests;
+mod feishu_ingest;
 pub(crate) mod help;
 pub(crate) mod launch;
 mod perf;
@@ -108,6 +109,11 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             return Err(io::Error::other(error));
         }
     };
+    if let Action::Control(args) = &invocation.action {
+        if args.first().is_some_and(|command| command == "feishu") {
+            return feishu_ingest::run(args);
+        }
+    }
     if matches!(invocation.action, Action::Run | Action::Resume(_)) {
         crate::utils::launch_guard::guard_launch()?;
     }

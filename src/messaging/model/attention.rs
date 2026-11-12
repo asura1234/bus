@@ -116,6 +116,7 @@ impl BusState {
             submitted_at_ms: now_ms,
             idle_agent_ids: Default::default(),
             attention_origin: Some(origin),
+            in_reply_to: None,
         };
         room.latest_prompt = Some(prompt.clone());
         room.notices.push(prompt);

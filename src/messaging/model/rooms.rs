@@ -458,6 +458,7 @@ impl BusState {
             submitted_at_ms: now_ms,
             idle_agent_ids: BTreeSet::new(),
             attention_origin: None,
+            in_reply_to: None,
         };
         // The latest prompt is what rings and what the composer recalls, as
         // for an agent's `send --as` to other agents.

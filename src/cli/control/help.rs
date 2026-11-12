@@ -49,6 +49,8 @@ pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
 fn argument_help(id: &str) -> &'static str {
     match id {
         "request-id" => "Use this request identity for retries and the JSON response",
+        "instance" => "Absolute Bus session root or registry base to inspect for the saved reply mapping",
+        "app-id" => "Expected Feishu application ID for the trusted bridge sink",
         "room" => "Room name or ID (master selects MASTER)",
         "agent" => "Agent name or ID",
         "name" => "Name to create or assign",
@@ -94,6 +96,8 @@ fn description(path: &str) -> (&'static str, &'static str) {
     match path {
         "" => ("Coordinate coding agents in terminal rooms", "Example: bus agent list"),
         "state" => ("Inspect rooms, agents, and current activity", "Example: bus state"),
+        "feishu" => ("Accept authenticated replies from the optional Feishu bridge", "Example: bus feishu ingest --help"),
+        "feishu ingest" => ("Durably ingest one bridge message from JSON stdin", "Example: bus feishu ingest --instance /absolute/bus-root --app-id cli_example"),
         "quit" => ("Quit the running Bus", "Example: bus --dev quit"),
         "settings" => ("Inspect shared settings or choose a setting to update", "Example: bus settings"),
         "settings feishu-notifications" => ("Inspect or enable mandatory developer notifications", "Example: bus settings feishu-notifications --on"),
