@@ -35,32 +35,54 @@ A missing or unplayable selection falls back to that system default, never a bun
 sound. If no system sounds are installed, Bus logs that playback is unavailable; the other
 notification routes remain active. No desktop popup is added.
 
-Feishu bot DMs remain under Settings → NOTIFICATIONS and are always on.
-A legacy `feishu_waiting_notifications: false` is read as true,
-and `bus settings feishu-notifications --off` is rejected. The Settings row says **always on**;
-it cannot toggle this route. Freeze diagnostics do not emit user notifications.
+Feishu is an optional local plugin. Install `feishu-bridge` on the same Mac and
+configure its bot transport separately. Bus discovers it through **feishu-bridge path**
+in Settings → NOTIFICATIONS (`feishu_bridge_path` in settings.json), or PATH when
+the field is empty. Without the executable, both Feishu directions are off.
 The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
-Click **Recipient open_id** to edit it; **lark-cli path** overrides the executable,
-with an empty field using `lark-cli` from PATH. Bus stores no credentials.
-Configure bot authentication in lark-cli; sends explicitly use `--as bot`.
+Bus stores no credentials and does not invoke lark-cli directly.
 
-Only messages with the literal `[waiting-on-you]` or `[waiting_on_you]` tag reach Feishu;
-untagged posts, `@you` mentions and the legacy phrase stay in the TUI. A fixed two-second
-window combines tagged messages in a burst into one DM. Each contributes
-`sender is waiting on you: action`, taking the first line or bullet after the marker (same or
-following nonempty line), with Markdown closing markers skipped and the full action line
-preserved. The same action from the same agent (by ID, so a rename does not matter) is
-not resent within 30 minutes of when Bus first saw it; a failed send releases it, and a Bus
-restart starts a fresh window.
-Additional body lines and attachment paths are never added.
-Routing markers and terminal controls are filtered. Each source contributes its own line.
+Only literal `[waiting-on-you]` or `[waiting_on_you]` tags reach Feishu. Untagged
+posts, `@you` mentions and the legacy phrase stay in the TUI. Each Bus request gets
+its own DM, including repeated requests with identical action text. The message
+contains `sender is waiting on you: action` and a short `bus:CODE` request code.
+The complete action is preserved, with routing markers and terminal controls filtered.
+Attachment files are not uploaded.
 
-The coordinator runs `lark-cli im +messages-send --as bot --user-id OPEN_ID --text TEXT
---idempotency-key KEY --format json` in one background worker without a shell, with a
-ten-second timeout and cancellation. Failures log a warning and never block or crash Bus;
-there are no automatic retries. Destination edits preserve pending messages, using the new
-destination for the next send; an in-flight send completes with its captured destination.
-There is no Feishu reply channel.
+Bus persists the source prompt/request, conversation room, raising agent, exact
+orchestrator binding, session root, recipient and stable idempotency key before
+starting `feishu-bridge send --open-id OPEN_ID --text TEXT --idempotency-key KEY`.
+The returned `message_id` and `chat_id` are committed to that record. Sends run
+serially in a cancellable background worker. An attempted send is never replayed
+automatically after a timeout, failure or Bus restart because its outcome can be
+uncertain. Its request code remains available for explicit replies.
 
-Tests use only scratch sessions, fake providers, a closed PATH recording bot CLI and
-recorded sound effects. They never play audio, send real Feishu or automate the desktop.
+Configure the bridge's sink as:
+
+```toml
+sink_command = ["/absolute/path/to/bus", "feishu", "ingest", "--instance", "/absolute/bus/root", "--app-id", "cli_YOUR_APP"]
+```
+
+`--instance` names an exact private Bus session root or its local session registry
+base. It is required: the sink never targets the last opened session or inherits
+an agent's author identity. The bridge passes one v1 JSON object on stdin. The sink
+validates the configured app ID, user sender type and p2p chat type, then Bus
+checks the sender against its configured recipient and the recorded recipient/chat.
+Reply ancestry (`reply_to`, then `root_id`, including accepted inbound ancestry)
+or an explicit `bus:CODE` must identify exactly one request. Conflicting references
+are refused. There is no matching by time, display name or most recent alert.
+
+Accepted replies become developer-authored Bus messages with structured
+`in_reply_to` provenance in history and the provider payload. They queue an
+independent turn for the exact recorded orchestrator. Unknown/ambiguous replies
+stay undelivered; deleted rooms/orchestrators are parked without selecting a
+replacement. The deduplication receipt and queued message commit together.
+Replays return the original receipt, including after restart; edited text does
+not create a second instruction. Exit 0 from the sink means durable acceptance
+(delivered or parked). An unavailable session or failed commit returns nonzero
+so the bridge retains its spool and retries. Diagnostics stay in logs.
+
+The bridge owns listener supervision, Feishu history reconciliation, offline
+spooling and retry. Bus does not install/start the listener. Acceptance uses a
+private scratch Bus, fake bridge and synthetic bridge input. The developer's
+final live reply is a separate acceptance step; tests send no real Feishu messages.

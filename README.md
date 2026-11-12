@@ -51,16 +51,16 @@ user skills.
 [Claude Code gives personal skills precedence](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name);
 [Codex lists both same-name copies](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 
-Feishu notifications are on by default. Install `lark-cli` on PATH and configure
-its bot identity. In **Settings → Feishu notifications**, choose the recipient
-user open_id and optionally override the CLI path. No credentials are stored by
-Bus. Use the checkbox or `bus settings feishu-notifications --off` to disable.
+Feishu notifications use the optional local `feishu-bridge` plugin. Install it on
+PATH (or set its path in Settings), configure its bot transport, and choose the
+recipient open_id. Without the plugin, Feishu is off. Bus stores no credentials.
+[Reply routing and sink setup](docs/developer-notifications.md) describe how a
+Feishu reply reaches the exact orchestrator as a developer instruction.
 
 An orchestrator puts `[waiting_on_you]` or `[waiting-on-you]` before the action
 it needs from the developer in a MASTER message. Bus sends a bot DM containing
-`name is waiting on you: action`, combining arrivals within two seconds. The
-existing case-insensitive whole phrases `waiting on you` and `still waiting on you`
-also qualify. `[needs_developer_attention]` still renders the internal badge;
+`name is waiting on you: action` and a short request code, one DM per request.
+Untagged whole phrases stay in the TUI. `[needs_developer_attention]` still renders the internal badge;
 by itself it does not send a DM. Failed sends warn without blocking Bus or
 retrying. See [Feishu notification settings and behavior](docs/developer-notifications.md).
 

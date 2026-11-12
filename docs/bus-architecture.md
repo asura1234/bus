@@ -216,10 +216,12 @@ Files are split by ownership, not by helper.
   - `attention.rs`: the developer-attention prefix shared by model, display and delivery.
     `model/attention.rs` owns durable Bus notices and mechanical episode latches;
     legacy delivery state remains readable. `coordinator/attention.rs` observes shared
-    notification settings and new developer-addressed MASTER messages, skipping startup
-    history. `feishu/` detects waiting tags and combines full action lines in a fixed
-    two-second burst. A cancellable background worker sends one bot DM through a bounded
-    lark-cli subprocess to the configured recipient; errors are logged without retries.
+    notification settings and tagged developer alerts, skipping startup history.
+    `model/feishu.rs` persists one outbox per source plus external-ID mappings and inbound
+    deduplication receipts. A cancellable background worker invokes the optional local
+    `feishu-bridge` plugin, one DM per request. The explicit-instance ingest sink validates
+    identity and ancestry, then atomically queues a developer instruction with `in_reply_to`
+    for the recorded orchestrator. Unknown/deleted targets stay parked; diagnostics are logged.
     Internal attention notices and badges remain independent of outbound delivery. The native
     `PaneInfo.agent_process_exited` reports explicit process exits;
     missing agents and API failures do not establish a crash.
