@@ -12,7 +12,6 @@ use crate::terminal::runtime::detection_policy::DetectionScreenReadDecision;
 use crate::terminal::runtime::detection_policy::DetectionScreenReadInput;
 use crate::terminal::runtime::detection_policy::PendingIdleConfirmation;
 use crate::terminal::runtime::detection_policy::ScreenDetectionPublishInput;
-use crate::terminal::runtime::detection_policy::AGENT_PENDING_IDLE_RECHECK;
 use crate::terminal::runtime::detection_policy::AGENT_STARTUP_GRACE_WINDOW;
 use crate::terminal::runtime::detection_process::apply_foreground_shell_agent_action;
 use crate::terminal::runtime::detection_process::clear_osc_evidence_for_agent_transition;
