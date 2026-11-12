@@ -71,7 +71,27 @@ fn feishu_outbox_keeps_each_request_and_worker_home_binding_before_send() {
     );
     let restored: BusState = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
     assert_eq!(restored.feishu, state.feishu);
-    assert!(state.durable_poll_change_from(&BusState::new()));
+}
+
+#[test]
+fn feishu_mapping_and_parked_reply_changes_require_a_durable_save() {
+    let (mut state, work, _, worker) = fixture();
+    let code = prepare(&mut state, work, worker);
+    let before_send = state.clone();
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    assert!(state.durable_poll_change_from(&before_send));
+    let before_park = state.clone();
+    state
+        .ingest_feishu_reply(
+            incoming("om_unknown", None, None, "Proceed"),
+            "ou_developer",
+            21,
+        )
+        .unwrap();
+    assert_eq!(state.requests().count(), 0);
+    assert!(state.durable_poll_change_from(&before_park));
 }
 
 #[test]
