@@ -5,7 +5,7 @@ use crate::messaging::coordinator::BusCommand;
 impl BusUi {
     pub(super) fn open_feishu_setting(&mut self, cli: bool) {
         let text = if cli {
-            self.settings.feishu_cli_path.clone().unwrap_or_default()
+            self.settings.feishu_bridge_path.clone().unwrap_or_default()
         } else {
             self.settings.feishu_recipient.clone()
         };

@@ -1,0 +1,37 @@
+use crate::messaging::model::{AgentId, PromptId, RequestId, RoomId};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AlertSource {
+    pub(crate) prompt_id: PromptId,
+    pub(crate) request_id: Option<RequestId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct OutboxRecord {
+    pub(crate) code: String,
+    pub(crate) key: String,
+    pub(crate) session: String,
+    pub(crate) source: AlertSource,
+    pub(crate) room: RoomId,
+    pub(crate) raising_agent: Option<AgentId>,
+    pub(crate) orchestrator: Option<AgentId>,
+    pub(crate) recipient: String,
+    pub(crate) text: String,
+    pub(crate) created_at_ms: u64,
+    pub(crate) attempted: bool,
+    pub(crate) message_id: Option<String>,
+    pub(crate) chat_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct FeishuState {
+    pub(crate) outbox: BTreeMap<String, OutboxRecord>,
+}
+
+impl FeishuState {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.outbox.is_empty()
+    }
+}
