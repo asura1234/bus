@@ -1,4 +1,4 @@
-//! Reconcile requests interrupted by a newer native-server generation.
+//! Reconcile tasks interrupted by a server restart or proven runtime loss.
 use super::super::{restart_continuation::ContinuationPreparation, LaunchKind, LaunchOutcome};
 use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase};
 
@@ -109,21 +109,11 @@ impl BusState {
             && !resume_failed
         {
             let preparation = self.prepare_restart_continuation(agent, id, generation, now_ms);
-            if preparation == ContinuationPreparation::AwaitingResume {
-                self.requests.get_mut(&id)?.awaiting_resume = true;
-                return Some(id);
-            }
-            if preparation == ContinuationPreparation::Prepared {
-                if let Some(current) = current.filter(|current| *current != id).or(successor) {
-                    self.agents.get_mut(&agent)?.current_request = Some(current);
-                    if self.requests.get(&current).is_some_and(|request| {
-                        request.restart_continuation && request.phase == RequestPhase::Queued
-                    }) {
-                        let queue = self.queues.entry(agent).or_default();
-                        queue.retain(|request| *request != current);
-                        queue.insert(0, current);
-                    }
+            if preparation != ContinuationPreparation::Refused {
+                if preparation == ContinuationPreparation::AwaitingResume {
+                    self.requests.get_mut(&id)?.awaiting_resume = true;
                 }
+                self.restore_interrupted_owner(agent, id, current, successor)?;
                 return Some(id);
             }
         }
@@ -156,6 +146,27 @@ impl BusState {
             .or(successor)
             .or(owner.current_request);
         Some(id)
+    }
+
+    /// Reconciliation of older work cannot release a newer delivery's owner.
+    fn restore_interrupted_owner(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        current: Option<RequestId>,
+        successor: Option<RequestId>,
+    ) -> Option<()> {
+        if let Some(current) = current.filter(|current| *current != id).or(successor) {
+            self.agents.get_mut(&agent)?.current_request = Some(current);
+            if self.requests.get(&current).is_some_and(|request| {
+                request.restart_continuation && request.phase == RequestPhase::Queued
+            }) {
+                let queue = self.queues.entry(agent).or_default();
+                queue.retain(|request| *request != current);
+                queue.insert(0, current);
+            }
+        }
+        Some(())
     }
 
     fn settle_interrupted_generation_end(

@@ -48,11 +48,21 @@ impl BusState {
     }
 
     pub(crate) fn awaiting_restart_resume(&self, agent: AgentId) -> bool {
+        let waiting = |request: &super::Request| {
+            request.awaiting_resume
+                || request
+                    .group
+                    .and_then(|id| self.requests.get(&id))
+                    .is_some_and(|lead| lead.awaiting_resume)
+        };
         self.agents
             .get(&agent)
             .and_then(|a| a.current_request)
             .and_then(|id| self.requests.get(&id))
-            .is_some_and(|r| r.awaiting_resume)
+            .is_some_and(waiting)
+            || self
+                .unsettled_requests()
+                .any(|request| request.agent_id == agent && waiting(request))
     }
 
     pub(super) fn restart_continuation_failure_reason(
@@ -104,7 +114,7 @@ impl BusState {
     }
 
     /// Requeue only a notice for the interrupted execution. Keep its group and
-    /// current owner until that same lead is submitted in the new generation.
+    /// current owner until that same lead is submitted after verified resume.
     pub(super) fn prepare_restart_continuation(
         &mut self,
         agent: AgentId,

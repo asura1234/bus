@@ -441,3 +441,80 @@ fn detached_conclusive_resume_preparation_failure_closes_original_group() {
         "failed resume never types a notice"
     );
 }
+#[test]
+fn detached_wait_preserves_a_newer_delivery_owner_and_requires_native_readiness() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let lead = running(&mut f, "old interrupted task", "turn-1");
+    let newer = f.send("current-generation input", false);
+    f.deliver();
+    let queued = f.send("independent FIFO successor", true);
+    let before = f.typed().len();
+    let mut document = serde_json::to_value(&f.worker.state).unwrap();
+    document["requests"][newer.0.to_string()]["delivery_epoch"]["generation"] = json!(5);
+    f.worker
+        .save(serde_json::from_value(document).unwrap())
+        .unwrap();
+    reopen_detached(&mut f, 5);
+    f.worker.tick().unwrap();
+    assert!(!f.request(lead).settled());
+    assert_eq!(f.request(newer).group, None);
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(newer),
+        "waiting for the old task must retain its current-generation successor owner"
+    );
+    let mut info = DetachedNative {
+        methods: f.native.clone(),
+        agent: f.agent,
+        room: f.room,
+        provider: f.provider,
+        generation: 5,
+        exited: false,
+        resumed: true,
+    }
+    .info(true);
+    info.native_ready = false;
+    f.worker.transport = Box::new(RestartLifecycleNative {
+        methods: f.native.clone(),
+        info,
+    });
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    assert_eq!(
+        f.typed().len(),
+        before,
+        "an older waiting task still needs native readiness"
+    );
+    f.worker.transport = epoch_transport(&f, true, 5);
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(lead).phase, RequestPhase::Queued);
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().current_request,
+        Some(newer)
+    );
+    assert_eq!(
+        f.typed().len(),
+        before,
+        "the notice must wait for the newer delivery"
+    );
+    f.started("turn-5", "current-generation input");
+    f.consume();
+    f.stopped("turn-5", "current task completed");
+    f.consume();
+    assert_completed_without_reply(&f, newer);
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
+    assert_eq!(f.typed().len(), before + 1);
+    let notice = f.typed().last().unwrap().0.clone();
+    assert!(notice.contains("Bus restarted"));
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    f.started("turn-6", &notice);
+    f.consume();
+    f.stopped("turn-6", "old task completed after verified recovery");
+    f.consume();
+    assert_completed_without_reply(&f, lead);
+}
