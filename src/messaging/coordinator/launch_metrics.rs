@@ -251,7 +251,8 @@ pub(super) fn observe(
         return Ok(());
     }
     let waiting_on_dialog = info.is_some_and(|i| {
-        i.dialog_id.is_some()
+        (i.dialog_id.is_some()
+            || i.launch_pending && i.agent_status == schema::AgentStatus::Blocked)
             && Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
             && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
     });
