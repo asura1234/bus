@@ -505,3 +505,36 @@ async fn cold_and_replaced_detector_facts_are_unknown_and_cannot_bypass_fresh_gu
         assert!(agents[0].dialog_id.is_some());
     }
 }
+
+#[tokio::test]
+async fn missing_screen_metadata_preserves_positive_busy_lifecycle_evidence() {
+    let (mut app, _writes) = app_with_dialog(UPDATE.replace('\n', "\r\n").as_bytes(), None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    for (native, expected) in [
+        (
+            AgentState::Working,
+            crate::protocol::api::schema::AgentStatus::Working,
+        ),
+        (
+            AgentState::Blocked,
+            crate::protocol::api::schema::AgentStatus::Blocked,
+        ),
+    ] {
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Claude), native);
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("busy".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        assert!(agents[0].screen_detection_skipped);
+        assert_eq!(
+            agents[0].agent_status, expected,
+            "a missing dialog fingerprint must not erase a positive native lifecycle signal"
+        );
+    }
+}

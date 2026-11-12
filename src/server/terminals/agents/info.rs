@@ -54,7 +54,13 @@ impl App {
             terminal_title: pane.terminal_title,
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
-            agent_status: if cached && screen.is_none() {
+            agent_status: if cached
+                && screen.is_none()
+                && matches!(
+                    pane.agent_status,
+                    crate::protocol::api::schema::AgentStatus::Idle
+                        | crate::protocol::api::schema::AgentStatus::Done
+                ) {
                 crate::protocol::api::schema::AgentStatus::Unknown
             } else {
                 pane.agent_status

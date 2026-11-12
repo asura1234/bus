@@ -62,7 +62,7 @@ impl Worker {
             if !info.is_some_and(|info| pending_launch_screen(agent, info)) {
                 super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;
             }
-            // Missing screen facts are not a fresh idle/busy observation.
+            // Missing screen facts cannot refresh an inconclusive status clock.
             if status != agent.status || !info.is_some_and(inconclusive_screen) {
                 state
                     .observe_status(agent.id, status, observed_at_ms)
@@ -443,7 +443,6 @@ pub(super) fn report_exit(
 // Explicit input/resume errors and saved exits still reach their existing owner.
 fn pending_launch_screen(agent: &RoomAgent, info: &schema::AgentInfo) -> bool {
     info.screen_detection_skipped
-        && info.agent_status == schema::AgentStatus::Unknown
         && info.native_ready
         && info.launch_input_error.is_none()
         && info
@@ -732,14 +731,14 @@ mod inconclusive_tests {
     use crate::messaging::native::{Transport, TransportError};
     use crate::protocol::api::schema::Method;
 
-    struct PendingScreen;
+    struct PendingScreen(&'static str);
     impl Transport for PendingScreen {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             assert!(matches!(method, Method::AgentListWithDetectionContext(_)));
             let info = serde_json::from_value(serde_json::json!({
                 "terminal_id":"terminal", "pane_id":"pane", "agent":"kimi",
                 "workspace_id":"w", "tab_id":"t", "focused":false,
-                "agent_status":"unknown", "screen_detection_skipped":true,
+                "agent_status":self.0, "screen_detection_skipped":true,
                 "interactive_ready":true, "native_ready":true, "revision":1
             }))
             .unwrap();
@@ -750,7 +749,7 @@ mod inconclusive_tests {
     #[test]
     fn inconclusive_publication_preserves_status_clock_and_dialog() {
         let root = crate::utils::test_temp::unique_temp_path("bus-pending-screen");
-        let mut worker = Worker::open(root.clone(), Box::new(PendingScreen)).unwrap();
+        let mut worker = Worker::open(root.clone(), Box::new(PendingScreen("unknown"))).unwrap();
         let mut state = worker.state.clone();
         let room = state.create_room("work").unwrap();
         let agent = state
@@ -829,6 +828,20 @@ mod inconclusive_tests {
             polled_status(current, Some(&lost)),
             RuntimeStatus::Launching
         );
+        for (native, expected) in [
+            ("working", RuntimeStatus::Working),
+            ("blocked", RuntimeStatus::Blocked),
+        ] {
+            worker.transport = Box::new(PendingScreen(native));
+            worker.poll().unwrap();
+            assert_eq!(worker.state.agent(agent).unwrap().status, expected);
+            assert!(worker.state.agent(agent).unwrap().dialog);
+            assert_eq!(
+                worker.state.launch_attempt(launch).unwrap().outcome,
+                crate::messaging::model::LaunchOutcome::Pending,
+                "an unreadable fingerprint cannot expire a live busy launch"
+            );
+        }
         drop(worker);
         std::fs::remove_dir_all(root).unwrap();
     }
