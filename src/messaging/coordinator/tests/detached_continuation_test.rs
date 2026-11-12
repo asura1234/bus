@@ -148,15 +148,7 @@ fn detached_same_generation_process_exit_resumes_original_ids_once() {
     reopen_detached(&mut f, 4);
     f.worker.tick().unwrap();
     assert_waiting(&f, lead, member, queued, before);
-    let hooks = f.dir.join(".codex/hooks.json");
-    let document = crate::agents::providers::hook_json::merge_hooks(
-        json!({}),
-        crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
-        &std::env::current_exe().unwrap(),
-    )
-    .unwrap();
-    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
-    std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    install_resume_hooks(&f);
     let result = f.worker.resume_room(f.room).unwrap();
     assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
     f.worker.tick().unwrap();
@@ -394,5 +386,54 @@ fn detached_socket_outage_does_not_interrupt_a_same_generation_live_turn() {
         f.typed().len(),
         before,
         "socket outage is not provider-exit evidence"
+    );
+}
+
+fn install_resume_hooks(f: &Fixture) {
+    let hooks = f.dir.join(".codex/hooks.json");
+    let document = crate::agents::providers::hook_json::merge_hooks(
+        json!({}),
+        crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+}
+
+#[test]
+fn detached_conclusive_resume_preparation_failure_closes_original_group() {
+    let _providers = crate::messaging::coordinator::tests::provider_binaries();
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let (lead, member, queued) = joined_task(&mut f);
+    f.worker.transport = detached_transport(&f, 4, true);
+    f.worker.tick().unwrap();
+    let before = f.typed().len();
+    assert_waiting(&f, lead, member, queued, before);
+    install_resume_hooks(&f);
+    // Capture verification conclusively fails before any native resume input.
+    std::fs::remove_file(f.dir.join("callbacks/launch/manifest.json")).unwrap();
+    let result = f.worker.resume_room(f.room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+    assert!(
+        result["agents"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("capture configuration"),
+        "{result}"
+    );
+    f.worker.tick().unwrap();
+    for id in [lead, member] {
+        assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            f.request(id).failure_reason.as_deref(),
+            Some("reply_not_captured")
+        );
+    }
+    assert_eq!(
+        f.typed().len(),
+        before,
+        "failed resume never types a notice"
     );
 }
