@@ -72,6 +72,7 @@ fn waiting_choices_and_next_line_reach_both_alert_routes() {
 }
 
 #[test]
+#[cfg(unix)]
 fn waiting_multiline_body_is_one_literal_feishu_text_argument() {
     use std::os::unix::fs::PermissionsExt;
     let root = crate::utils::test_temp::unique_temp_path("waiting-multiline");
