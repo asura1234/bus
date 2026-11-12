@@ -366,12 +366,10 @@ fn saved_exit_output_pages_no_one() {
         .unwrap()
         .tail
         .contains("paste the prod token"));
-    let mut waiting = crate::messaging::feishu::waiting::WaitingNotifications::default();
-    waiting.configure(true);
-    let now = io::now_ms();
-    waiting.observe(&before, &f.worker.state, now);
-    let sent = waiting.take(now + 10_000);
-    assert_eq!(sent, None, "screen text paged the developer");
+    assert!(
+        crate::messaging::model::developer_alerts(&before, &f.worker.state, true).is_empty(),
+        "screen text paged the developer"
+    );
 }
 
 /// A request sent to a worker after its provider exited and Bus closed its
