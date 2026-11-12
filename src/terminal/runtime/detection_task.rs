@@ -194,10 +194,6 @@ pub(super) fn spawn_detection_task(
     )
 }
 
-const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
-const TICK_IDENTIFIED: Duration = Duration::from_millis(300);
-const TICK_TRANSIENT_COLOR_OVERRIDE: Duration = Duration::from_millis(50);
-
 struct DetectionTask {
     pane_id: PaneId,
     child_pid: Arc<AtomicU32>,
@@ -336,15 +332,11 @@ impl DetectionTask {
     }
 
     fn tick_delay(&self, status: &DetectionState) -> Duration {
-        if self.terminal.has_transient_default_color_override() {
-            TICK_TRANSIENT_COLOR_OVERRIDE
-        } else if status.pending_idle.active() {
-            AGENT_PENDING_IDLE_RECHECK
-        } else if status.agent_presence.current_agent().is_none() {
-            TICK_UNIDENTIFIED
-        } else {
-            TICK_IDENTIFIED
-        }
+        super::detection_policy::detection_tick_delay(
+            self.terminal.has_transient_default_color_override(),
+            status.pending_idle.active(),
+            status.agent_presence.current_agent().is_some(),
+        )
     }
 
     fn observe_foreground_group(
@@ -374,7 +366,8 @@ impl DetectionTask {
         let foreground_observation_due = should_observe_foreground_process_group(
             last_content_seq != Some(content_seq)
                 && (last_content_seq.is_some()
-                    || now.duration_since(status.last_observation.0) >= TICK_IDENTIFIED),
+                    || now.duration_since(status.last_observation.0)
+                        >= super::detection_policy::TICK_IDENTIFIED),
             process_probe_input,
         );
         #[cfg(not(windows))]
