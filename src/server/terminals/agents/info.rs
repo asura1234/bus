@@ -30,6 +30,8 @@ impl App {
             cached,
         );
         let quota = screen.as_ref().is_some_and(|s| s.provider_quota);
+        let current = screen.as_ref().is_some_and(|s| s.current);
+        let compaction_observed = pane.agent.as_deref() == Some("grok") && screen.is_some();
         Some(crate::protocol::api::schema::AgentInfo {
             generation: self.state.generation,
             launch_input_error: self
@@ -55,7 +57,7 @@ impl App {
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
             agent_status: if cached
-                && screen.is_none()
+                && !current
                 && matches!(
                     pane.agent_status,
                     crate::protocol::api::schema::AgentStatus::Idle
@@ -65,7 +67,8 @@ impl App {
             } else {
                 pane.agent_status
             },
-            screen_detection_skipped: screen.is_none(),
+            screen_detection_skipped: !current,
+            compaction_observed,
             compaction_banner: screen.as_ref().is_some_and(|s| s.compaction_banner),
             dialog_id: screen.and_then(|s| s.dialog),
             update_error: None,
@@ -109,6 +112,7 @@ impl App {
 }
 
 struct ScreenMetadata {
+    current: bool,
     compaction_banner: bool,
     provider_quota: bool,
     dialog: Option<String>,
@@ -122,18 +126,20 @@ fn screen_metadata(
 ) -> Option<ScreenMetadata> {
     let runtime = runtime?;
     if cached {
-        let snapshot =
-            runtime.cached_screen_detection(agent.and_then(crate::agents::parse_agent_label))?;
+        let (snapshot, current) = runtime
+            .cached_screen_detection_facts(agent.and_then(crate::agents::parse_agent_label))?;
         return Some(ScreenMetadata {
+            current,
             compaction_banner: snapshot.compaction_banner,
-            provider_quota: snapshot.provider_quota,
-            dialog: snapshot.dialog(working),
+            provider_quota: current && snapshot.provider_quota,
+            dialog: current.then(|| snapshot.dialog(working)).flatten(),
         });
     }
     // Explicit single-agent reads and input guards retain fresh observation.
     let (grid, _) = crate::terminal::driver::observe(runtime).ok()?;
     let text = grid.text();
     Some(ScreenMetadata {
+        current: true,
         compaction_banner: crate::agents::compaction_banner::visible(agent, &text),
         provider_quota: agent == Some("cursor")
             && crate::agents::providers::cursor::usage::is_restored_monthly_usage_limit(&text),

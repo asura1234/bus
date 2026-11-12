@@ -217,21 +217,30 @@ impl ScreenDetection {
 }
 
 impl TerminalRuntime {
+    #[cfg(test)]
     pub(crate) fn cached_screen_detection(
         &self,
         agent: Option<AgentKind>,
     ) -> Option<ScreenDetection> {
+        self.cached_screen_detection_facts(agent)
+            .and_then(|(snapshot, current)| current.then_some(snapshot))
+    }
+
+    /// History facts remain observations after a later raw write. The separate
+    /// current bit is required for readiness, dialogs, quota and input guards.
+    pub(crate) fn cached_screen_detection_facts(
+        &self,
+        agent: Option<AgentKind>,
+    ) -> Option<(ScreenDetection, bool)> {
         let before = self.content_seq();
-        // Publication rejects synchronized output. Every PTY write advances
-        // content_seq, so a matching even revision rejects later partial frames
-        // without acquiring the emulator's observation lock.
-        if !before.is_multiple_of(2) {
-            return None;
-        }
         // Never wait for the detector, including during publication.
         let snapshot = self.screen_detection.latest.try_lock().ok()?.clone()?;
-        (snapshot.agent == agent && snapshot.revision == before && before == self.content_seq())
-            .then_some(snapshot)
+        if snapshot.agent != agent {
+            return None;
+        }
+        let current =
+            before.is_multiple_of(2) && snapshot.revision == before && before == self.content_seq();
+        Some((snapshot, current))
     }
 }
 

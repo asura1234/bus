@@ -106,14 +106,15 @@ impl Worker {
         observed_at_ms: u64,
     ) -> Result<(), String> {
         // Grok prints a compaction banner instead of Claude's compact hook.
-        // A skipped screen read is not "banner gone".
+        // A missing sample is not "banner gone". A coherent historical
+        // sample still records an observed edge after a newer raw repaint.
         if agent.provider != super::Provider::Grok {
             return Ok(());
         }
         let Some(info) = info else {
             return Ok(());
         };
-        if info.screen_detection_skipped {
+        if info.screen_detection_skipped && !info.compaction_observed {
             return Ok(());
         }
         state
@@ -915,6 +916,86 @@ mod cursor_screen_tests {
             "unknown",
             "a coherent non-quota frame still clears prior screen evidence"
         );
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod compaction_observation_tests {
+    use super::*;
+    use crate::messaging::model::{AgentRuntimeIdentity, Provider};
+    use crate::messaging::native::{Transport, TransportError};
+    use crate::protocol::api::schema::Method;
+    use std::collections::VecDeque;
+
+    struct Frames(VecDeque<schema::AgentInfo>);
+    impl Transport for Frames {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentListWithDetectionContext(_)));
+            Ok(ResponseResult::AgentList {
+                agents: vec![self.0.pop_front().unwrap()],
+            })
+        }
+    }
+
+    #[test]
+    fn observed_compaction_edges_survive_skipped_current_frames_but_cold_gaps_do_not_rearm() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-observed-banner");
+        let frames = [
+            (true, true),
+            (false, false),
+            (true, true),
+            (true, false),
+            (true, true),
+        ]
+        .into_iter()
+        .map(|(observed, banner)| {
+            serde_json::from_value(serde_json::json!({
+                "terminal_id":"terminal", "pane_id":"pane", "agent":"grok",
+                "workspace_id":"w", "tab_id":"t", "focused":false,
+                "agent_status":"unknown", "screen_detection_skipped":true,
+                "compaction_observed":observed, "compaction_banner":banner,
+                "interactive_ready":true, "native_ready":true, "revision":1
+            }))
+            .unwrap()
+        })
+        .collect();
+        let mut worker = Worker::open(root.clone(), Box::new(Frames(frames))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Grok, root.clone(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(agent).unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 1234)
+            .unwrap();
+        state.observe_dialog(agent, true, 1234).unwrap();
+        worker.save(state).unwrap();
+        for want in [1, 1, 1, 1, 2] {
+            worker.poll().unwrap();
+            let current = worker.state.agent(agent).unwrap();
+            assert_eq!(current.compactions.count, want,
+                "count coherent observed edges even when a later repaint makes the current frame unavailable");
+            assert_eq!(current.status, RuntimeStatus::Idle);
+            assert_eq!(current.observed_at_ms, 1234);
+            assert!(
+                current.dialog,
+                "historical compaction metadata cannot close a current dialog"
+            );
+        }
         drop(worker);
         std::fs::remove_dir_all(root).unwrap();
     }

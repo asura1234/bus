@@ -538,3 +538,114 @@ async fn missing_screen_metadata_preserves_positive_busy_lifecycle_evidence() {
         );
     }
 }
+
+#[tokio::test]
+async fn cached_compaction_observation_survives_a_new_raw_frame_without_proving_idle() {
+    let banner = b"Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n";
+    let (mut app, mut writes) = app_with_dialog(banner, None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Grok), AgentState::Idle);
+    let cold: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("cold".into())).unwrap();
+    assert_ne!(cold["result"]["agents"][0]["compaction_observed"], true);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_scan_detection_context(AgentKind::Grok, AgentState::Unknown)
+        .await;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    assert!(
+        runtime
+            .cached_screen_detection(Some(AgentKind::Grok))
+            .unwrap()
+            .compaction_banner
+    );
+    // A new raw revision makes the current-screen lease unavailable. It does
+    // not erase the coherent banner the detector actually observed.
+    runtime.test_process_pty_bytes(b"\r");
+    assert!(runtime
+        .cached_screen_detection(Some(AgentKind::Grok))
+        .is_none());
+    let result: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("redraw".into())).unwrap();
+    let info = &result["result"]["agents"][0];
+    assert_eq!(
+        info["compaction_banner"], true,
+        "observed history must not disappear at every raw repaint"
+    );
+    assert_eq!(info["compaction_observed"], true);
+    assert_eq!(info["screen_detection_skipped"], true);
+    assert_eq!(
+        info["agent_status"], "unknown",
+        "historical metadata cannot prove current idle"
+    );
+    assert!(info["dialog_id"].is_null());
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let replaced: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("replaced".into())).unwrap();
+    assert_ne!(replaced["result"]["agents"][0]["compaction_observed"], true);
+    assert_ne!(
+        replaced["result"]["agents"][0]["compaction_banner"], true,
+        "a replaced provider cannot inherit another provider's sample"
+    );
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Grok), AgentState::Idle);
+    let (replacement, mut replacement_writes) =
+        crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+    app.state.insert_test_runtime(pane, replacement);
+    let cold_replacement: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("new-runtime".into())).unwrap();
+    assert_ne!(
+        cold_replacement["result"]["agents"][0]["compaction_observed"], true,
+        "a new runtime of the same provider starts without historical facts"
+    );
+    assert_ne!(
+        cold_replacement["result"]["agents"][0]["compaction_banner"],
+        true
+    );
+    assert!(replacement_writes.try_recv().is_err());
+    assert!(writes.try_recv().is_err());
+}
+
+#[test]
+fn compaction_sample_availability_decodes_across_old_and_new_peers() {
+    let old_wire = serde_json::json!({
+        "terminal_id":"terminal", "pane_id":"pane", "agent":"grok",
+        "workspace_id":"w", "tab_id":"t", "focused":false,
+        "agent_status":"idle", "revision":1, "compaction_banner":true
+    });
+    let mut current: crate::protocol::api::schema::AgentInfo =
+        serde_json::from_value(old_wire).unwrap();
+    assert!(
+        !current.compaction_observed,
+        "old servers omit the optional availability field"
+    );
+    assert!(!current.screen_detection_skipped);
+    assert!(current.compaction_banner);
+    current.compaction_observed = true;
+    current.screen_detection_skipped = true;
+    #[derive(serde::Deserialize)]
+    struct OldScreenFields {
+        compaction_banner: bool,
+        #[serde(default)]
+        screen_detection_skipped: bool,
+    }
+    let old_client: OldScreenFields =
+        serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
+    assert!(old_client.compaction_banner);
+    assert!(
+        old_client.screen_detection_skipped,
+        "an old peer ignores the new field and still sees the unavailable current frame"
+    );
+}

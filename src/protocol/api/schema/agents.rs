@@ -238,8 +238,13 @@ pub struct AgentInfo {
     pub agent_status: AgentStatus,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub screen_detection_skipped: bool,
-    /// Grok is showing a compaction banner on this pane. False when the
-    /// screen was not read. Claude counts compactions from its hook.
+    /// A coherent Grok compaction sample exists, including when a newer raw
+    /// frame makes the current-screen lease unavailable. Defaults false for
+    /// older servers and cold/replaced detector caches.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub compaction_observed: bool,
+    /// Banner value in the latest coherent Grok sample. A missing sample
+    /// cannot establish either a banner or its disappearance.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub compaction_banner: bool,
     /// Identity of a blocked screen observed by the terminal driver, if any.
