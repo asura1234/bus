@@ -433,7 +433,7 @@ impl Worker {
             .transport
             .request(Method::PaneRead(schema::PaneReadParams {
                 pane_id: pane.clone(),
-                source: schema::ReadSource::Recent,
+                source: schema::ReadSource::RecentUnwrapped,
                 lines: Some(SCREEN_LINES),
                 format: schema::ReadFormat::Text,
                 strip_ansi: true,

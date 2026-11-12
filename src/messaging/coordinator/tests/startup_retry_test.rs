@@ -471,3 +471,40 @@ fn rejected_saved_session_startup_does_not_archive_the_old_conversation() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn codex_bootstrap_retry_classifies_a_40_column_pane() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let request = queue(&mut worker, room, agent, "retry the narrow-pane failure");
+    let calls = Arc::new(Mutex::new(0));
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        screen: Some("Error: account/read failed during TUI bootstrap: workspace routing discovery failed (-32603)".into()),
+        screen_columns: Some(40),
+        exited: true,
+        retry_calls: Some(calls.clone()),
+        ..Default::default()
+    });
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued,
+        "soft wrap between fai and led must not discard a transient retry"
+    );
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 35_000)
+        .unwrap();
+    assert_eq!(*calls.lock().unwrap(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -48,6 +48,7 @@ struct FailedLaunchNative {
     shell_wait_code: Option<&'static str>,
     launch_args: Option<Arc<Mutex<Vec<String>>>>,
     screen: Option<String>,
+    screen_columns: Option<usize>,
     exited: bool,
     retry_calls: Option<Arc<Mutex<usize>>>,
     uncertain_retry: bool,
@@ -119,14 +120,21 @@ impl Transport for FailedLaunchNative {
                     "osc_title":"⠋ Working", "osc_progress":"4;1;", "content_revision":2
                 })).unwrap() })
             }
-            Method::PaneRead(_) => Ok(ResponseResult::PaneRead {
-                read: serde_json::from_value(json!({
+            Method::PaneRead(params) => {
+                let screen = if let Some(screen) = &self.screen { screen.as_str() } else if self.shell_wait_code.is_some() { "STARTUP QUESTION [Y/n] " } else { "zsh: command not found: bus-provider-does-not-exist\nscratch% " };
+                let text = if params.source == schema::ReadSource::Recent {
+                    if let Some(columns) = self.screen_columns {
+                        screen.chars().collect::<Vec<_>>().chunks(columns)
+                            .map(|row| row.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
+                    } else { screen.into() }
+                } else { screen.into() };
+                Ok(ResponseResult::PaneRead { read: serde_json::from_value(json!({
                     "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1",
-                    "source":"recent", "format":"text", "revision":1,
-                    "text":if let Some(screen) = &self.screen { screen.as_str() } else if self.shell_wait_code.is_some() { "STARTUP QUESTION [Y/n] " } else { "zsh: command not found: bus-provider-does-not-exist\nscratch% " },
+                    "source":params.source, "format":"text", "revision":1,
+                    "text":text,
                     "truncated":false, "returned_lines":2
-                })).unwrap(),
-            }),
+                })).unwrap() })
+            }
             Method::PaneCloseIfIdentity(params) => {
                 let state = JsonStore::new(self.state_path.clone()).load().unwrap().unwrap();
                 let agent = state.agents().find(|agent| agent.runtime_identity.terminal_id.as_deref() == Some(&params.expected_terminal_id)).unwrap();
