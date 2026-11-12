@@ -30,6 +30,18 @@ fn startup_failure(reason: &str, evidence: &str, sessionless: bool) -> StartupFa
     }
 }
 
+fn describe_exhausted_retry(failure: &mut StartupFailure, recovery: Option<&StartupRecovery>) {
+    if let Some(StartupRecovery::CodexBootstrap {
+        attempts,
+        exhausted: true,
+        ..
+    }) = recovery
+    {
+        failure.reason = format!("{}; Codex couldn't reach the ChatGPT backend (workspace routing discovery failed) after {} tries", failure.reason, attempts + 1);
+        failure.recovery = "This is usually a short network or OpenAI outage. The message text is retained in history; recreate the agent, rebrief it and resend this message.".into();
+    }
+}
+
 /// Only native restore evidence establishes a new attempt; opening a client does not.
 pub(super) fn watch_native_resume(
     state: &mut super::BusState,
@@ -364,15 +376,7 @@ impl Worker {
                     // Requests outlive deleted agents and callback captures.
                     failure.reason = format!("{reason}\n{snapshot}");
                 }
-                if let Some(StartupRecovery::CodexBootstrap {
-                    attempts,
-                    exhausted: true,
-                    ..
-                }) = &startup.recovery
-                {
-                    failure.reason = format!("{}; Codex couldn't reach the ChatGPT backend (workspace routing discovery failed) after {} tries", failure.reason, attempts + 1);
-                    failure.recovery = "This is usually a short network or OpenAI outage. The message text is retained in history; recreate the agent, rebrief it and resend this message.".into();
-                }
+                describe_exhausted_retry(&mut failure, startup.recovery.as_ref());
                 let text = format!(
                     "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\n{snapshot}\nStartup diagnostics:\n{diagnostics}",
                     failure.notice(), launch::provider_kind(agent.provider), startup.command
