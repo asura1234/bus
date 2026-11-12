@@ -341,7 +341,11 @@ impl HeadlessServer {
                 needs_full_render = true;
                 crate::utils::render::prof::event("full_render_cause.api_requests");
             }
-            if rendered || api_changed || !self.app.api_rx.is_empty() || self.app.state.should_quit
+            if rendered
+                || api_changed
+                || !self.app.api_rx.is_empty()
+                || self.app.state.should_quit
+                || self.should_quit.load(Ordering::Acquire)
             {
                 continue;
             }
