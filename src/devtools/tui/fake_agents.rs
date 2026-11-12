@@ -270,10 +270,7 @@ impl FakeAgent {
             run_hook(command, &payload);
         }
         if event == "UserPromptSubmit" {
-            // The provider has consumed the draft before this restart gate.
-            // Publish its cleared/restored composer before blocking the fake.
-            self.redraw();
-            work::hold_after_submit_hook();
+            work::hold_after_submit_hook(|| self.redraw());
         }
     }
 

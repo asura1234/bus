@@ -5,11 +5,14 @@ use std::sync::mpsc;
 
 /// Restart acceptance holds the fake after its Started hook has been published,
 /// before a fast final can race the coordinator's pause under host load.
-pub(super) fn hold_after_submit_hook() {
+pub(super) fn hold_after_submit_hook(publish_consumption: impl FnOnce()) {
     let Some(directory) = std::env::var_os("BUS_TUI_FAKE_SUBMIT_GATE") else {
         return;
     };
     let directory = std::path::PathBuf::from(directory);
+    // The provider consumed the draft before this restart gate. Publish its
+    // cleared/restored composer before reporting that the fake is held.
+    publish_consumption();
     std::fs::write(directory.join("submission-held"), b"")
         .expect("write fake submission gate marker");
     while !directory.join("submission-release").exists() {
