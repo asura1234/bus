@@ -129,7 +129,7 @@ impl Worker {
         observed_at_ms: u64,
     ) -> Result<(), String> {
         if agent.provider == super::Provider::Cursor {
-            if let Some(info) = info {
+            if let Some(info) = info.filter(|info| !info.screen_detection_skipped) {
                 self.usage.observe_cursor(
                     agent.id,
                     info.provider_error.as_deref(),
@@ -842,6 +842,79 @@ mod inconclusive_tests {
                 "an unreadable fingerprint cannot expire a live busy launch"
             );
         }
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod cursor_screen_tests {
+    use super::*;
+    use crate::messaging::model::{AgentRuntimeIdentity, Provider};
+    use crate::messaging::native::{Transport, TransportError};
+    use crate::protocol::api::schema::Method;
+    use std::collections::VecDeque;
+
+    struct Frames(VecDeque<schema::AgentInfo>);
+    impl Transport for Frames {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentListWithDetectionContext(_)));
+            Ok(ResponseResult::AgentList {
+                agents: vec![self.0.pop_front().unwrap()],
+            })
+        }
+    }
+
+    #[test]
+    fn skipped_cursor_screen_preserves_quota_until_a_coherent_clear() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-cursor-screen-gap");
+        let now = io::now_ms();
+        let quota = crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR;
+        let frames = [(false, Some(quota)), (true, None), (false, None)]
+            .into_iter()
+            .map(|(skipped, error)| {
+                serde_json::from_value(serde_json::json!({
+                    "terminal_id":"terminal", "pane_id":"pane", "agent":"cursor",
+                    "workspace_id":"w", "tab_id":"t", "focused":false,
+                    "agent_status":if skipped { "unknown" } else { "idle" },
+                    "screen_detection_skipped":skipped, "interactive_ready":true,
+                    "native_ready":true, "revision":1, "provider_error":error,
+                    "provider_quota_reset_at":error.map(|_| now / 1000 + 3600)
+                }))
+                .unwrap()
+            })
+            .collect();
+        let mut worker = Worker::open(root.clone(), Box::new(Frames(frames))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Cursor, root.clone(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(agent).unwrap();
+        worker.save(state).unwrap();
+        worker.poll().unwrap();
+        let observed = worker.usage.state_json()["cursor"].clone();
+        assert_eq!(observed["status"], "observed");
+        worker.poll().unwrap();
+        assert_eq!(worker.usage.state_json()["cursor"], observed,
+            "a missing cached frame must neither clear quota evidence nor renew its observation clock");
+        worker.poll().unwrap();
+        assert_eq!(
+            worker.usage.state_json()["cursor"]["status"],
+            "unknown",
+            "a coherent non-quota frame still clears prior screen evidence"
+        );
         drop(worker);
         std::fs::remove_dir_all(root).unwrap();
     }
