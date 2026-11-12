@@ -1065,8 +1065,10 @@ idle then deliver, and an approval card without `--yolo`.
   path before the single Enter, including mixed results. Normalize CRLF before
   counting paths, and verify the same result correlates with UserPromptSubmit.
   Include long mixed results: failed paths can be hidden inside one atomic
-  collapsed text chip while successful image chips remain visible. Plain text still submits without a render readback,
-  and focused panes and half-typed drafts still use immediate draft save/restore.
+  collapsed text chip while successful image chips remain visible. That repair
+  left plain text without a render readback; the 2026-11-12 request-5251 lesson
+  below replaces that rule. Focused panes and half-typed drafts retain native
+  draft save/restore.
   Check `message status`'s `latency.provider_started_at_ms`; native write clocks
   and an empty worker `events` list do not prove or disprove provider acceptance.
 
@@ -1083,3 +1085,16 @@ idle then deliver, and an approval card without `--yolo`.
   captured-reply neighbour and a stale positive directory observation so a
   prior filesystem check cannot clear the new Unavailable state. This verifies
   Bus detection, not a fix to Codex's hook runner.
+
+- **2026-11-12 — Claude plain paste, request 5251:** A 1422-byte plain paste
+  remained in the composer after an early Enter while an unrelated background
+  notification turn ran. A successful PTY write did not prove consumption.
+  Wait for the owned plain composer before the first Enter, then require a
+  fresh cleared composer or native stash restoration. Working chrome alone
+  cannot confirm this message. If the unchanged owned Bus draft remains after
+  250 ms, allow one extra Enter under the content and developer-input guards;
+  never paste again or replay a lost Enter receipt. Edited or blocked input
+  stays untouched. Run `just test-one claude_plain_paste`, then isolated real
+  Claude and Codex round trips with owned start binding and separate native
+  turn-end proof, including a large plain paste with literal full-width-colon
+  image paths, queued followers, steering and private-root resume.
