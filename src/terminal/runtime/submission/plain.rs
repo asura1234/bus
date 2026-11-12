@@ -31,15 +31,11 @@ impl ObservedSubmission {
                 return Ok(());
             }
             let observation = self.observe("plain_consumption");
-            if fresh
-                && matches!(
-                    observation,
-                    InputObservation::Empty | InputObservation::Accepted
-                )
-            {
+            if fresh && observation == InputObservation::Empty {
                 return Ok(());
             }
-            // A background turn does not consume a still-visible Bus draft.
+            // Working chrome can belong to an unrelated background turn;
+            // only a cleared composer or restored native stash proves consumption.
             // A changed draft loses ownership in the inspector permanently.
             self.check_deadline().map_err(Self::uncertain_submission)?;
             let retry = !retried

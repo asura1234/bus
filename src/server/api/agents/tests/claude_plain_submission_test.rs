@@ -143,3 +143,37 @@ async fn claude_plain_paste_lost_enter_receipt_is_never_retried() {
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
     fail_enter_receipt(&mut app, method, &mut writes, AgentKind::Claude).await;
 }
+
+#[tokio::test]
+async fn claude_plain_paste_does_not_confirm_unrelated_background_activity() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let receipt = clock(&app).hold_next_write_completion();
+    let response = start(&mut app, method);
+    next_write(&mut writes).await;
+    redraw(&app, AgentKind::Claude, "from bus");
+    receipt.send(()).unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    clock(&app).wait_for_enters(1);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes("\x1b[2J\x1b[H✻ Thinking…\r\n".as_bytes());
+    let generation = clock(&app).advance(Duration::from_millis(300));
+    clock(&app).wait_for_submission_check(generation);
+    assert!(
+        response.try_recv().is_err(),
+        "foreign activity is not consumption"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "no Enter without the owned composer"
+    );
+    redraw(&app, AgentKind::Claude, "from bus");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    redraw(&app, AgentKind::Claude, "");
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    assert!(writes.try_recv().is_err());
+}
