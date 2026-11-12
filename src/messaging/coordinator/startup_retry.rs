@@ -38,6 +38,9 @@ impl Worker {
     }
 
     pub(super) fn capture_startup_exit(&mut self, agent: &RoomAgent) -> Result<(), String> {
+        if agent.runtime_identity.session_id.is_some() {
+            return Ok(());
+        }
         let AgentRuntimeIdentity {
             pane_id: Some(pane),
             terminal_id: Some(terminal),

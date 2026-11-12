@@ -314,3 +314,38 @@ fn codex_bootstrap_retry_never_replays_uncertain_launch_input() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn rejected_saved_session_startup_does_not_archive_the_old_conversation() {
+    let (mut worker, agent, _, dir) = pending(Provider::Codex);
+    let mut state = worker.state.clone();
+    let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = Some("saved-conversation".into());
+    state.set_agent_runtime_identity(agent, identity).unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        exited: true,
+        screen: Some("old conversation text must not be archived".into()),
+        ..Default::default()
+    });
+    let mut info = pending_info(&worker, agent);
+    info.agent = None;
+    info.launch_pending = false;
+    info.launch_input_error = Some("launch rejected before Enter".into());
+    worker
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    assert!(!dir.join("exit-snapshots").exists());
+    let error = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .unwrap();
+    assert!(error.contains("Conversation screen omitted"));
+    assert!(!error.contains("old conversation text"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

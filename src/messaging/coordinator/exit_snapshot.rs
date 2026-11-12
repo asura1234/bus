@@ -23,6 +23,11 @@ pub(super) fn save(
     pane: &str,
     terminal: &str,
 ) -> Result<(), String> {
+    // A rejected restore can still show the saved conversation. Keep the
+    // existing startup privacy boundary; fresh launches have no conversation.
+    if agent.startup.is_some() && agent.runtime_identity.session_id.is_some() {
+        return Ok(());
+    }
     let launch_id = agent.runtime_identity.launch_id.clone();
     if agent.exit_snapshot.as_ref().is_some_and(|saved| {
         saved.launch_id == launch_id
