@@ -29,7 +29,7 @@ def main():
     for name in ('claude', 'codex', 'cursor-agent', 'grok', 'open', 'osascript', 'afplay', 'terminal-notifier'):
         (root / 'bin' / name).symlink_to(binary)
     search = [root / 'bin', Path('/usr/bin'), Path('/bin')]
-    assert all(not (p / 'lark-cli').exists() for p in search)
+    assert all(not (p / 'feishu-bridge').exists() for p in search)
     env = dict(HOME=str(root / 'home'), USERPROFILE=str(root / 'home'), SHELL='/bin/zsh',
                PATH=':'.join(map(str, search)), TERM='xterm-256color', LANG='en_US.UTF-8',
                BUS_DATA_DIR=str(root / 'data'), BUS_TUI_FAKE_AGENT='1',

@@ -94,8 +94,8 @@ class Bus:
             if (not self.data.is_absolute() or self.data.resolve().is_relative_to(live_root.resolve())
                     or not self.data.is_dir() or self.data.stat().st_mode & 0o777 != 0o700):
                 raise AssertionError("real-provider acceptance requires a private 0700 BUS_DATA_DIR")
-            if shutil.which("lark-cli", path=self.env.get("PATH", "")):
-                raise AssertionError("real-provider scratch PATH must not resolve lark-cli")
+            if shutil.which("feishu-bridge", path=self.env.get("PATH", "")):
+                raise AssertionError("real-provider scratch PATH must not resolve feishu-bridge")
             return
         protected = Path(self.env["TEST_BUS_PROTECTED_HOME"])
         if not home.is_absolute() or home.resolve() == protected.resolve():
