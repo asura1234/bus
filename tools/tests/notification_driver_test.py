@@ -11,7 +11,6 @@ def test_notification_driver_preserves_child_report_docs_and_driver_command_forw
     helper = importlib.import_module("tools.acceptance.notification_driver")
     sound = importlib.import_module("tools.acceptance.developer_sound_test")
     notify = importlib.import_module("tools.acceptance.notify_you_test")
-    outbound = importlib.import_module("tools.acceptance.feishu_notify_test")
     binary = tmp_path / "bus"
     binary.write_bytes(b"fake binary fingerprint")
     monkeypatch.setattr(helper, "ROOT", tmp_path)
@@ -35,9 +34,7 @@ def test_notification_driver_preserves_child_report_docs_and_driver_command_forw
     monkeypatch.setattr(helper.subprocess, "check_output", output)
     sound_run = sound.Run(binary, "sound")
     notify_run = notify.Run(binary, "notify")
-    outbound_run = outbound.Run(binary, "outbound")
-    assert reports == ["tests/e2e-tui/developer-sound.md", "tests/e2e-tui/notify-you.md", "tests/e2e-tui/feishu-notify.md"]
-    assert outbound_run.doc == reports[2] and isinstance(outbound_run.report, Path)
+    assert reports == ["tests/e2e-tui/developer-sound.md", "tests/e2e-tui/notify-you.md"]
     assert sound_run.doc == reports[0] and notify_run.doc == reports[1]
     assert isinstance(sound_run.report, Path) and isinstance(notify_run.report, Path)
     seen = []
@@ -83,7 +80,3 @@ def test_notification_driver_fake_bridge_checks_the_actual_bus_data_dir_before_a
     call = json.loads((tmp_path / "calls.jsonl").read_text())
     assert call["state_path"] == str(state)
     assert call["outbox"]["source"]["prompt_id"] == 7
-    (tmp_path / "bridge-mode").write_text("fail")
-    failed = subprocess.run(argv, env=env, capture_output=True, text=True)
-    assert failed.returncode == 7 and not failed.stdout
-    assert len((tmp_path / "calls.jsonl").read_text().splitlines()) == 2

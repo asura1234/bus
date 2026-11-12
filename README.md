@@ -54,14 +54,15 @@ user skills.
 Feishu notifications use the optional local `feishu-bridge` plugin. Install it on
 PATH (or set its path in Settings), configure its bot transport, and choose the
 recipient open_id. Without the plugin, Feishu is off. Bus stores no credentials.
-See [notification settings and delivery behavior](docs/developer-notifications.md).
+[Reply routing and sink setup](docs/developer-notifications.md) describe how a
+Feishu reply reaches the exact orchestrator as a developer instruction.
 
 An orchestrator puts `[waiting_on_you]` or `[waiting-on-you]` before the action
 it needs from the developer in a MASTER message. Bus sends a bot DM containing
 `name is waiting on you: action` and a short request code, one DM per request.
 Untagged whole phrases stay in the TUI. `[needs_developer_attention]` still renders the internal badge;
 by itself it does not send a DM. Failed sends warn without blocking Bus or
-retrying.
+retrying. See [Feishu notification settings and behavior](docs/developer-notifications.md).
 
 Settings includes disk warning and critical thresholds (20/5 GB free by
 default). Bus checks its data volume every minute and posts one grey `bus`
