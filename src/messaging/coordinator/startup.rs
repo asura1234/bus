@@ -9,7 +9,7 @@ pub(super) const STARTUP_TIMEOUT_MS: u64 =
     crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
 
-fn startup_failure(reason: &str, evidence: &str) -> StartupFailure {
+fn startup_failure(reason: &str, evidence: &str, sessionless: bool) -> StartupFailure {
     let recovery = if evidence
         .lines()
         .any(|line| line.starts_with("> No conversation found with session ID:"))
@@ -18,7 +18,9 @@ fn startup_failure(reason: &str, evidence: &str) -> StartupFailure {
     } else if evidence.contains("unauthorized (401)")
         || evidence.contains("requires a ChatGPT account id")
     {
-        "Run `codex login` to repair the account, then recreate the agent and resend this message."
+        "Run `codex login` to repair the account, then recreate the agent, rebrief it and resend this message."
+    } else if sessionless {
+        "Inspect the agent's terminal and repair shell/provider setup, then delete and recreate this sessionless agent with its launch settings and system prompt, and rebrief it. Resend this message to the replacement agent."
     } else {
         "Inspect the agent's terminal and repair shell/provider setup before resuming. Resend this message after startup is confirmed."
     };
@@ -205,7 +207,11 @@ impl Worker {
             startup.failure = None;
         } else {
             startup.recovery = None;
-            startup.failure = Some(startup_failure(&error.message, ""));
+            startup.failure = Some(startup_failure(
+                &error.message,
+                "",
+                agent.runtime_identity.session_id.is_none(),
+            ));
             super::launch_metrics::settle_current(
                 &mut state,
                 id,
@@ -343,22 +349,30 @@ impl Worker {
                 if process_exited {
                     self.capture_startup_exit(&agent)?;
                 }
-                let mut failure = startup_failure(reason, &evidence);
+                let snapshot = self
+                    .state
+                    .agent(agent.id)
+                    .and_then(super::exit_snapshot::startup_snapshot)
+                    .map(crate::messaging::model::ExitSnapshot::notice)
+                    .unwrap_or_default();
+                let mut failure = startup_failure(
+                    reason,
+                    &evidence,
+                    agent.runtime_identity.session_id.is_none(),
+                );
+                if process_exited && !snapshot.is_empty() {
+                    // Requests outlive deleted agents and callback captures.
+                    failure.reason = format!("{reason}\n{snapshot}");
+                }
                 if let Some(StartupRecovery::CodexBootstrap {
                     attempts,
                     exhausted: true,
                     ..
                 }) = &startup.recovery
                 {
-                    failure.reason = format!("{reason}; Codex couldn't reach the ChatGPT backend (workspace routing discovery failed) after {} tries", attempts + 1);
-                    failure.recovery = "This is usually a short network or OpenAI outage. The message text is retained in history; recreate the agent and resend this message.".into();
+                    failure.reason = format!("{}; Codex couldn't reach the ChatGPT backend (workspace routing discovery failed) after {} tries", failure.reason, attempts + 1);
+                    failure.recovery = "This is usually a short network or OpenAI outage. The message text is retained in history; recreate the agent, rebrief it and resend this message.".into();
                 }
-                let snapshot = self
-                    .state
-                    .agent(agent.id)
-                    .and_then(|a| a.exit_snapshot.as_ref())
-                    .map(crate::messaging::model::ExitSnapshot::notice)
-                    .unwrap_or_default();
                 let text = format!(
                     "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\n{snapshot}\nStartup diagnostics:\n{diagnostics}",
                     failure.notice(), launch::provider_kind(agent.provider), startup.command
