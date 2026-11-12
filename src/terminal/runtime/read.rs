@@ -94,6 +94,7 @@ pub(super) struct PtyReadContext {
     pub(super) content_seq: Arc<AtomicU64>,
     pub(super) content_write_lock: Arc<Mutex<()>>,
     pub(super) detection_content_seq: Arc<AtomicU64>,
+    pub(super) screen_detection: Arc<super::screen_detection::ScreenDetectionCache>,
     pub(super) child_pid: Arc<AtomicU32>,
     pub(super) events: mpsc::Sender<TerminalEvent>,
     pub(super) reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
@@ -114,6 +115,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
         content_seq,
         content_write_lock,
         detection_content_seq,
+        screen_detection,
         child_pid,
         events,
         reported_cwd,
@@ -142,6 +144,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
         publish_terminal_bells(pane_id, result.terminal_bells, &events);
         if agent_detection == AgentDetection::Enabled {
             observe_detection_content_change(bytes, &detection_content_seq);
+            screen_detection.notify_changed();
         }
         let title_requested =
             result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);

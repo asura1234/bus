@@ -119,6 +119,7 @@ impl TerminalRuntime {
             .terminal
             .process_pty_bytes(self.pane_id, 0, bytes, &tx, |_| None);
         self.content_seq.fetch_add(1, Ordering::Release);
+        self.screen_detection.notify_changed();
         self.compression.wake();
         if let Some(clock) = self.test_submission_clock() {
             clock.rendered();
@@ -210,3 +211,28 @@ impl TerminalRuntime {
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) use crate::utils::test_env::env_lock;
+
+#[cfg(test)]
+impl TerminalRuntime {
+    pub(crate) fn test_hold_terminal_observation(
+        &self,
+        held: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<()> {
+        let terminal = self.terminal.clone();
+        std::thread::spawn(move || {
+            let _guard = terminal.ghostty.core.lock().unwrap();
+            held.send(()).unwrap();
+            release.recv().unwrap();
+        })
+    }
+}
+
+#[cfg(test)]
+impl TerminalRuntime {
+    pub(crate) fn test_publish_screen_detection(&self, kind: AgentKind) {
+        self.screen_detection.prepare_test_tick();
+        self.screen_detection
+            .observe(&self.terminal, Some(kind), false);
+    }
+}

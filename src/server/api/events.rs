@@ -557,19 +557,39 @@ impl App {
         ws_idx: usize,
         pane_id: crate::utils::ids::PaneId,
     ) -> Option<crate::protocol::api::schema::PaneInfo> {
+        self.pane_info_projection(ws_idx, pane_id, true)
+    }
+
+    pub(in crate::server) fn pane_info_without_scroll(
+        &self,
+        ws_idx: usize,
+        pane_id: crate::utils::ids::PaneId,
+    ) -> Option<crate::protocol::api::schema::PaneInfo> {
+        self.pane_info_projection(ws_idx, pane_id, false)
+    }
+
+    fn pane_info_projection(
+        &self,
+        ws_idx: usize,
+        pane_id: crate::utils::ids::PaneId,
+        include_scroll: bool,
+    ) -> Option<crate::protocol::api::schema::PaneInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
-        let scroll = self
-            .state
-            .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
-            .and_then(|runtime| runtime.scroll_metrics())
-            .map(|metrics| crate::protocol::api::schema::PaneScrollInfo {
-                offset_from_bottom: metrics.offset_from_bottom as u64,
-                max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
-                viewport_rows: metrics.viewport_rows as u64,
-            });
+        let scroll = if include_scroll {
+            self.state
+                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+                .and_then(|runtime| runtime.scroll_metrics())
+        } else {
+            None
+        }
+        .map(|metrics| crate::protocol::api::schema::PaneScrollInfo {
+            offset_from_bottom: metrics.offset_from_bottom as u64,
+            max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
+            viewport_rows: metrics.viewport_rows as u64,
+        });
         let focused = self.state.active == Some(ws_idx)
             && ws.active_tab == tab_idx
             && ws

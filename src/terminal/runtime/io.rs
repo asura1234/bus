@@ -265,6 +265,7 @@ impl TerminalRuntime {
         drop(_content_write_guard);
         self.compression.wake();
         mark_detection_content_changed(&self.detection_content_seq);
+        self.screen_detection.notify_changed();
         self.io.resize(
             rows,
             cols,

@@ -21,7 +21,8 @@ impl App {
         if !terminal.is_agent_terminal() && terminal.native_resume.is_none() {
             return None;
         }
-        let pane = self.pane_info(ws_idx, pane_id)?;
+        // AgentInfo does not expose scroll metrics; querying them would wait on VT.
+        let pane = self.pane_info_without_scroll(ws_idx, pane_id)?;
         let screen = screen_metadata(
             self.lookup_runtime_sender(ws_idx, pane_id),
             pane.agent.as_deref(),
@@ -53,7 +54,11 @@ impl App {
             terminal_title: pane.terminal_title,
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
-            agent_status: pane.agent_status,
+            agent_status: if cached && screen.is_none() {
+                crate::protocol::api::schema::AgentStatus::Unknown
+            } else {
+                pane.agent_status
+            },
             screen_detection_skipped: screen.is_none(),
             compaction_banner: screen.as_ref().is_some_and(|s| s.compaction_banner),
             dialog_id: screen.and_then(|s| s.dialog),

@@ -710,6 +710,7 @@ impl TerminalRuntime {
         let child_instance = initial_child_instance(spawned.child.process_id());
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let screen_detection = Arc::new(ScreenDetectionCache::new(content_seq.clone()));
         spawn_child_watcher(
             pane_id,
             spawned.child,
@@ -728,6 +729,7 @@ impl TerminalRuntime {
                 content_seq: content_seq.clone(),
                 content_write_lock: content_write_lock.clone(),
                 detection_content_seq: detection_content_seq.clone(),
+                screen_detection: screen_detection.clone(),
                 child_pid: child_pid.clone(),
                 events: events.clone(),
                 reported_cwd: reported_cwd.clone(),
@@ -747,7 +749,6 @@ impl TerminalRuntime {
             })?)
         };
 
-        let screen_detection = Arc::new(ScreenDetectionCache::new(content_seq.clone()));
         let (managed_launch_pending, detection_context, detect_handle) = spawn_detection_task(
             pane_id,
             agent_detection,

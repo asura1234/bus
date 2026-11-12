@@ -402,3 +402,106 @@ async fn detector_publications_preserve_dialog_quota_and_compaction_metadata() {
         assert!(writes.try_recv().is_err());
     }
 }
+
+#[tokio::test]
+async fn agent_list_does_not_wait_for_terminal_observation() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let (mut app, _writes) = app_with_dialog(UPDATE.replace('\n', "\r\n").as_bytes(), None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Unknown)
+        .await;
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let holder = runtime.test_hold_terminal_observation(held_tx, release_rx);
+    held_rx.recv().unwrap();
+    let (result_tx, result_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("nonblocking".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        result_tx
+            .send(!agents[0].screen_detection_skipped && agents[0].dialog_id.is_some())
+            .unwrap();
+    });
+    let while_observation_held = result_rx.recv_timeout(Duration::from_secs(1));
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    reader.join().unwrap();
+    assert_eq!(
+        while_observation_held,
+        Ok(true),
+        "agent-list projection must not acquire the VT lock"
+    );
+}
+
+#[tokio::test]
+async fn cold_and_replaced_detector_facts_are_unknown_and_cannot_bypass_fresh_guards() {
+    for replaced in [false, true] {
+        let (mut app, params, mut writes) = claude_agent_with_input("❯");
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let dialog = b"\x1b[2J\x1b[HDo you want to proceed?\r\n\xE2\x9D\xAF 1. Yes\r\n  2. No\r\nEsc to cancel";
+        if replaced {
+            app.lookup_runtime_sender(0, pane)
+                .unwrap()
+                .test_publish_screen_detection(AgentKind::Claude);
+            let (runtime, replacement_writes) =
+                crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+            app.state.insert_test_runtime(pane, runtime);
+            writes = replacement_writes;
+        }
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(dialog);
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("cold".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        assert!(agents[0].screen_detection_skipped);
+        assert_eq!(
+            agents[0].agent_status,
+            crate::protocol::api::schema::AgentStatus::Unknown
+        );
+        assert!(
+            app.agent_info(0, pane).unwrap().dialog_id.is_some(),
+            "explicit observation still sees the fresh dialog"
+        );
+        let (send, receive) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_api_request(
+            Request {
+                id: "cold-guard".into(),
+                method: Method::AgentPromptIfIdle(params),
+            },
+            send
+        ));
+        let response = receive
+            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+            .unwrap();
+        assert!(response.contains("\"error\""), "{response}");
+        assert!(
+            writes.try_recv().is_err(),
+            "a cold cache must not admit input past the fresh dialog guard"
+        );
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_publish_screen_detection(AgentKind::Claude);
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("published".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        assert!(!agents[0].screen_detection_skipped);
+        assert!(agents[0].dialog_id.is_some());
+    }
+}
