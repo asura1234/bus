@@ -334,22 +334,19 @@ fn feishu_unbound_worker_reply_is_parked_without_selecting_another_orchestrator(
 }
 
 #[test]
-fn feishu_sender_and_chat_are_authenticated_before_consuming_the_message_id() {
+fn feishu_unauthenticated_sender_cannot_consume_the_message_id() {
     let (mut state, work, _, worker) = fixture();
     let code = prepare(&mut state, work, worker);
     state
         .complete_feishu_send(&code, "om_out", "oc_dm")
         .unwrap();
     let event = incoming("om_in", Some("om_out"), None, "Proceed");
-    for (sender, chat) in [("ou_impostor", "oc_dm"), ("ou_developer", "oc_other")] {
-        let mut forged = event.clone();
-        forged.sender_id = sender.into();
-        forged.chat_id = chat.into();
-        assert!(state
-            .ingest_feishu_reply(forged, "ou_developer", 21)
-            .is_err());
-        assert!(!state.feishu.inbox.contains_key("cli_test:om_in"));
-    }
+    let mut forged = event.clone();
+    forged.sender_id = "ou_impostor".into();
+    assert!(state
+        .ingest_feishu_reply(forged, "ou_developer", 21)
+        .is_err());
+    assert!(!state.feishu.inbox.contains_key("cli_test:om_in"));
     assert!(matches!(
         state
             .ingest_feishu_reply(event, "ou_developer", 22)
@@ -455,10 +452,58 @@ fn feishu_changed_recipient_cannot_authorize_a_reply_to_an_old_recipient() {
         .unwrap();
     let mut event = incoming("om_in", Some("om_out"), None, "Proceed");
     event.sender_id = "ou_new_developer".into();
-    assert!(state
-        .ingest_feishu_reply(event, "ou_new_developer", 21)
-        .is_err());
+    let receipt = state
+        .ingest_feishu_reply(event.clone(), "ou_new_developer", 21)
+        .unwrap();
+    assert!(matches!(receipt, IngestOutcome::Parked { .. }));
+    let mut restored: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    assert_eq!(
+        restored
+            .ingest_feishu_reply(event, "ou_new_developer", 22)
+            .unwrap(),
+        receipt
+    );
     assert_eq!(state.requests().count(), 0);
+}
+
+#[test]
+fn feishu_authenticated_chat_conflict_is_durable_and_does_not_block_a_later_reply() {
+    let (mut state, work, _, worker) = fixture();
+    let code = prepare(&mut state, work, worker);
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    let mut conflict = incoming("om_conflict", Some("om_out"), None, "Proceed");
+    conflict.chat_id = "oc_other".into();
+    let parked = state
+        .ingest_feishu_reply(conflict.clone(), "ou_developer", 21)
+        .unwrap();
+    assert!(matches!(parked, IngestOutcome::Parked { .. }));
+    assert_eq!(state.requests().count(), 0);
+    let mut restored: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    assert_eq!(
+        restored
+            .ingest_feishu_reply(conflict, "ou_developer", 22)
+            .unwrap(),
+        parked
+    );
+    assert!(matches!(
+        restored
+            .ingest_feishu_reply(
+                incoming("om_valid", Some("om_out"), None, "Continue"),
+                "ou_developer",
+                23
+            )
+            .unwrap(),
+        IngestOutcome::Delivered { .. }
+    ));
+    assert_eq!(restored.requests().count(), 1);
+    assert_eq!(
+        restored.feishu.inbox["cli_test:om_conflict"].outcome,
+        parked
+    );
 }
 
 #[test]
@@ -499,6 +544,49 @@ fn feishu_deleted_orchestrator_is_parked_even_when_a_replacement_has_its_name() 
         IngestOutcome::Parked { .. }
     ));
     assert_eq!(state.requests().count(), 0);
+}
+
+#[test]
+fn feishu_parked_child_resolves_after_its_backfilled_parent_is_accepted() {
+    let (mut state, work, _, worker) = fixture();
+    let code = prepare(&mut state, work, worker);
+    state
+        .complete_feishu_send(&code, "om_out", "oc_dm")
+        .unwrap();
+    // A code-addressed plain message is a valid root. Its live child can beat
+    // history backfill of that root, without carrying the request code itself.
+    let mut child = incoming(
+        "om_child",
+        Some("om_parent"),
+        Some("om_parent"),
+        "Use option B",
+    );
+    child.create_time = 30;
+    assert!(matches!(
+        state
+            .ingest_feishu_reply(child.clone(), "ou_developer", 40)
+            .unwrap(),
+        IngestOutcome::Parked { .. }
+    ));
+    let parent = incoming("om_parent", None, None, &format!("bus:{code} Proceed"));
+    assert!(matches!(
+        state
+            .ingest_feishu_reply(parent, "ou_developer", 50)
+            .unwrap(),
+        IngestOutcome::Delivered { .. }
+    ));
+    // The route is now exact, including after a Bus restart. Replaying must
+    // return a delivered receipt for the child's one queued instruction.
+    let mut restored: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    let result = restored
+        .ingest_feishu_reply(child, "ou_developer", 60)
+        .unwrap();
+    assert!(
+        matches!(result, IngestOutcome::Delivered { .. }),
+        "a known parent must release its parked child: {result:?}"
+    );
+    assert_eq!(restored.requests().count(), 2);
 }
 
 #[test]

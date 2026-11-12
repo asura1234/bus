@@ -124,8 +124,8 @@ impl BusState {
         Ok(())
     }
 
-    // A reply may beat the send worker's returned-ID commit. Revisit only exact
-    // references after a mapping appears; a deleted known target stays parked.
+    // A reply may beat an outbound mapping or its backfilled inbound parent.
+    // Revisit exact references only; a deleted known target stays parked.
     fn resolve_parked_feishu(&mut self) -> Result<(), String> {
         let mut pending: Vec<_> = self
             .feishu
@@ -202,13 +202,19 @@ impl BusState {
                         .as_deref()
                         .is_some_and(|chat| chat != input.chat_id)
                 {
-                    return Err(
-                        "Feishu sender or chat does not match the original notification".into(),
-                    );
+                    (
+                        Some(record.code.clone()),
+                        IngestOutcome::Parked {
+                            reason:
+                                "Feishu sender or chat does not match the original notification"
+                                    .into(),
+                        },
+                    )
+                } else {
+                    let record = record.clone();
+                    let outcome = self.enqueue_feishu_reply(&record, &input, now_ms)?;
+                    (Some(record.code), outcome)
                 }
-                let record = record.clone();
-                let outcome = self.enqueue_feishu_reply(&record, &input, now_ms)?;
-                (Some(record.code), outcome)
             }
             Err(reason) => (None, IngestOutcome::Parked { reason }),
         };
@@ -216,6 +222,7 @@ impl BusState {
             let _log_only = crate::utils::error_pipe::suppress(true);
             tracing::warn!(event = "bus.feishu.parked", app_id = %input.app_id, message_id = %input.message_id, %reason, "Feishu reply remains undelivered");
         }
+        let ancestry_added = code.is_some();
         self.feishu.inbox.insert(
             key,
             InboxRecord {
@@ -225,6 +232,9 @@ impl BusState {
                 received_at_ms: now_ms,
             },
         );
+        if ancestry_added {
+            self.resolve_parked_feishu()?;
+        }
         Ok(outcome)
     }
 

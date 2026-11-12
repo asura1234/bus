@@ -282,6 +282,7 @@ class Run:
     def refusal(self):
         before = len(self.state()["requests"])
         for event in [self.event("om_unknown", text="Unmapped"),
+                      self.event("om_wrong_chat", parent=self.first["message_id"], chat_id="oc_other"),
                       self.event("om_ambiguous", parent=self.first["message_id"], root=self.second["message_id"]),
                       self.event("om_ambiguous_codes", text="bus:" + self.first["outbox"]["code"] + " bus:" + self.second["outbox"]["code"])]:
             assert self.ingest(event)["stage"] == "parked"
@@ -290,7 +291,6 @@ class Run:
         for event in [self.event("om_wrong_sender", parent=self.first["message_id"], sender={"open_id":"ou_impostor","sender_type":"user"}),
                       self.event("om_bot", parent=self.first["message_id"], sender={"open_id":RECIPIENT,"sender_type":"app"}),
                       self.event("om_group", parent=self.first["message_id"], chat_type="group"),
-                      self.event("om_wrong_chat", parent=self.first["message_id"], chat_id="oc_other"),
                       self.event("om_wrong_app", parent=self.first["message_id"], app_id="cli_other")]:
             self.ingest(event, accepted=False)
             assert not self.requests_for(event["message_id"])
