@@ -94,7 +94,7 @@ pub(crate) struct Prompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) in_reply_to: Option<super::feishu::InReplyTo>,
+    pub(crate) in_reply_to: Option<Box<super::feishu::InReplyTo>>,
 }
 
 fn developer_author() -> Author {

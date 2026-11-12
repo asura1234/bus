@@ -228,7 +228,7 @@ impl BusState {
             )
             .map_err(|e| e.to_string())?;
         let request_id = *ids.first().ok_or("Feishu reply did not create a request")?;
-        let provenance = InReplyTo {
+        let provenance = Box::new(InReplyTo {
             session: record.session.clone(),
             source: record.source.clone(),
             room: record.room,
@@ -240,7 +240,7 @@ impl BusState {
             chat_id: input.chat_id.clone(),
             sender_open_id: input.sender_id.clone(),
             create_time: input.create_time,
-        };
+        });
         let request = self
             .requests
             .get_mut(&request_id)
