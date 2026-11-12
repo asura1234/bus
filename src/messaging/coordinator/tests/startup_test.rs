@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "startup_exit_test.rs"]
+mod startup_exit_tests;
+
 #[test]
 fn cursor_and_grok_worker_bootstraps_stay_out_of_room_history() {
     for provider in [Provider::Cursor, Provider::Grok] {
