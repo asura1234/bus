@@ -723,7 +723,7 @@ fn provider_exit_before_native_save_restores_a_shell_without_managed_ownership()
     assert!(pane.managed_agent_kind.is_none());
     assert!(pane.agent_session.is_none());
     let (events, _event_rx) = tokio::sync::mpsc::channel(4);
-    let restored = restore(
+    let restored = super::super::restore(
         &saved,
         None,
         true,

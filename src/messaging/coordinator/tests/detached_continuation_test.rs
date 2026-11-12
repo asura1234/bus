@@ -119,11 +119,19 @@ fn detached_restart_waits_durably_for_verified_resume() {
         observe_epoch(&mut f, 4);
         let (lead, member, queued) = joined_task(&mut f);
         let before = f.typed().len();
-        for _ in 0..2 {
-            reopen_detached(&mut f, 5);
+        for generation in [5, 5, 6] {
+            reopen_detached(&mut f, generation);
             f.worker.tick().unwrap();
             assert_waiting(&f, lead, member, queued, before);
+            assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("turn-1"));
+            assert_eq!(
+                delivery_generation(&f, lead),
+                4,
+                "keep old reconciliation evidence"
+            );
         }
+        f.expire_after_reconciliation(io::now_ms() + 10 * 60 * 1000);
+        assert_waiting(&f, lead, member, queued, before);
     }
 }
 
@@ -135,6 +143,9 @@ fn detached_same_generation_process_exit_resumes_original_ids_once() {
     let (lead, member, queued) = joined_task(&mut f);
     let before = f.typed().len();
     f.worker.transport = detached_transport(&f, 4, true);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    reopen_detached(&mut f, 4);
     f.worker.tick().unwrap();
     assert_waiting(&f, lead, member, queued, before);
     let hooks = f.dir.join(".codex/hooks.json");
@@ -235,4 +246,153 @@ fn detached_durable_old_end_wins_before_resume() {
         assert_eq!(f.request(queued).phase, RequestPhase::Queued);
         assert_eq!(f.typed().len(), before);
     }
+}
+
+#[test]
+fn detached_saved_idle_metadata_is_not_verified_resume() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let (lead, member, queued) = joined_task(&mut f);
+    let before = f.typed().len();
+    reopen_detached(&mut f, 5);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    let mut info = DetachedNative {
+        methods: f.native.clone(),
+        agent: f.agent,
+        room: f.room,
+        provider: f.provider,
+        generation: 5,
+        exited: false,
+        resumed: true,
+    }
+    .info(true);
+    info.native_ready = false;
+    f.worker.transport = Box::new(RestartLifecycleNative {
+        methods: f.native.clone(),
+        info,
+    });
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    assert!(!f.request(lead).settled());
+    assert_eq!(f.request(member).group, Some(lead));
+    assert_eq!(
+        f.typed().len(),
+        before,
+        "saved metadata cannot authorize a notice"
+    );
+}
+
+#[test]
+fn detached_same_generation_terminal_failures_close_unanswered_group() {
+    for cause in ["invalidated", "startup_failed", "deleted"] {
+        let mut f = Fixture::new(Provider::Codex);
+        observe_epoch(&mut f, 4);
+        let (lead, member, queued) = joined_task(&mut f);
+        f.worker.transport = detached_transport(&f, 4, true);
+        f.worker.tick().unwrap();
+        let before = f.typed().len();
+        assert_waiting(&f, lead, member, queued, before);
+        let mut state = f.worker.state.clone();
+        match cause {
+            "invalidated" => state.invalidate_agent_session(f.agent).unwrap(),
+            "deleted" => state.delete_agent(f.agent, io::now_ms()).unwrap(),
+            _ => {
+                state
+                    .set_agent_startup(
+                        f.agent,
+                        Some(crate::messaging::model::AgentStartup {
+                            command: "codex resume session".into(),
+                            started_at_ms: io::now_ms(),
+                            reported: true,
+                            process_observed: false,
+                            native_terminal_id: Some("resumed-terminal".into()),
+                            recovery: None,
+                            failure: Some(crate::messaging::model::StartupFailure {
+                                reason: "saved conversation could not resume".into(),
+                                recovery: "replace the agent".into(),
+                            }),
+                        }),
+                    )
+                    .unwrap();
+                state.abandon_failed_startup_queue(f.agent, io::now_ms());
+            }
+        }
+        f.worker.save(state).unwrap();
+        f.worker.tick().unwrap();
+        for id in [lead, member] {
+            assert_eq!(
+                f.request(id).phase,
+                RequestPhase::Abandoned,
+                "{cause}: {:?}",
+                f.request(id)
+            );
+            assert_eq!(
+                f.request(id).failure_reason.as_deref(),
+                Some(if cause == "deleted" {
+                    "agent_deleted"
+                } else {
+                    "reply_not_captured"
+                })
+            );
+        }
+        assert_eq!(f.typed().len(), before, "no notice after {cause}");
+    }
+}
+
+#[test]
+fn detached_socket_outage_does_not_interrupt_a_same_generation_live_turn() {
+    struct Outage;
+    impl Transport for Outage {
+        fn request(&mut self, _: Method) -> Result<ResponseResult, TransportError> {
+            Err(TransportError {
+                timestamps: Default::default(),
+                code: Some("server_unavailable".into()),
+                message: "scratch socket unavailable".into(),
+                definitely_rejected: false,
+            })
+        }
+    }
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let (lead, member, queued) = joined_task(&mut f);
+    let before = f.typed().len();
+    f.worker.transport = Box::new(Outage);
+    for _ in 0..3 {
+        f.worker.tick().unwrap();
+    }
+    assert_eq!(
+        f.worker.state.agent(f.agent).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    let mut info = DetachedNative {
+        methods: f.native.clone(),
+        agent: f.agent,
+        room: f.room,
+        provider: f.provider,
+        generation: 4,
+        exited: false,
+        resumed: true,
+    }
+    .info(true);
+    info.terminal_id = "terminal".into();
+    info.pane_id = "pane".into();
+    info.agent_status = schema::AgentStatus::Working;
+    f.worker.transport = Box::new(RestartLifecycleNative {
+        methods: f.native.clone(),
+        info,
+    });
+    f.worker.tick().unwrap();
+    assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("turn-1"));
+    assert!(!f.request(lead).settled());
+    assert_eq!(f.request(member).group, Some(lead));
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(
+        f.typed().len(),
+        before,
+        "socket outage is not provider-exit evidence"
+    );
 }
