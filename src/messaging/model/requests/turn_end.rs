@@ -11,11 +11,11 @@ impl BusState {
         if request.phase == RequestPhase::Completed {
             return true;
         }
-        if request.awaiting_resume
+        if request.restart_resume.is_some()
             || request
                 .group
                 .and_then(|id| self.requests.get(&id))
-                .is_some_and(|lead| lead.awaiting_resume)
+                .is_some_and(|lead| lead.restart_resume.is_some())
         {
             return false;
         }

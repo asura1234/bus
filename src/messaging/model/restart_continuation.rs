@@ -1,7 +1,7 @@
 //! Continue interrupted tasks in their saved conversation, retaining request IDs.
 use super::{
     callbacks::provider_turn_key, AgentId, Author, BusState, DeliveryEpoch, RequestId,
-    RequestPhase, RoomAgent, RuntimeStatus,
+    RequestPhase, RestartResume, RoomAgent, RuntimeStatus,
 };
 
 #[derive(Eq, PartialEq)]
@@ -32,7 +32,12 @@ impl BusState {
         let Some(id) = self.agents.get(&agent).and_then(|a| a.current_request) else {
             return;
         };
-        if self.resumable_task_owner(agent, id).is_none() {
+        if self.resumable_task_owner(agent, id).is_none()
+            && !self
+                .agents
+                .get(&agent)
+                .is_some_and(|a| a.session_binding_invalidated)
+        {
             return;
         }
         if let Some(request) = self.requests.get_mut(&id).filter(|r| {
@@ -43,17 +48,19 @@ impl BusState {
                     RequestPhase::Active | RequestPhase::Submitting | RequestPhase::Queued
                 )
         }) {
-            request.awaiting_resume = true;
+            request
+                .restart_resume
+                .get_or_insert(RestartResume::Awaiting);
         }
     }
 
     pub(crate) fn awaiting_restart_resume(&self, agent: AgentId) -> bool {
         let waiting = |request: &super::Request| {
-            request.awaiting_resume
+            request.restart_resume.is_some()
                 || request
                     .group
                     .and_then(|id| self.requests.get(&id))
-                    .is_some_and(|lead| lead.awaiting_resume)
+                    .is_some_and(|lead| lead.restart_resume.is_some())
         };
         self.agents
             .get(&agent)
@@ -63,6 +70,32 @@ impl BusState {
             || self
                 .unsettled_requests()
                 .any(|request| request.agent_id == agent && waiting(request))
+    }
+
+    /// Latch a conclusive failure from the actual resume operation, not its history.
+    pub(crate) fn fail_restart_resume(&mut self, agent: AgentId) {
+        let mut waiting: Vec<_> = self
+            .unsettled_requests()
+            .filter(|r| r.agent_id == agent)
+            .filter_map(|request| {
+                if request.restart_resume.is_some() {
+                    Some(request.id)
+                } else {
+                    request.group.filter(|id| {
+                        self.requests
+                            .get(id)
+                            .is_some_and(|r| r.restart_resume.is_some())
+                    })
+                }
+            })
+            .collect();
+        waiting.sort_unstable();
+        waiting.dedup();
+        for id in waiting {
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.restart_resume = Some(RestartResume::Failed);
+            }
+        }
     }
 
     pub(super) fn restart_continuation_failure_reason(
@@ -176,7 +209,7 @@ impl BusState {
             };
             request.group = (*id != lead).then_some(lead);
             request.restart_continuation = true;
-            request.awaiting_resume = false;
+            request.restart_resume = None;
             request.steered = false;
             request.delivery_epoch = Some(DeliveryEpoch {
                 generation,

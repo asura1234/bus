@@ -519,6 +519,14 @@ pub(crate) struct BoundTurnActivity {
     pub(crate) working_seen: bool,
 }
 
+/// Positive runtime loss retains the task until verified resume or conclusive failure.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RestartResume {
+    Awaiting,
+    Failed,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
@@ -548,10 +556,10 @@ pub(crate) struct Request {
     /// Delivery sends a short notice, never the original prompt again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) restart_continuation: bool,
-    /// Runtime loss is proven, but no verified successor owns the saved task yet.
-    /// Keep the interrupted execution correlation until durable ends are read.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) awaiting_resume: bool,
+    /// Runtime loss and any conclusive resume failure for this interrupted task.
+    /// Keep the old execution correlation until durable ends are reconciled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) restart_resume: Option<RestartResume>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) delivery_epoch: Option<DeliveryEpoch>,
     pub(crate) expected_launch_id: Option<String>,

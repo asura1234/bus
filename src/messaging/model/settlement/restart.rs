@@ -1,5 +1,5 @@
 //! Reconcile tasks interrupted by a server restart or proven runtime loss.
-use super::super::{restart_continuation::ContinuationPreparation, LaunchKind, LaunchOutcome};
+use super::super::{restart_continuation::ContinuationPreparation, RestartResume};
 use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase};
 
 impl BusState {
@@ -16,11 +16,8 @@ impl BusState {
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
         let request = self.requests.get(&id)?.clone();
-        let resume_failed = self.current_launch_attempt(agent).is_some_and(|attempt| {
-            request.awaiting_resume
-                && matches!(attempt.kind, LaunchKind::Resume | LaunchKind::NativeResume)
-                && attempt.outcome == LaunchOutcome::Failed
-        }) || owner.session_binding_invalidated
+        let resume_failed = request.restart_resume == Some(RestartResume::Failed)
+            || owner.session_binding_invalidated
             || owner.working_directory_error.is_some()
             || owner.missing_binary.is_some()
             || owner
@@ -29,14 +26,17 @@ impl BusState {
                 .is_some_and(|startup| startup.failure.is_some());
         if request.agent_id != agent
             || owner.deletion_pending
-            || !request.awaiting_resume
+            || request.restart_resume.is_none()
                 && request
                     .delivery_epoch
                     .as_ref()
                     .is_none_or(|epoch| epoch.generation >= generation)
             || request.group.is_some_and(|lead| {
                 owner.current_request == Some(lead)
-                    && self.requests.get(&lead).is_some_and(|r| r.awaiting_resume)
+                    && self
+                        .requests
+                        .get(&lead)
+                        .is_some_and(|r| r.restart_resume.is_some())
             })
             || !(matches!(
                 request.phase,
@@ -111,7 +111,10 @@ impl BusState {
             let preparation = self.prepare_restart_continuation(agent, id, generation, now_ms);
             if preparation != ContinuationPreparation::Refused {
                 if preparation == ContinuationPreparation::AwaitingResume {
-                    self.requests.get_mut(&id)?.awaiting_resume = true;
+                    self.requests
+                        .get_mut(&id)?
+                        .restart_resume
+                        .get_or_insert(RestartResume::Awaiting);
                 }
                 self.restore_interrupted_owner(agent, id, current, successor)?;
                 return Some(id);

@@ -52,7 +52,7 @@ impl Transport for DetachedNative {
                 self.methods.lock().unwrap().push(method);
                 Ok(ResponseResult::AgentStarted { agent:self.info(true), argv:vec!["provider".into()] })
             }
-            other if matches!(other, Method::PaneCloseIfIdentity(_)) => Ok(ResponseResult::Ok {}),
+            Method::PaneCloseIfIdentity(_) => Ok(ResponseResult::Ok {}),
             _ => Native(self.methods.clone()).request(method),
         }
     }
@@ -427,6 +427,8 @@ fn detached_conclusive_resume_preparation_failure_closes_original_group() {
             .contains("capture configuration"),
         "{result}"
     );
+    // The conclusive operation result survives reload before settlement.
+    reopen_detached(&mut f, 4);
     f.worker.tick().unwrap();
     for id in [lead, member] {
         assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
@@ -517,4 +519,77 @@ fn detached_wait_preserves_a_newer_delivery_owner_and_requires_native_readiness(
     f.stopped("turn-6", "old task completed after verified recovery");
     f.consume();
     assert_completed_without_reply(&f, lead);
+}
+
+#[test]
+fn detached_invalidated_ownership_before_process_exit_is_terminal() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let (lead, member, _) = joined_task(&mut f);
+    let before = f.typed().len();
+    let mut state = f.worker.state.clone();
+    state.invalidate_agent_session(f.agent).unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.transport = detached_transport(&f, 4, true);
+    f.worker.tick().unwrap();
+    for id in [lead, member] {
+        assert_eq!(
+            f.request(id).phase,
+            RequestPhase::Abandoned,
+            "positive process death cannot retain invalidated task ownership"
+        );
+    }
+    assert_eq!(f.typed().len(), before);
+}
+
+#[test]
+fn detached_historical_resume_failure_cannot_abandon_a_later_started_task() {
+    use crate::messaging::model::{LaunchKind, LaunchOutcome};
+    let _providers = crate::messaging::coordinator::tests::support::provider_binaries();
+    let mut f = Fixture::new(Provider::Codex);
+    let mut state = f.worker.state.clone();
+    let identity = state.agent(f.agent).unwrap().runtime_identity.clone();
+    let old = state.begin_launch_attempt("builder", f.provider, f.room, LaunchKind::Resume, 1);
+    state.attach_launch_attempt(old, f.agent).unwrap();
+    assert!(state.bind_launch_identity(old, &identity));
+    assert!(state.settle_launch_attempt(
+        old,
+        &identity,
+        LaunchOutcome::Failed,
+        Some("startup_timeout"),
+        2
+    ));
+    f.worker.save(state).unwrap();
+    // A late successful readiness observation must keep that failed audit
+    // record immutable; this later task then really starts and owns the turn.
+    observe_epoch(&mut f, 4);
+    let (lead, member, queued) = joined_task(&mut f);
+    let before = f.typed().len();
+    f.worker.transport = detached_transport(&f, 4, true);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    assert_eq!(
+        f.worker.state.launch_attempt(old).unwrap().outcome,
+        LaunchOutcome::Failed
+    );
+    reopen_detached(&mut f, 4);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    install_resume_hooks(&f);
+    let result = f.worker.resume_room(f.room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
+    f.worker.tick().unwrap();
+    assert_eq!(f.typed().len(), before + 1);
+    let notice = f.typed().last().unwrap().0.clone();
+    assert!(notice.contains("Bus restarted"));
+    f.started("turn-2", &notice);
+    f.consume();
+    f.stopped("turn-2", "finished the later task");
+    f.consume();
+    assert_completed_without_reply(&f, lead);
+    assert_completed_without_reply(&f, member);
+    assert_eq!(
+        f.worker.state.launch_attempt(old).unwrap().outcome,
+        LaunchOutcome::Failed
+    );
 }
