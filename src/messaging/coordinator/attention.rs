@@ -57,14 +57,14 @@ impl Runtime {
         }
     }
 
-    fn collect_completion(&mut self, worker: &mut Worker) -> Result<(), String> {
+    fn collect_completion(&mut self, worker: &mut Worker, finishing: bool) -> Result<(), String> {
         if self.completion.is_none() {
             let job = if self.job.as_ref().is_some_and(|job| job.is_finished()) {
                 self.job.take()
             } else {
                 self.retired
                     .iter()
-                    .position(JoinHandle::is_finished)
+                    .position(|job| finishing || job.is_finished())
                     .map(|index| self.retired.swap_remove(index))
             };
             if let Some(job) = job {
@@ -118,7 +118,7 @@ impl Runtime {
         }
         // Completed transport results belong to the outbox even when settings
         // become unreadable or the sending worker was cancelled/retired.
-        self.collect_completion(worker)?;
+        self.collect_completion(worker, false)?;
         let saved = match worker
             .settings_path
             .as_deref()
@@ -222,6 +222,22 @@ impl Runtime {
 }
 
 impl Worker {
+    pub(super) fn finish_feishu(&mut self) {
+        let mut runtime = std::mem::take(&mut self.attention);
+        runtime.stop();
+        let result = (|| {
+            while !runtime.retired.is_empty() || runtime.completion.is_some() {
+                runtime.collect_completion(self, true)?;
+            }
+            Ok::<(), String>(())
+        })();
+        self.attention = runtime;
+        if let Err(error) = result {
+            let _log_only = crate::utils::error_pipe::suppress(true);
+            tracing::warn!(event = "bus.feishu.shutdown_commit_failed", %error, "Feishu completion could not be committed before shutdown");
+        }
+    }
+
     pub(super) fn set_feishu_notifications(
         &mut self,
         on: bool,

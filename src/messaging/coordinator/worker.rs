@@ -410,6 +410,7 @@ impl Worker {
     ) {
         self.finish_native_submissions(true);
         self.fold_journal();
+        self.finish_feishu();
         self.last_command_id = id;
         if let Ok(mut shared) = snapshots.lock() {
             *shared = Arc::new(self.snapshot());
@@ -459,6 +460,7 @@ impl Worker {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     self.finish_native_submissions(true);
                     self.fold_journal();
+                    self.finish_feishu();
                     break;
                 }
                 Ok((_, BusCommand::CallbackReady(launch))) => {

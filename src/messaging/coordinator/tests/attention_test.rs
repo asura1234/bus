@@ -304,3 +304,47 @@ fn feishu_successful_send_mapping_survives_worker_retirement() {
     let record = saved.feishu.outbox.values().next().unwrap();
     assert_eq!(record.message_id.as_deref(), Some("om_fake_1"));
 }
+
+#[test]
+fn feishu_successful_send_mapping_survives_worker_shutdown() {
+    for explicit in [true, false] {
+        let mut f = Fixture::new();
+        f.post("[waiting-on-you] Choose");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !f.worker.attention.job.as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < deadline, "bridge did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let replacement = Worker::open(f.root.join("unused"), Box::new(NoNative)).unwrap();
+        let worker = std::mem::replace(&mut f.worker, replacement);
+        let snapshots = std::sync::Arc::new(std::sync::Mutex::new(std::sync::Arc::new(
+            worker.snapshot(),
+        )));
+        let (commands, receiver) = mpsc::channel();
+        if explicit {
+            commands
+                .send((1, crate::messaging::coordinator::BusCommand::Shutdown))
+                .unwrap();
+        }
+        drop(commands);
+        worker.run(receiver, f.events.clone(), snapshots);
+        let saved = crate::messaging::storage::state_store::JsonStore::new(
+            f.root.join("session/state.json"),
+        )
+        .load()
+        .unwrap()
+        .unwrap();
+        assert_eq!(f.calls().len(), 1);
+        assert_eq!(
+            saved
+                .feishu
+                .outbox
+                .values()
+                .next()
+                .unwrap()
+                .message_id
+                .as_deref(),
+            Some("om_fake_1")
+        );
+    }
+}
