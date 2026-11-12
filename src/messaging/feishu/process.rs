@@ -24,7 +24,7 @@ impl Cancellation {
 #[derive(Clone)]
 pub(super) struct Process {
     program: OsString,
-    timeout: Duration,
+    timeout: Option<Duration>,
     #[cfg(test)]
     pub(super) path: Option<OsString>,
     /// Tests set this so the deadline starts after a grandchild is known to be running.
@@ -42,7 +42,9 @@ impl Default for Process {
                 "feishu-bridge"
             }
             .into(),
-            timeout: Duration::from_secs(10),
+            // The bridge owns its configured auth/send command deadlines.
+            // Bus owns cancellation and must not truncate a valid bridge call.
+            timeout: None,
             #[cfg(test)]
             path: None,
             #[cfg(test)]
@@ -133,11 +135,15 @@ impl Process {
                     child.wait(),
                 )
             };
-            tokio::select! {
-                result = tokio::time::timeout(self.timeout, work) => {
-                    result.map_err(|_| "feishu-bridge timed out".to_owned())
-                        .and_then(|result| result.map_err(|error| format!("feishu-bridge IO failed: {error}")))
+            let deadline = async {
+                match self.timeout {
+                    Some(timeout) => tokio::time::sleep(timeout).await,
+                    None => std::future::pending::<()>().await,
                 }
+            };
+            tokio::select! {
+                result = work => result.map_err(|error| format!("feishu-bridge IO failed: {error}")),
+                () = deadline => Err("feishu-bridge timed out".to_owned()),
                 () = wait_cancelled(cancel) => Err("Feishu notifications were disabled".to_owned()),
             }
         };
@@ -161,7 +167,7 @@ impl Process {
     pub(super) fn at(program: impl Into<OsString>, timeout: Duration) -> Self {
         Self {
             program: program.into(),
-            timeout,
+            timeout: Some(timeout),
             path: None,
             arm_timeout: None,
         }

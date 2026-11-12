@@ -131,3 +131,26 @@ fn feishu_bridge_invalid_recipient_or_key_never_launches_the_plugin() {
     assert!(!root.join("called").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn feishu_bridge_send_within_the_bridge_command_budget_is_not_killed() {
+    // INTERFACE.md: auth status and send each run under command_timeout_seconds (default 30).
+    let root = crate::utils::test_temp::unique_temp_path("feishu-bridge-budget");
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("feishu-bridge");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nsleep 12\nprintf '{\"message_id\":\"om_slow\",\"chat_id\":\"oc_dm\"}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let result = Client::default().send(
+        "ou_developer",
+        script.to_str(),
+        "slow but valid",
+        "bus-slow",
+        &Cancellation::default(),
+    );
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(result.map(|sent| sent.message_id), Ok("om_slow".to_owned()));
+}

@@ -218,7 +218,7 @@ fn feishu_process_cancellation_terminates_running_wrapper_and_grandchild() {
     let mut process = fixture.hanging_wrapper();
     // Ceiling only. Cancel runs when the ready pipe delivers the grandchild
     // pid, so a slow start cannot turn this into the timeout case.
-    process.timeout = Duration::from_secs(120);
+    process.timeout = Some(Duration::from_secs(120));
     let cancel = Cancellation::default();
     let job_cancel = cancel.clone();
     let ready = ReadyPipe::open(&fixture.0);
