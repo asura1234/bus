@@ -34,7 +34,9 @@ async fn claude_fixture_descheduling_requires_rendered_composer_before_enter() {
                 "{response}"
             );
             assert!(f.typed(agent).is_empty(), "never enter an unobserved draft");
-            assert!(!f.state().request(request).unwrap().uncertain_outcome);
+            // The late paste is retained. Keep the coordinator's conservative
+            // timeout outcome so it cannot automatically replay that draft.
+            assert!(f.state().request(request).unwrap().uncertain_outcome);
             continue;
         }
         assert_eq!(response["result"]["type"], "agent_prompted", "{response}");

@@ -91,6 +91,13 @@ def scenario(binary, root, provider, master, retain_failure=False):
         message = str(sent["message_id"])
         until(lambda: bus.cli("message", "status", message)["requests"][0]["start_bound"])
         until(held.exists)
+        # A Started hook can precede native submission acknowledgement. Let the
+        # server observe consumption before intentionally pausing its coordinator.
+        def native_confirmed():
+            request = durable()["requests"][str(sent["request_ids"][0])]
+            return ((request.get("latency") or {}).get("native") or {}).get("native_confirmed_at_ms")
+
+        until(native_confirmed)
         # Stop only this scratch coordinator while its native provider keeps running.
         # The provider cannot produce a final until this pause is established,
         # even if polling or SIGSTOP is delayed longer than the old fake work.
