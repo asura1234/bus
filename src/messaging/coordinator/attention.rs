@@ -58,10 +58,18 @@ impl Runtime {
     }
 
     fn collect_completion(&mut self, worker: &mut Worker) -> Result<(), String> {
-        if self.job.as_ref().is_some_and(|job| job.is_finished()) {
-            if let Some(job) = self.job.take() {
+        if self.completion.is_none() {
+            let job = if self.job.as_ref().is_some_and(|job| job.is_finished()) {
+                self.job.take()
+            } else {
+                self.retired
+                    .iter()
+                    .position(JoinHandle::is_finished)
+                    .map(|index| self.retired.swap_remove(index))
+            };
+            if let Some(job) = job {
                 self.completion = job.join().ok();
-                self.status.pending = false;
+                self.status.pending = self.job.is_some();
             }
         }
         let Some((code, result)) = self.completion.take() else {
@@ -108,6 +116,9 @@ impl Runtime {
         if state != worker.state {
             worker.save(state)?;
         }
+        // Completed transport results belong to the outbox even when settings
+        // become unreadable or the sending worker was cancelled/retired.
+        self.collect_completion(worker)?;
         let saved = match worker
             .settings_path
             .as_deref()
@@ -125,8 +136,6 @@ impl Runtime {
                 return Ok(());
             }
         };
-        self.retired.retain(|job| !job.is_finished());
-        self.collect_completion(worker)?;
         let program = saved
             .as_ref()
             .and_then(|s| self.client.program(s.feishu_bridge_path.as_deref()));
@@ -147,7 +156,11 @@ impl Runtime {
         }
         self.previous = Some((worker.revision, worker.state.clone()));
         if let Some(program) = program {
-            if self.job.is_none() && self.completion.is_none() && worker.storage_pause.is_none() {
+            if self.job.is_none()
+                && self.retired.is_empty()
+                && self.completion.is_none()
+                && worker.storage_pause.is_none()
+            {
                 self.start_next(worker, &program)?;
             }
         }

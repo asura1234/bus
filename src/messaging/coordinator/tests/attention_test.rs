@@ -85,6 +85,7 @@ impl Fixture {
         loop {
             self.pump();
             if self.worker.attention.job.is_none()
+                && self.worker.attention.retired.is_empty()
                 && self.worker.attention.completion.is_none()
                 && self.worker.attention.status.queued == 0
             {
@@ -257,4 +258,49 @@ fn feishu_new_runtime_uses_history_as_baseline_but_keeps_persisted_pending_outbo
     f.post("[waiting-on-you] Fresh request");
     f.flush();
     assert_eq!(f.calls().len(), 1);
+}
+
+#[test]
+fn feishu_successful_send_mapping_survives_unreadable_settings() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Choose");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !f.worker.attention.job.as_ref().unwrap().is_finished() {
+        assert!(Instant::now() < deadline, "bridge did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(f.calls().len(), 1);
+    let settings_path = f.worker.settings_path.as_ref().unwrap().clone();
+    let saved_settings = std::fs::read(&settings_path).unwrap();
+    std::fs::write(&settings_path, b"{malformed").unwrap();
+    f.pump();
+    std::fs::write(&settings_path, saved_settings).unwrap();
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "settings recovery must not resend");
+    let saved = f.worker.store.load().unwrap().unwrap();
+    let record = saved.feishu.outbox.values().next().unwrap();
+    assert_eq!(
+        record.message_id.as_deref(),
+        Some("om_fake_1"),
+        "a successful bridge completion must survive a settings read failure"
+    );
+    assert_eq!(record.chat_id.as_deref(), Some("oc_dm"));
+}
+
+#[test]
+fn feishu_successful_send_mapping_survives_worker_retirement() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Choose");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !f.worker.attention.job.as_ref().unwrap().is_finished() {
+        assert!(Instant::now() < deadline, "bridge did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // A settings failure can retire the worker just after its finished check.
+    f.worker.attention.stop();
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    let saved = f.worker.store.load().unwrap().unwrap();
+    let record = saved.feishu.outbox.values().next().unwrap();
+    assert_eq!(record.message_id.as_deref(), Some("om_fake_1"));
 }
