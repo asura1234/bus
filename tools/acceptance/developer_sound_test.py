@@ -8,14 +8,16 @@ import sys
 import traceback
 
 if __package__:
-    from . import feishu_notify_test as helper
+    from . import notification_driver as helper
 else:
-    import feishu_notify_test as helper
+    import notification_driver as helper
 
-helper.DOC = "tests/e2e-tui/developer-sound.md"
+DOC = "tests/e2e-tui/developer-sound.md"
 
 
 class Run(helper.Run):
+    doc = DOC
+
     def sounds(self):
         return self.command("effects", "--kind", "sound").get("effects", [])
 
@@ -125,11 +127,11 @@ class Run(helper.Run):
         def row(text):
             return next(match["row"] for match in self.command("find", text)["matches"] if match["col"] >= 30)
         assert row("Sound notifications") < row("YOU") < row("[x] You") < row("MASTER") < row("ROOMS")
-        assert row("NOTIFICATIONS") < row("Feishu notifications (always on)") < row("Recipient open_id") < row("lark-cli path")
+        assert row("NOTIFICATIONS") < row("Feishu notifications (on)") < row("Recipient open_id") < row("feishu-bridge path")
         assert self.preference() == {"enabled": True, "name": None}
         assert all(not room["sound"] for room in self.state()["rooms"])
         self.capture("system-default")
-        self.step(1, "Checked You/System default is first under YOU above MASTER/ROOMS; Feishu/recipient/CLI remain under NOTIFICATIONS; all rooms muted; system-default.png captured")
+        self.step(1, "Checked You/System default is first under YOU above MASTER/ROOMS; Feishu/recipient/bridge remain under NOTIFICATIONS; all rooms muted; system-default.png captured")
 
         first = self.change("click", "--hit", "developer-sound:next")
         assert first is not None
@@ -171,9 +173,9 @@ class Run(helper.Run):
         self.post("[waiting-on-you] Muted audio still sends Feishu")
         self.quiet()
         assert len(self.sounds()) == count
-        assert any("Muted audio still sends Feishu" in args[7] for args in self.sends()[calls:])
+        assert any("Muted audio still sends Feishu" in args[4] for args in self.sends()[calls:])
         assert self.state()["settings"]["feishu_waiting_notifications"]
-        self.step(4, "Enter unchecked You, retained Glass and persisted enabled=false; qualifying notice made no sound but recording lark-cli captured its Feishu DM; you-muted.png and muted-settings.json retained")
+        self.step(4, "Enter unchecked You, retained Glass and persisted enabled=false; qualifying notice made no sound but recording feishu-bridge captured its Feishu DM; you-muted.png and muted-settings.json retained")
 
         self.open_settings()
         self.command("press", "down")
@@ -229,7 +231,7 @@ class Run(helper.Run):
         self.step(2, "At 160x24 mouse checkbox mutes/restores You, Space inert; next/Right/Left preview and save while unchecked without enabling it; Down+Enter toggles only MASTER")
 
         self.command("scroll", "--text", "[x] You", "--down", "30")
-        for text in ("NOTIFICATIONS", "Feishu notifications (always on)", "Recipient open_id", "lark-cli path"):
+        for text in ("NOTIFICATIONS", "Feishu notifications (on)", "Recipient open_id", "feishu-bridge path"):
             assert self.command("find", text)["count"]
         for _ in range(22):
             self.command("press", "down")
@@ -283,7 +285,7 @@ class Run(helper.Run):
         self.report.write_text(body[:start] + "### Step ".join(blocks) + body[end:])
 
     def finish(self):
-        checked = subprocess.run([sys.executable, str(helper.REPORT_TOOL), "check", "--doc", helper.DOC, str(self.report)], cwd=helper.ROOT, capture_output=True, text=True)
+        checked = subprocess.run([sys.executable, str(helper.REPORT_TOOL), "check", "--doc", self.doc, str(self.report)], cwd=helper.ROOT, capture_output=True, text=True)
         self.report.write_text(self.report.read_text() + "\n## Summary\n\n" + checked.stdout + checked.stderr)
         print(f"{checked.stdout.strip()} — {self.report}", flush=True)
         return checked.returncode if "Verdict: GREEN" in checked.stdout else 1
