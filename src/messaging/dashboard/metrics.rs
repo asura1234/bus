@@ -79,7 +79,7 @@ impl Counts {
             _ => {}
         }
         increment(&mut self.stages, request.delivery_stage());
-        if request.settled() && outcome.capture != "replied" {
+        if request.phase == RequestPhase::Abandoned && outcome.capture != "replied" {
             increment(&mut self.terminal_reasons, reason(request));
         }
     }

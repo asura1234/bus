@@ -1,6 +1,56 @@
 use super::*;
 use crate::messaging::model::BusState;
 
+// Bus treats a launching provider shown as Blocked without a readable dialog
+// id as a startup dialog wait (startup.rs confirms startup; poll.rs posts the
+// blocked notice). The launch ledger must keep it pending too.
+#[test]
+fn launch_metrics_blocked_startup_wait_without_dialog_id_stays_pending() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, 30_001);
+    let previous = worker.state.agent(agent).unwrap().clone();
+    let mut info = native_info("pane", "codex", "session");
+    info.native_ready = false;
+    info.interactive_ready = false;
+    info.launch_pending = true;
+    info.agent_status = schema::AgentStatus::Blocked;
+    info.dialog_id = None;
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 31_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
+    assert!(ledger(&worker)["1"]["cause"].is_null());
+    info.launch_pending = false;
+    info.agent_status = schema::AgentStatus::Idle;
+    info.native_ready = true;
+    info.interactive_ready = true;
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 45_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "usable");
+    assert_eq!(ledger(&worker)["1"]["dialog_wait_ms"], 14_000);
+    assert!(ledger(&worker)["1"]["dialog_wait_started_at_ms"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn launch_metrics_blocked_without_a_pending_launch_still_times_out() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, 30_001);
+    let previous = worker.state.agent(agent).unwrap().clone();
+    let mut info = native_info("pane", "codex", "session");
+    info.native_ready = false;
+    info.interactive_ready = false;
+    info.launch_pending = false;
+    info.agent_status = schema::AgentStatus::Blocked;
+    info.dialog_id = None;
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 31_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(ledger(&worker)["1"]["cause"], "blocked_timeout");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 pub(super) fn ledger(worker: &Worker) -> serde_json::Value {
     serde_json::to_value(&worker.state).unwrap()["launch_attempts"].clone()
 }
@@ -97,31 +147,129 @@ fn launch_metrics_positive_readiness_settles_even_after_an_observation_gap() {
 }
 
 #[test]
-fn launch_metrics_dialog_wait_expires_without_becoming_usable() {
-    for (deadline, expected) in [(u64::MAX, "pending"), (0, "failed")] {
-        let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
-        seed_launch(&mut worker, agent, deadline);
-        let a = worker.state.agent(agent).unwrap();
-        let mut info = native_info("pane", "codex", "session");
-        info.name = Some(crate::messaging::identity::managed_name(a.room_id, agent));
+fn launch_metrics_dialog_wait_stays_pending_then_becomes_usable_after_deadline() {
+    for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+        let (mut worker, agent, _, dir, _) = fixture(provider, vec![]);
+        seed_launch(&mut worker, agent, 30_001);
+        let previous = worker.state.agent(agent).unwrap().clone();
+        let mut info = native_info("pane", provider.label(), "session");
         info.native_ready = false;
         info.interactive_ready = false;
         info.launch_pending = true;
         info.agent_status = schema::AgentStatus::Blocked;
         info.dialog_id = Some("folder-trust".into());
-        worker.transport = Box::new(FakeTransport {
-            replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
-            calls: Arc::default(),
-            state_path: dir.join("state.json"),
-        });
-        worker.poll().unwrap();
-        assert_eq!(ledger(&worker)["1"]["outcome"], expected);
-        if expected == "failed" {
-            assert_eq!(ledger(&worker)["1"]["cause"], "dialog_timeout");
+        for now in [10_000, 31_000, 44_000] {
+            let before = worker.state.clone();
+            super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), now)
+                .unwrap();
+            assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
+            assert!(ledger(&worker)["1"]["cause"].is_null());
+            if now > 10_000 {
+                assert!(!worker.state.launch_records_changed_from(&before));
+            }
         }
+        // Pending dialogs survive a save/reload and keep their original clock.
+        worker.save(worker.state.clone()).unwrap();
+        worker.state = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        info.dialog_id = None;
+        info.launch_pending = false;
+        info.agent_status = schema::AgentStatus::Idle;
+        // Dismissing the dialog can precede prompt readiness by another poll.
+        super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 44_500)
+            .unwrap();
+        assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
+        info.native_ready = true;
+        info.interactive_ready = true;
+        super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 45_001)
+            .unwrap();
+        let record = ledger(&worker)["1"].clone();
+        assert_eq!(record["outcome"], "usable");
+        assert!(record["cause"].is_null());
+        assert_eq!(record["dialog_wait_ms"], 34_500);
+        assert!(record["dialog_wait_started_at_ms"].is_null());
+        assert_eq!(
+            record["settled_at_ms"].as_u64().unwrap() - record["started_at_ms"].as_u64().unwrap(),
+            45_000
+        );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn launch_metrics_dialog_does_not_hide_a_definite_launch_input_error() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, 30_001);
+    let previous = worker.state.agent(agent).unwrap().clone();
+    let mut info = native_info("pane", "codex", "session");
+    info.dialog_id = Some("folder-trust".into());
+    info.launch_input_error = Some("launch input rejected".into());
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 31_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(ledger(&worker)["1"]["cause"], "launch_input_failed");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn launch_metrics_after_dialog_dismissal_still_bounds_a_stalled_launch() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, 30_001);
+    let previous = worker.state.agent(agent).unwrap().clone();
+    let mut info = native_info("pane", "codex", "session");
+    info.dialog_id = Some("folder-trust".into());
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 44_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
+    info.dialog_id = None;
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 45_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 75_001)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(ledger(&worker)["1"]["cause"], "startup_timeout");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn launch_metrics_dialog_on_another_terminal_cannot_defer_the_deadline() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, 30_001);
+    let previous = worker.state.agent(agent).unwrap().clone();
+    let mut info = native_info("another-pane", "codex", "session");
+    info.terminal_id = "another-terminal".into();
+    info.dialog_id = Some("folder-trust".into());
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 44_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(ledger(&worker)["1"]["deadline_at_ms"], 30_001);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn launch_metrics_blocked_startup_wait_on_another_pane_cannot_defer_the_deadline() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    seed_launch(&mut worker, agent, 30_001);
+    let previous = worker.state.agent(agent).unwrap().clone();
+    let mut info = native_info("another-pane", "codex", "session");
+    info.native_ready = false;
+    info.interactive_ready = false;
+    info.launch_pending = true;
+    info.agent_status = schema::AgentStatus::Blocked;
+    info.dialog_id = None;
+    super::super::launch_metrics::observe(&mut worker.state, &previous, Some(&info), 31_000)
+        .unwrap();
+    assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+    assert_eq!(ledger(&worker)["1"]["deadline_at_ms"], 30_001);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

@@ -37,6 +37,10 @@ pub(crate) struct LaunchAttempt {
     pub(crate) submission_revision_floor: u64,
     pub(crate) deadline_at_ms: u64,
     pub(crate) settled_at_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) dialog_wait_started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) dialog_wait_ms: u64,
     pub(crate) outcome: LaunchOutcome,
     pub(crate) cause: Option<String>,
 }
@@ -76,6 +80,8 @@ impl BusState {
                 deadline_at_ms: at_ms
                     .saturating_add(crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64),
                 settled_at_ms: None,
+                dialog_wait_started_at_ms: None,
+                dialog_wait_ms: 0,
                 outcome: LaunchOutcome::Pending,
                 cause: None,
             },
@@ -181,6 +187,11 @@ impl BusState {
             cause.map(str::to_owned)
         };
         record.settled_at_ms = Some(at_ms);
+        if let Some(started) = record.dialog_wait_started_at_ms.take() {
+            record.dialog_wait_ms = record
+                .dialog_wait_ms
+                .saturating_add(at_ms.saturating_sub(started));
+        }
         true
     }
 
@@ -214,6 +225,32 @@ impl BusState {
         let id = record.id;
         if let Some(record) = Arc::make_mut(&mut self.launch_attempts).get_mut(&id) {
             record.deadline_at_ms = deadline;
+        }
+    }
+
+    /// Persist dialog transitions, not every poll. The wait is latency and
+    /// dismissal starts a fresh readiness window without changing the start.
+    pub(crate) fn observe_launch_dialog(&mut self, agent: AgentId, waiting: bool, now_ms: u64) {
+        let Some(record) = self.current_launch_attempt(agent) else {
+            return;
+        };
+        if record.outcome != LaunchOutcome::Pending
+            || waiting == record.dialog_wait_started_at_ms.is_some()
+        {
+            return;
+        }
+        let id = record.id;
+        let Some(record) = Arc::make_mut(&mut self.launch_attempts).get_mut(&id) else {
+            return;
+        };
+        if waiting {
+            record.dialog_wait_started_at_ms = Some(now_ms);
+        } else if let Some(started) = record.dialog_wait_started_at_ms.take() {
+            record.dialog_wait_ms = record
+                .dialog_wait_ms
+                .saturating_add(now_ms.saturating_sub(started));
+            record.deadline_at_ms =
+                now_ms.saturating_add(crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64);
         }
     }
 

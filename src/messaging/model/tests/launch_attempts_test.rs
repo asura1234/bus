@@ -55,12 +55,15 @@ fn pending_model_launch() -> (BusState, super::AgentId) {
 fn launch_metrics_deletion_cancels_pending_attempt_without_losing_its_identity() {
     let (mut state, agent) = pending_model_launch();
     state.rename_agent(agent, "renamed").unwrap();
+    state.observe_launch_dialog(agent, true, 200);
     state.delete_agent(agent, 500).unwrap();
     let saved = serde_json::to_value(&state).unwrap();
     let a = &saved["launch_attempts"]["1"];
     assert_eq!(a["outcome"], "cancelled");
     assert_eq!(a["cause"], "agent_deleted");
     assert_eq!(a["settled_at_ms"], 500);
+    assert_eq!(a["dialog_wait_ms"], 300);
+    assert!(a["dialog_wait_started_at_ms"].is_null());
     assert_eq!(a["name"], "before rename");
 }
 #[test]

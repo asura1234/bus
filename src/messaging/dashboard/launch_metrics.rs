@@ -16,7 +16,7 @@ struct Counts {
 impl Counts {
     fn add(&mut self, attempt: &LaunchAttempt) {
         self.attempts += 1;
-        match attempt.outcome {
+        match measured_outcome(attempt) {
             LaunchOutcome::Usable => self.usable += 1,
             LaunchOutcome::Failed => {
                 self.failed += 1;
@@ -28,6 +28,15 @@ impl Counts {
             LaunchOutcome::Pending => self.pending += 1,
             LaunchOutcome::Cancelled => self.cancelled += 1,
         }
+    }
+}
+/// Older builds finalized dialogs at a wall-clock deadline. That proves a
+/// wait, not failure or readiness; retain the raw ledger as historical evidence.
+fn measured_outcome(attempt: &LaunchAttempt) -> LaunchOutcome {
+    if attempt.outcome == LaunchOutcome::Failed && cause(attempt) == "dialog_timeout" {
+        LaunchOutcome::Pending
+    } else {
+        attempt.outcome
     }
 }
 fn cause(attempt: &LaunchAttempt) -> &str {
@@ -132,7 +141,7 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
             .entry(attempt.provider.label().into())
             .or_default()
             .add(attempt, &hour);
-        if attempt.outcome == LaunchOutcome::Failed {
+        if measured_outcome(attempt) == LaunchOutcome::Failed {
             failures.push(Failure {
                 id: attempt.id,
                 name: attempt.name.clone(),

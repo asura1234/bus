@@ -179,3 +179,48 @@ fn launch_dashboard_record_reference_resolves_in_saved_state_json() {
         "record reference {reference} did not resolve to the failed attempt in state.json"
     );
 }
+
+#[test]
+fn launch_metrics_legacy_dialog_timeouts_are_inconclusive_without_rewriting_history() {
+    let root = crate::utils::test_temp::unique_temp_path("launch-legacy-dialog-timeout");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut saved = serde_json::to_value(launch_fixture()).unwrap();
+    saved["launch_attempts"]["3"]["outcome"] = json!("failed");
+    saved["launch_attempts"]["3"]["cause"] = json!("dialog_timeout");
+    let store = JsonStore::new(root.join("state.json"));
+    store.save(&serde_json::from_value(saved).unwrap()).unwrap();
+    let before = super::tests::files(&root);
+    let body: Value = serde_json::from_slice(&response_for(&root, "GET", "/data").body).unwrap();
+    let after = super::tests::files(&root);
+    let retained = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    let launches = &body["launches"];
+    assert_eq!(launches["all"]["counts"]["attempts"], 7);
+    assert_eq!(launches["all"]["counts"]["usable"], 2);
+    assert_eq!(launches["all"]["counts"]["failed"], 2);
+    assert_eq!(launches["all"]["counts"]["pending"], 2);
+    assert_eq!(launches["all"]["rates"]["launch_success"]["denominator"], 4);
+    let codex = &launches["providers"]["codex"];
+    assert_eq!(codex["counts"]["failed"], 0);
+    assert_eq!(codex["counts"]["pending"], 1);
+    assert!(codex["rates"]["launch_success"]["percent"].is_null());
+    for series in [&launches["all"], codex] {
+        assert!(series["counts"]["failure_reasons"]
+            .get("dialog_timeout")
+            .is_none());
+        for hour in series["hours"].as_array().unwrap() {
+            assert!(hour["counts"]["failure_reasons"]
+                .get("dialog_timeout")
+                .is_none());
+        }
+    }
+    assert!(launches["failures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["id"] != 3));
+    assert_eq!(before, after);
+    assert_eq!(retained["launch_attempts"]["3"]["outcome"], "failed");
+    assert_eq!(retained["launch_attempts"]["3"]["cause"], "dialog_timeout");
+}

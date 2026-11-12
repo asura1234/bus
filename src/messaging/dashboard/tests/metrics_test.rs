@@ -84,6 +84,34 @@ fn recorded_outcomes_classify_every_phase_and_preserve_reply_precedence() {
     assert_reply_capture_rate_is_absent(&snapshot(&state, singapore_hour), "requests fixture");
 }
 
+#[test]
+fn successful_ended_turns_have_no_terminal_failure_reason_in_any_series() {
+    let state = fixture_state([named_case("completed-without-text")]);
+    let report = snapshot(&state, singapore_hour);
+    let check = |series: &Series| {
+        assert_eq!(series.counts.ended, 1);
+        assert!(series.counts.terminal_reasons.is_empty());
+        assert!(series.hours[0].counts.terminal_reasons.is_empty());
+    };
+    check(&report.all);
+    check(
+        report
+            .providers
+            .values()
+            .find(|s| s.counts.attempts == 1)
+            .unwrap(),
+    );
+    check(&report.rooms.values().next().unwrap().series);
+    assert!(report.failures.is_empty());
+
+    // A genuinely abandoned request without a saved reason remains diagnosable.
+    let mut abandoned = named_case("completed-without-text");
+    abandoned.phase = RequestPhase::Abandoned;
+    let report = snapshot(&fixture_state([abandoned]), singapore_hour);
+    assert_eq!(report.all.counts.terminal_reasons["missing_reason"], 1);
+    assert_eq!(report.failures[0].reason, "missing_reason");
+}
+
 // Each recipient is counted even when two requests share the same prompt.
 #[test]
 fn hours_count_requests_at_send_time_and_keep_provider_and_reason_denominators() {
