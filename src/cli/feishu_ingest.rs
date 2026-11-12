@@ -33,7 +33,7 @@ pub(super) fn run(args: &[String]) -> io::Result<()> {
     }
 }
 
-fn arguments(args: &[String]) -> Result<(PathBuf, String), String> {
+pub(super) fn arguments(args: &[String]) -> Result<(PathBuf, String), String> {
     let matches = super::control::command_tree(false)
         .try_get_matches_from(args)
         .map_err(|error| error.to_string())?;
@@ -80,15 +80,10 @@ fn ingest_with(
 ) -> Result<Response, String> {
     let (event, normalized) = read_input(input, app)?;
     let target = select_instance(instance, &normalized)?;
-    // Changed content for an already accepted external ID must reach durable
-    // model dedupe, rather than conflict with an in-memory control receipt.
-    let digest = crate::utils::time::digest(
-        serde_json::to_vec(&event)
-            .map_err(|_| "Cannot encode Feishu sink event")?
-            .as_slice(),
-    );
+    // Every sink invocation can recover after a cached refusal. Durable app/message
+    // receipts own replay protection; transport retries within this call keep this ID.
     let request = Request {
-        id: format!("feishu-{digest}"),
+        id: super::control::next_request_id(),
         method: "feishu.ingest".into(),
         params: json!({"app_id":app, "event":event}),
     };
@@ -285,6 +280,36 @@ mod tests {
         assert!(result.unwrap_err().contains("offline"));
         assert_eq!(paths, [std::fs::canonicalize(&fixture.first).unwrap()]);
         assert_ne!(paths[0], std::fs::canonicalize(&fixture.second).unwrap());
+    }
+
+    #[test]
+    fn feishu_sink_new_invocation_can_recover_after_a_cached_refusal() {
+        let fixture = Fixture::new();
+        let event = wire(Some("om_first"), "Proceed");
+        let mut receipts = std::collections::BTreeMap::<String, Response>::new();
+        // The real coordinator caches mutation responses, including refusals.
+        let mut transport = |_: &Path, request: &Request| {
+            if let Some(receipt) = receipts.get(&request.id) {
+                return Ok(receipt.clone());
+            }
+            let response = if receipts.is_empty() {
+                Response::failure(
+                    &request.id,
+                    "storage_unavailable",
+                    "Temporarily unavailable",
+                )
+            } else {
+                Response::success(
+                    &request.id,
+                    json!({"stage":"delivered","message_id":10,"request_id":11}),
+                )
+            };
+            receipts.insert(request.id.clone(), response.clone());
+            Ok(response)
+        };
+        assert!(ingest_with(&fixture.base, "cli_test", event.as_slice(), &mut transport).is_err());
+        assert!(ingest_with(&fixture.base, "cli_test", event.as_slice(), &mut transport).is_ok(),
+            "a fresh sink invocation must recover after repair; durable Bus message-ID dedupe owns repeat protection");
     }
 
     #[test]

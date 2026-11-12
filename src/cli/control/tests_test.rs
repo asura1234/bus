@@ -185,6 +185,14 @@ fn room_sound_requires_exactly_one_of_on_or_off() {
 /// One sample command line per control method, so the tier table, the parser
 /// and both help texts are checked against each other method by method.
 const SAMPLES: &[&[&str]] = &[
+    &[
+        "feishu",
+        "ingest",
+        "--instance",
+        "/private/tmp",
+        "--app-id",
+        "cli_test",
+    ],
     &["state"],
     &["agent", "list"],
     &["settings"],
@@ -238,13 +246,20 @@ const SAMPLES: &[&[&str]] = &[
 ];
 
 #[test]
-fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() {
+fn every_tier_table_method_has_a_valid_command_and_sits_in_its_tiers_help() {
     use crate::messaging::coordinator::{dev_tier_mentions, Tier, METHODS};
     assert_eq!(SAMPLES.len(), METHODS.len());
     for spec in METHODS {
         let sample = SAMPLES
             .iter()
-            .find(|args| command(args).is_ok_and(|c| c.method == spec.method))
+            .find(|args| {
+                if spec.method == "feishu.ingest" {
+                    let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+                    crate::cli::feishu_ingest::arguments(&args).is_ok()
+                } else {
+                    command(args).is_ok_and(|c| c.method == spec.method)
+                }
+            })
             .unwrap_or_else(|| panic!("no sample parses into {}", spec.method));
         assert!(sample.join(" ").starts_with(spec.command), "{sample:?}");
         let words: Vec<_> = spec
