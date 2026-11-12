@@ -179,13 +179,11 @@ fn failure_cause(
     if fresh_exit {
         return Some("unavailable_at_launch");
     }
-    if now < record.deadline_at_ms {
+    if now < record.deadline_at_ms || record.dialog_wait_started_at_ms.is_some() {
         return None;
     }
     Some(if agent.session_binding_invalidated {
         "session_hook_missing"
-    } else if info.is_some_and(|i| i.dialog_id.is_some()) {
-        "dialog_timeout"
     } else if info.is_some_and(|i| i.agent_status == schema::AgentStatus::Blocked) {
         "blocked_timeout"
     } else {
@@ -252,6 +250,15 @@ pub(super) fn observe(
         }
         return Ok(());
     }
+    let waiting_on_dialog = info.is_some_and(|i| {
+        i.dialog_id.is_some()
+            && Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+            && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
+    });
+    state.observe_launch_dialog(agent.id, waiting_on_dialog, now);
+    let Some(record) = state.current_launch_attempt(agent.id) else {
+        return Ok(());
+    };
     let ready = info.is_some_and(|i| {
         i.agent
             .as_deref()
@@ -297,6 +304,7 @@ pub(super) fn log_outcomes(before: &BusState, after: &BusState) {
             agent_id=attempt.agent_id.map(|id|id.0),provider=attempt.provider.label(),
             kind=?attempt.kind,outcome=?attempt.outcome,cause=attempt.cause.as_deref(),
             started_at_ms=attempt.started_at_ms,settled_at_ms=attempt.settled_at_ms,
+            dialog_wait_ms=attempt.dialog_wait_ms,
             "Agent launch outcome persisted");
     }
 }
