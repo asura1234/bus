@@ -372,13 +372,13 @@ impl Worker {
                     &evidence,
                     agent.runtime_identity.session_id.is_none(),
                 );
-                if process_exited && !snapshot.is_empty() {
-                    // Requests outlive deleted agents and callback captures.
-                    failure.reason = format!("{reason}\n{snapshot}");
-                }
                 describe_exhausted_retry(&mut failure, startup.recovery.as_ref());
+                if !snapshot.is_empty() {
+                    // Requests outlive deleted agents and callback captures.
+                    failure.reason = format!("{}\n{snapshot}", failure.reason);
+                }
                 let text = format!(
-                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\n{snapshot}\nStartup diagnostics:\n{diagnostics}",
+                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
                     failure.notice(), launch::provider_kind(agent.provider), startup.command
                 );
                 startup.failure = Some(failure);
@@ -415,9 +415,44 @@ impl Worker {
                 state.abandon_failed_startup_queue(agent.id, now_ms);
                 // The persisted marker deduplicates this blocker across restarts.
                 self.save(state)?;
+            } else {
+                self.enrich_reported_startup_exit(&agent)?;
             }
         }
         Ok(())
+    }
+
+    /// A startup deadline can precede the provider's eventual confirmed exit.
+    fn enrich_reported_startup_exit(&mut self, agent: &super::RoomAgent) -> Result<(), String> {
+        let Some(snapshot) = super::exit_snapshot::startup_snapshot(agent) else {
+            return Ok(());
+        };
+        let Some(mut startup) = agent.startup.clone() else {
+            return Ok(());
+        };
+        let Some(failure) = startup.failure.as_mut() else {
+            return Ok(());
+        };
+        let snapshot = snapshot.notice();
+        if failure.reason.contains(&snapshot) {
+            return Ok(());
+        }
+        let previous = failure.notice();
+        failure.reason = format!("{}\n{snapshot}", failure.reason);
+        let detail = failure.notice();
+        let error = agent.actionable_error.as_ref().map_or_else(
+            || detail.clone(),
+            |text| text.replacen(&previous, &detail, 1),
+        );
+        let mut state = self.state.clone();
+        state.refresh_failed_startup_requests(agent.id, &detail);
+        state
+            .set_agent_startup(agent.id, Some(startup))
+            .map_err(|error| error.to_string())?;
+        state
+            .set_agent_error(agent.id, Some(error))
+            .map_err(|error| error.to_string())?;
+        self.save(state)
     }
 
     fn startup_screen(&mut self, id: AgentId) -> String {

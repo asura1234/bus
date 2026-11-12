@@ -235,3 +235,221 @@ fn startup_exit_read_rejects_snapshot_from_previous_launch() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn startup_exit_after_timeout_preserves_diagnostics_after_deletion() {
+    let (mut worker, agent, _, dir, request) = failed_startup();
+    worker.transport = Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        screen: Some("Provider bootstrap is still starting".into()),
+        ..Default::default()
+    });
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    let pending = pending_info(&worker, agent);
+    worker
+        .cleanup_failed_startups(
+            std::slice::from_ref(&pending),
+            &mpsc::channel().0,
+            start + 29_999,
+        )
+        .unwrap();
+    worker
+        .cleanup_failed_startups(&[pending], &mpsc::channel().0, start + 30_000)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert!(worker.state.agent(agent).unwrap().exit_snapshot.is_none());
+
+    let completed = worker.state.request(request).unwrap().completed_at_ms;
+    let latency = json!(worker.state.request(request).unwrap().latency);
+    // The already observed provider exits after the startup deadline.
+    worker.transport = Box::new(StartupExitNative::exited(&dir));
+    let infos = worker.poll().unwrap().unwrap();
+    worker
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 30_001)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    let error = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_ref()
+        .unwrap();
+    assert!(error.contains(BOOTSTRAP_ERROR), "{error}");
+    assert_eq!(error.matches("Exit snapshot: ").count(), 1, "{error}");
+    assert_eq!(
+        worker.state.request(request).unwrap().completed_at_ms,
+        completed
+    );
+    assert_eq!(
+        json!(worker.state.request(request).unwrap().latency),
+        latency
+    );
+    let detail = worker
+        .state
+        .request(request)
+        .unwrap()
+        .submission_error
+        .clone();
+    worker
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 30_002)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().submission_error,
+        detail
+    );
+    let snapshot = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .exit_snapshot
+        .clone()
+        .unwrap();
+    let path = snapshot.path.unwrap();
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains(BOOTSTRAP_ERROR));
+    let read = worker.control_read(agent, Some("visible"), None).unwrap();
+    assert_eq!(read["capture"]["source"], "exit_snapshot");
+    assert_eq!(read["exit_snapshot"]["path"], json!(path));
+    worker
+        .command(BusCommand::DeleteAgent(agent), &mpsc::channel().0)
+        .unwrap();
+    assert!(!dir.join("callbacks/launch").exists());
+    assert!(path.is_file());
+    drop(worker);
+    let restored = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert!(restored.agent(agent).is_none());
+    let detail = restored
+        .request(request)
+        .unwrap()
+        .submission_error
+        .clone()
+        .unwrap();
+    let path_text = path.to_string_lossy().into_owned();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        detail.contains(BOOTSTRAP_ERROR) && detail.contains(&path_text),
+        "captured startup error and snapshot path must survive deletion; detail={detail:?}; expected_path={path_text}"
+    );
+}
+
+#[test]
+fn exhausted_startup_summary_precedes_single_saved_snapshot() {
+    let (mut worker, agent, _, dir, _) = failed_startup();
+    let mut stored = json!(worker.state);
+    stored["agents"][agent.0.to_string()]["startup"]["recovery"] =
+        json!(crate::messaging::model::StartupRecovery::CodexBootstrap {
+            args: vec![],
+            attempts: 2,
+            retry_at_ms: None,
+            uncertain: false,
+            exhausted: true,
+        });
+    worker
+        .save(serde_json::from_value(stored).unwrap())
+        .unwrap();
+    let infos = worker.poll().unwrap().unwrap();
+    worker
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
+        .unwrap();
+    let error = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_ref()
+        .unwrap();
+    assert_eq!(error.matches("Exit snapshot: ").count(), 1, "{error}");
+    assert!(
+        error.find("after 3 tries").unwrap() < error.find("Exit snapshot: ").unwrap(),
+        "{error}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn late_startup_evidence_preserves_other_failure_diagnostics() {
+    for case in [
+        "older",
+        "foreign_launch",
+        "native_input",
+        "uncertain",
+        "other_failure",
+    ] {
+        let (mut worker, agent, _, dir, request) = failed_startup();
+        worker.transport = Box::new(FailedLaunchNative {
+            state_path: dir.join("state.json"),
+            screen: Some("Provider bootstrap is still starting".into()),
+            ..Default::default()
+        });
+        let start = worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .startup
+            .as_ref()
+            .unwrap()
+            .started_at_ms;
+        let pending = pending_info(&worker, agent);
+        worker
+            .cleanup_failed_startups(
+                std::slice::from_ref(&pending),
+                &mpsc::channel().0,
+                start + 29_999,
+            )
+            .unwrap();
+        worker
+            .cleanup_failed_startups(&[pending], &mpsc::channel().0, start + 30_000)
+            .unwrap();
+        let previous = worker
+            .state
+            .request(request)
+            .unwrap()
+            .submission_error
+            .clone();
+        let mut stored = json!(worker.state);
+        let row = &mut stored["requests"][request.0.to_string()];
+        match case {
+            "older" => row["completed_at_ms"] = json!(start - 1),
+            "foreign_launch" => row["expected_launch_id"] = json!("another-launch"),
+            "native_input" => row["latency"]["native_requested_at_ms"] = json!(start),
+            "uncertain" => row["uncertain_outcome"] = json!(true),
+            "other_failure" => row["failure_reason"] = json!("worker_exited"),
+            _ => unreachable!(),
+        }
+        worker
+            .save(serde_json::from_value(stored).unwrap())
+            .unwrap();
+        worker.transport = Box::new(StartupExitNative::exited(&dir));
+        let infos = worker.poll().unwrap().unwrap();
+        worker
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 30_001)
+            .unwrap();
+        assert!(worker.state.agent(agent).unwrap().exit_snapshot.is_some());
+        assert_eq!(
+            worker.state.request(request).unwrap().submission_error,
+            previous,
+            "{case}"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
