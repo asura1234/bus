@@ -578,7 +578,9 @@ impl DetectionTask {
         match decide_detection_screen_read(DetectionScreenReadInput {
             state: status.state,
             agent,
-            pending_idle_active: status.pending_idle.active() || has_obligation,
+            pending_idle_active: status.pending_idle.active()
+                || has_obligation
+                || self.screen_detection.needs_refresh(agent),
             agent_changed,
             process_exited,
             current_detection_content_seq,
@@ -588,16 +590,12 @@ impl DetectionTask {
             DetectionScreenReadDecision::Skip => return,
         }
 
-        let (content, coherent) =
-            self.screen_detection
-                .observe(&self.terminal, agent, process_exited);
+        let content = self
+            .screen_detection
+            .observe(&self.terminal, agent, process_exited);
         let pty_activity = current_detection_content_seq
             .is_some_and(|seq| seq != status.last_screen_scan_detection_content_seq.unwrap_or(0));
-        status.last_screen_scan_detection_content_seq = if coherent {
-            current_detection_content_seq
-        } else {
-            None
-        };
+        status.last_screen_scan_detection_content_seq = current_detection_content_seq;
         let content_changed = content != status.last_detection_text;
         status.last_detection_text.clone_from(&content);
         if pty_activity && status.state == AgentState::Working {
@@ -1038,6 +1036,57 @@ mod blocked_tests {
         );
         assert!(writes.try_recv().is_err());
         (initial_text, runtime.detection_text())
+    }
+
+    #[tokio::test]
+    async fn partial_frame_cache_retries_do_not_renew_pty_activity() {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        runtime.set_detection_context(
+            AgentKind::Kimi,
+            true,
+            None,
+            Some(Box::new(|_: &str| {
+                super::super::InputObservation::Unavailable
+            })),
+        );
+        feed_pty(&runtime, b"\x1b[?2026hTool output is still arriving\r\n");
+        let (events, _received) = mpsc::channel(16);
+        let task = DetectionTask {
+            pane_id: runtime.pane_id,
+            child_pid: runtime.child_pid.clone(),
+            terminal: runtime.terminal.clone(),
+            state_events: events,
+            detection_content_seq: runtime.detection_content_seq.clone(),
+            managed_launch_pending: runtime.managed_launch_pending.clone(),
+            detection_context: runtime.detection_context.clone(),
+            screen_detection: runtime.screen_detection.clone(),
+            render_notify: Arc::new(Notify::new()),
+            render_dirty: Arc::new(RenderSignal::default()),
+            kimi_code_home: Arc::new(Mutex::new(None)),
+        };
+        let started = Instant::now();
+        let mut status = DetectionState::new(Some(AgentKind::Kimi));
+        status.state = AgentState::Working;
+        for elapsed_ms in [0, 100, 200] {
+            task.scan_screen(
+                &mut status,
+                Some(AgentKind::Kimi),
+                false,
+                false,
+                false,
+                started + Duration::from_millis(elapsed_ms),
+            )
+            .await;
+            assert_eq!(
+                status.last_pty_activity_at,
+                Some(started),
+                "a cache retry without bytes must not renew Working activity"
+            );
+            assert!(runtime
+                .cached_screen_detection(Some(AgentKind::Kimi))
+                .is_none());
+        }
+        assert!(writes.try_recv().is_err());
     }
 
     #[tokio::test]

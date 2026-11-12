@@ -10,6 +10,16 @@ pub(super) struct ScreenDetectionCache {
 }
 
 impl ScreenDetectionCache {
+    pub(super) fn needs_refresh(&self, agent: Option<AgentKind>) -> bool {
+        let revision = self.content_seq.load(Ordering::Acquire);
+        !self
+            .latest
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.agent == agent && snapshot.revision == revision)
+    }
+
     /// Reuse the detector's active-screen text and parse outside the publication
     /// lock; list reads copy only the completed facts.
     pub(super) fn observe(
@@ -17,7 +27,7 @@ impl ScreenDetectionCache {
         terminal: &crate::terminal::emulator::PaneTerminal,
         agent: Option<AgentKind>,
         process_exited: bool,
-    ) -> (String, bool) {
+    ) -> String {
         let revision = self.content_seq.load(Ordering::Acquire);
         let content = terminal.detection_text();
         let coherent = revision.is_multiple_of(2)
@@ -31,9 +41,7 @@ impl ScreenDetectionCache {
                 *self.latest.lock().unwrap_or_else(|p| p.into_inner()) = Some(snapshot);
             }
         }
-        // Retry after a partial frame, even if the sync-end marker changes no text.
-        let coherent = coherent && revision == self.content_seq.load(Ordering::Acquire);
-        (content, coherent)
+        content
     }
 
     pub(super) fn new(content_seq: Arc<AtomicU64>) -> Self {
