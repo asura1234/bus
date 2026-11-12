@@ -1,6 +1,37 @@
 use super::*;
 use crate::messaging::model::{AgentId, Author, Provider, RoomId};
 
+#[test]
+fn feishu_each_request_has_its_own_dm_instead_of_a_cross_request_burst() {
+    let (before, master, _, agent) = fixture();
+    let mut next = before.clone();
+    next.post_to_developer(
+        master,
+        agent,
+        "[waiting-on-you] First decision".into(),
+        vec![],
+        1,
+    )
+    .unwrap();
+    next.post_to_developer(
+        master,
+        agent,
+        "[waiting-on-you] Second decision".into(),
+        vec![],
+        2,
+    )
+    .unwrap();
+    let mut policy = enabled();
+    policy.observe(&before, &next, 1000);
+    let first = policy.take(3000).unwrap();
+    assert!(
+        !first.contains("Second decision"),
+        "one reply cannot identify a request inside a burst: {first}"
+    );
+    policy.finish(true);
+    assert!(policy.take(3000).unwrap().contains("Second decision"));
+}
+
 fn fixture() -> (BusState, RoomId, RoomId, AgentId) {
     let mut state = BusState::default();
     let master = state.ensure_master_room();

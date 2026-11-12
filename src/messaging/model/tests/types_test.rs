@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use super::*;
 
+#[path = "feishu_routing_test.rs"]
+mod feishu_routing_tests;
+
 #[test]
 fn mixed_claude_image_success_and_failed_literal_path_correlate() {
     let typed = "from bus\n\"/tmp/a.png\"\n\"/tmp/b.jpg\"";
