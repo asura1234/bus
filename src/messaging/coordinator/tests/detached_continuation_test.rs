@@ -1,0 +1,238 @@
+use super::*;
+
+// A native witness advances the generation even when the target's managed
+// provider disappeared before save. The reused pane is never an owned agent.
+struct DetachedNative {
+    methods: Arc<Mutex<Vec<Method>>>,
+    agent: AgentId,
+    room: RoomId,
+    provider: Provider,
+    generation: u64,
+    exited: bool,
+    resumed: bool,
+}
+
+impl DetachedNative {
+    fn info(&self, target: bool) -> schema::AgentInfo {
+        let kind = crate::messaging::identity::provider_kind(self.provider).label();
+        serde_json::from_value(json!({
+            "generation": self.generation,
+            "terminal_id": if target { "resumed-terminal" } else { "witness-terminal" },
+            "pane_id": if target { "resumed-pane" } else { "witness-pane" },
+            "name": if target { crate::messaging::identity::managed_name(self.room, self.agent) } else { "witness".into() },
+            "agent": kind, "agent_status": "idle", "interactive_ready": true,
+            "native_ready": true, "workspace_id":"w", "tab_id":"t", "focused":false, "revision":1,
+            "agent_session":{"source":crate::messaging::identity::managed_source(self.provider),
+                "agent":kind,"kind":"id","value":if target { "session" } else { "witness-session" }}
+        })).unwrap()
+    }
+}
+
+impl Transport for DetachedNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match &method {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList {
+                agents: vec![self.info(self.resumed)],
+            }),
+            Method::PaneGet(p) => Ok(ResponseResult::PaneInfo { pane: serde_json::from_value(json!({
+                "pane_id":p.pane_id, "terminal_id":if self.exited { "terminal" } else { "replacement-shell" },
+                "workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown",
+                "revision":1,"agent_process_exited":self.exited
+            })).unwrap() }),
+            Method::TabCreate(_) => Ok(ResponseResult::TabCreated {
+                tab: serde_json::from_value(json!({"tab_id":"t","workspace_id":"w","number":1,"label":"resume","focused":false,"pane_count":1,"agent_status":"unknown"})).unwrap(),
+                root_pane: serde_json::from_value(json!({"pane_id":"resumed-pane","terminal_id":"resumed-terminal","workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown","revision":1})).unwrap(),
+            }),
+            Method::AgentStart(_) => {
+                self.resumed = true;
+                self.methods.lock().unwrap().push(method);
+                Ok(ResponseResult::AgentStarted { agent:self.info(true), argv:vec!["provider".into()] })
+            }
+            other if matches!(other, Method::PaneCloseIfIdentity(_)) => Ok(ResponseResult::Ok {}),
+            _ => Native(self.methods.clone()).request(method),
+        }
+    }
+}
+
+fn detached_transport(f: &Fixture, generation: u64, exited: bool) -> Box<dyn Transport> {
+    Box::new(DetachedNative {
+        methods: f.native.clone(),
+        agent: f.agent,
+        room: f.room,
+        provider: f.provider,
+        generation,
+        exited,
+        resumed: false,
+    })
+}
+
+fn reopen_detached(f: &mut Fixture, generation: u64) {
+    reload(f);
+    f.worker.transport = detached_transport(f, generation, false);
+}
+
+fn joined_task(f: &mut Fixture) -> (RequestId, RequestId, RequestId) {
+    let lead = running(f, "ORIGINAL_TASK_NEVER_REPLAY", "turn-1");
+    let member = f.send("ORIGINAL_STEERING_NEVER_REPLAY", false);
+    f.deliver();
+    f.started("turn-1", "ORIGINAL_STEERING_NEVER_REPLAY");
+    f.consume();
+    let queued = f.send("independent FIFO task", true);
+    (lead, member, queued)
+}
+
+fn assert_waiting(
+    f: &Fixture,
+    lead: RequestId,
+    member: RequestId,
+    queued: RequestId,
+    before: usize,
+) {
+    for id in [lead, member] {
+        assert!(
+            !f.request(id).settled(),
+            "must retain original {id:?}: {:?}",
+            f.request(id)
+        );
+        assert!(
+            f.request(id).turn_ended_at_ms.is_none(),
+            "runtime loss is not a native end"
+        );
+    }
+    assert_eq!(f.request(member).group, Some(lead));
+    let owner = f.worker.state.agent(f.agent).unwrap();
+    assert_eq!(owner.status, RuntimeStatus::Unavailable);
+    assert_eq!(owner.current_request, Some(lead));
+    assert!(owner.runtime_identity.pane_id.is_none());
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(
+        f.typed().len(),
+        before,
+        "never type into the replacement shell"
+    );
+}
+
+#[test]
+fn detached_restart_waits_durably_for_verified_resume() {
+    for provider in [Provider::Codex, Provider::ClaudeCode] {
+        let mut f = Fixture::new(provider);
+        observe_epoch(&mut f, 4);
+        let (lead, member, queued) = joined_task(&mut f);
+        let before = f.typed().len();
+        for _ in 0..2 {
+            reopen_detached(&mut f, 5);
+            f.worker.tick().unwrap();
+            assert_waiting(&f, lead, member, queued, before);
+        }
+    }
+}
+
+#[test]
+fn detached_same_generation_process_exit_resumes_original_ids_once() {
+    let _providers = crate::messaging::coordinator::tests::provider_binaries();
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let (lead, member, queued) = joined_task(&mut f);
+    let before = f.typed().len();
+    f.worker.transport = detached_transport(&f, 4, true);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    let hooks = f.dir.join(".codex/hooks.json");
+    let document = crate::agents::providers::hook_json::merge_hooks(
+        json!({}),
+        crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
+        &std::env::current_exe().unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
+    let result = f.worker.resume_room(f.room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.worker.serving_generation, 4,
+        "do not fabricate a generation"
+    );
+    assert_eq!(
+        f.typed().len(),
+        before + 1,
+        "one continuation after explicit resume"
+    );
+    let notice = f.typed().last().unwrap().0.clone();
+    assert!(notice.contains(&format!("message {}", f.request(lead).prompt.id.0)));
+    assert!(!notice.contains("ORIGINAL_"));
+    assert_eq!(f.request(member).group, Some(lead));
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    f.worker.tick().unwrap();
+    assert_eq!(f.typed().len(), before + 1);
+    f.started("turn-1", "ORIGINAL_TASK_NEVER_REPLAY");
+    f.stopped("turn-1", "late interrupted final");
+    f.consume();
+    assert!(!f.request(lead).settled());
+    f.started("turn-2", &notice);
+    f.consume();
+    assert!(f.request(lead).trusted_start_bound);
+    f.stopped("turn-2", "resumed native completion");
+    f.consume();
+    assert_completed_without_reply(&f, lead);
+    assert_completed_without_reply(&f, member);
+    assert_eq!(f.worker.state.requests().count(), 3);
+}
+
+#[test]
+fn detached_restart_native_rebind_notifies_once_and_explicit_reply_settles_original() {
+    let mut f = Fixture::new(Provider::Codex);
+    observe_epoch(&mut f, 4);
+    let (lead, member, queued) = joined_task(&mut f);
+    let before = f.typed().len();
+    reopen_detached(&mut f, 5);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    epoch_reopen(&mut f, true, 5);
+    f.worker.tick().unwrap();
+    let notice = f.typed().last().unwrap().0.clone();
+    assert_eq!(f.typed().len(), before + 1);
+    epoch_reopen(&mut f, true, 5);
+    f.worker.tick().unwrap();
+    assert_eq!(f.typed().len(), before + 1);
+    f.started("turn-2", &notice);
+    f.consume();
+    let response = f.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "detached-original-reply".into(),
+            method: "message.send".into(),
+            params: json!({"reply_to":f.request(lead).prompt.id.0.to_string(),
+                "as":f.agent.0.to_string(),"text":"answer to original detached task"}),
+        },
+        None,
+    );
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result["stage"], "replied");
+    assert_eq!(
+        f.reply(lead).as_deref(),
+        Some("answer to original detached task")
+    );
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    f.stopped("turn-2", "native completion");
+    f.consume();
+    assert_completed_without_reply(&f, member);
+}
+
+#[test]
+fn detached_durable_old_end_wins_before_resume() {
+    for provider in [Provider::Codex, Provider::ClaudeCode] {
+        let mut f = Fixture::new(provider);
+        observe_epoch(&mut f, 4);
+        let (lead, member, queued) = joined_task(&mut f);
+        let before = f.typed().len();
+        reopen_detached(&mut f, 5);
+        // This is durable evidence from the interrupted execution, consumed
+        // after detach and before it is fenced by a verified successor.
+        f.stopped("turn-1", "durable completed task");
+        f.worker.tick().unwrap();
+        assert_completed_without_reply(&f, lead);
+        assert_completed_without_reply(&f, member);
+        assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+        assert_eq!(f.typed().len(), before);
+    }
+}

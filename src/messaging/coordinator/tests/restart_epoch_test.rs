@@ -3,6 +3,9 @@ use super::*;
 #[path = "restart_continuation_test.rs"]
 mod restart_continuation_tests;
 
+#[path = "detached_continuation_test.rs"]
+mod detached_continuation_tests;
+
 #[derive(Clone, Copy, Debug)]
 enum EpochMode {
     Server,
