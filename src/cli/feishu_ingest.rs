@@ -85,7 +85,9 @@ fn ingest_with(
     }
     let instance =
         std::fs::canonicalize(instance).map_err(|_| "Feishu sink instance does not exist")?;
-    if instance.join("state.json").is_file() {
+    let registry =
+        instance.join("sessions").is_dir() || instance.join("session-registry.lock").is_file();
+    if !registry && instance.join("state.json").is_file() {
         return dispatch(&instance, app, event, &mut send);
     }
     registry::ingest(&instance, app, event, normalized, &mut send)
@@ -530,4 +532,30 @@ mod tests {
         .map(String::from);
         assert!(arguments(&args).unwrap_err().contains("absolute"));
     }
+
+    #[test]
+    fn feishu_registry_legacy_base_state_does_not_hide_registered_sessions() {
+        let f = Fixture::new();
+        std::fs::copy(f.first.join("state.json"), f.base.join("state.json")).unwrap();
+        let unknown = wire(None, "Unknown");
+        assert_eq!(
+            ingest_with(&f.base, "cli_test", unknown.as_slice(), |_, _| panic!(
+                "registry input must not target its legacy base"
+            ))
+            .unwrap()
+            .result["stage"],
+            "parked"
+        );
+        let mut mapped: Value =
+            serde_json::from_slice(&wire(Some("om_second"), "Continue")).unwrap();
+        mapped["message_id"] = json!("om_legacy_valid");
+        let mapped = serde_json::to_vec(&mapped).unwrap();
+        let response = ingest_with(&f.base, "cli_test", mapped.as_slice(), |root, request| {
+            assert_eq!(root, std::fs::canonicalize(&f.second).unwrap());
+            Ok(Response::success(&request.id, json!({"stage":"delivered"})))
+        })
+        .unwrap();
+        assert_eq!(response.result["stage"], "delivered");
+    }
+
 }
