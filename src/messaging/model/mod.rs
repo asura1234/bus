@@ -10,7 +10,7 @@ mod error;
 mod error_reports;
 pub(crate) mod feishu;
 #[cfg(test)]
-#[path = "tests/feishu_fixture.rs"]
+#[path = "tests/feishu_fixture_test.rs"]
 pub(crate) mod feishu_fixture;
 mod history;
 mod history_index;
