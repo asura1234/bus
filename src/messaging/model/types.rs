@@ -548,6 +548,10 @@ pub(crate) struct Request {
     /// Delivery sends a short notice, never the original prompt again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) restart_continuation: bool,
+    /// Runtime loss is proven, but no verified successor owns the saved task yet.
+    /// Keep the interrupted execution correlation until durable ends are read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) awaiting_resume: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) delivery_epoch: Option<DeliveryEpoch>,
     pub(crate) expected_launch_id: Option<String>,

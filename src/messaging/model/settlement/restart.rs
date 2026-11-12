@@ -1,4 +1,5 @@
 //! Reconcile requests interrupted by a newer native-server generation.
+use super::super::{restart_continuation::ContinuationPreparation, LaunchKind, LaunchOutcome};
 use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase};
 
 impl BusState {
@@ -15,7 +16,11 @@ impl BusState {
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
         let request = self.requests.get(&id)?.clone();
-        let resume_failed = owner.session_binding_invalidated
+        let resume_failed = self.current_launch_attempt(agent).is_some_and(|attempt| {
+            request.awaiting_resume
+                && matches!(attempt.kind, LaunchKind::Resume | LaunchKind::NativeResume)
+                && attempt.outcome == LaunchOutcome::Failed
+        }) || owner.session_binding_invalidated
             || owner.working_directory_error.is_some()
             || owner.missing_binary.is_some()
             || owner
@@ -24,10 +29,15 @@ impl BusState {
                 .is_some_and(|startup| startup.failure.is_some());
         if request.agent_id != agent
             || owner.deletion_pending
-            || request
-                .delivery_epoch
-                .as_ref()
-                .is_none_or(|epoch| epoch.generation >= generation)
+            || !request.awaiting_resume
+                && request
+                    .delivery_epoch
+                    .as_ref()
+                    .is_none_or(|epoch| epoch.generation >= generation)
+            || request.group.is_some_and(|lead| {
+                owner.current_request == Some(lead)
+                    && self.requests.get(&lead).is_some_and(|r| r.awaiting_resume)
+            })
             || !(matches!(
                 request.phase,
                 RequestPhase::Submitting | RequestPhase::Active
@@ -51,6 +61,10 @@ impl BusState {
         for member in self.group_members(id) {
             let member = self.requests.get_mut(&member)?;
             if !member.settled()
+                && request
+                    .delivery_epoch
+                    .as_ref()
+                    .is_some_and(|epoch| epoch.generation < generation)
                 && member
                     .delivery_epoch
                     .as_ref()
@@ -92,19 +106,26 @@ impl BusState {
         if (request.trusted_start_bound || request.restart_continuation)
             && request.pending_final.is_none()
             && recorded_end(&request).is_none()
-            && self.prepare_restart_continuation(agent, id, generation, now_ms)
+            && !resume_failed
         {
-            if let Some(current) = current.filter(|current| *current != id).or(successor) {
-                self.agents.get_mut(&agent)?.current_request = Some(current);
-                if self.requests.get(&current).is_some_and(|request| {
-                    request.restart_continuation && request.phase == RequestPhase::Queued
-                }) {
-                    let queue = self.queues.entry(agent).or_default();
-                    queue.retain(|request| *request != current);
-                    queue.insert(0, current);
-                }
+            let preparation = self.prepare_restart_continuation(agent, id, generation, now_ms);
+            if preparation == ContinuationPreparation::AwaitingResume {
+                self.requests.get_mut(&id)?.awaiting_resume = true;
+                return Some(id);
             }
-            return Some(id);
+            if preparation == ContinuationPreparation::Prepared {
+                if let Some(current) = current.filter(|current| *current != id).or(successor) {
+                    self.agents.get_mut(&agent)?.current_request = Some(current);
+                    if self.requests.get(&current).is_some_and(|request| {
+                        request.restart_continuation && request.phase == RequestPhase::Queued
+                    }) {
+                        let queue = self.queues.entry(agent).or_default();
+                        queue.retain(|request| *request != current);
+                        queue.insert(0, current);
+                    }
+                }
+                return Some(id);
+            }
         }
         self.settle_interrupted_generation_end(
             agent,

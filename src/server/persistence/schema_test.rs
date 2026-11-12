@@ -732,12 +732,20 @@ fn provider_exit_before_native_save_restores_a_shell_without_managed_ownership()
         std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
     );
     assert_eq!(restored.launches.len(), 1);
-    assert!(restored.launches[0].identity.is_none());
+    assert_eq!(
+        restored.launches[0].identity.as_ref().unwrap().pane_id,
+        crate::server::workspaces::public_pane_id_for_number(
+            &state.workspaces[0].id,
+            state.workspaces[0].public_pane_number(pane_id).unwrap()
+        )
+    );
     assert_ne!(restored.launches[0].terminal_id, terminal_id);
     assert!(restored
         .terminals
         .values()
-        .all(|terminal| terminal.agent_name.is_none()));
+        .all(|terminal| terminal.agent_name.is_none()
+            && terminal.persisted_agent_session.is_none()
+            && terminal.pending_agent_resume_plan.is_none()));
     // Coordinator detached_continuation_test presents this unowned shell at
     // the old public pane with a fresh terminal; it must never be adopted.
 }

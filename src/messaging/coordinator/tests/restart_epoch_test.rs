@@ -27,7 +27,7 @@ fn epoch_transport(fixture: &Fixture, rebind: bool, generation: u64) -> Box<dyn 
         "terminal_id": if rebind { "restored-terminal" } else { "terminal" },
         "pane_id": if rebind { "restored-pane" } else { "pane" },
         "name": crate::messaging::identity::managed_name(fixture.room, fixture.agent),
-        "agent": kind, "agent_status": "idle", "interactive_ready": true,
+        "agent": kind, "agent_status": "idle", "interactive_ready": true, "native_ready": true,
         "workspace_id": "workspace", "tab_id": "tab", "focused": false, "revision": 1,
         "agent_session": {"source": crate::messaging::identity::managed_source(fixture.provider),
             "agent": kind, "kind": "id", "value": "session"}

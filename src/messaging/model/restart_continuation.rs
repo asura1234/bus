@@ -1,9 +1,60 @@
 //! Continue interrupted tasks in their saved conversation, retaining request IDs.
 use super::{
-    callbacks::provider_turn_key, AgentId, Author, BusState, DeliveryEpoch, RequestId, RequestPhase,
+    callbacks::provider_turn_key, AgentId, Author, BusState, DeliveryEpoch, RequestId,
+    RequestPhase, RoomAgent, RuntimeStatus,
 };
 
+#[derive(Eq, PartialEq)]
+pub(super) enum ContinuationPreparation {
+    Prepared,
+    AwaitingResume,
+    Refused,
+}
+
 impl BusState {
+    fn resumable_task_owner(&self, agent: AgentId, id: RequestId) -> Option<&RoomAgent> {
+        let owner = self.agents.get(&agent)?;
+        let request = self.requests.get(&id)?;
+        let session = owner.runtime_identity.session_id.as_deref()?;
+        (!session.is_empty()
+            && request.provider_session_id.as_deref() == Some(session)
+            && owner.hook_setup_confirmed
+            && !owner.deletion_pending
+            && !owner.session_binding_invalidated
+            && owner.working_directory_error.is_none()
+            && owner.missing_binary.is_none()
+            && owner.startup.as_ref().is_none_or(|s| s.failure.is_none()))
+        .then_some(owner)
+    }
+
+    /// Call only for positive runtime loss, never an inconclusive native poll.
+    pub(crate) fn await_restart_resume(&mut self, agent: AgentId) {
+        let Some(id) = self.agents.get(&agent).and_then(|a| a.current_request) else {
+            return;
+        };
+        if self.resumable_task_owner(agent, id).is_none() {
+            return;
+        }
+        if let Some(request) = self.requests.get_mut(&id).filter(|r| {
+            (r.trusted_start_bound || r.restart_continuation)
+                && r.pending_final.is_none()
+                && matches!(
+                    r.phase,
+                    RequestPhase::Active | RequestPhase::Submitting | RequestPhase::Queued
+                )
+        }) {
+            request.awaiting_resume = true;
+        }
+    }
+
+    pub(crate) fn awaiting_restart_resume(&self, agent: AgentId) -> bool {
+        self.agents
+            .get(&agent)
+            .and_then(|a| a.current_request)
+            .and_then(|id| self.requests.get(&id))
+            .is_some_and(|r| r.awaiting_resume)
+    }
+
     pub(super) fn restart_continuation_failure_reason(
         &self,
         id: RequestId,
@@ -48,7 +99,7 @@ impl BusState {
             )
         };
         Some(format!(
-            "[Bus message {message} from {sender}]\nBus restarted while you were working on message {message} from {sender}; your previous turn was interrupted. Check what you already did, then continue and finish that task.{joined} Reply as usual to the original message IDs."
+            "[Bus message {message} from {sender}]\nBus restarted or recovered your provider runtime while you were working on message {message} from {sender}; your previous turn was interrupted. Check what you already did, then continue and finish that task.{joined} Reply as usual to the original message IDs."
         ))
     }
 
@@ -60,21 +111,19 @@ impl BusState {
         id: RequestId,
         generation: u64,
         now_ms: u64,
-    ) -> bool {
-        let Some(owner) = self.agents.get(&agent) else {
-            return false;
+    ) -> ContinuationPreparation {
+        let Some(owner) = self.resumable_task_owner(agent, id) else {
+            return ContinuationPreparation::Refused;
         };
-        if owner.deletion_pending
-            || owner.session_binding_invalidated
-            || owner.working_directory_error.is_some()
-            || owner.missing_binary.is_some()
-            || owner.startup.as_ref().is_some_and(|s| s.failure.is_some())
-        {
-            return false;
+        if matches!(
+            owner.status,
+            RuntimeStatus::Unavailable | RuntimeStatus::Launching
+        ) {
+            return ContinuationPreparation::AwaitingResume;
         }
         let identity = owner.runtime_identity.clone();
         let (Some(terminal), Some(pane)) = (&identity.terminal_id, &identity.pane_id) else {
-            return false;
+            return ContinuationPreparation::AwaitingResume;
         };
         let all: Vec<_> = std::iter::once(id).chain(self.group_members(id)).collect();
         let pending: Vec<_> = all
@@ -106,7 +155,7 @@ impl BusState {
                 .get_mut(&agent)
                 .expect("retained agent")
                 .current_request = None;
-            return true;
+            return ContinuationPreparation::Prepared;
         };
         for id in &pending {
             let request = self.requests.get_mut(id).expect("retained request");
@@ -117,6 +166,7 @@ impl BusState {
             };
             request.group = (*id != lead).then_some(lead);
             request.restart_continuation = true;
+            request.awaiting_resume = false;
             request.steered = false;
             request.delivery_epoch = Some(DeliveryEpoch {
                 generation,
@@ -158,7 +208,7 @@ impl BusState {
         let owner = self.agents.get_mut(&agent).expect("retained agent");
         owner.current_request = Some(lead);
         owner.delivery_rejection = None;
-        true
+        ContinuationPreparation::Prepared
     }
 
     /// All preserved inputs belong to the resumed turn, without pasting them again.

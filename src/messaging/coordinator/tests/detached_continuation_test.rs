@@ -39,6 +39,10 @@ impl Transport for DetachedNative {
                 "workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown",
                 "revision":1,"agent_process_exited":self.exited
             })).unwrap() }),
+            Method::PaneRead(p) => Ok(ResponseResult::PaneRead { read: serde_json::from_value(json!({
+                "pane_id":p.pane_id,"workspace_id":"w","tab_id":"t","source":p.source,
+                "format":"text","text":"provider exited","revision":1,"truncated":false
+            })).unwrap() }),
             Method::TabCreate(_) => Ok(ResponseResult::TabCreated {
                 tab: serde_json::from_value(json!({"tab_id":"t","workspace_id":"w","number":1,"label":"resume","focused":false,"pane_count":1,"agent_status":"unknown"})).unwrap(),
                 root_pane: serde_json::from_value(json!({"pane_id":"resumed-pane","terminal_id":"resumed-terminal","workspace_id":"w","tab_id":"t","focused":false,"agent_status":"unknown","revision":1})).unwrap(),
@@ -137,7 +141,7 @@ fn detached_restart_waits_durably_for_verified_resume() {
 
 #[test]
 fn detached_same_generation_process_exit_resumes_original_ids_once() {
-    let _providers = crate::messaging::coordinator::tests::provider_binaries();
+    let _providers = crate::messaging::coordinator::tests::support::provider_binaries();
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 4);
     let (lead, member, queued) = joined_task(&mut f);
@@ -403,7 +407,7 @@ fn install_resume_hooks(f: &Fixture) {
 
 #[test]
 fn detached_conclusive_resume_preparation_failure_closes_original_group() {
-    let _providers = crate::messaging::coordinator::tests::provider_binaries();
+    let _providers = crate::messaging::coordinator::tests::support::provider_binaries();
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 4);
     let (lead, member, queued) = joined_task(&mut f);

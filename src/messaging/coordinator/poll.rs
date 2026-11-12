@@ -39,7 +39,13 @@ impl Worker {
             let agent = &current_agent;
             let observed_at_ms = self.now_ms();
             self.observe_cursor_info(&mut state, agent, info, observed_at_ms)?;
-            let status = polled_status(agent, info);
+            let status = if state.awaiting_restart_resume(agent.id)
+                && info.is_none_or(|info| !info.native_ready || !info.interactive_ready)
+            {
+                RuntimeStatus::Unavailable
+            } else {
+                polled_status(agent, info)
+            };
             let (missing, exit_evidence) =
                 self.observe_missing_binary(&mut state, agent, status, info)?;
             if !missing {
@@ -409,6 +415,7 @@ pub(super) fn report_exit(
         return Ok(());
     }
     if evidence == Some(true) {
+        state.await_restart_resume(id);
         state.record_worker_exit(id, io::now_ms());
     }
     let agent = state.agent(id).ok_or("Unknown agent")?;

@@ -275,7 +275,9 @@ impl BusState {
                 else {
                     continue;
                 };
-                if !self.prepare_restart_continuation(agent, hold.lead, generation, now_ms) {
+                if self.prepare_restart_continuation(agent, hold.lead, generation, now_ms)
+                    != super::restart_continuation::ContinuationPreparation::Prepared
+                {
                     continue;
                 }
                 for id in &pending {
