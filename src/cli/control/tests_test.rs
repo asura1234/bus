@@ -189,7 +189,11 @@ const SAMPLES: &[&[&str]] = &[
         "feishu",
         "ingest",
         "--instance",
-        "/private/tmp",
+        if cfg!(windows) {
+            r"C:\bus-fixture"
+        } else {
+            "/private/tmp"
+        },
         "--app-id",
         "cli_test",
     ],
