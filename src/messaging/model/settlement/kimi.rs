@@ -49,7 +49,7 @@ impl BusState {
         if recorded.is_none() && self.idle_bound_turn_candidate(agent, now_ms) == Some(id) {
             return self.settle_idle_bound_turn(agent, id, now_ms, None);
         }
-        if recorded.is_none() && (owner.dialog || !exited) {
+        if recorded.is_none() && (request.restart_resume.is_some() || owner.dialog || !exited) {
             return None;
         }
         self.consume_recorded_end(

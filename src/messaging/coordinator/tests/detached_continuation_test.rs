@@ -593,3 +593,93 @@ fn detached_historical_resume_failure_cannot_abandon_a_later_started_task() {
         LaunchOutcome::Failed
     );
 }
+
+#[cfg(unix)]
+fn retain_detached_task_past_exit_grace(provider: Provider) {
+    let mut f = Fixture::new(provider);
+    let kimi_wire =
+        (provider == Provider::Kimi).then(|| super::super::kimi_steering_tests::home(&f));
+    observe_epoch(&mut f, 4);
+    let turn = if provider == Provider::Kimi {
+        "1"
+    } else {
+        "turn-1"
+    };
+    let lead = running(&mut f, "unfinished original task", turn);
+    let member = f.send("unfinished bound steering", false);
+    f.deliver();
+    f.started(turn, "unfinished bound steering");
+    f.consume();
+    assert!(f.request(member).trusted_start_bound);
+    let queued = f.send("independent FIFO successor", true);
+    let before = f.typed().len();
+    f.worker.transport = detached_transport(&f, 4, true);
+    f.worker.tick().unwrap();
+    assert_waiting(&f, lead, member, queued, before);
+    assert!(f.request(lead).restart_resume.is_some());
+    let deadline = f
+        .worker
+        .state
+        .agent(f.agent)
+        .unwrap()
+        .exit_snapshot
+        .as_ref()
+        .unwrap()
+        .at_ms
+        + crate::messaging::model::TURN_SETTLE_MS
+        + 1;
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Unavailable, deadline)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.settle_requests().unwrap();
+    assert_eq!(f.worker.serving_generation, 4);
+    for id in [lead, member] {
+        assert!(
+            !f.request(id).settled(),
+            "{provider:?} runtime loss without a native end must retain {id:?}, got {:?}",
+            f.request(id)
+        );
+        assert!(f.request(id).turn_ended_at_ms.is_none());
+    }
+    assert_waiting(&f, lead, member, queued, before);
+    if let Some(wire) = kimi_wire {
+        // A late durable commit from the old execution still wins before resume.
+        let original = f.worker.state.render_request_payload(lead).unwrap();
+        let steering = f.typed()[1].0.clone();
+        std::fs::write(
+            wire,
+            super::super::kimi_steering_tests::native_turn(
+                1,
+                &original,
+                &[steering],
+                "durable completion after runtime loss",
+            ),
+        )
+        .unwrap();
+        f.worker.settle_requests().unwrap();
+        assert_completed_without_reply(&f, lead);
+        assert_completed_without_reply(&f, member);
+        assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+        assert_eq!(f.typed().len(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_runtime_loss_past_exit_grace_retains_codex_task() {
+    retain_detached_task_past_exit_grace(Provider::Codex);
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_runtime_loss_past_exit_grace_retains_claude_task() {
+    retain_detached_task_past_exit_grace(Provider::ClaudeCode);
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_runtime_loss_past_exit_grace_retains_kimi_task() {
+    retain_detached_task_past_exit_grace(Provider::Kimi);
+}
