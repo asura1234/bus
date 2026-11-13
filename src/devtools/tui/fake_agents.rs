@@ -270,7 +270,11 @@ impl FakeAgent {
             run_hook(command, &payload);
         }
         if event == "UserPromptSubmit" {
-            work::hold_after_submit_hook();
+            work::hold_after_submit_hook(|| {
+                if !self.live_turn() {
+                    self.draw_prompt();
+                }
+            });
         }
     }
 

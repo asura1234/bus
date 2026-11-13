@@ -9,7 +9,7 @@ mod ownership;
 mod preservation;
 
 /// The final submission guard checks native input availability. Attachment
-/// registration is checked separately; ordinary text needs no render readback.
+/// registration and Claude plain-paste ownership are checked separately.
 fn submission_available(kind: AgentKind, screen: &str) -> bool {
     let plain = screen
         .lines()
@@ -42,7 +42,7 @@ fn paste_ready(kind: AgentKind, screen: &str, expected: &str) -> bool {
     let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
     let (images, _) = crate::agents::providers::claude_code::hooks::claude_lifted_images(&expected);
     if images == 0 {
-        return true;
+        return observe_with_cursor(kind, screen, &expected, None) == InputObservation::Pending;
     }
     // Claude 2.1.316 consumes Enter while an image path is being loaded, then
     // drops that deferred key. The PTY receipt does not attest registration.

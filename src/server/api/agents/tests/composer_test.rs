@@ -120,7 +120,12 @@ fn claude_image_registration_waits_for_all_chips_and_allows_failed_read_text() {
         &frame("[Image #7][Image #8]clipped suffix"),
         expected
     ));
-    assert!(paste_ready(AgentKind::Claude, &frame(""), "ordinary text"));
+    assert!(!paste_ready(AgentKind::Claude, &frame(""), "ordinary text"));
+    assert!(paste_ready(
+        AgentKind::Claude,
+        &frame("ordinary text"),
+        "ordinary text"
+    ));
 }
 
 #[test]

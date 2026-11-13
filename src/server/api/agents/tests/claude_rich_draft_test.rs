@@ -20,6 +20,89 @@ async fn key(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
         .unwrap()
 }
 
+#[tokio::test]
+async fn claude_plain_paste_held_frame_cannot_submit_a_restored_native_draft() {
+    let mut retries = Vec::new();
+    for stash in ["empty", "captured", "existing"] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-held-plain-frame");
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        let clock = runtime.test_submission_clock().unwrap();
+        clock.pause();
+        let original = "developer draft";
+        paint(
+            &runtime,
+            if stash == "captured" { original } else { "" },
+            stash == "existing",
+            "initial",
+        );
+        let completion = runtime
+            .queue_observed_input_with_inspector(
+                Bytes::from_static(b"from bus"),
+                Bytes::from_static(b"\r"),
+                vec![
+                    Bytes::from_static(b"\x01"),
+                    Bytes::from_static(b"\x0b"),
+                    Bytes::from_static(b"\x15"),
+                ],
+                Duration::ZERO,
+                None,
+                Box::new(PreservingComposer::new(
+                    AgentKind::Claude,
+                    "from bus".into(),
+                    directory.clone(),
+                    vec![
+                        Bytes::from_static(b"\x13"),
+                        Bytes::from_static(b"\x07"),
+                        Bytes::from_static(b"\x7f"),
+                    ],
+                )),
+            )
+            .unwrap();
+        if stash == "captured" {
+            assert_eq!(key(&mut writes).await.as_ref(), b"\x13");
+            paint(&runtime, "", true, "native draft stashed");
+        }
+        assert_eq!(key(&mut writes).await.as_ref(), b"from bus");
+        paint(&runtime, "from bus", stash != "empty", "Bus paste rendered");
+        assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+        clock.wait_for_enters(1);
+        // Claude consumed Enter, restoring a developer stash when present,
+        // but its repaint is held outside Bus. The parsed frame still contains Bus.
+        let generation = clock.advance(Duration::from_millis(300));
+        clock.wait_for_submission_check(generation);
+        let stale_retry = writes.try_recv().ok();
+        // Even a later repaint retaining Bus must not permit a stash retry.
+        let mut stash_retry = None;
+        if stash != "empty" && stale_retry.is_none() {
+            paint(&runtime, "from bus", true, "unrelated repaint");
+            let generation = clock.advance(Duration::from_millis(300));
+            clock.wait_for_submission_check(generation);
+            stash_retry = writes.try_recv().ok();
+        }
+        paint(
+            &runtime,
+            if stash == "empty" { "" } else { original },
+            false,
+            "consumption repaint released",
+        );
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        if directory.exists() {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+        if stale_retry.is_some() || stash_retry.is_some() {
+            retries.push((stash, stale_retry, stash_retry));
+        }
+        assert!(writes.try_recv().is_err());
+    }
+    assert!(
+        retries.is_empty(),
+        "held/native-stash frames authorized another Enter: {retries:?}"
+    );
+}
+
 async fn delayed_paste(painted_before_receipt: bool, unrelated_output: bool) {
     let directory = crate::utils::test_temp::unique_temp_path("claude-delayed-rich-paste");
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);

@@ -6,10 +6,11 @@ use crate::messaging::model::{Provider, RequestPhase, RuntimeStatus};
 use serde_json::json;
 
 #[tokio::test]
-async fn provider_fixture_descheduling_does_not_expire_a_committed_submission() {
+async fn claude_fixture_descheduling_requires_rendered_composer_before_enter() {
     for real_time in [true, false] {
-        // Claude retains its writer-receipt contract; Codex additionally needs
-        // a consumption frame within its native confirmation window.
+        // A writer receipt alone does not prove Claude rendered the Bus draft.
+        // A three-second deschedule fits the hard deadline. Both clocks must
+        // permit the eventual owned frame and subsequent consumption.
         let mut f = Delivery::new(&[Provider::ClaudeCode], false);
         let agent = f.agents[0];
         if real_time {
