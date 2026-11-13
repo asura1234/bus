@@ -22,7 +22,7 @@ impl BusState {
                 continue;
             }
             let orchestrator = alert.sender.and_then(|id| self.feishu_target(id));
-            // The first physical DM owns a fixed window; repeats never extend it.
+            // The newest confirmed DM owns a fixed window; aliases never extend it.
             // Legacy records lack ask_body and cannot safely be grouped by text.
             if let Some(record) = self
                 .feishu
@@ -39,7 +39,7 @@ impl BusState {
                             .checked_sub(record.created_at_ms)
                             .is_some_and(|age| age < 30 * 60_000)
                 })
-                .min_by_key(|record| (record.created_at_ms, record.source.prompt_id))
+                .max_by_key(|record| (record.created_at_ms, record.source.prompt_id))
             {
                 record.aliases.push(AlertRoute {
                     source: alert.source,

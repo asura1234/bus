@@ -154,3 +154,62 @@ fn feishu_outbox_keeps_an_unbound_worker_without_selecting_another_orchestrator(
     let code = prepare(&mut state, unbound, worker);
     assert_eq!(state.feishu.outbox[&code].orchestrator, None);
 }
+
+#[test]
+fn feishu_new_confirmed_repeat_root_owns_later_aliases() {
+    let (mut state, work, _, worker) = fixture();
+    let add = |state: &mut BusState, now| {
+        let previous = state.clone();
+        let source = state
+            .post_to_developer(
+                work,
+                worker,
+                "[waiting-on-you] Choose rollout".into(),
+                vec![],
+                now,
+            )
+            .unwrap();
+        state.prepare_feishu_alerts(&previous, "/tmp/private-bus-session", "ou_developer", now);
+        source
+    };
+    let first = add(&mut state, 1_000);
+    let first_code = state
+        .feishu
+        .outbox
+        .values()
+        .find(|record| record.source.prompt_id == first)
+        .unwrap()
+        .code
+        .clone();
+    // The explicit repeat is admitted while the original send has no receipt.
+    let repeated = add(&mut state, 11_000);
+    let repeated_code = state
+        .feishu
+        .outbox
+        .values()
+        .find(|record| record.source.prompt_id == repeated)
+        .unwrap()
+        .code
+        .clone();
+    assert_ne!(first_code, repeated_code);
+    // Serial transport can subsequently return receipts for both sends.
+    state
+        .complete_feishu_send(&first_code, "om_first", "oc_dm")
+        .unwrap();
+    state
+        .complete_feishu_send(&repeated_code, "om_repeat", "oc_dm")
+        .unwrap();
+    let later = add(&mut state, 21_000);
+    assert_eq!(state.feishu.outbox.len(), 2);
+    let new_root = &state.feishu.outbox[&repeated_code];
+    assert_eq!(
+        new_root.aliases.len(),
+        1,
+        "the explicit repeat became the new root under decision 49695"
+    );
+    assert_eq!(new_root.aliases[0].source.prompt_id, later);
+    assert!(
+        state.feishu.outbox[&first_code].aliases.is_empty(),
+        "a late old receipt must not take aliases back from the new root"
+    );
+}
