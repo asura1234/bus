@@ -90,9 +90,10 @@ peer-only. The owner does not forward a second copy of a verdict or result.
 Any agent may message the developer directly, workers from their own room. It
 had better be important.
 
-**`[waiting-on-you]` means a hard blocker** and pages the developer on Feishu,
-wherever they are. Use it only when work is stopped and only the developer can
-unstop it:
+<a id="waiting-on-you"></a>
+
+**`[waiting-on-you]` means a hard blocker** (legacy spelling: `[waiting_on_you]`).
+Use it only when work is stopped and only the developer can unstop it:
 
 - an authorization or login only they hold (Figma, a provider account);
 - a physical action (unlock or plug in a device);
@@ -100,8 +101,23 @@ unstop it:
 - a product decision with no basis to recommend, after the orchestrator
   couldn't decide.
 
-Put the tag first, then the one action needed:
-`[waiting-on-you] Unlock the iPhone 14 so the verifier can install build 6bd4393.`
+Make each ask self-contained for a developer answering from their phone: give
+the context, decision, options and recommendation, answerable in one line. Put
+the tag first; do not rely on earlier chat or attachments. For example:
+`[waiting-on-you] Build 6bd4393 verification needs the iPhone 14 unlocked. Unlock now (recommended) or defer? Reply unlocked/defer.`
+
+With the optional `feishu-bridge` installed and configured, each ask gets its own
+Feishu DM. The developer can use Feishu Reply; the correlated reply arrives at
+the recorded orchestrator as a normal developer instruction with `in_reply_to`
+provenance. Act on it like a MASTER message and answer only through Bus.
+Without the bridge, Feishu is off: asks remain one-way TUI alerts, and the
+developer answers in Bus.
+
+Do not re-page the same ask. Repeats by the same agent within 30 minutes of the
+first confirmed DM fold into it, and a reply answers them all. Plain DMs without
+Feishu Reply need the alert's `bus:CODE`; unmatched replies are parked and logged,
+never guessed. See [developer notifications](https://github.com/asura1234/bus/blob/master/docs/developer-notifications.md)
+for bridge setup and routing details.
 
 Never tag "when convenient" chores, status, results or FYIs. They are not
 blockers.

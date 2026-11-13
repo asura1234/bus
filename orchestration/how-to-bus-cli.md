@@ -78,18 +78,18 @@ upgrades do not insert task turns into existing conversations with saved instruc
 For a developer-only request from any room:
 
 ```sh
-bus send --room ROOM --as AGENT --to you --text '[waiting-on-you] Approve access.'
+bus send --room ROOM --as AGENT --to you --text '[waiting-on-you] Authorize staging access for build 6bd4393 or defer? Recommend authorize so verification can finish. Reply authorize/defer.'
 # An orchestrator can report in MASTER (human is the compatibility alias):
 bus send --room master --as claude-orch --to human --text 'Merged PR #N.'
 ```
 
 `@you` in prose means the developer; use `--to you` in the CLI. The message
 stays in its conversation, with no agent request to wait for. Only hard blockers
-use `[waiting-on-you]` (or legacy `[waiting_on_you]`), which also sends a Feishu
-DM. Agent posts to You and explicit @you/blocker markers alert the TUI; peer
-traffic saying merely “waiting on you” does not page the developer. See
-[developer notifications](../docs/developer-notifications.md) for setup, burst
-format and deduplication. Developer sends never notify.
+use `[waiting-on-you]` (or legacy `[waiting_on_you]`). Follow the
+[waiting-on-you guidance](bus-communication-guide.md#waiting-on-you) for
+self-contained asks, optional Feishu replies and repeat asks. Agent posts to You
+and explicit @you/blocker markers alert the TUI; peer traffic saying merely
+“waiting on you” does not page the developer. Developer sends never notify.
 
 ## Send work and wait for the reply
 ```sh

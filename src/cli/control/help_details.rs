@@ -430,9 +430,11 @@ settles that request as agent_deleted. No binding/match is command_failed.
 --to you (human alias, case-insensitive) requires an agent author and one recipient; no
 queue/async or mixed agent list. It stays in this room with requests:[],stage:posted.
 Agent posts to you always notify the developer in the TUI in every room; only
-[waiting-on-you] (or [waiting_on_you]) also sends a mandatory Feishu DM. Reserve
-that tag for hard blockers. The YOU checkbox controls audio only; developer sends
-never notify. See docs/developer-notifications.md for setup and deduplication.
+[waiting-on-you] (or [waiting_on_you]) also sends a Feishu DM when the optional
+feishu-bridge is installed and configured. Reserve that tag for hard blockers;
+follow orchestration/bus-communication-guide.md#waiting-on-you for asks and replies.
+The YOU checkbox controls audio only; developer sends never notify.
+See docs/developer-notifications.md for setup, reply routing and deduplication.
 Use --file repeatedly; attachments are validated before queueing.
 Ordinary agent-authored requests to orchestrators get independent queued turns
 and replies, without steering or coalescing. Developer steering is unchanged.

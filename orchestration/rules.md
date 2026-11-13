@@ -147,13 +147,11 @@ the wrapper remains held.
 
 <a id="waiting-on-you"></a>
 
-- **Mark requests for the developer with `[waiting_on_you]` (or `[waiting-on-you]`).** When you need
-  something from the developer, put `[waiting_on_you]` or `[waiting-on-you]` before it in your MASTER
-  message; Bus notifies the developer on Feishu only for these requests. State the action on the
-  same line or the next line or bullet. This notifies regardless of the room or
-  agent terminal open, or terminal focus, when Feishu notifications
-  is enabled. Routine progress stays untagged. *Why:* an explicit request makes
-  it clear when the developer needs to act.
+- **Mark hard blockers for the developer with `[waiting-on-you]` (or `[waiting_on_you]`).**
+  Put the tag before the decision or action in your MASTER message; routine
+  progress stays untagged. Follow the [waiting-on-you guidance](bus-communication-guide.md#waiting-on-you)
+  for self-contained phone asks, developer authority of Feishu replies, Bus-only
+  answers, optional bridge availability and the rule against re-paging.
 
 - **Let Bus identify the sender.** Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for numeric or historical names. Send only the body; do not add a "from X", "X here" or signature line.
   Include this instruction in every worker brief. Agents can message any agent
