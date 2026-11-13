@@ -92,7 +92,7 @@ pub(super) fn command(path: &str) -> String {
         }
         "state" => STATE,
         "feishu ingest" => {
-            "Read exactly one feishu-bridge v1 JSON message from stdin (maximum 128 KiB).\n--instance must be an absolute session root or registry base; --app-id must match\nthe configured bridge app. This sink bypasses inherited caller identity and the\nlast-opened session. Registry replies must identify exactly one saved session.\nResult: a control JSON acknowledgement after durable delivery or parking; exit 0\nacknowledges acceptance. Errors: invalid input, unknown/ambiguous registry mapping,\nan offline target or a failed save exit nonzero so the bridge retains its spool.\nNo listener, Feishu send, Bus launch or UI error is created by this command."
+            "Read exactly one feishu-bridge v1 JSON message from stdin (maximum 128 KiB).\n--instance must be an absolute session root or registry base; --app-id must match\nthe configured bridge app. This sink bypasses inherited caller identity and the\nlast-opened session. Unknown/ambiguous registry replies park durably.\nResult: a control JSON acknowledgement after durable delivery or parking; exit 0\nacknowledges acceptance. Invalid input, unauthenticated senders, an offline target\nor a failed save exit nonzero so the bridge retains its spool.\nNo listener, Feishu send, Bus launch or UI error is created by this command."
         }
         "room create" => ROOM_CREATE,
         "room rename" => ROOM_RENAME,

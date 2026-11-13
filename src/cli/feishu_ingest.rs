@@ -1,14 +1,13 @@
 //! Bridge sink: select the recorded private instance without caller inference.
 mod registry;
+mod routing;
 use crate::messaging::{
     control::{self, Request, Response},
     feishu::ingest::Message,
-    model::{feishu::IncomingReply, BusState},
-    storage::state_store::JsonStore,
+    model::feishu::IncomingReply,
 };
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
     io::{self, Read},
     path::{Path, PathBuf},
 };
@@ -90,7 +89,10 @@ fn ingest_with(
     if !registry && instance.join("state.json").is_file() {
         return dispatch(&instance, app, event, &mut send);
     }
-    registry::ingest(&instance, app, event, normalized, &mut send)
+    if !registry {
+        return Err("Feishu sink instance is neither a session nor a registry".into());
+    }
+    registry::ingest(&instance, app, event, normalized, &mut send, routing::read)
 }
 
 fn dispatch(
@@ -121,83 +123,10 @@ enum Target {
     Parked(&'static str),
 }
 
-fn select_instance(instance: &Path, input: &IncomingReply) -> Result<Target, String> {
-    let entries = std::fs::read_dir(instance.join("sessions"))
-        .map_err(|_| "Feishu sink instance is neither a session nor a registry")?;
-    let mut receipts = BTreeSet::new();
-    let mut references = BTreeSet::new();
-    for entry in entries {
-        let entry = entry.map_err(|_| "Cannot inspect Bus session registry")?;
-        if !entry
-            .file_type()
-            .map_err(|_| "Cannot inspect Bus registry entry")?
-            .is_dir()
-        {
-            continue;
-        }
-        let root =
-            std::fs::canonicalize(entry.path()).map_err(|_| "Cannot resolve Bus session root")?;
-        let Some(state) = JsonStore::new(root.join("state.json"))
-            .load()
-            .map_err(|error| format!("Cannot inspect Bus routing state: {error}"))?
-        else {
-            continue;
-        };
-        if state.feishu.inbox.contains_key(&input.key()) {
-            receipts.insert(root.clone());
-        }
-        if state.feishu.resolve(input).is_ok() || references_session(&state, input) {
-            references.insert(root);
-        }
-    }
-    let candidates = if receipts.is_empty() {
-        references
-    } else {
-        receipts
-    };
-    if candidates.len() != 1 {
-        return Ok(Target::Parked(if candidates.is_empty() {
-            "Unknown Feishu reply; no mapped Bus session"
-        } else {
-            "Ambiguous Feishu reply; multiple Bus sessions match"
-        }));
-    }
-    candidates
-        .into_iter()
-        .next()
-        .map(Target::Session)
-        .ok_or_else(|| "Unknown Feishu reply".into())
-}
-
-/// Include evidence that a per-session resolver rejects locally, so references
-/// split across sessions cannot become a false unique match elsewhere.
-fn references_session(state: &BusState, input: &IncomingReply) -> bool {
-    input
-        .reply_to
-        .iter()
-        .chain(input.root_id.iter())
-        .any(|message| {
-            state
-                .feishu
-                .outbox
-                .values()
-                .any(|record| record.message_id.as_ref() == Some(message))
-                || state
-                    .feishu
-                    .inbox
-                    .contains_key(&format!("{}:{message}", input.app_id))
-        })
-        || input.text.split_whitespace().any(|word| {
-            let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':');
-            word.strip_prefix("bus:")
-                .is_some_and(|code| state.feishu.outbox.contains_key(code))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::model::feishu_fixture;
+    use crate::messaging::{model::feishu_fixture, storage::state_store::JsonStore};
 
     struct Fixture {
         base: PathBuf,
@@ -398,6 +327,21 @@ mod tests {
                 .unwrap()
                 .result,
             replay.result
+        );
+        let mut edited_parent: Value =
+            serde_json::from_slice(&wire(None, "Edited parent without a code")).unwrap();
+        edited_parent["message_id"] = json!("om_parent");
+        assert_eq!(
+            ingest_with(
+                &f.base,
+                "cli_test",
+                serde_json::to_vec(&edited_parent).unwrap().as_slice(),
+                &mut control
+            )
+            .unwrap()
+            .result["stage"],
+            "delivered",
+            "an edited replay still finds its canonical session receipt"
         );
         let state = JsonStore::new(f.second.join("state.json"))
             .load()
@@ -634,5 +578,79 @@ mod tests {
             ["om_parent", "om_z_first", "om_a_second"],
             "late ancestry must preserve the original bridge acceptance order among siblings"
         );
+    }
+
+    #[test]
+    fn feishu_registry_parked_receipts_do_not_multiply_history_loads() {
+        for referenced in [false, true] {
+            let f = Fixture::new();
+            for index in 0..40 {
+                let mut event: Value = serde_json::from_slice(&wire(
+                    referenced.then_some("om_not_a_bus_parent"),
+                    "Unmapped",
+                ))
+                .unwrap();
+                event["message_id"] = json!(format!("om_pending_{index}"));
+                assert_eq!(
+                    ingest_with(
+                        &f.base,
+                        "cli_test",
+                        serde_json::to_vec(&event).unwrap().as_slice(),
+                        |_, _| panic!("unknown reference cannot dispatch")
+                    )
+                    .unwrap()
+                    .result["stage"],
+                    "parked"
+                );
+            }
+            let bytes = wire(
+                referenced.then_some("om_still_unknown"),
+                "New unmatched input",
+            );
+            let (event, input) = read_input(bytes.as_slice(), "cli_test").unwrap();
+            let mut loads = Vec::new();
+            let response = registry::ingest(
+                &f.base,
+                "cli_test",
+                event,
+                input,
+                &mut |_, _| panic!("unknown reference cannot dispatch"),
+                |root| {
+                    loads.push(root.to_owned());
+                    routing::read(root)
+                },
+            )
+            .unwrap();
+            assert_eq!(response.result["stage"], "parked");
+            loads.sort();
+            let mut expected = vec![
+                f.first.canonicalize().unwrap(),
+                f.second.canonicalize().unwrap(),
+            ];
+            expected.sort();
+            assert_eq!(
+                loads, expected,
+                "one invocation loads each history once, independent of forty parked receipts"
+            );
+            let journal: Value =
+                serde_json::from_slice(&std::fs::read(f.base.join("feishu-inbox.json")).unwrap())
+                    .unwrap();
+            assert_eq!(journal.as_object().unwrap().len(), 41);
+        }
+    }
+
+    #[test]
+    fn feishu_sink_uninitialized_directory_never_creates_a_registry_receipt() {
+        let f = Fixture::new();
+        std::fs::rename(f.base.join("sessions"), f.base.join("saved-sessions")).unwrap();
+        assert!(ingest_with(
+            &f.base,
+            "cli_test",
+            wire(None, "Unknown").as_slice(),
+            |_, _| panic!("not an instance")
+        )
+        .unwrap_err()
+        .contains("neither a session nor a registry"));
+        assert!(!f.base.join("feishu-inbox.json").exists());
     }
 }

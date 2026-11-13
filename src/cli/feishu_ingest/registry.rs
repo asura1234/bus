@@ -1,5 +1,9 @@
 //! Unresolved registry input is accepted without inventing a destination session.
-use super::{dispatch, select_instance, IncomingReply, Request, Response, Target, Value};
+use super::{
+    dispatch,
+    routing::{self, ReadResult, Routes},
+    IncomingReply, Request, Response, Target, Value,
+};
 use crate::messaging::{feishu::Client, prefs::settings, storage::io};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -23,6 +27,7 @@ pub(super) fn ingest(
     event: Value,
     input: IncomingReply,
     send: &mut impl FnMut(&Path, &Request) -> Result<Response, String>,
+    mut read: impl FnMut(&Path) -> ReadResult,
 ) -> Result<Response, String> {
     let settings = settings::load(&root.join("settings.json"))?;
     if input.sender_id != settings.feishu_recipient {
@@ -43,6 +48,8 @@ pub(super) fn ingest(
         Err(error) => return Err(error.to_string()),
     };
     let key = input.key();
+    let mut routes = Routes::default();
+    let mut dispatched = None;
     let response = if let Some(receipt) = receipts.get(&key) {
         if receipt.input.sender_id != input.sender_id || receipt.input.chat_id != input.chat_id {
             return Err("Feishu replay identity does not match the accepted message".into());
@@ -51,7 +58,10 @@ pub(super) fn ingest(
         // A successful handoff already owns a durable coordinator receipt.
         if let Some(target) = &receipt.target {
             match dispatch(target, app, receipt.event.clone(), send) {
-                Ok(response) => response,
+                Ok(response) => {
+                    dispatched = Some(target.clone());
+                    response
+                }
                 Err(error) => {
                     log_pending(&error);
                     Response::success(
@@ -67,8 +77,12 @@ pub(super) fn ingest(
             )
         }
     } else {
-        match select_instance(root, &input)? {
-            Target::Session(target) => dispatch(&target, app, event, send)?,
+        match routes.select(root, &input, &mut read)? {
+            Target::Session(target) => {
+                let response = dispatch(&target, app, event, send)?;
+                dispatched = Some(target);
+                response
+            }
             Target::Parked(reason) => {
                 let outcome = json!({"stage":"parked", "reason":reason});
                 let accepted_order = receipts
@@ -94,21 +108,41 @@ pub(super) fn ingest(
             }
         }
     };
+    if let Some(target) = dispatched {
+        routes.refresh(&target, &mut read)?;
+    }
     if let Some(receipt) = receipts.get_mut(&key).filter(|r| r.target.is_some()) {
         receipt.outcome = response.result.clone();
         save(&path, &receipts)?;
     }
+    reconcile(root, &path, &mut receipts, &mut routes, send, &mut read)?;
+    if let Some(receipt) = receipts.get(&key) {
+        if receipt.target.is_some() {
+            return Ok(Response::success(&response.id, receipt.outcome.clone()));
+        }
+    }
+    Ok(response)
+}
+
+fn reconcile(
+    root: &Path,
+    path: &Path,
+    receipts: &mut BTreeMap<String, Receipt>,
+    routes: &mut Routes,
+    send: &mut impl FnMut(&Path, &Request) -> Result<Response, String>,
+    read: &mut impl FnMut(&Path) -> ReadResult,
+) -> Result<(), String> {
     // A later parent or outbound mapping can make a parked route exact. The
     // journal remains the durable acceptance owner until its coordinator acks.
     for _ in 0..receipts.len() {
         let mut progress = false;
         let mut pending: Vec<_> = receipts
             .values_mut()
-            .filter(|r| r.target.is_none())
+            .filter(|r| r.target.is_none() && routing::has_references(&r.input))
             .collect();
         pending.sort_by_key(|receipt| receipt.accepted_order);
         for receipt in pending {
-            let target = match select_instance(root, &receipt.input) {
+            let target = match routes.select(root, &receipt.input, read) {
                 Ok(Target::Session(target)) => target,
                 Ok(Target::Parked(_)) => continue,
                 Err(error) => {
@@ -119,7 +153,8 @@ pub(super) fn ingest(
             match dispatch(&target, &receipt.input.app_id, receipt.event.clone(), send) {
                 Ok(response) => {
                     receipt.outcome = response.result;
-                    receipt.target = Some(target);
+                    receipt.target = Some(target.clone());
+                    routes.refresh(&target, read)?;
                     progress = true;
                 }
                 Err(error) => log_pending(&error),
@@ -128,14 +163,9 @@ pub(super) fn ingest(
         if !progress {
             break;
         }
-        save(&path, &receipts)?;
+        save(path, receipts)?;
     }
-    if let Some(receipt) = receipts.get(&key) {
-        if receipt.target.is_some() {
-            return Ok(Response::success(&response.id, receipt.outcome.clone()));
-        }
-    }
-    Ok(response)
+    Ok(())
 }
 
 fn save(path: &Path, receipts: &BTreeMap<String, Receipt>) -> Result<(), String> {
