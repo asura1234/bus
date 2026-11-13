@@ -653,4 +653,58 @@ mod tests {
         .contains("neither a session nor a registry"));
         assert!(!f.base.join("feishu-inbox.json").exists());
     }
+
+    #[test]
+    fn feishu_registry_failed_snapshot_is_not_reloaded_for_every_parked_receipt() {
+        let f = Fixture::new();
+        for index in 0..40 {
+            let mut event: Value =
+                serde_json::from_slice(&wire(Some("om_not_a_bus_parent"), "Unmapped")).unwrap();
+            event["message_id"] = json!(format!("om_pending_{index}"));
+            assert_eq!(
+                ingest_with(
+                    &f.base,
+                    "cli_test",
+                    serde_json::to_vec(&event).unwrap().as_slice(),
+                    |_, _| panic!("unknown reference cannot dispatch")
+                )
+                .unwrap()
+                .result["stage"],
+                "parked"
+            );
+        }
+        // One unreadable saved session must not cause all historical states to
+        // be reread separately for every already accepted pending message.
+        std::fs::write(f.second.join("state.json"), b"{").unwrap();
+        let mut replay: Value =
+            serde_json::from_slice(&wire(Some("om_not_a_bus_parent"), "Unmapped")).unwrap();
+        replay["message_id"] = json!("om_pending_0");
+        let bytes = serde_json::to_vec(&replay).unwrap();
+        let (event, input) = read_input(bytes.as_slice(), "cli_test").unwrap();
+        let mut loads = Vec::new();
+        let mut failed_reads = 0;
+        let response = registry::ingest(
+            &f.base,
+            "cli_test",
+            event,
+            input,
+            &mut |_, _| panic!("unreadable routing state must not dispatch"),
+            |root| {
+                loads.push(root.to_owned());
+                let result = routing::read(root);
+                if result.is_err() {
+                    failed_reads += 1;
+                }
+                result
+            },
+        )
+        .unwrap();
+        assert_eq!(response.result["stage"], "parked");
+        assert_eq!(failed_reads, 1,
+            "a failed routing snapshot is attempted once per ingress, not once per pending receipt; total real reads: {}", loads.len());
+        assert!(
+            loads.len() <= 2,
+            "at most one attempted two-session snapshot: {loads:?}"
+        );
+    }
 }

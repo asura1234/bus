@@ -21,7 +21,7 @@ pub(super) fn read(root: &Path) -> ReadResult {
 
 #[derive(Default)]
 pub(super) struct Routes {
-    sessions: Option<Sessions>,
+    sessions: Option<Result<Sessions, String>>,
 }
 
 impl Routes {
@@ -31,30 +31,34 @@ impl Routes {
         input: &IncomingReply,
         read: &mut impl FnMut(&Path) -> ReadResult,
     ) -> Result<Target, String> {
-        if self.sessions.is_none() {
-            let entries = std::fs::read_dir(root.join("sessions"))
-                .map_err(|_| "Feishu sink instance is neither a session nor a registry")?;
-            let mut sessions = Vec::new();
-            for entry in entries {
-                let entry = entry.map_err(|_| "Cannot inspect Bus session registry")?;
-                if !entry
-                    .file_type()
-                    .map_err(|_| "Cannot inspect Bus registry entry")?
-                    .is_dir()
-                {
-                    continue;
+        let sessions = self
+            .sessions
+            .get_or_insert_with(|| {
+                let entries = std::fs::read_dir(root.join("sessions"))
+                    .map_err(|_| "Feishu sink instance is neither a session nor a registry")?;
+                let mut sessions = Vec::new();
+                for entry in entries {
+                    let entry = entry.map_err(|_| "Cannot inspect Bus session registry")?;
+                    if !entry
+                        .file_type()
+                        .map_err(|_| "Cannot inspect Bus registry entry")?
+                        .is_dir()
+                    {
+                        continue;
+                    }
+                    let root = std::fs::canonicalize(entry.path())
+                        .map_err(|_| "Cannot resolve Bus session root")?;
+                    if let Some(state) = read(&root)? {
+                        sessions.push((root, state));
+                    }
                 }
-                let root = std::fs::canonicalize(entry.path())
-                    .map_err(|_| "Cannot resolve Bus session root")?;
-                if let Some(state) = read(&root)? {
-                    sessions.push((root, state));
-                }
-            }
-            self.sessions = Some(sessions);
-        }
+                Ok(sessions)
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
         let mut receipts = BTreeSet::new();
         let mut references = BTreeSet::new();
-        for (root, state) in self.sessions.iter().flatten() {
+        for (root, state) in sessions {
             if state.inbox.contains_key(&input.key()) {
                 receipts.insert(root.clone());
             }
@@ -86,7 +90,7 @@ impl Routes {
         root: &Path,
         read: &mut impl FnMut(&Path) -> ReadResult,
     ) -> Result<(), String> {
-        if let Some(sessions) = &mut self.sessions {
+        if let Some(Ok(sessions)) = &mut self.sessions {
             match read(root)? {
                 Some(state) => {
                     if let Some((_, saved)) = sessions.iter_mut().find(|(path, _)| path == root) {
