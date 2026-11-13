@@ -157,6 +157,24 @@ impl Worker {
     ) -> Result<Value, String> {
         let read_source = control_read_source(source, lines)?;
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
+        if let Some(snapshot) = super::super::exit_snapshot::startup_snapshot(agent) {
+            // Return only persisted evidence. The shell may now host something
+            // else; this does not inspect it or grant any adoption/input authority.
+            return Ok(json!({
+                "agent_id":id,"name":agent.name,"status":agent.status,
+                "current_request":agent.current_request,
+                "runtime":{
+                    "launch_id":agent.runtime_identity.launch_id,
+                    "session_id":agent.runtime_identity.session_id,
+                    "session_verified":false,
+                    "pane_id":agent.runtime_identity.pane_id,
+                    "terminal_id":agent.runtime_identity.terminal_id,
+                },
+                "capture":{"source":"exit_snapshot","at_ms":snapshot.at_ms,"note":"Saved startup exit evidence; current terminal was not read"},
+                "exit_snapshot":snapshot,
+                "text":snapshot.notice(),
+            }));
+        }
         let target = agent
             .runtime_identity
             .pane_id

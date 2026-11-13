@@ -46,6 +46,42 @@ impl BusState {
         Ok(())
     }
 
+    /// Add late evidence to this startup's already-closed, never-submitted work.
+    /// This changes diagnosis only; completion, queues and input authority stand.
+    pub(crate) fn refresh_failed_startup_requests(&mut self, id: AgentId, detail: &str) {
+        let Some(agent) = self.agents.get(&id) else {
+            return;
+        };
+        let Some(startup) = agent.startup.as_ref().filter(|startup| startup.reported) else {
+            return;
+        };
+        let Some(previous) = startup.failure.as_ref().map(super::StartupFailure::notice) else {
+            return;
+        };
+        for request in self.requests.values_mut() {
+            if request.agent_id == id
+                && request.phase == RequestPhase::Abandoned
+                && !request.bus_generated
+                && !request.uncertain_outcome
+                && request.latency.native_requested_at_ms.is_none()
+                && request
+                    .completed_at_ms
+                    .is_some_and(|at| at >= startup.started_at_ms)
+                && request
+                    .expected_launch_id
+                    .as_ref()
+                    .is_none_or(|launch| Some(launch) == agent.runtime_identity.launch_id.as_ref())
+                && matches!(
+                    request.failure_reason.as_deref(),
+                    Some(super::AGENT_STARTUP_FAILED | super::CODEX_BOOTSTRAP_FAILED)
+                )
+                && request.submission_error.as_deref() == Some(previous.as_str())
+            {
+                request.submission_error = Some(detail.into());
+            }
+        }
+    }
+
     /// Close sender-authored work that never reached provider input, preserving its diagnosis.
     pub(crate) fn abandon_failed_startup_queue(&mut self, id: AgentId, now_ms: u64) {
         let Some(failure) = self

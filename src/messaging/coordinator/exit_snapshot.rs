@@ -99,6 +99,17 @@ pub(super) fn save(
         .map_err(|e| e.to_string())
 }
 
+/// Return only archived startup evidence for this exact launch and attempt.
+pub(super) fn startup_snapshot(agent: &RoomAgent) -> Option<&ExitSnapshot> {
+    let startup = agent.startup.as_ref()?;
+    let snapshot = agent.exit_snapshot.as_ref()?;
+    (agent.runtime_identity.launch_id.is_some()
+        && snapshot.launch_id == agent.runtime_identity.launch_id
+        && Some(&snapshot.terminal_id) == agent.runtime_identity.terminal_id.as_ref()
+        && snapshot.at_ms >= startup.started_at_ms)
+        .then_some(snapshot)
+}
+
 impl Worker {
     /// Close each worker terminal whose exit snapshot is now durable, even
     /// with a command running in its shell, then report the exit. A refused
