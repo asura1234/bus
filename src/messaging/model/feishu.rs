@@ -217,7 +217,7 @@ impl BusState {
             self.feishu
                 .inbox
                 .get_mut(&key)
-                .unwrap()
+                .ok_or("Feishu reply receipt disappeared during alias reconciliation")?
                 .alias_outcomes
                 .extend(outcomes);
         }
