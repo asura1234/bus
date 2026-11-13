@@ -453,3 +453,101 @@ fn late_startup_evidence_preserves_other_failure_diagnostics() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+// A positive native exit is sufficient even when no poll saw the provider.
+#[test]
+fn early_startup_exit_reports_provider_error_without_waiting_for_timeout() {
+    let (mut worker, agent, _, dir, request) = failed_startup();
+    let mut stored = json!(worker.state);
+    stored["agents"][agent.0.to_string()]["startup"]["process_observed"] = json!(false);
+    worker
+        .save(serde_json::from_value(stored).unwrap())
+        .unwrap();
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    let infos = worker.poll().unwrap().unwrap();
+    worker
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 1)
+        .unwrap();
+    let a = worker.state.agent(agent).unwrap();
+    assert!(a.startup.as_ref().unwrap().reported);
+    let error = a.actionable_error.as_deref().unwrap();
+    let snapshot = a.exit_snapshot.as_ref().unwrap();
+    assert!(snapshot.path.as_ref().unwrap().is_file());
+    assert!(error.contains(BOOTSTRAP_ERROR), "{error}");
+    assert!(error.contains("provider exited during startup"), "{error}");
+    assert!(!error.contains("within 30 seconds"), "{error}");
+    let request = worker.state.request(request).unwrap();
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert!(request.latency.native_requested_at_ms.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn early_startup_exit_requires_positive_owned_native_evidence() {
+    struct UnprovenExit(&'static str);
+    impl Transport for UnprovenExit {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let unreadable = || TransportError {
+                timestamps: Default::default(),
+                code: Some("transport_unavailable".into()),
+                message: "native read unavailable".into(),
+                definitely_rejected: false,
+            };
+            match method {
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Err(unreadable())
+                }
+                Method::PaneGet(params) if self.0 != "transport" => Ok(ResponseResult::PaneInfo {
+                    pane: serde_json::from_value(json!({
+                        "pane_id":params.pane_id,
+                        "terminal_id":if self.0 == "replacement" { "foreign" } else { "terminal" },
+                        "workspace_id":"w1","tab_id":"t1","focused":false,
+                        "agent_status":"unknown","revision":1,
+                        "agent_process_exited":self.0 == "replacement"
+                    }))
+                    .unwrap(),
+                }),
+                Method::PaneGet(_) => Err(unreadable()),
+                other => panic!("unproven exit must not capture or retry: {other:?}"),
+            }
+        }
+    }
+    for case in ["transport", "replacement", "absent"] {
+        let (mut worker, agent, room, dir) = pending(Provider::Codex);
+        let request = queue(&mut worker, room, agent, "wait for positive exit evidence");
+        worker.transport = Box::new(UnprovenExit(case));
+        let start = worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .startup
+            .as_ref()
+            .unwrap()
+            .started_at_ms;
+        assert!(
+            worker.poll().unwrap().is_none(),
+            "failed list is not an empty list"
+        );
+        worker
+            .cleanup_failed_startups(&[], &mpsc::channel().0, start + 1)
+            .unwrap();
+        let a = worker.state.agent(agent).unwrap();
+        assert!(!a.startup.as_ref().unwrap().reported, "{case}");
+        assert!(a.exit_snapshot.is_none(), "{case}");
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued,
+            "{case}"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

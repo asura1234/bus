@@ -1078,3 +1078,6 @@ mod verified_launch;
 #[cfg(unix)]
 #[path = "kimi_wire_launch_test.rs"]
 mod kimi_wire_launch;
+
+#[path = "early_startup_exit_test.rs"]
+mod early_startup_exit;

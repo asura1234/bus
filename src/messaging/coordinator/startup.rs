@@ -354,7 +354,7 @@ impl Worker {
                 let reason = if let Some(reason) = native_error {
                     reason
                 } else if process_exited {
-                    "the native provider launch ended before startup was confirmed"
+                    "provider exited during startup"
                 } else {
                     "no provider session or interactive confirmation within 30 seconds"
                 };

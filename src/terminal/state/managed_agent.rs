@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
-use super::{AgentNameOwner, ManagedAgent, ManagedAgentPhase, TerminalState};
+use super::{
+    AgentNameOwner, ManagedAgent, ManagedAgentPhase, RecentAgentProcessExit, TerminalState,
+};
 use crate::agents::{AgentKind, AgentState};
 
 impl TerminalState {
@@ -290,6 +292,19 @@ impl TerminalState {
             kind,
             phase: ManagedAgentPhase::Active,
         }));
+    }
+
+    /// The caller has authenticated this owned launch's return to its shell.
+    /// Preserve that exit even when process detection never acquired the provider.
+    pub(crate) fn record_managed_startup_exit(&mut self, now: Instant) {
+        if self.managed_agent_awaiting_startup() {
+            if let Some(agent) = self.managed_agent_kind() {
+                self.recent_agent_process_exit = Some(RecentAgentProcessExit {
+                    agent,
+                    observed_at: now,
+                });
+            }
+        }
     }
 
     pub fn clear_agent_name(&mut self) {

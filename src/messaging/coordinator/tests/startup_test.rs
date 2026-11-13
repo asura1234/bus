@@ -326,7 +326,7 @@ fn startup_observed_process_exit_fails_before_deadline() {
         .actionable_error
         .as_deref()
         .unwrap()
-        .contains("launch ended"));
+        .contains("provider exited during startup"));
     assert_eq!(
         worker
             .state
@@ -916,7 +916,7 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
     assert_eq!(status.result["complete"], true);
     let detail = status.result["requests"][0]["detail"].as_str().unwrap();
     assert!(
-        detail.contains("launch ended") && detail.contains("Resend"),
+        detail.contains("provider exited during startup") && detail.contains("Resend"),
         "{detail}"
     );
     worker.state.retain_worker_outcomes(io::now_ms());
@@ -998,7 +998,7 @@ fn startup_failure_abandons_new_sends_with_persistent_recovery_detail() {
         .clone()
         .unwrap();
     assert!(
-        detail.contains("launch ended") && detail.contains("Resend"),
+        detail.contains("provider exited during startup") && detail.contains("Resend"),
         "{detail}"
     );
     assert!(state.queued_requests(agent).is_empty());
