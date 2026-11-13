@@ -52,7 +52,8 @@ impl App {
             tabs,
             panes: self.collect_panes_for_workspace(None).unwrap_or_default(),
             layouts,
-            agents: self.collect_agent_infos(),
+            // Rendering shares the list's freshness rules without parsing every pane.
+            agents: self.collect_cached_agent_infos(),
         }
     }
 }
@@ -108,5 +109,164 @@ mod tests {
             snapshot.focused_pane_id.as_deref(),
             Some(snapshot.panes[0].pane_id.as_str())
         );
+    }
+
+    fn app_with_snapshot_agent() -> (crate::server::app::App, crate::utils::ids::PaneId) {
+        let mut app = app_with_two_tabs();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane)
+            .unwrap()
+            .seen = true;
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        let native = app.state.terminals.get_mut(&terminal).unwrap();
+        native.set_agent_name("snapshot-worker".into());
+        native.set_detected_state(
+            Some(crate::agents::AgentKind::Claude),
+            crate::agents::AgentState::Idle,
+        );
+        let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"ready");
+        app.state.insert_test_runtime(pane, runtime);
+        (app, pane)
+    }
+
+    fn assert_snapshot_status(
+        app: &crate::server::app::App,
+        expected: crate::protocol::api::schema::AgentStatus,
+    ) {
+        let session = app.session_snapshot();
+        assert_eq!(session.agents.len(), 1);
+        assert_eq!(session.agents[0].agent_status, expected);
+        let shell = crate::server::rendering::snapshot::snapshot(app, "test", 1, None, None);
+        assert_eq!(shell.agents.len(), 1);
+        assert_eq!(shell.agents[0].agent_status, expected);
+        assert_eq!(shell.agents[0].pane_id, session.agents[0].pane_id);
+        assert_eq!(shell.agents[0].name, session.agents[0].name);
+    }
+
+    #[tokio::test]
+    async fn session_snapshot_agent_cache_requires_publication_after_launch_and_restart() {
+        use crate::agents::{AgentKind, AgentState};
+        use crate::protocol::api::schema::AgentStatus;
+        let (mut app, pane) = app_with_snapshot_agent();
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        let now = std::time::Instant::now();
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .begin_managed_agent(
+                "snapshot-worker".into(),
+                AgentKind::Claude,
+                now,
+                std::time::Duration::ZERO,
+                std::time::Duration::from_secs(10),
+            );
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+        assert_snapshot_status(&app, AgentStatus::Unknown);
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .reconcile_managed_agent_at(now + std::time::Duration::from_secs(1), false);
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_publish_screen_detection(AgentKind::Claude);
+        assert_snapshot_status(&app, AgentStatus::Idle);
+        assert!(!app.session_snapshot().agents[0].screen_detection_skipped);
+        // A restored runtime must not inherit the old runtime's ready publication.
+        app.state.insert_test_runtime(
+            pane,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"restored"),
+        );
+        assert_snapshot_status(&app, AgentStatus::Unknown);
+        assert!(app.session_snapshot().agents[0].screen_detection_skipped);
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_publish_screen_detection(AgentKind::Claude);
+        assert_snapshot_status(&app, AgentStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn session_snapshot_agent_cache_keeps_positive_busy_state_across_gaps() {
+        use crate::agents::{AgentKind, AgentState};
+        use crate::protocol::api::schema::AgentStatus;
+        let (mut app, pane) = app_with_snapshot_agent();
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        for (native, expected) in [
+            (AgentState::Working, AgentStatus::Working),
+            (AgentState::Blocked, AgentStatus::Blocked),
+        ] {
+            app.state
+                .terminals
+                .get_mut(&terminal)
+                .unwrap()
+                .set_detected_state(Some(AgentKind::Claude), native);
+            assert_snapshot_status(&app, expected);
+            assert!(app.session_snapshot().agents[0].screen_detection_skipped);
+        }
+    }
+
+    #[tokio::test]
+    async fn session_snapshot_agent_cache_dialog_matches_fresh_viewport_after_scroll() {
+        use crate::agents::{AgentKind, AgentState};
+        use crate::protocol::api::schema::AgentStatus;
+        let (mut app, pane) = app_with_snapshot_agent();
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Claude), AgentState::Blocked);
+        let (runtime, _writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 200_000, b"", 2,
+            );
+        runtime.test_process_pty_bytes("historical output\r\n".repeat(80).as_bytes());
+        runtime.test_process_pty_bytes(b"\x1b[H\x1b[JContinue? [y/n]");
+        app.state.insert_test_runtime(pane, runtime);
+        let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+        runtime.test_publish_screen_detection(AgentKind::Claude);
+        let fresh = app.agent_info(0, pane).unwrap();
+        assert!(fresh.dialog_id.is_some());
+        assert_eq!(app.session_snapshot().agents[0].dialog_id, fresh.dialog_id);
+        assert_snapshot_status(&app, AgentStatus::Blocked);
+        runtime.scroll_up(60);
+        assert!(app.agent_info(0, pane).unwrap().dialog_id.is_none());
+        assert!(app.session_snapshot().agents[0].screen_detection_skipped);
+        assert!(app.session_snapshot().agents[0].dialog_id.is_none());
+        assert_snapshot_status(&app, AgentStatus::Blocked);
+        runtime.test_publish_screen_detection(AgentKind::Claude);
+        assert_eq!(
+            app.session_snapshot().agents[0].dialog_id,
+            app.agent_info(0, pane).unwrap().dialog_id
+        );
+        runtime.scroll_reset();
+        assert!(app.session_snapshot().agents[0].screen_detection_skipped);
+        runtime.test_publish_screen_detection(AgentKind::Claude);
+        assert_eq!(app.session_snapshot().agents[0].dialog_id, fresh.dialog_id);
+        // Closing a dialog does not expose stale Idle while its frame is pending.
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Hready");
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+        assert_snapshot_status(&app, AgentStatus::Unknown);
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_publish_screen_detection(AgentKind::Claude);
+        let published = &app.session_snapshot().agents[0];
+        assert!(published.dialog_id.is_none());
+        assert_eq!(
+            published.agent_status,
+            app.agent_info(0, pane).unwrap().agent_status
+        );
+        assert_snapshot_status(&app, AgentStatus::Idle);
     }
 }
