@@ -200,12 +200,26 @@ fn failure_cause(
     if now < record.deadline_at_ms || record.dialog_wait_started_at_ms.is_some() {
         return None;
     }
+    if !agent.session_binding_invalidated && live_screen_gap(agent, info) {
+        // No current frame can prove a screen-derived startup timeout. Definite
+        // failures above and a missing session hook remain independent evidence.
+        return None;
+    }
     Some(if agent.session_binding_invalidated {
         "session_hook_missing"
     } else if info.is_some_and(|i| i.agent_status == schema::AgentStatus::Blocked) {
         "blocked_timeout"
     } else {
         "startup_timeout"
+    })
+}
+
+fn live_screen_gap(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> bool {
+    info.is_some_and(|info| {
+        info.screen_detection_skipped
+            && info.native_ready
+            && Some(info.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+            && Some(info.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
     })
 }
 
@@ -274,7 +288,10 @@ pub(super) fn observe(
             && Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
             && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
     });
-    state.observe_launch_dialog(agent.id, waiting_on_dialog, now);
+    // Positive waits still count, but an unread live frame cannot close one.
+    if waiting_on_dialog || !live_screen_gap(&agent, info) {
+        state.observe_launch_dialog(agent.id, waiting_on_dialog, now);
+    }
     let Some(record) = state.current_launch_attempt(agent.id) else {
         return Ok(());
     };
@@ -283,6 +300,7 @@ pub(super) fn observe(
             .as_deref()
             .is_some_and(|label| agent.provider.observes_label(label))
             && i.native_ready
+            && !i.screen_detection_skipped
             && i.interactive_ready
             && !i.launch_pending
             && i.dialog_id.is_none()

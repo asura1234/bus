@@ -9,6 +9,7 @@ mod io;
 mod launch_env;
 mod launch_transaction;
 mod read;
+mod screen_detection;
 mod shell_integration;
 mod shell_launch;
 #[cfg(test)]
@@ -174,6 +175,7 @@ pub struct TerminalRuntime {
     /// Semantic navigation state is owned exclusively by the terminal driver.
     driver_state: crate::terminal::driver::DriverState,
     detection_content_seq: Arc<AtomicU64>,
+    screen_detection: Arc<screen_detection::ScreenDetectionCache>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<detection_context::DetectionContext>>,
     kimi_code_home: Arc<Mutex<Option<std::path::PathBuf>>>,

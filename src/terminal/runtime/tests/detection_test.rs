@@ -552,7 +552,8 @@ async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visibl
         Arc::new(AtomicU32::new(pid)),
         runtime.terminal.clone(),
         events,
-        Arc::new(AtomicU64::new(0)),
+        runtime.detection_content_seq.clone(),
+        runtime.screen_detection.clone(),
         Arc::new(Notify::new()),
         Arc::new(RenderSignal::new()),
         Arc::new(Mutex::new(None)),
@@ -668,4 +669,119 @@ fn a_pending_exit_keeps_its_leader_until_the_agent_is_cleared() {
     assert_eq!(leader, named);
     track_agent_leader(&mut leader, None, false, Some(1));
     assert_eq!(leader, None);
+}
+
+// The cached list and fresh AgentGet must identify the same open dialog, or
+// the coordinator's two-poll steadiness check reseeds forever.
+#[tokio::test]
+async fn cached_dialog_id_matches_fresh_viewport_after_clear_with_scrollback() {
+    let mut bytes = Vec::new();
+    for line in 0..40 {
+        bytes.extend_from_slice(format!("history line {line}\r\n").as_bytes());
+    }
+    bytes.extend_from_slice(b"\x1b[H\x1b[J");
+    bytes.extend_from_slice(
+        b"Overwrite the existing config file?\r\nThis cannot be undone.\r\nContinue? [y/n] ",
+    );
+    let runtime = TerminalRuntime::test_with_scrollback_bytes(80, 24, 1 << 20, &bytes);
+    runtime
+        .screen_detection
+        .observe(&runtime.terminal, Some(AgentKind::Claude), false);
+    let cached = runtime
+        .cached_screen_detection(Some(AgentKind::Claude))
+        .expect("current cached detection")
+        .dialog(false);
+    let (grid, _) = crate::terminal::driver::observe(&runtime).unwrap();
+    let fresh = crate::terminal::driver::blocker(&grid, false);
+    assert!(fresh.is_some(), "fixture must show a dialog");
+    assert_eq!(
+        cached, fresh,
+        "cached list and fresh AgentGet disagree on the dialog id"
+    );
+}
+
+#[tokio::test]
+async fn cached_dialog_tracks_scrolled_viewport_without_pty_output() {
+    let mut bytes = Vec::new();
+    for line in 0..80 {
+        bytes.extend_from_slice(format!("history line {line}\r\n").as_bytes());
+    }
+    bytes.extend_from_slice(b"\x1b[H\x1b[JContinue? [y/n] ");
+    let runtime = TerminalRuntime::test_with_scrollback_bytes(80, 24, 1 << 20, &bytes);
+    runtime
+        .screen_detection
+        .observe(&runtime.terminal, Some(AgentKind::Claude), false);
+    assert!(runtime
+        .cached_screen_detection(Some(AgentKind::Claude))
+        .unwrap()
+        .dialog(false)
+        .is_some());
+    runtime.scroll_up(24);
+    let (grid, _) = crate::terminal::driver::observe(&runtime).unwrap();
+    let fresh = crate::terminal::driver::blocker(&grid, false);
+    assert!(
+        fresh.is_none(),
+        "the live prompt must be outside this viewport"
+    );
+    runtime.screen_detection.prepare_test_tick();
+    runtime
+        .screen_detection
+        .observe(&runtime.terminal, Some(AgentKind::Claude), false);
+    assert_eq!(
+        runtime
+            .cached_screen_detection(Some(AgentKind::Claude))
+            .unwrap()
+            .dialog(false),
+        fresh
+    );
+    runtime.scroll_reset();
+    assert!(
+        runtime
+            .cached_screen_detection(Some(AgentKind::Claude))
+            .is_none(),
+        "viewport motion must invalidate facts before another publication"
+    );
+    runtime.screen_detection.prepare_test_tick();
+    runtime
+        .screen_detection
+        .observe(&runtime.terminal, Some(AgentKind::Claude), false);
+    let (grid, _) = crate::terminal::driver::observe(&runtime).unwrap();
+    let fresh = crate::terminal::driver::blocker(&grid, false);
+    assert!(fresh.is_some());
+    assert_eq!(
+        runtime
+            .cached_screen_detection(Some(AgentKind::Claude))
+            .unwrap()
+            .dialog(false),
+        fresh
+    );
+}
+
+#[tokio::test]
+async fn cached_dialog_matches_wide_viewport_rows_and_alternate_screen() {
+    for alternate in [false, true] {
+        let mut bytes = (0..40)
+            .map(|n| format!("old history {n}\r\n"))
+            .collect::<String>();
+        if alternate {
+            bytes.push_str("\x1b[?1049h");
+        }
+        bytes.push_str("\x1b[H\x1b[JOverwrite 設定 e\u{301} 🌙?\r\nContinue? [y/n] ");
+        let runtime =
+            TerminalRuntime::test_with_scrollback_bytes(80, 24, 1 << 20, bytes.as_bytes());
+        runtime
+            .screen_detection
+            .observe(&runtime.terminal, Some(AgentKind::Claude), false);
+        let (grid, _) = crate::terminal::driver::observe(&runtime).unwrap();
+        assert!(crate::terminal::driver::blocker(&grid, false).is_some());
+        for working in [false, true] {
+            assert_eq!(
+                runtime
+                    .cached_screen_detection(Some(AgentKind::Claude))
+                    .unwrap()
+                    .dialog(working),
+                crate::terminal::driver::blocker(&grid, working)
+            );
+        }
+    }
 }

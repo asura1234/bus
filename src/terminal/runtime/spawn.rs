@@ -1,3 +1,4 @@
+use super::{detection_task::spawn_detection_task, screen_detection::ScreenDetectionCache};
 use crate::agents::AgentKind;
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::terminal::emulator::PaneTerminal;
@@ -7,7 +8,6 @@ use crate::terminal::pty::actor::PtyIoActorConfig;
 #[cfg(unix)]
 use crate::terminal::pty::fd;
 use crate::terminal::runtime::compression::TerminalCompressionTask;
-use crate::terminal::runtime::detection_task::spawn_detection_task;
 use crate::terminal::runtime::io::PaneRuntimeIo;
 use crate::terminal::runtime::read::{pty_read_callback, PtyReadContext};
 use crate::terminal::runtime::AgentDetection;
@@ -710,6 +710,7 @@ impl TerminalRuntime {
         let child_instance = initial_child_instance(spawned.child.process_id());
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let screen_detection = Arc::new(ScreenDetectionCache::new(content_seq.clone()));
         spawn_child_watcher(
             pane_id,
             spawned.child,
@@ -728,6 +729,7 @@ impl TerminalRuntime {
                 content_seq: content_seq.clone(),
                 content_write_lock: content_write_lock.clone(),
                 detection_content_seq: detection_content_seq.clone(),
+                screen_detection: screen_detection.clone(),
                 child_pid: child_pid.clone(),
                 events: events.clone(),
                 reported_cwd: reported_cwd.clone(),
@@ -755,6 +757,7 @@ impl TerminalRuntime {
             terminal.clone(),
             events.clone(),
             detection_content_seq.clone(),
+            screen_detection.clone(),
             render_notify.clone(),
             render_dirty.clone(),
             kimi_code_home.clone(),
@@ -779,6 +782,7 @@ impl TerminalRuntime {
             detection_content_seq,
             managed_launch_pending,
             detection_context,
+            screen_detection,
             kimi_code_home,
             #[cfg(unix)]
             shared_codex: Arc::new(Mutex::new(None)),

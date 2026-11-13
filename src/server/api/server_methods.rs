@@ -52,16 +52,14 @@ type PaneApiState = (
 );
 
 impl HeadlessServer {
-    /// Drains API requests with shutdown awareness.
-    ///
-    /// During shutdown, remaining requests get a `server_unavailable` error.
+    /// Handle one queued request, allowing input/render work between API calls.
+    /// Shutdown rejection drains the remaining queue separately.
     pub(in crate::server) fn drain_api_requests_with_shutdown_check(&mut self) -> bool {
         let mut changed = false;
-        while !self.should_quit.load(Ordering::Acquire) {
-            let Ok(msg) = self.app.api_rx.try_recv() else {
-                break;
-            };
-            changed |= self.handle_timed_api_request(msg);
+        if !self.should_quit.load(Ordering::Acquire) {
+            if let Ok(msg) = self.app.api_rx.try_recv() {
+                changed |= self.handle_timed_api_request(msg);
+            }
         }
         changed
     }

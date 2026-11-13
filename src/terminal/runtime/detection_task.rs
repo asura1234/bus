@@ -12,7 +12,6 @@ use crate::terminal::runtime::detection_policy::DetectionScreenReadDecision;
 use crate::terminal::runtime::detection_policy::DetectionScreenReadInput;
 use crate::terminal::runtime::detection_policy::PendingIdleConfirmation;
 use crate::terminal::runtime::detection_policy::ScreenDetectionPublishInput;
-use crate::terminal::runtime::detection_policy::AGENT_PENDING_IDLE_RECHECK;
 use crate::terminal::runtime::detection_policy::AGENT_STARTUP_GRACE_WINDOW;
 use crate::terminal::runtime::detection_process::apply_foreground_shell_agent_action;
 use crate::terminal::runtime::detection_process::clear_osc_evidence_for_agent_transition;
@@ -157,6 +156,7 @@ pub(super) fn spawn_detection_task(
     terminal: Arc<PaneTerminal>,
     events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    screen_detection: Arc<super::screen_detection::ScreenDetectionCache>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
     kimi_code_home: Arc<Mutex<Option<PathBuf>>>,
@@ -183,6 +183,7 @@ pub(super) fn spawn_detection_task(
         render_dirty,
         kimi_code_home,
         detection_context: detection_context.clone(),
+        screen_detection,
     };
     let handle = tokio::spawn(task.run(initial_agent));
     (
@@ -192,16 +193,13 @@ pub(super) fn spawn_detection_task(
     )
 }
 
-const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
-const TICK_IDENTIFIED: Duration = Duration::from_millis(300);
-const TICK_TRANSIENT_COLOR_OVERRIDE: Duration = Duration::from_millis(50);
-
 struct DetectionTask {
     pane_id: PaneId,
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
     state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
+    screen_detection: Arc<super::screen_detection::ScreenDetectionCache>,
     managed_launch_pending: Arc<AtomicBool>,
     detection_context: Arc<Mutex<super::detection_context::DetectionContext>>,
     render_notify: Arc<Notify>,
@@ -274,10 +272,12 @@ impl DetectionTask {
         let mut status = DetectionState::new(initial_agent);
         tokio::time::sleep(Duration::from_millis(50)).await;
         loop {
-            tokio::time::sleep(self.tick_delay(&status)).await;
+            let mut agent = status.agent_presence.current_agent();
+            self.screen_detection
+                .wait_until(&self.terminal, agent, self.tick_delay(&status))
+                .await;
             let now = Instant::now();
             let pid = self.child_pid.load(Ordering::Acquire);
-            let mut agent = status.agent_presence.current_agent();
             let (foreground_pgid, process_group_changed, should_check_process) =
                 self.observe_foreground_group(&mut status, pid, now);
             let mut agent_changed = false;
@@ -333,15 +333,11 @@ impl DetectionTask {
     }
 
     fn tick_delay(&self, status: &DetectionState) -> Duration {
-        if self.terminal.has_transient_default_color_override() {
-            TICK_TRANSIENT_COLOR_OVERRIDE
-        } else if status.pending_idle.active() {
-            AGENT_PENDING_IDLE_RECHECK
-        } else if status.agent_presence.current_agent().is_none() {
-            TICK_UNIDENTIFIED
-        } else {
-            TICK_IDENTIFIED
-        }
+        super::detection_policy::detection_tick_delay(
+            self.terminal.has_transient_default_color_override(),
+            status.pending_idle.active(),
+            status.agent_presence.current_agent().is_some(),
+        )
     }
 
     fn observe_foreground_group(
@@ -371,7 +367,8 @@ impl DetectionTask {
         let foreground_observation_due = should_observe_foreground_process_group(
             last_content_seq != Some(content_seq)
                 && (last_content_seq.is_some()
-                    || now.duration_since(status.last_observation.0) >= TICK_IDENTIFIED),
+                    || now.duration_since(status.last_observation.0)
+                        >= super::detection_policy::TICK_IDENTIFIED),
             process_probe_input,
         );
         #[cfg(not(windows))]
@@ -544,6 +541,8 @@ impl DetectionTask {
                 status.last_screen_scan_detection_content_seq = None;
                 status.pending_idle.clear();
             } else {
+                self.screen_detection
+                    .observe_if_stale(&self.terminal, status.agent_presence.current_agent());
                 if now < until {
                     status.pending_idle.clear();
                     return true;
@@ -582,7 +581,9 @@ impl DetectionTask {
         match decide_detection_screen_read(DetectionScreenReadInput {
             state: status.state,
             agent,
-            pending_idle_active: status.pending_idle.active() || has_obligation,
+            pending_idle_active: status.pending_idle.active()
+                || has_obligation
+                || self.screen_detection.needs_refresh(agent),
             agent_changed,
             process_exited,
             current_detection_content_seq,
@@ -592,7 +593,9 @@ impl DetectionTask {
             DetectionScreenReadDecision::Skip => return,
         }
 
-        let content = self.terminal.detection_text();
+        let content = self
+            .screen_detection
+            .observe(&self.terminal, agent, process_exited);
         let pty_activity = current_detection_content_seq
             .is_some_and(|seq| seq != status.last_screen_scan_detection_content_seq.unwrap_or(0));
         status.last_screen_scan_detection_content_seq = current_detection_content_seq;
@@ -801,6 +804,43 @@ mod blocked_tests {
     // represents the same generic stop with no safe automatic submission.
     const UPDATE: &str = "New version available: 2.4.1\n❯ Install update now\n  Continue with current version\n↑/↓ to select, Enter to confirm";
 
+    #[tokio::test]
+    async fn startup_grace_publishes_screen_facts_without_advancing_lifecycle() {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        runtime.test_process_pty_bytes(b"Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n");
+        let (events, mut received) = mpsc::channel(16);
+        let task = DetectionTask {
+            pane_id: runtime.pane_id,
+            child_pid: runtime.child_pid.clone(),
+            terminal: runtime.terminal.clone(),
+            state_events: events,
+            detection_content_seq: runtime.detection_content_seq.clone(),
+            managed_launch_pending: runtime.managed_launch_pending.clone(),
+            detection_context: runtime.detection_context.clone(),
+            screen_detection: runtime.screen_detection.clone(),
+            render_notify: Arc::new(Notify::new()),
+            render_dirty: Arc::new(RenderSignal::new()),
+            kimi_code_home: Arc::new(Mutex::new(None)),
+        };
+        let now = Instant::now();
+        let mut status = DetectionState::new(Some(AgentKind::Grok));
+        status.state = AgentState::Unknown;
+        status.agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
+        assert!(task.startup_grace_blocks_read(&mut status, now, false));
+        let facts = runtime
+            .cached_screen_detection(Some(AgentKind::Grok))
+            .expect("startup grace must not hide a live compaction banner");
+        assert!(facts.compaction_banner);
+        assert_eq!(status.state, AgentState::Unknown);
+        assert!(received.try_recv().is_err());
+        assert!(writes.try_recv().is_err());
+        runtime.test_process_pty_bytes(b"\x1b[?2026hpartial redraw");
+        assert!(task.startup_grace_blocks_read(&mut status, now, false));
+        assert!(runtime
+            .cached_screen_detection(Some(AgentKind::Grok))
+            .is_none());
+    }
+
     async fn scan_with_obligation(
         screen: &str,
         startup: bool,
@@ -857,6 +897,7 @@ mod blocked_tests {
             kind: Option<AgentKind>,
             previous: AgentState,
         ) -> (AgentState, Option<TerminalEvent>) {
+            self.screen_detection.prepare_test_tick();
             let (events, mut received) = mpsc::channel(16);
             let task = DetectionTask {
                 pane_id: self.pane_id,
@@ -866,6 +907,7 @@ mod blocked_tests {
                 detection_content_seq: self.detection_content_seq.clone(),
                 managed_launch_pending: self.managed_launch_pending.clone(),
                 detection_context: self.detection_context.clone(),
+                screen_detection: self.screen_detection.clone(),
                 render_notify: Arc::new(Notify::new()),
                 render_dirty: Arc::new(RenderSignal::default()),
                 kimi_code_home: Arc::new(Mutex::new(None)),
@@ -988,6 +1030,7 @@ mod blocked_tests {
             detection_content_seq: runtime.detection_content_seq.clone(),
             managed_launch_pending: runtime.managed_launch_pending.clone(),
             detection_context: runtime.detection_context.clone(),
+            screen_detection: runtime.screen_detection.clone(),
             render_notify: Arc::new(Notify::new()),
             render_dirty: Arc::new(RenderSignal::default()),
             kimi_code_home: Arc::new(Mutex::new(None)),
@@ -1034,6 +1077,62 @@ mod blocked_tests {
         );
         assert!(writes.try_recv().is_err());
         (initial_text, runtime.detection_text())
+    }
+
+    #[tokio::test]
+    async fn partial_frame_cache_retries_do_not_renew_pty_activity() {
+        let (runtime, mut writes) = super::super::TerminalRuntime::test_with_channel(100, 30);
+        runtime.set_detection_context(
+            AgentKind::Kimi,
+            true,
+            None,
+            Some(Box::new(|_: &str| {
+                super::super::InputObservation::Unavailable
+            })),
+        );
+        feed_pty(&runtime, b"Tool output is still arriving\r\n\x1b[?2026h");
+        let (events, _received) = mpsc::channel(16);
+        let task = DetectionTask {
+            pane_id: runtime.pane_id,
+            child_pid: runtime.child_pid.clone(),
+            terminal: runtime.terminal.clone(),
+            state_events: events,
+            detection_content_seq: runtime.detection_content_seq.clone(),
+            managed_launch_pending: runtime.managed_launch_pending.clone(),
+            detection_context: runtime.detection_context.clone(),
+            screen_detection: runtime.screen_detection.clone(),
+            render_notify: Arc::new(Notify::new()),
+            render_dirty: Arc::new(RenderSignal::default()),
+            kimi_code_home: Arc::new(Mutex::new(None)),
+        };
+        let started = Instant::now();
+        let mut status = DetectionState::new(Some(AgentKind::Kimi));
+        status.state = AgentState::Working;
+        for elapsed_ms in [0, 100, 200, 1800, 1900, 2000, 2100] {
+            task.scan_screen(
+                &mut status,
+                Some(AgentKind::Kimi),
+                false,
+                false,
+                false,
+                started + Duration::from_millis(elapsed_ms),
+            )
+            .await;
+            assert_eq!(
+                status.last_pty_activity_at,
+                Some(started),
+                "a cache retry without bytes must not renew Working activity"
+            );
+            assert!(runtime
+                .cached_screen_detection(Some(AgentKind::Kimi))
+                .is_none());
+        }
+        assert_eq!(
+            status.state,
+            AgentState::Blocked,
+            "quiet partial-frame retries must allow the Working hold to expire"
+        );
+        assert!(writes.try_recv().is_err());
     }
 
     #[tokio::test]

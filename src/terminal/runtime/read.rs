@@ -94,6 +94,7 @@ pub(super) struct PtyReadContext {
     pub(super) content_seq: Arc<AtomicU64>,
     pub(super) content_write_lock: Arc<Mutex<()>>,
     pub(super) detection_content_seq: Arc<AtomicU64>,
+    pub(super) screen_detection: Arc<super::screen_detection::ScreenDetectionCache>,
     pub(super) child_pid: Arc<AtomicU32>,
     pub(super) events: mpsc::Sender<TerminalEvent>,
     pub(super) reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
@@ -114,6 +115,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
         content_seq,
         content_write_lock,
         detection_content_seq,
+        screen_detection,
         child_pid,
         events,
         reported_cwd,
@@ -142,6 +144,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
         publish_terminal_bells(pane_id, result.terminal_bells, &events);
         if agent_detection == AgentDetection::Enabled {
             observe_detection_content_change(bytes, &detection_content_seq);
+            screen_detection.notify_changed();
         }
         let title_requested =
             result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
@@ -201,25 +204,35 @@ impl TerminalRuntime {
 
     /// Scroll up by N lines (into scrollback history).
     pub fn scroll_up(&self, lines: usize) {
-        self.terminal.scroll_up(lines);
-        self.compression.wake();
+        self.scroll_viewport(|terminal| terminal.scroll_up(lines));
     }
 
     /// Scroll down by N lines (toward live output).
     pub fn scroll_down(&self, lines: usize) {
-        self.terminal.scroll_down(lines);
-        self.compression.wake();
+        self.scroll_viewport(|terminal| terminal.scroll_down(lines));
     }
 
     /// Reset scroll to live view (offset = 0).
     pub fn scroll_reset(&self) {
-        self.terminal.scroll_reset();
-        self.compression.wake();
+        self.scroll_viewport(PaneTerminal::scroll_reset);
     }
 
     /// Set scrollback offset measured from the live bottom of the terminal.
     pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
-        self.terminal.set_scroll_offset_from_bottom(lines);
+        self.scroll_viewport(|terminal| terminal.set_scroll_offset_from_bottom(lines));
+    }
+
+    fn scroll_viewport(&self, change: impl FnOnce(&PaneTerminal)) {
+        let guard = self
+            .content_write_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
+        change(&self.terminal);
+        self.content_seq.fetch_add(1, Ordering::Release);
+        drop(guard);
+        // Scrolling changes dialog identity, not native output or activity.
+        self.screen_detection.notify_changed();
         self.compression.wake();
     }
 

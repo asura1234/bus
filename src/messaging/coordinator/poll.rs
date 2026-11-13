@@ -60,15 +60,18 @@ impl Worker {
             }
             confirm_interactive_agent(&mut state, agent, info)?;
             super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;
-            state
-                .observe_status(agent.id, status, observed_at_ms)
-                .map_err(|e| e.to_string())?;
+            // Missing screen facts cannot refresh an inconclusive status clock.
+            if status != agent.status || !info.is_some_and(inconclusive_screen) {
+                state
+                    .observe_status(agent.id, status, observed_at_ms)
+                    .map_err(|e| e.to_string())?;
+            }
             Self::observe_grok_banner(&mut state, agent, info, observed_at_ms)?;
             let dialog_id = info.and_then(|info| info.dialog_id.clone());
-            state
-                .observe_dialog(agent.id, dialog_id.is_some(), observed_at_ms)
-                .map_err(|e| e.to_string())?;
-            if info.is_some() {
+            if info.is_some_and(|info| !info.screen_detection_skipped) {
+                state
+                    .observe_dialog(agent.id, dialog_id.is_some(), observed_at_ms)
+                    .map_err(|e| e.to_string())?;
                 waits.push((
                     agent.id,
                     dialog_id.or_else(|| {
@@ -101,14 +104,15 @@ impl Worker {
         observed_at_ms: u64,
     ) -> Result<(), String> {
         // Grok prints a compaction banner instead of Claude's compact hook.
-        // A skipped screen read is not "banner gone".
+        // A missing sample is not "banner gone". A coherent historical
+        // sample still records an observed edge after a newer raw repaint.
         if agent.provider != super::Provider::Grok {
             return Ok(());
         }
         let Some(info) = info else {
             return Ok(());
         };
-        if info.screen_detection_skipped {
+        if info.screen_detection_skipped && !info.compaction_observed {
             return Ok(());
         }
         state
@@ -124,7 +128,7 @@ impl Worker {
         observed_at_ms: u64,
     ) -> Result<(), String> {
         if agent.provider == super::Provider::Cursor {
-            if let Some(info) = info {
+            if let Some(info) = info.filter(|info| !info.screen_detection_skipped) {
                 self.usage.observe_cursor(
                     agent.id,
                     info.provider_error.as_deref(),
@@ -434,6 +438,14 @@ pub(super) fn report_exit(
     Ok(())
 }
 
+fn inconclusive_screen(info: &schema::AgentInfo) -> bool {
+    info.screen_detection_skipped
+        && info.agent_status == schema::AgentStatus::Unknown
+        && info.native_ready
+        && info.interactive_ready
+        && !info.launch_pending
+}
+
 fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {
     info.map_or(RuntimeStatus::Unavailable, |info| {
         if agent.session_binding_invalidated || agent.deletion_pending {
@@ -447,6 +459,9 @@ fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> Runtime
         }
         if !info.interactive_ready {
             return RuntimeStatus::Unavailable;
+        }
+        if inconclusive_screen(info) {
+            return agent.status;
         }
         match info.agent_status {
             schema::AgentStatus::Idle | schema::AgentStatus::Done => RuntimeStatus::Idle,
@@ -689,5 +704,281 @@ mod detection_context_tests {
             None,
             "a submitted request is not proof that its provider turn started"
         );
+    }
+}
+
+#[cfg(test)]
+mod inconclusive_tests {
+    use super::*;
+    use crate::messaging::model::AgentRuntimeIdentity;
+    use crate::messaging::native::{Transport, TransportError};
+    use crate::protocol::api::schema::Method;
+
+    struct PendingScreen(&'static str);
+    impl Transport for PendingScreen {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentListWithDetectionContext(_)));
+            let info = serde_json::from_value(serde_json::json!({
+                "terminal_id":"terminal", "pane_id":"pane", "agent":"kimi",
+                "workspace_id":"w", "tab_id":"t", "focused":false,
+                "agent_status":self.0, "screen_detection_skipped":true,
+                "interactive_ready":true, "native_ready":true, "revision":1
+            }))
+            .unwrap();
+            Ok(ResponseResult::AgentList { agents: vec![info] })
+        }
+    }
+
+    #[test]
+    fn inconclusive_publication_preserves_status_clock_and_dialog() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-pending-screen");
+        let mut worker = Worker::open(root.clone(), Box::new(PendingScreen("unknown"))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(
+                room,
+                "worker",
+                super::super::Provider::Kimi,
+                root.clone(),
+                None,
+            )
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(agent).unwrap();
+        let launch = state.begin_launch_attempt(
+            "worker",
+            super::super::Provider::Kimi,
+            room,
+            crate::messaging::model::LaunchKind::Create,
+            1,
+        );
+        state.attach_launch_attempt(launch, agent).unwrap();
+        let identity = state.agent(agent).unwrap().runtime_identity.clone();
+        state.bind_launch_identity(launch, &identity);
+        state
+            .observe_status(agent, RuntimeStatus::Blocked, 1234)
+            .unwrap();
+        state.observe_dialog(agent, true, 1234).unwrap();
+        worker.save(state).unwrap();
+        worker.poll().unwrap();
+        let current = worker.state.agent(agent).unwrap();
+        assert_eq!(
+            worker.state.launch_attempt(launch).unwrap().outcome,
+            crate::messaging::model::LaunchOutcome::Pending,
+            "a live inconclusive frame must not expire the launch"
+        );
+        assert_eq!(current.status, RuntimeStatus::Blocked);
+        assert_eq!(
+            current.observed_at_ms, 1234,
+            "missing facts must not refresh an idle-inference clock"
+        );
+        assert!(current.dialog, "missing facts cannot close an open dialog");
+        assert!(
+            worker.dialog_seen.is_empty(),
+            "an inconclusive read starts no wait episode"
+        );
+        let mut lost: schema::AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id":"terminal", "pane_id":"pane", "agent":"kimi",
+            "workspace_id":"w", "tab_id":"t", "focused":false,
+            "agent_status":"unknown", "screen_detection_skipped":true,
+            "interactive_ready":false, "native_ready":false, "revision":1
+        }))
+        .unwrap();
+        assert_eq!(
+            polled_status(current, Some(&lost)),
+            RuntimeStatus::Unavailable
+        );
+        lost.interactive_ready = true;
+        assert_eq!(
+            polled_status(current, Some(&lost)),
+            RuntimeStatus::Unavailable,
+            "a lost runtime cannot inherit prior availability"
+        );
+        lost.native_ready = true;
+        lost.launch_pending = true;
+        assert_eq!(
+            polled_status(current, Some(&lost)),
+            RuntimeStatus::Launching
+        );
+        for (native, expected) in [
+            ("working", RuntimeStatus::Working),
+            ("blocked", RuntimeStatus::Blocked),
+        ] {
+            worker.transport = Box::new(PendingScreen(native));
+            worker.poll().unwrap();
+            assert_eq!(worker.state.agent(agent).unwrap().status, expected);
+            assert!(worker.state.agent(agent).unwrap().dialog);
+            assert_eq!(
+                worker.state.launch_attempt(launch).unwrap().outcome,
+                crate::messaging::model::LaunchOutcome::Pending,
+                "an unreadable fingerprint cannot expire a live busy launch"
+            );
+        }
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod cursor_screen_tests {
+    use super::*;
+    use crate::messaging::model::{AgentRuntimeIdentity, Provider};
+    use crate::messaging::native::{Transport, TransportError};
+    use crate::protocol::api::schema::Method;
+    use std::collections::VecDeque;
+
+    struct Frames(VecDeque<schema::AgentInfo>);
+    impl Transport for Frames {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentListWithDetectionContext(_)));
+            Ok(ResponseResult::AgentList {
+                agents: vec![self.0.pop_front().unwrap()],
+            })
+        }
+    }
+
+    #[test]
+    fn skipped_cursor_screen_preserves_quota_until_a_coherent_clear() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-cursor-screen-gap");
+        let now = io::now_ms();
+        let quota = crate::agents::providers::cursor::usage::MONTHLY_USAGE_LIMIT_ERROR;
+        let frames = [(false, Some(quota)), (true, None), (false, None)]
+            .into_iter()
+            .map(|(skipped, error)| {
+                serde_json::from_value(serde_json::json!({
+                    "terminal_id":"terminal", "pane_id":"pane", "agent":"cursor",
+                    "workspace_id":"w", "tab_id":"t", "focused":false,
+                    "agent_status":if skipped { "unknown" } else { "idle" },
+                    "screen_detection_skipped":skipped, "interactive_ready":true,
+                    "native_ready":true, "revision":1, "provider_error":error,
+                    "provider_quota_reset_at":error.map(|_| now / 1000 + 3600)
+                }))
+                .unwrap()
+            })
+            .collect();
+        let mut worker = Worker::open(root.clone(), Box::new(Frames(frames))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Cursor, root.clone(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(agent).unwrap();
+        worker.save(state).unwrap();
+        worker.poll().unwrap();
+        let observed = worker.usage.state_json()["cursor"].clone();
+        assert_eq!(observed["status"], "observed");
+        worker.poll().unwrap();
+        assert_eq!(worker.usage.state_json()["cursor"], observed,
+            "a missing cached frame must neither clear quota evidence nor renew its observation clock");
+        worker.poll().unwrap();
+        assert_eq!(
+            worker.usage.state_json()["cursor"]["status"],
+            "unknown",
+            "a coherent non-quota frame still clears prior screen evidence"
+        );
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod compaction_observation_tests {
+    use super::*;
+    use crate::messaging::model::{AgentRuntimeIdentity, Provider};
+    use crate::messaging::native::{Transport, TransportError};
+    use crate::protocol::api::schema::Method;
+    use std::collections::VecDeque;
+
+    struct Frames(VecDeque<schema::AgentInfo>);
+    impl Transport for Frames {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            assert!(matches!(method, Method::AgentListWithDetectionContext(_)));
+            Ok(ResponseResult::AgentList {
+                agents: vec![self.0.pop_front().unwrap()],
+            })
+        }
+    }
+
+    #[test]
+    fn observed_compaction_edges_survive_skipped_current_frames_but_cold_gaps_do_not_rearm() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-observed-banner");
+        let frames = [
+            (true, true),
+            (false, false),
+            (true, true),
+            (true, false),
+            (true, true),
+        ]
+        .into_iter()
+        .map(|(observed, banner)| {
+            serde_json::from_value(serde_json::json!({
+                "terminal_id":"terminal", "pane_id":"pane", "agent":"grok",
+                "workspace_id":"w", "tab_id":"t", "focused":false,
+                "agent_status":"unknown", "screen_detection_skipped":true,
+                "compaction_observed":observed, "compaction_banner":banner,
+                "interactive_ready":true, "native_ready":true, "revision":1
+            }))
+            .unwrap()
+        })
+        .collect();
+        let mut worker = Worker::open(root.clone(), Box::new(Frames(frames))).unwrap();
+        let mut state = worker.state.clone();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", Provider::Grok, root.clone(), None)
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: None,
+                },
+            )
+            .unwrap();
+        state.confirm_hook_setup(agent).unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 1234)
+            .unwrap();
+        state.observe_dialog(agent, true, 1234).unwrap();
+        worker.save(state).unwrap();
+        for want in [1, 1, 1, 1, 2] {
+            worker.poll().unwrap();
+            let current = worker.state.agent(agent).unwrap();
+            assert_eq!(current.compactions.count, want,
+                "count coherent observed edges even when a later repaint makes the current frame unavailable");
+            assert_eq!(current.status, RuntimeStatus::Idle);
+            assert_eq!(current.observed_at_ms, 1234);
+            assert!(
+                current.dialog,
+                "historical compaction metadata cannot close a current dialog"
+            );
+        }
+        drop(worker);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

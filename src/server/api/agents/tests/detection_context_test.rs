@@ -278,3 +278,374 @@ async fn codex_runtime_keeps_stale_question_activity_working() {
         );
     }
 }
+
+#[tokio::test]
+async fn agent_list_uses_only_current_detector_publications() {
+    let (mut app, mut writes) = app_with_dialog(UPDATE.replace('\n', "\r\n").as_bytes(), None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    fn list(app: &mut App) -> crate::protocol::api::schema::AgentInfo {
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("cached".into())).unwrap();
+        let ResponseResult::AgentList { mut agents } = response.result else {
+            panic!("agent list");
+        };
+        agents.remove(0)
+    }
+    assert!(
+        list(&mut app).screen_detection_skipped,
+        "a poll must not parse a screen before the detector publishes it"
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Unknown)
+        .await;
+    let info = list(&mut app);
+    assert!(!info.screen_detection_skipped);
+    assert!(info.dialog_id.is_some());
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[Hready");
+    assert!(
+        list(&mut app).screen_detection_skipped,
+        "a changed screen must invalidate the old publication"
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Unknown)
+        .await;
+    let info = list(&mut app);
+    assert!(!info.screen_detection_skipped);
+    assert!(info.dialog_id.is_none());
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+    assert!(
+        list(&mut app).screen_detection_skipped,
+        "a publication belongs to one provider incarnation"
+    );
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_process_pty_bytes(b"\x1b[?2026hpartial redraw");
+    runtime
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Idle)
+        .await;
+    assert!(
+        list(&mut app).screen_detection_skipped,
+        "synchronized redraws cannot publish partial metadata"
+    );
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime.test_process_pty_bytes(b"\x1b[?2026l");
+    runtime
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Idle)
+        .await;
+    assert!(!list(&mut app).screen_detection_skipped);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .resize(30, 100, 0, 0);
+    assert!(
+        list(&mut app).screen_detection_skipped,
+        "resize invalidates the publication too"
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Idle)
+        .await;
+    assert!(!list(&mut app).screen_detection_skipped);
+    let (replacement, _replacement_writes) =
+        crate::terminal::TerminalRuntime::test_with_channel(100, 30);
+    app.state.insert_test_runtime(pane, replacement);
+    assert!(
+        list(&mut app).screen_detection_skipped,
+        "a replacement runtime cannot inherit another runtime's publication"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn detector_publications_preserve_dialog_quota_and_compaction_metadata() {
+    for (kind, screen) in [
+        (AgentKind::Kimi, UPDATE),
+        (AgentKind::Claude, "do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel"),
+        (AgentKind::Codex, "• Queued follow-up inputs\n  ? 1 question\n    shift+left to answer\n\n› Ask Codex to do anything\n"),
+        (AgentKind::Cursor, "Error: You've reached your monthly usage limit\nRequest higher limits to continue using Cursor\n > [Pasted text #1 +3 lines]\n / commands · @ files"),
+        (AgentKind::Grok, "Context compacted: 209.9k -> 37.8k tokens (131.2s)\n"),
+    ] {
+        let (mut app, mut writes) = app_with_dialog(screen.replace('\n', "\r\n").as_bytes(), None);
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+        app.state.terminals.get_mut(&terminal).unwrap().set_detected_state(Some(kind), AgentState::Idle);
+        app.lookup_runtime_sender(0, pane).unwrap().test_scan_detection_context(kind, AgentState::Unknown).await;
+        // Working/Idle projection can change independently of screen revision.
+        for state in [AgentState::Idle, AgentState::Working] {
+            app.state.terminals.get_mut(&terminal).unwrap().set_detected_state(Some(kind), state);
+            let fresh = app.agent_info(0, pane).unwrap();
+            let response: SuccessResponse = serde_json::from_str(&app.handle_agent_list("metadata".into())).unwrap();
+            let ResponseResult::AgentList { agents } = response.result else { panic!("list"); };
+            let cached = &agents[0];
+            assert!(!cached.screen_detection_skipped, "{kind:?}");
+            assert_eq!(cached.dialog_id, fresh.dialog_id, "{kind:?} {state:?}");
+            assert_eq!(cached.compaction_banner, fresh.compaction_banner, "{kind:?}");
+            assert_eq!(cached.provider_error, fresh.provider_error, "{kind:?}");
+            assert_eq!(cached.provider_quota_reset_at, fresh.provider_quota_reset_at, "{kind:?}");
+        }
+        assert!(writes.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn agent_list_does_not_wait_for_terminal_observation() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let (mut app, _writes) = app_with_dialog(UPDATE.replace('\n', "\r\n").as_bytes(), None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    runtime
+        .test_scan_detection_context(AgentKind::Kimi, AgentState::Unknown)
+        .await;
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let holder = runtime.test_hold_terminal_observation(held_tx, release_rx);
+    held_rx.recv().unwrap();
+    let (result_tx, result_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("nonblocking".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        result_tx
+            .send(!agents[0].screen_detection_skipped && agents[0].dialog_id.is_some())
+            .unwrap();
+    });
+    let while_observation_held = result_rx.recv_timeout(Duration::from_secs(1));
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    reader.join().unwrap();
+    assert_eq!(
+        while_observation_held,
+        Ok(true),
+        "agent-list projection must not acquire the VT lock"
+    );
+}
+
+#[tokio::test]
+async fn cold_and_replaced_detector_facts_are_unknown_and_cannot_bypass_fresh_guards() {
+    for replaced in [false, true] {
+        let (mut app, params, mut writes) = claude_agent_with_input("❯");
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let dialog = b"\x1b[2J\x1b[HDo you want to proceed?\r\n\xE2\x9D\xAF 1. Yes\r\n  2. No\r\nEsc to cancel";
+        if replaced {
+            app.lookup_runtime_sender(0, pane)
+                .unwrap()
+                .test_publish_screen_detection(AgentKind::Claude);
+            let (runtime, replacement_writes) =
+                crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+            app.state.insert_test_runtime(pane, runtime);
+            writes = replacement_writes;
+        }
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(dialog);
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("cold".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        assert!(agents[0].screen_detection_skipped);
+        assert_eq!(
+            agents[0].agent_status,
+            crate::protocol::api::schema::AgentStatus::Unknown
+        );
+        assert!(
+            app.agent_info(0, pane).unwrap().dialog_id.is_some(),
+            "explicit observation still sees the fresh dialog"
+        );
+        let (send, receive) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_api_request(
+            Request {
+                id: "cold-guard".into(),
+                method: Method::AgentPromptIfIdle(params),
+            },
+            send
+        ));
+        let response = receive
+            .recv_timeout(crate::terminal::runtime::NATIVE_TEST_TIMEOUT)
+            .unwrap();
+        assert!(response.contains("\"error\""), "{response}");
+        assert!(
+            writes.try_recv().is_err(),
+            "a cold cache must not admit input past the fresh dialog guard"
+        );
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_publish_screen_detection(AgentKind::Claude);
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("published".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        assert!(!agents[0].screen_detection_skipped);
+        assert!(agents[0].dialog_id.is_some());
+    }
+}
+
+#[tokio::test]
+async fn missing_screen_metadata_preserves_positive_busy_lifecycle_evidence() {
+    let (mut app, _writes) = app_with_dialog(UPDATE.replace('\n', "\r\n").as_bytes(), None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    for (native, expected) in [
+        (
+            AgentState::Working,
+            crate::protocol::api::schema::AgentStatus::Working,
+        ),
+        (
+            AgentState::Blocked,
+            crate::protocol::api::schema::AgentStatus::Blocked,
+        ),
+    ] {
+        app.state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Claude), native);
+        let response: SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("busy".into())).unwrap();
+        let ResponseResult::AgentList { agents } = response.result else {
+            panic!("list");
+        };
+        assert!(agents[0].screen_detection_skipped);
+        assert_eq!(
+            agents[0].agent_status, expected,
+            "a missing dialog fingerprint must not erase a positive native lifecycle signal"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cached_compaction_observation_survives_a_new_raw_frame_without_proving_idle() {
+    let banner = b"Context compacted: 209.9k -> 37.8k tokens (131.2s)\r\n";
+    let (mut app, mut writes) = app_with_dialog(banner, None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Grok), AgentState::Idle);
+    let cold: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("cold".into())).unwrap();
+    assert_ne!(cold["result"]["agents"][0]["compaction_observed"], true);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_scan_detection_context(AgentKind::Grok, AgentState::Unknown)
+        .await;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    assert!(
+        runtime
+            .cached_screen_detection(Some(AgentKind::Grok))
+            .unwrap()
+            .compaction_banner
+    );
+    // A new raw revision makes the current-screen lease unavailable. It does
+    // not erase the coherent banner the detector actually observed.
+    runtime.test_process_pty_bytes(b"\r");
+    assert!(runtime
+        .cached_screen_detection(Some(AgentKind::Grok))
+        .is_none());
+    let result: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("redraw".into())).unwrap();
+    let info = &result["result"]["agents"][0];
+    assert_eq!(
+        info["compaction_banner"], true,
+        "observed history must not disappear at every raw repaint"
+    );
+    assert_eq!(info["compaction_observed"], true);
+    assert_eq!(info["screen_detection_skipped"], true);
+    assert_eq!(
+        info["agent_status"], "unknown",
+        "historical metadata cannot prove current idle"
+    );
+    assert!(info["dialog_id"].is_null());
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Kimi), AgentState::Idle);
+    let replaced: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("replaced".into())).unwrap();
+    assert_ne!(replaced["result"]["agents"][0]["compaction_observed"], true);
+    assert_ne!(
+        replaced["result"]["agents"][0]["compaction_banner"], true,
+        "a replaced provider cannot inherit another provider's sample"
+    );
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Grok), AgentState::Idle);
+    let (replacement, mut replacement_writes) =
+        crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+    app.state.insert_test_runtime(pane, replacement);
+    let cold_replacement: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_list("new-runtime".into())).unwrap();
+    assert_ne!(
+        cold_replacement["result"]["agents"][0]["compaction_observed"], true,
+        "a new runtime of the same provider starts without historical facts"
+    );
+    assert_ne!(
+        cold_replacement["result"]["agents"][0]["compaction_banner"],
+        true
+    );
+    assert!(replacement_writes.try_recv().is_err());
+    assert!(writes.try_recv().is_err());
+}
+
+#[test]
+fn compaction_sample_availability_decodes_across_old_and_new_peers() {
+    let old_wire = serde_json::json!({
+        "terminal_id":"terminal", "pane_id":"pane", "agent":"grok",
+        "workspace_id":"w", "tab_id":"t", "focused":false,
+        "agent_status":"idle", "revision":1, "compaction_banner":true
+    });
+    let mut current: crate::protocol::api::schema::AgentInfo =
+        serde_json::from_value(old_wire).unwrap();
+    assert!(
+        !current.compaction_observed,
+        "old servers omit the optional availability field"
+    );
+    assert!(!current.screen_detection_skipped);
+    assert!(current.compaction_banner);
+    current.compaction_observed = true;
+    current.screen_detection_skipped = true;
+    #[derive(serde::Deserialize)]
+    struct OldScreenFields {
+        compaction_banner: bool,
+        #[serde(default)]
+        screen_detection_skipped: bool,
+    }
+    let old_client: OldScreenFields =
+        serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
+    assert!(old_client.compaction_banner);
+    assert!(
+        old_client.screen_detection_skipped,
+        "an old peer ignores the new field and still sees the unavailable current frame"
+    );
+}

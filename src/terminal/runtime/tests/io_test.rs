@@ -168,6 +168,7 @@ async fn focus_events_are_forwarded_when_enabled() {
         GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
     ));
     let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+    let content_seq = Arc::new(AtomicU64::new(0));
     let (draft_input, startup_suggestion_open) =
         super::super::draft_input::DraftInput::shared_with_launch_window();
     let runtime = TerminalRuntime {
@@ -184,12 +185,15 @@ async fn focus_events_are_forwarded_when_enabled() {
         reported_cwd: Arc::new(Mutex::new(None)),
         child_wait_completed: None,
         kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
-        content_seq: Arc::new(AtomicU64::new(0)),
+        content_seq: content_seq.clone(),
         content_write_lock: Arc::new(Mutex::new(())),
         draft_input,
         driver_state: Default::default(),
         detection_content_seq: Arc::new(AtomicU64::new(0)),
         managed_launch_pending: Arc::new(AtomicBool::new(false)),
+        screen_detection: Arc::new(super::super::screen_detection::ScreenDetectionCache::new(
+            content_seq,
+        )),
         detection_context: Default::default(),
         kimi_code_home: Arc::new(Mutex::new(None)),
         #[cfg(unix)]
@@ -220,6 +224,7 @@ async fn focus_events_are_suppressed_when_disabled() {
         GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
     ));
     let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+    let content_seq = Arc::new(AtomicU64::new(0));
     let (draft_input, startup_suggestion_open) =
         super::super::draft_input::DraftInput::shared_with_launch_window();
     let runtime = TerminalRuntime {
@@ -236,12 +241,15 @@ async fn focus_events_are_suppressed_when_disabled() {
         reported_cwd: Arc::new(Mutex::new(None)),
         child_wait_completed: None,
         kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
-        content_seq: Arc::new(AtomicU64::new(0)),
+        content_seq: content_seq.clone(),
         content_write_lock: Arc::new(Mutex::new(())),
         draft_input,
         driver_state: Default::default(),
         detection_content_seq: Arc::new(AtomicU64::new(0)),
         managed_launch_pending: Arc::new(AtomicBool::new(false)),
+        screen_detection: Arc::new(super::super::screen_detection::ScreenDetectionCache::new(
+            content_seq,
+        )),
         detection_context: Default::default(),
         kimi_code_home: Arc::new(Mutex::new(None)),
         #[cfg(unix)]

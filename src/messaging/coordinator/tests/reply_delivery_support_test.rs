@@ -26,6 +26,20 @@ fn screen(provider: Provider, draft: &str) -> String {
     format!("\x1b[?2004h\x1b[2J\x1b[H{body}")
 }
 
+fn kind(provider: Provider) -> AgentKind {
+    match provider {
+        crate::agents::providers::ProviderKind::Grok
+        | crate::agents::providers::ProviderKind::Kimi => {
+            panic!("This fixture covers the original providers; use dedicated Grok provider tests")
+        }
+        Provider::ClaudeCode | Provider::ClaudeDs => AgentKind::Claude,
+        Provider::Codex => AgentKind::Codex,
+        Provider::Cursor => AgentKind::Cursor,
+        #[cfg(feature = "dev-tools")]
+        Provider::Fake => AgentKind::Fake,
+    }
+}
+
 struct Terminal {
     pane: crate::utils::ids::PaneId,
     provider: Provider,
@@ -68,19 +82,7 @@ impl NativeServer {
         let terminal_id = ws.tabs[0].panes[&pane].attached_terminal_id.clone();
         self.app.state.workspaces.push(ws);
         self.app.state.ensure_test_terminals();
-        let kind = match provider {
-            crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => {
-                panic!(
-                    "This fixture covers the original providers; use dedicated Grok provider tests"
-                )
-            }
-            Provider::ClaudeCode | Provider::ClaudeDs => AgentKind::Claude,
-            Provider::Codex => AgentKind::Codex,
-            Provider::Cursor => AgentKind::Cursor,
-            #[cfg(feature = "dev-tools")]
-            Provider::Fake => AgentKind::Fake,
-        };
+        let kind = kind(provider);
         let terminal = self.app.state.terminals.get_mut(&terminal_id).unwrap();
         let now = Instant::now();
         terminal.begin_managed_agent(
@@ -105,6 +107,7 @@ impl NativeServer {
         let clock = runtime.test_submission_clock().unwrap();
         clock.pause();
         runtime.test_process_pty_bytes(screen(provider, "").as_bytes());
+        runtime.test_publish_screen_detection(kind);
         self.app.state.insert_test_runtime(pane, runtime);
         let ResponseResult::AgentList { agents } =
             self.request(Method::AgentList(Default::default())).unwrap()
@@ -188,7 +191,8 @@ impl NativeServer {
                         .collect::<String>();
                     screen(terminal.provider, &format!("{chips}{}", terminal.draft))
                 };
-                self.app
+                let runtime = self
+                    .app
                     .state
                     .runtime_for_pane_in_workspace(
                         &self.app.terminal_runtimes,
@@ -200,8 +204,9 @@ impl NativeServer {
                             .unwrap(),
                         terminal.pane,
                     )
-                    .unwrap()
-                    .test_process_pty_bytes(display.as_bytes());
+                    .unwrap();
+                runtime.test_process_pty_bytes(display.as_bytes());
+                runtime.test_publish_screen_detection(kind(terminal.provider));
             }
         }
     }
@@ -549,12 +554,13 @@ impl Delivery {
             .position(|w| w.terminal_id(terminal.pane).is_some())
             .unwrap();
         let normal = screen(terminal.provider, "");
-        server
+        let runtime = server
             .app
             .state
             .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, index, terminal.pane)
-            .unwrap()
-            .test_process_pty_bytes(text.unwrap_or(&normal).as_bytes());
+            .unwrap();
+        runtime.test_process_pty_bytes(text.unwrap_or(&normal).as_bytes());
+        runtime.test_publish_screen_detection(kind(terminal.provider));
     }
     pub(crate) fn request_for_message(&self, id: u64) -> RequestId {
         self.state()

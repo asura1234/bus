@@ -1,6 +1,27 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::agents::{AgentDetection, AgentKind, AgentState};
+
+const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
+pub(super) const TICK_IDENTIFIED: Duration = Duration::from_millis(300);
+const TICK_TRANSIENT_COLOR_OVERRIDE: Duration = Duration::from_millis(50);
+
+pub(super) fn detection_tick_delay(
+    has_transient_color_override: bool,
+    pending_idle_active: bool,
+    has_agent: bool,
+) -> Duration {
+    if has_transient_color_override {
+        TICK_TRANSIENT_COLOR_OVERRIDE
+    } else if pending_idle_active {
+        AGENT_PENDING_IDLE_RECHECK
+    } else if !has_agent {
+        TICK_UNIDENTIFIED
+    } else {
+        TICK_IDENTIFIED
+    }
+}
 
 pub(super) const AGENT_PENDING_IDLE_RECHECK: std::time::Duration =
     std::time::Duration::from_millis(100);

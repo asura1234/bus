@@ -119,6 +119,7 @@ impl TerminalRuntime {
             .terminal
             .process_pty_bytes(self.pane_id, 0, bytes, &tx, |_| None);
         self.content_seq.fetch_add(1, Ordering::Release);
+        self.screen_detection.notify_changed();
         self.compression.wake();
         if let Some(clock) = self.test_submission_clock() {
             clock.rendered();
@@ -158,6 +159,7 @@ impl TerminalRuntime {
             GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
         ));
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        let content_seq = Arc::new(AtomicU64::new(0));
         let (draft_input, startup_suggestion_open) =
             super::draft_input::DraftInput::shared_with_launch_window();
 
@@ -176,12 +178,15 @@ impl TerminalRuntime {
                 reported_cwd: Arc::new(Mutex::new(None)),
                 child_wait_completed: None,
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
-                content_seq: Arc::new(AtomicU64::new(0)),
+                content_seq: content_seq.clone(),
                 content_write_lock: Arc::new(Mutex::new(())),
                 draft_input,
                 driver_state: Default::default(),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 managed_launch_pending: Arc::new(AtomicBool::new(false)),
+                screen_detection: Arc::new(super::screen_detection::ScreenDetectionCache::new(
+                    content_seq,
+                )),
                 detection_context: Default::default(),
                 kimi_code_home: Arc::new(Mutex::new(None)),
                 #[cfg(unix)]
@@ -206,3 +211,28 @@ impl TerminalRuntime {
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) use crate::utils::test_env::env_lock;
+
+#[cfg(test)]
+impl TerminalRuntime {
+    pub(crate) fn test_hold_terminal_observation(
+        &self,
+        held: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<()> {
+        let terminal = self.terminal.clone();
+        std::thread::spawn(move || {
+            let _guard = terminal.ghostty.core.lock().unwrap();
+            held.send(()).unwrap();
+            release.recv().unwrap();
+        })
+    }
+}
+
+#[cfg(test)]
+impl TerminalRuntime {
+    pub(crate) fn test_publish_screen_detection(&self, kind: AgentKind) {
+        self.screen_detection.prepare_test_tick();
+        self.screen_detection
+            .observe(&self.terminal, Some(kind), false);
+    }
+}

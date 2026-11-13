@@ -19,7 +19,15 @@ struct Controls {
 /// Opaque content identity. A pending answer shortcut can coexist with live
 /// activity; only foreground controls interrupt that activity.
 pub(crate) fn blocker(grid: &Grid, working: bool) -> Option<String> {
-    let rows = outside_composer(grid.rows_text());
+    blocker_from_rows(grid.rows_text(), working)
+}
+
+pub(crate) fn blocker_from_text(text: &str, working: bool) -> Option<String> {
+    blocker_from_rows(text.lines().map(str::to_owned).collect(), working)
+}
+
+fn blocker_from_rows(rows: Vec<String>, working: bool) -> Option<String> {
+    let rows = outside_composer(rows);
     let controls = controls(&rows)?;
     if working && controls.kind == ControlKind::Pending {
         return None;

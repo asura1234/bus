@@ -305,6 +305,7 @@ fn drained_api_requests_are_timed_like_waited_ones() {
     }
 
     server.drain_api_requests_with_shutdown_check();
+    server.drain_api_requests_with_shutdown_check();
 
     for response in responses {
         response.try_recv().expect("drained request answered");
@@ -556,4 +557,166 @@ async fn headless_native_interrupt_handshake_does_not_block_api_dispatch() {
         writes.try_recv().is_err(),
         "a native interrupt must not press Esc"
     );
+}
+
+// Runs the production drain/schedule/render path with the coordinator's poll.
+// No providers, live Bus state, terminal IO threads, or machine-specific load.
+#[tokio::test]
+async fn idle_agent_poll_server_loop_p99_under_50ms() {
+    use crate::agents::{AgentKind, AgentState};
+    use crate::protocol::api::schema::{
+        AgentDetectionContext, AgentDetectionContexts, Method, Request,
+    };
+    let mut server = test_headless_server();
+    let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    server.app.api_rx = api_rx;
+    server.app.state.workspaces = (0..20)
+        .map(|i| crate::server::workspaces::Workspace::test_new(&format!("idle-{i}")))
+        .collect();
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let screen = include_str!("../api/agents/tests/fixtures/claude_2_1_310_idle_88cols.txt");
+    let mut contexts = Vec::new();
+    let mut receivers = Vec::new();
+    for ws in 0..20 {
+        let pane = server.app.state.workspaces[ws].tabs[0].root_pane;
+        let terminal_id = server.app.state.workspaces[ws]
+            .terminal_id(pane)
+            .unwrap()
+            .clone();
+        let terminal = server.app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+        terminal.set_agent_name(format!("idle-{ws}"));
+        let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(180, 65);
+        runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+        receivers.push(writes);
+        server.app.state.insert_test_runtime(pane, runtime);
+        contexts.push(AgentDetectionContext {
+            pane_id: server.app.public_pane_id(ws, pane).unwrap(),
+            terminal_id: terminal_id.to_string(),
+            session_id: None,
+            obligation: false,
+            activity_age_ms: None,
+        });
+    }
+    // Settle initial geometry before publishing the detector's idle snapshots.
+    server.render_and_stream();
+    for ws in 0..20 {
+        let pane = server.app.state.workspaces[ws].tabs[0].root_pane;
+        server
+            .app
+            .lookup_runtime_sender(ws, pane)
+            .unwrap()
+            .test_scan_detection_context(AgentKind::Claude, AgentState::Unknown)
+            .await;
+    }
+    let mut samples = Vec::new();
+    for sample in 0..45 {
+        let (respond_to, response) = std::sync::mpsc::channel();
+        api_tx
+            .send(crate::server::api::ApiRequestMessage {
+                received_at: Instant::now(),
+                request: Request {
+                    id: sample.to_string(),
+                    method: Method::AgentListWithDetectionContext(AgentDetectionContexts {
+                        agents: contexts.clone(),
+                    }),
+                },
+                respond_to,
+            })
+            .unwrap();
+        let started = Instant::now();
+        server.test_loop_work();
+        let elapsed = started.elapsed();
+        let reply: crate::protocol::api::schema::SuccessResponse =
+            serde_json::from_str(&response.try_recv().unwrap()).unwrap();
+        let crate::protocol::api::schema::ResponseResult::AgentList { agents } = reply.result
+        else {
+            panic!("agent list");
+        };
+        assert_eq!(agents.len(), 20);
+        if sample >= 5 {
+            assert!(
+                agents.iter().all(|agent| !agent.screen_detection_skipped),
+                "the budget must measure current detector publications for all 20 panes"
+            );
+            samples.push(elapsed);
+        }
+    }
+    samples.sort();
+    let p99 = samples[(samples.len() * 99 / 100).min(samples.len() - 1)];
+    eprintln!(
+        "server.loop 20 idle agent panes: median={:?} p99={p99:?}",
+        samples[samples.len() / 2]
+    );
+    assert!(
+        p99 < Duration::from_millis(50),
+        "server.loop p99={p99:?} must be <50ms"
+    );
+    assert!(receivers.iter_mut().all(|rx| rx.try_recv().is_err()));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn pane_input_runs_before_queued_api_and_api_backlog_yields() {
+    use crate::protocol::api::schema::{Method, PaneSendTextParams, Request};
+    let mut server = test_headless_server();
+    let mut input = install_focused_test_runtime(&mut server, b"");
+    let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
+    server.clients.insert(
+        11,
+        ClientConnection::new((80, 24), Default::default(), 1, unread_test_writer()),
+    );
+    let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    server.app.api_rx = api_rx;
+    let mut replies = Vec::new();
+    for i in 0..3 {
+        let (respond_to, reply) = std::sync::mpsc::channel();
+        replies.push(reply);
+        api_tx
+            .send(crate::server::api::ApiRequestMessage {
+                received_at: Instant::now(),
+                request: Request {
+                    id: i.to_string(),
+                    method: Method::PaneSendText(PaneSendTextParams {
+                        pane_id: pane_id.clone(),
+                        text: "api".into(),
+                    }),
+                },
+                respond_to,
+            })
+            .unwrap();
+    }
+    server
+        .server_event_tx
+        .try_send(ServerEvent::ClientShellPaneInput {
+            client_id: 11,
+            pane_id,
+            events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
+                "key".into(),
+            )],
+        })
+        .unwrap();
+    server.test_loop_work();
+    assert_eq!(
+        input.try_recv().unwrap(),
+        Bytes::from_static(b"key"),
+        "pane input takes priority over API work already queued"
+    );
+    assert_eq!(input.try_recv().unwrap(), Bytes::from_static(b"api"));
+    assert_eq!(
+        server.app.api_rx.len(),
+        2,
+        "a backlog must yield to input/render between requests"
+    );
+    for _ in 0..2 {
+        server.test_loop_work();
+    }
+    assert!(
+        server.app.api_rx.is_empty(),
+        "API work still makes progress"
+    );
+    assert!(replies.iter().all(|rx| rx.try_recv().is_ok()));
+    shutdown_test_runtimes(&mut server);
 }
