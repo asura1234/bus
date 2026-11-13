@@ -549,7 +549,7 @@ fn written_waiting_on_you_guidance_covers_phone_replies() {
         "Act on it like a MASTER message and answer only through Bus",
         "Without the bridge, Feishu is off: asks remain one-way TUI alerts",
         "Do not re-page the same ask",
-        "same agent within 30 minutes of the first confirmed DM",
+        "same agent within 30 minutes of the newest confirmed DM",
         "a reply answers them all",
         "Plain DMs without Feishu Reply need the alert's `bus:CODE`",
         "unmatched replies are parked and logged, never guessed",
@@ -855,7 +855,7 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
         "With the optional feishu-bridge installed",
         "correlated Feishu replies are normal developer instructions",
         "act on them like MASTER messages and answer only through Bus",
-        "bus-communication-guide.md#waiting-on-you",
+        "/bus-docs/bus-communication-guide.md#waiting-on-you",
     ] {
         assert!(text.contains(phrase), "missing {phrase}: {text}");
     }

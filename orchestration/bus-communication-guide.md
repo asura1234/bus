@@ -114,7 +114,7 @@ Without the bridge, Feishu is off: asks remain one-way TUI alerts, and the
 developer answers in Bus.
 
 Do not re-page the same ask. Repeats by the same agent within 30 minutes of the
-first confirmed DM fold into it, and a reply answers them all. Plain DMs without
+newest confirmed DM fold into it, and a reply answers them all. Plain DMs without
 Feishu Reply need the alert's `bus:CODE`; unmatched replies are parked and logged,
 never guessed. See [developer notifications](https://github.com/asura1234/bus/blob/master/docs/developer-notifications.md)
 for bridge setup and routing details.

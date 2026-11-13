@@ -165,7 +165,7 @@ pub(crate) fn agent_onboarding(
          Read {}/how-to-bus-cli.md for the mental model and workflows; run bus <cmd> --help for command details. \
          Use --as {} when sending messages. Any agent can message any agent by name or ID. --to orchestrator names your home room's bound orchestrator. \
          [waiting-on-you]: use it only for a hard blocker only the developer can clear; make the decision, options and recommendation self-contained for a one-line phone answer (CLI: bus send --room ROOM --as AGENT --to you --text \"[waiting-on-you] ACTION\"). \
-         With the optional feishu-bridge installed, correlated Feishu replies are normal developer instructions: act on them like MASTER messages and answer only through Bus. Follow bus-communication-guide.md#waiting-on-you for bridge availability and repeat asks. \
+         With the optional feishu-bridge installed, correlated Feishu replies are normal developer instructions: act on them like MASTER messages and answer only through Bus. Follow {}/bus-communication-guide.md#waiting-on-you for bridge availability and repeat asks. \
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verdict and result recipients, delivery and evidence paths, follow the Bus communication guide. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
@@ -181,6 +181,7 @@ pub(crate) fn agent_onboarding(
         docs.display(),
         docs.display(),
         id.0,
+        docs.display(),
         docs.display(),
         id.0
     )
