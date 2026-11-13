@@ -231,7 +231,21 @@ fn dashboard_nonblocking_accept_preserves_fragmented_headers() {
         .set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
     client.write_all(b"GET /health HTTP/1.1\r\n").unwrap();
-    let (stream, _) = listener.accept().unwrap();
+    // connect() can return before the server side queues the connection, so a
+    // nonblocking accept may briefly see WouldBlock; serve_connections retries it too.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("dashboard listener never queued the connection: {error}"),
+        }
+    };
     dispatch_connection(
         stream,
         "/nonexistent-dashboard-test".into(),
