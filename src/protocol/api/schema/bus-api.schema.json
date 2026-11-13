@@ -4588,7 +4588,11 @@
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
             "compaction_banner": {
-              "description": "Grok is showing a compaction banner on this pane. False when the\nscreen was not read. Claude counts compactions from its hook.",
+              "description": "Banner value in the latest coherent Grok sample. A missing sample\ncannot establish either a banner or its disappearance.",
+              "type": "boolean"
+            },
+            "compaction_observed": {
+              "description": "A coherent Grok compaction sample exists, including when a newer raw\nframe makes the current-screen lease unavailable. Defaults false for\nolder servers and cold/replaced detector caches.",
               "type": "boolean"
             },
             "cwd": {
