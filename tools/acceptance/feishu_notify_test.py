@@ -63,25 +63,27 @@ class Run(helper.Run):
                    self.post("master", agents[1], "[waiting_on_you] Second decision"),
                    self.post("feishu-a", worker, "[waiting-on-you] Same decision"),
                    self.post("feishu-a", worker, "[waiting-on-you] Same decision")]
-        self.until(lambda: len(self.calls()) == 4, "four requests produce four DMs")
-        self.until(lambda: sum(r["message_id"] is not None for r in self.durable()["feishu"]["outbox"].values()) == 4,
+        self.until(lambda: len(self.calls()) == 3, "four requests share three DMs")
+        self.until(lambda: sum(r["message_id"] is not None for r in self.durable()["feishu"]["outbox"].values()) == 3,
                    "returned message/chat mappings committed")
         self.quiet()
         records = self.bridge_records()
-        assert len(records) == 4
-        by_source = {r["outbox"]["source"]["prompt_id"]: r for r in records}
-        assert set(by_source) == set(sources)
-        assert len({r["outbox"]["key"] for r in records}) == len({r["outbox"]["code"] for r in records}) == 4
-        assert "Second decision" not in by_source[sources[0]]["argv"][4]
-        for source in sources[2:]:
-            assert by_source[source]["outbox"]["raising_agent"] == worker
-            assert by_source[source]["outbox"]["orchestrator"] == agents[0]
+        assert len(records) == 3
         saved = self.durable()["feishu"]["outbox"]
+        by_source = {route["source"]["prompt_id"]: (mapping, route)
+                     for mapping in saved.values() for route in [mapping, *mapping.get("aliases", [])]}
+        assert set(by_source) == set(sources)
+        assert len({r["outbox"]["key"] for r in records}) == len({r["outbox"]["code"] for r in records}) == 3
+        assert "Second decision" not in by_source[sources[0]][0]["text"]
+        assert by_source[sources[2]][0] == by_source[sources[3]][0]
+        for source in sources[2:]:
+            assert by_source[source][1]["raising_agent"] == worker
+            assert by_source[source][1]["orchestrator"] == agents[0]
         for record in records:
             mapping = saved[record["outbox"]["code"]]
             assert mapping["message_id"] == record["message_id"] and mapping["chat_id"] == "oc_dm"
         self.assert_bridge()
-        self.step(2, "Four separate v1 sends, including two identical worker asks; each fake invocation verified the actual persisted outbox/key first, and returned IDs match saved source/binding mappings")
+        self.step(2, "Three v1 sends retain four durable logical routes; identical worker asks share one DM and both frozen bindings; each fake invocation verified the persisted outbox/key before returning IDs")
 
         self.command("click", "--hit", "settings")
         self.edit("feishu-cli-path", str(self.bin / "not-installed"))
@@ -89,21 +91,21 @@ class Run(helper.Run):
         self.command("press", "esc")
         self.post("master", agents[0], "[waiting-on-you] Off-period ask")
         self.quiet()
-        assert len(self.calls()) == 4
+        assert len(self.calls()) == 3
         self.command("click", "--hit", "settings")
         self.edit("feishu-cli-path", "")
         self.command("wait", "--text", "Feishu notifications (on)")
         self.command("press", "esc")
         self.quiet()
-        assert len(self.calls()) == 4, "restoring the plugin cannot replay off-period alerts"
+        assert len(self.calls()) == 3, "restoring the plugin cannot replay off-period alerts"
         self.step(3, "Missing explicit plugin path disabled Feishu; restoring PATH discovery did not replay the off-period ask")
 
         (self.bin / "bridge-mode").write_text("fail")
         failed_source = self.post("master", agents[0], "[waiting-on-you] Synthetic failure")
-        self.until(lambda: len(self.calls()) == 5, "one failed bridge attempt")
+        self.until(lambda: len(self.calls()) == 4, "one failed bridge attempt")
         self.until(lambda: self.state()["settings"]["feishu"]["error"], "failed send status")
         self.quiet()
-        assert len(self.calls()) == 5
+        assert len(self.calls()) == 4
         failed = next(r for r in self.durable()["feishu"]["outbox"].values() if r["source"]["prompt_id"] == failed_source)
         assert failed["attempted"] and failed["message_id"] is None
         logs = "\n".join(path.read_text(errors="replace") for path in Path(self.session["data_dir"]).rglob("*.log"))
@@ -119,12 +121,12 @@ class Run(helper.Run):
         self.edit("feishu-cli-path", str(self.cli))
         self.command("press", "esc")
         configured = self.post("master", agents[0], "[waiting-on-you] Configured recipient")
-        self.until(lambda: len(self.calls()) == 6, "configured executable and recipient")
+        self.until(lambda: len(self.calls()) == 5, "configured executable and recipient")
         self.until(lambda: any(r["source"]["prompt_id"] == configured and r["message_id"] is not None
                               for r in self.durable()["feishu"]["outbox"].values()), "configured returned IDs committed")
         assert self.calls()[-1][2] == "ou_fixture_destination"
         self.quiet()
-        assert len(self.calls()) == 6, "a later successful request cannot replay the failed attempt"
+        assert len(self.calls()) == 5, "a later successful request cannot replay the failed attempt"
         self.assert_bridge()
         self.no_popup()
         (self.root / "bridge-calls.json").write_text(json.dumps(self.bridge_records(), indent=2))

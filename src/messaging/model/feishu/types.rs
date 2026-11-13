@@ -9,6 +9,14 @@ pub(crate) struct AlertSource {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AlertRoute {
+    pub(crate) source: AlertSource,
+    pub(crate) room: RoomId,
+    pub(crate) raising_agent: Option<AgentId>,
+    pub(crate) orchestrator: Option<AgentId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct OutboxRecord {
     pub(crate) code: String,
     pub(crate) key: String,
@@ -19,10 +27,29 @@ pub(crate) struct OutboxRecord {
     pub(crate) orchestrator: Option<AgentId>,
     pub(crate) recipient: String,
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) ask_body: Option<String>,
+    #[serde(default)]
+    pub(crate) aliases: Vec<AlertRoute>,
     pub(crate) created_at_ms: u64,
     pub(crate) attempted: bool,
     pub(crate) message_id: Option<String>,
     pub(crate) chat_id: Option<String>,
+}
+
+impl OutboxRecord {
+    pub(crate) fn route(&self) -> AlertRoute {
+        AlertRoute {
+            source: self.source.clone(),
+            room: self.room,
+            raising_agent: self.raising_agent,
+            orchestrator: self.orchestrator,
+        }
+    }
+
+    pub(crate) fn routes(&self) -> impl Iterator<Item = AlertRoute> + '_ {
+        std::iter::once(self.route()).chain(self.aliases.iter().cloned())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

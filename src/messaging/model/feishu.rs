@@ -1,7 +1,7 @@
 //! Durable per-request Feishu outbox and returned message mapping.
 mod types;
 use super::{AgentId, BusState};
-use types::OutboxRecord;
+use types::{AlertRoute, OutboxRecord};
 pub(crate) use types::{AlertSource, FeishuState};
 
 impl BusState {
@@ -17,8 +17,35 @@ impl BusState {
                 .feishu
                 .outbox
                 .values()
-                .any(|r| r.source == alert.source)
+                .any(|r| r.routes().any(|route| route.source == alert.source))
             {
+                continue;
+            }
+            let orchestrator = alert.sender.and_then(|id| self.feishu_target(id));
+            // The first physical DM owns a fixed window; repeats never extend it.
+            // Legacy records lack ask_body and cannot safely be grouped by text.
+            if let Some(record) = self
+                .feishu
+                .outbox
+                .values_mut()
+                .filter(|record| {
+                    alert.sender.is_some()
+                        && record.raising_agent == alert.sender
+                        && record.session == session
+                        && record.recipient == recipient
+                        && record.ask_body.as_deref() == Some(alert.body.as_str())
+                        && now_ms
+                            .checked_sub(record.created_at_ms)
+                            .is_some_and(|age| age < 30 * 60_000)
+                })
+                .min_by_key(|record| (record.created_at_ms, record.source.prompt_id))
+            {
+                record.aliases.push(AlertRoute {
+                    source: alert.source,
+                    room: alert.room,
+                    raising_agent: alert.sender,
+                    orchestrator,
+                });
                 continue;
             }
             let digest =
@@ -27,7 +54,6 @@ impl BusState {
                 .map(|length| digest[..length].to_owned())
                 .find(|code| !self.feishu.outbox.contains_key(code));
             let Some(code) = code else { continue };
-            let orchestrator = alert.sender.and_then(|id| self.feishu_target(id));
             self.feishu.outbox.insert(
                 code.clone(),
                 OutboxRecord {
@@ -40,6 +66,8 @@ impl BusState {
                     raising_agent: alert.sender,
                     orchestrator,
                     recipient: recipient.to_owned(),
+                    ask_body: Some(alert.body),
+                    aliases: Vec::new(),
                     created_at_ms: now_ms,
                     attempted: false,
                     message_id: None,

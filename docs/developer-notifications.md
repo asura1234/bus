@@ -43,8 +43,11 @@ The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
 Bus stores no credentials and does not invoke lark-cli directly.
 
 Only literal `[waiting-on-you]` or `[waiting_on_you]` tags reach Feishu. Untagged
-posts, `@you` mentions and the legacy phrase stay in the TUI. Each Bus request gets
-its own DM, including repeated requests with identical action text. The message
+posts, `@you` mentions and the legacy phrase stay in the TUI. Requests get separate
+DMs except when the same agent repeats the same normalized ask within thirty
+minutes of the first DM. Those repeats become durable aliases of its mapping;
+the window survives restart and repeats do not extend it. Different recipients
+remain separate. The message
 contains `sender is waiting on you: action` and a short `bus:CODE` request code.
 The complete action is preserved, with routing markers and terminal controls filtered.
 Attachment files are not uploaded.

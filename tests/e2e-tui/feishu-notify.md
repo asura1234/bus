@@ -24,7 +24,7 @@ recorded bridge entries and report output are retained under
 `wait --stable 3s --rows 0-0 --timeout 8s`. No skipped steps or failed-step retries.
 This procedure proves outbound behavior only.
 
-### FEISHU-01 — Optional bridge sends separate durable request notifications
+### FEISHU-01 — Optional bridge persists every request route
 
 Preconditions: private fake orchestrators for `feishu-a` and `feishu-b`, plus a
 worker in `feishu-a`; recording bridge installed on the fixture PATH.
@@ -34,11 +34,15 @@ worker in `feishu-a`; recording bridge installed on the fixture PATH.
    row. Capture the layout. Close Settings and post untagged progress; require
    no bridge invocation after a quiet window.
 2. Post one waiting-tagged request from each orchestrator and two identical
-   tagged asks from the worker. Require exactly four independent v1 sends with
-   distinct source IDs, request codes and idempotency keys. The fake must verify
+   tagged asks from the worker. Require exactly three independent v1 sends with
+   distinct request codes and idempotency keys, retaining all four source IDs:
+   the identical worker asks share one DM with a durable alias. The fake must verify
    the actual persisted record and `attempted: true` before returning an ID.
    Check saved returned message/chat IDs, exact raising-agent/orchestrator
-   bindings and literal text, with no cross-request batching or duplicate send.
+   bindings and literal text. Same-agent/same-ask repeats within a fixed thirty
+   minutes share the first DM; aliases and its original window survive restart.
+   Different agents, asks or recipients retain separate DMs. An uncertain send
+   is never retried automatically, including when the ask repeats.
 3. Through Settings, select a missing explicit bridge path. Require Feishu off
    and no send for a new waiting tag. Restore PATH discovery and require Feishu
    on without replaying the off-period request.

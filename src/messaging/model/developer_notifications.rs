@@ -42,6 +42,7 @@ pub(crate) struct DeveloperAlert {
     pub(crate) source: AlertSource,
     pub(crate) room: RoomId,
     pub(crate) sender: Option<AgentId>,
+    pub(crate) body: String,
     pub(crate) line: String,
 }
 
@@ -67,9 +68,10 @@ pub(crate) fn developer_alerts(
             } else {
                 waiting_tag_action(message.text)
             };
-            let line = if let Some(action) = action {
+            let (body, line) = if let Some(action) = action {
                 let body = plain_action(action);
-                format!("{sender} is waiting on you: {body}")
+                let line = format!("{sender} is waiting on you: {body}");
+                (body, line)
             } else if !waiting_only && (message.directed || has_you_mention(message.text)) {
                 let body = plain_line(message.text.trim_start());
                 let body = if body.is_empty() {
@@ -77,7 +79,8 @@ pub(crate) fn developer_alerts(
                 } else {
                     body
                 };
-                format!("{sender} to you: {body}")
+                let line = format!("{sender} to you: {body}");
+                (body, line)
             } else {
                 return None;
             };
@@ -85,6 +88,7 @@ pub(crate) fn developer_alerts(
                 source: message.source,
                 room: message.room,
                 sender: message.sender_id,
+                body,
                 line,
             })
         })

@@ -21,7 +21,10 @@ fn prepare(state: &mut BusState, room: RoomId, sender: AgentId) -> String {
         .post_to_developer(
             room,
             sender,
-            "[waiting-on-you] Choose the rollout".into(),
+            format!(
+                "[waiting-on-you] Choose rollout {}",
+                before.feishu.outbox.len()
+            ),
             vec![],
             10,
         )
@@ -44,7 +47,7 @@ fn feishu_outbox_keeps_each_request_and_worker_home_binding_before_send() {
     let second = prepare(&mut state, work, worker);
     assert_ne!(
         first, second,
-        "identical text from separate Bus requests needs separate reply routes"
+        "distinct asks need separate DMs and reply routes"
     );
     assert_eq!(state.feishu.outbox.len(), 2);
     let record = &state.feishu.outbox[&first];

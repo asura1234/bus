@@ -1,7 +1,7 @@
 use super::*;
 use crate::messaging::coordinator::{Method, ResponseResult};
 use crate::messaging::{
-    model::{AgentId, Provider},
+    model::{AgentId, PromptId, Provider},
     native::{Transport, TransportError},
 };
 use std::{
@@ -66,9 +66,9 @@ impl Fixture {
     fn pump(&mut self) {
         self.worker.pump_feishu(&self.events, self.now).unwrap();
     }
-    fn post(&mut self, text: &str) {
+    fn post(&mut self, text: &str) -> PromptId {
         let mut state = self.worker.state.clone();
-        state
+        let source = state
             .post_to_developer(
                 state.master_room().unwrap().id,
                 self.agent,
@@ -79,6 +79,7 @@ impl Fixture {
             .unwrap();
         self.worker.save(state).unwrap();
         self.pump();
+        source
     }
     fn flush(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -119,15 +120,15 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn feishu_each_request_has_its_own_dm_and_durable_mapping_before_and_after_transport() {
+fn feishu_distinct_asks_have_their_own_dm_and_durable_mapping_before_and_after_transport() {
     let mut f = Fixture::new();
-    f.post("[waiting-on-you] Choose");
-    f.post("[waiting-on-you] Choose");
+    f.post("[waiting-on-you] Choose first");
+    f.post("[waiting-on-you] Choose second");
     f.flush();
     assert_eq!(
         f.calls().len(),
         2,
-        "same text from distinct requests must retain both routes"
+        "distinct asks must retain separate DMs and routes"
     );
     assert_eq!(f.worker.state.feishu.outbox.len(), 2);
     let saved = f.worker.store.load().unwrap().unwrap();
@@ -196,6 +197,13 @@ fn feishu_attempted_send_is_never_replayed_after_failure_or_runtime_restart() {
     assert_eq!(f.calls().len(), 1);
     std::fs::remove_file(f.root.join("mode")).unwrap();
     f.post("[waiting-on-you] Choose");
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        1,
+        "a repeated ask cannot retry an uncertain send"
+    );
+    f.post("[waiting-on-you] Different ask after recovery");
     f.flush();
     assert_eq!(
         f.calls().len(),
@@ -347,4 +355,121 @@ fn feishu_successful_send_mapping_survives_worker_shutdown() {
             Some("om_fake_1")
         );
     }
+}
+
+#[test]
+fn feishu_repeat_ask_keeps_one_dm_and_both_persisted_request_routes() {
+    let mut f = Fixture::new();
+    let first = f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    f.now += 60_000;
+    let repeated = f.post("[waiting_on_you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "one shared DM within thirty minutes");
+    let mut saved = f.worker.store.load().unwrap().unwrap();
+    assert_eq!(saved.feishu.outbox.len(), 1);
+    let record = serde_json::to_value(saved.feishu.outbox.values().next().unwrap()).unwrap();
+    assert_eq!(record["source"]["prompt_id"], serde_json::json!(first));
+    assert_eq!(
+        record["aliases"][0]["source"]["prompt_id"],
+        serde_json::json!(repeated)
+    );
+    assert_eq!(record["message_id"], "om_fake_1");
+    assert_eq!(
+        record["aliases"][0]["raising_agent"],
+        serde_json::json!(f.agent)
+    );
+    // Re-observing retained history cannot append a logical source twice.
+    saved.prepare_feishu_alerts(
+        &BusState::new(),
+        &f.worker.data_dir.to_string_lossy(),
+        &settings::BusSettings::default().feishu_recipient,
+        f.now,
+    );
+    assert_eq!(saved.feishu.outbox.len(), 1);
+    assert_eq!(
+        saved.feishu.outbox.values().next().unwrap().aliases.len(),
+        1
+    );
+}
+
+#[test]
+fn feishu_repeat_ask_window_survives_restart_and_is_not_extended_by_a_repeat() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    let replacement = Worker::open(f.root.join("unused-restart"), Box::new(NoNative)).unwrap();
+    drop(std::mem::replace(&mut f.worker, replacement));
+    f.worker = Worker::open(f.root.join("session"), Box::new(NoNative)).unwrap();
+    f.worker.settings_path = Some(f.root.join("settings.json"));
+    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(10));
+    f.now += 60_000;
+    f.pump();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "restart must retain suppression");
+    f.now = 1_000 + 30 * 60_000;
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 2, "the window starts at the first request");
+}
+
+#[test]
+fn feishu_repeat_ask_does_not_reuse_a_dm_for_another_recipient() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    f.settings(|settings| settings.feishu_recipient = "ou_other_recipient".into());
+    f.now += 60_000;
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 2);
+    assert_eq!(f.calls()[1][2], "ou_other_recipient");
+}
+
+#[test]
+fn feishu_repeat_ask_keeps_different_raising_agents_separate() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    let mut state = f.worker.state.clone();
+    f.agent = state
+        .create_agent(
+            state.master_room().unwrap().id,
+            "other",
+            Provider::Codex,
+            f.root.clone(),
+            None,
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 2);
+}
+
+#[test]
+fn feishu_repeat_ask_does_not_guess_legacy_ask_identity() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    let mut saved = serde_json::to_value(&f.worker.state).unwrap();
+    for record in saved["feishu"]["outbox"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        record.as_object_mut().unwrap().remove("ask_body");
+        record.as_object_mut().unwrap().remove("aliases");
+    }
+    f.worker
+        .save(serde_json::from_value(saved).unwrap())
+        .unwrap();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        2,
+        "legacy rows have no reliable normalized ask"
+    );
 }

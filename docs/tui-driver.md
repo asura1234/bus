@@ -155,7 +155,8 @@ not stand in for, so `start` refuses there.
 Agent messages addressed to `you` (or `human`) and all waiting-tagged agent messages
 notify from every room and sender. Explicit `@you` mentions also qualify. Bare waiting phrases
 qualify only in developer conversations, not peer traffic. Feishu uses the optional local
-`feishu-bridge` plugin and sends only literal waiting-tagged requests, one DM per source.
+`feishu-bridge` plugin and sends only literal waiting-tagged requests. Same-agent,
+same-ask repeats within thirty minutes share one DM with durable source aliases.
 The recipient and optional bridge path are shared settings. Without the plugin, Feishu is off.
 Use a closed PATH recording bridge to assert argv and persisted outbox admission. Developer sends emit no alerts,
 and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).
