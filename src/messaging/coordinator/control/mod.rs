@@ -1,6 +1,7 @@
 //! Control receipts, tiers, validation and routing on the existing single-writer coordinator.
 mod agents;
 mod driver;
+mod feishu;
 mod inspect;
 mod messages;
 mod rooms;
@@ -248,6 +249,7 @@ impl Worker {
         events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
+            "feishu.ingest" => self.control_feishu_ingest(p),
             "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.seen"
             | "room.sound" | "room.delete" | "room.history" => {
                 self.execute_rooms(method, p, events)
@@ -379,6 +381,13 @@ const fn spec(
 /// one cannot ship without a tier. Dev-tier methods from `src/devtools` (the
 /// TUI driver's `ui hits` / `ui screen`) are registered in this table too.
 pub(crate) const METHODS: &[MethodSpec] = &[
+    spec(
+        "feishu.ingest",
+        "feishu ingest",
+        &["app_id", "event"],
+        true,
+        Tier::Agent,
+    ),
     spec("state", "state", &[], false, Tier::Agent),
     spec("agent.list", "agent list", &["room"], false, Tier::Agent),
     spec("settings", "settings", &[], false, Tier::Agent),

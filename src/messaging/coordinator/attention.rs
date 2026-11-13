@@ -161,6 +161,7 @@ impl Runtime {
                         &settings.feishu_recipient,
                         now,
                     );
+                    next.resolve_parked_feishu()?;
                     worker.save(next)?;
                 }
             }

@@ -1,3 +1,4 @@
+pub(crate) mod ingest;
 mod process;
 
 pub(crate) use process::Cancellation;

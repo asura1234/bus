@@ -87,10 +87,13 @@ pub(super) fn command(path: &str) -> String {
         "" => {
             "A plain bus launch starts a new interactive session. Control commands target an\nexisting session and return JSON. Use bus <command> --help for its contract.\n--paths returns a JSON object of data/log/config/state paths without starting Bus.\nUse bus sessions and bus resume --help before selecting a saved session."
         }
-        "room" | "agent" | "message" | "request" | "ui" => {
+        "room" | "agent" | "message" | "request" | "ui" | "feishu" => {
             "Choose a subcommand below, then run bus <command> <subcommand> --help.\nA bare group prints help without contacting Bus; it has no JSON result."
         }
         "state" => STATE,
+        "feishu ingest" => {
+            "Read exactly one feishu-bridge v1 JSON message from stdin (maximum 128 KiB).\n--instance must be an absolute session root or registry base; --app-id must match\nthe configured bridge app. This sink bypasses inherited caller identity and the\nlast-opened session. Unknown/ambiguous registry replies park durably.\nResult: a control JSON acknowledgement after durable delivery or parking; exit 0\nacknowledges acceptance.\nErrors: invalid input, unauthenticated senders, an offline target or a failed save\nexit nonzero so the bridge retains its spool. Correct input/authentication or\nrestore the target and storage, then let the bridge retry.\nNo listener, Feishu send, Bus launch or UI error is created by this command."
+        }
         "room create" => ROOM_CREATE,
         "room rename" => ROOM_RENAME,
         "room delete" => ROOM_DELETE,

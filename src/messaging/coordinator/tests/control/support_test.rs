@@ -5,6 +5,9 @@ use serde_json::json;
 
 #[path = "agents_test.rs"]
 mod agents_tests;
+#[cfg(unix)]
+#[path = "feishu_ingest_test.rs"]
+mod feishu_ingest_tests;
 #[path = "identity_test.rs"]
 mod identity_tests;
 #[path = "inspect_test.rs"]

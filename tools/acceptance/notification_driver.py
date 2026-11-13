@@ -34,9 +34,6 @@ with (root / "calls.jsonl").open("a+") as ledger:
         "state_path":str(state_path),"outbox_verified":True,"outbox":record}) + "\n")
     ledger.flush()
     os.fsync(ledger.fileno())
-mode = root / "bridge-mode"
-if mode.exists() and mode.read_text().strip() == "fail":
-    sys.exit(7)
 print(json.dumps({"message_id":message,"chat_id":"oc_dm"}))
 '''
 

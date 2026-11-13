@@ -149,6 +149,7 @@ impl BusState {
                 submitted_at_ms: now_ms,
                 idle_agent_ids: Default::default(),
                 attention_origin: None,
+                in_reply_to: None,
             });
         self.cancel_pending_launch(agent, INTERRUPTED, now_ms);
         Ok(id)

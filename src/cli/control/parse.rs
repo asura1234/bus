@@ -38,6 +38,16 @@ pub(super) fn cli() -> Command {
         .arg_required_else_help(true)
         .arg(value_arg("request-id").long("request-id").global(true))
         .subcommand(subcommand("state"))
+        .subcommand(
+            subcommand("feishu")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    subcommand("ingest")
+                        .arg(option("instance"))
+                        .arg(option("app-id")),
+                ),
+        )
         .subcommand(subcommand("quit"))
         .subcommand(
             subcommand("settings")

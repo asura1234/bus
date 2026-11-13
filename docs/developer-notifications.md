@@ -38,7 +38,7 @@ notification routes remain active. No desktop popup is added.
 Feishu is an optional local plugin. Install `feishu-bridge` on the same Mac and
 configure its bot transport separately. Bus discovers it through **feishu-bridge path**
 in Settings → NOTIFICATIONS (`feishu_bridge_path` in settings.json), or PATH when
-the field is empty. Without the executable, Feishu is off.
+the field is empty. Without the executable, both Feishu directions are off.
 The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
 Bus stores no credentials and does not invoke lark-cli directly.
 
@@ -60,9 +60,43 @@ starting `feishu-bridge send --open-id OPEN_ID --text TEXT --idempotency-key KEY
 The returned `message_id` and `chat_id` are committed to that record. Sends run
 serially in a cancellable background worker. An attempted send is never replayed
 automatically after a timeout, failure or Bus restart because its outcome can be
-uncertain. Its request code and outbox record remain available for audit.
+uncertain. Its request code remains available for explicit replies.
 
-Outbound acceptance uses a private scratch Bus, fake providers and a recording
-bridge. The fake bridge reads the actual persisted outbox before returning IDs.
-Run the procedure in [Feishu outbound acceptance](../tests/e2e-tui/feishu-notify.md).
-Tests send no real Feishu messages.
+Configure the bridge's sink as:
+
+```toml
+sink_command = ["/absolute/path/to/bus", "feishu", "ingest", "--instance", "/absolute/bus/root", "--app-id", "cli_YOUR_APP"]
+```
+
+`--instance` names an exact private Bus session root or its local session registry
+base. It is required: the sink never targets the last opened session or inherits
+an agent's author identity. Registry inputs without one exact session are saved
+in the registry's private `feishu-inbox.json` journal. Later ingress reconsiders
+those original inputs when new exact mappings become available. A session root
+must be the original path recorded in its outbox; copied state does not transfer
+the recorded session's authority. The bridge passes one v1 JSON object on stdin. The sink
+validates the configured app ID, user sender type and p2p chat type, then Bus
+checks the sender against its configured recipient and the recorded recipient/chat.
+Reply ancestry (`reply_to`, then `root_id`, including accepted inbound ancestry)
+or an explicit `bus:CODE` must identify exactly one request. Conflicting references
+stay parked. There is no matching by time, display name or most recent alert.
+
+Accepted replies become developer-authored Bus messages with structured
+`in_reply_to` provenance in history and the provider payload. They queue an
+independent turn for each original or aliased source's exact recorded orchestrator.
+Aliases admitted after a reply receive its saved original text without a replay;
+each source has its own durable outcome, including individual target parking.
+Unknown/ambiguous replies
+stay undelivered; deleted rooms/orchestrators are parked without selecting a
+replacement. The deduplication receipt and queued message commit together.
+Authenticated replies that conflict with the original recipient or chat are
+parked with a receipt; unauthenticated senders are refused before consuming an ID.
+Replays return the original receipt, including after restart; edited text does
+not create a second instruction. Exit 0 from the sink means durable acceptance
+(delivered or parked). An unavailable session or failed commit returns nonzero
+so the bridge retains its spool and retries. Diagnostics stay in logs.
+
+The bridge owns listener supervision, Feishu history reconciliation, offline
+spooling and retry. Bus does not install/start the listener. Acceptance uses a
+private scratch Bus, fake bridge and synthetic bridge input. The developer's
+final live reply is a separate acceptance step; tests send no real Feishu messages.
