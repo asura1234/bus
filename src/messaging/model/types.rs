@@ -611,6 +611,11 @@ pub(crate) struct Request {
     /// but never seen starting, waited. The agent has moved on since.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) foreign_turn_settled_at_ms: Option<u64>,
+    /// When a turn the agent started on its own began while this request,
+    /// typed but never seen starting, waited. That turn's Working status says
+    /// nothing about this request, so nothing may be steered into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) foreign_turn_started_at_ms: Option<u64>,
     /// The last sign of life for this request since Bus typed it: the status
     /// poll before submission, then every accepted provider callback.
     /// Recovery deadlines counts idle time from here.
