@@ -57,12 +57,11 @@ recipient open_id. Without the plugin, Feishu is off. Bus stores no credentials.
 [Reply routing and sink setup](docs/developer-notifications.md) describe how a
 Feishu reply reaches the exact orchestrator as a developer instruction.
 
-An orchestrator puts `[waiting_on_you]` or `[waiting-on-you]` before the action
-it needs from the developer in a MASTER message. Bus sends a bot DM containing
-`name is waiting on you: action` and a short request code, one DM per request.
-Untagged whole phrases stay in the TUI. `[needs_developer_attention]` still renders the internal badge;
-by itself it does not send a DM. Failed sends warn without blocking Bus or
-retrying. See [Feishu notification settings and behavior](docs/developer-notifications.md).
+An orchestrator tags developer-only hard blockers with `[waiting-on-you]`
+(legacy `[waiting_on_you]`) in MASTER. With the bridge, the developer can answer
+from their phone using Feishu Reply. Follow the [waiting-on-you guidance](orchestration/bus-communication-guide.md#waiting-on-you)
+for writing asks and acting on replies. Untagged posts stay in the TUI;
+`[needs_developer_attention]` alone does not send a DM.
 
 Settings includes disk warning and critical thresholds (20/5 GB free by
 default). Bus checks its data volume every minute and posts one grey `bus`

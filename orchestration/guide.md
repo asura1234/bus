@@ -502,8 +502,9 @@ applies to unknown intent: stop and ask rather than inventing a resource, scope
 or authority. It does not require re-asking for
 authority already given. Missing intent or conflicting resources block only the
 affected part. When a developer decision is needed, ask in MASTER
-with `[waiting-on-you]`, the cause and a recommended plan where there is a basis
-for one. Hold only the affected part and keep every independent piece moving.
+with `[waiting-on-you]`; follow the [waiting-on-you guidance](bus-communication-guide.md#waiting-on-you)
+for self-contained decisions, phone replies and repeat asks. Hold only the
+affected part and keep every independent piece moving.
 
 Approval of the workflow at kickoff covers its whole path through review and
 [auto-merge-pr](workflows/auto-merge-pr.md), read in full. Merge only the exact

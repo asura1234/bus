@@ -325,8 +325,8 @@ fn fill_replaces_every_placeholder() {
         "Never write a bare PR, MR or issue number",
         "`gh pr view N --json title,url`",
         "orchestrator-rules.md#chat-markdown",
-        "Put `[waiting-on-you]` before every request that needs the developer",
-        "orchestrator-rules.md#waiting-on-you",
+        "Make `[waiting-on-you]` asks self-contained",
+        "bus-communication-guide.md#waiting-on-you",
     ] {
         assert!(
             rules_section.contains(phrase),
@@ -530,6 +530,51 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         assert!(!text.contains("Agent process exited: NAME"), "{text}");
         assert!(!text.contains(" stalled "), "{text}");
     }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn written_waiting_on_you_guidance_covers_phone_replies() {
+    let data = temp_root("phone-replies");
+    let root = write_docs(&data).unwrap();
+    let communication =
+        flat(&std::fs::read_to_string(root.join("bus-communication-guide.md")).unwrap());
+    for phrase in [
+        "<a id=\"waiting-on-you\"></a>",
+        "Make each ask self-contained",
+        "from their phone",
+        "decision, options and recommendation, answerable in one line",
+        "optional `feishu-bridge` installed and configured",
+        "normal developer instruction with `in_reply_to` provenance",
+        "Act on it like a MASTER message and answer only through Bus",
+        "Without the bridge, Feishu is off: asks remain one-way TUI alerts",
+        "Do not re-page the same ask",
+        "same agent within 30 minutes of the newest confirmed DM",
+        "a reply answers them all",
+        "Plain DMs without Feishu Reply need the alert's `bus:CODE`",
+        "unmatched replies are parked and logged, never guessed",
+    ] {
+        assert!(
+            communication.contains(phrase),
+            "missing {phrase}: {communication}"
+        );
+    }
+    for name in [
+        "orchestrator-guide.md",
+        "orchestrator-rules.md",
+        "how-to-bus-cli.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(name)).unwrap();
+        assert!(
+            text.contains("bus-communication-guide.md#waiting-on-you"),
+            "{name}"
+        );
+    }
+    let prompt = fill(DEFAULT_PROMPT, &values(Some(("scratch", 7)), &data));
+    assert!(prompt.contains(&format!(
+        "{}/bus-communication-guide.md#waiting-on-you",
+        root.display()
+    )));
     std::fs::remove_dir_all(data).unwrap();
 }
 
@@ -805,6 +850,15 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     assert!(text.contains("Do not reply Ready merely to acknowledge a launch prompt"));
     assert!(text.contains("Send only the body"));
     assert!(text.contains("use it only for a hard blocker only the developer can clear"));
+    for phrase in [
+        "decision, options and recommendation self-contained for a one-line phone answer",
+        "With the optional feishu-bridge installed",
+        "correlated Feishu replies are normal developer instructions",
+        "act on them like MASTER messages and answer only through Bus",
+        "/bus-docs/bus-communication-guide.md#waiting-on-you",
+    ] {
+        assert!(text.contains(phrase), "missing {phrase}: {text}");
+    }
     assert!(text.contains("[Bus message N from NAME]"));
     assert!(text.contains(&format!(
         "bus send --reply-to N --as {} --text 'YOUR ANSWER'",
