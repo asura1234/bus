@@ -41,8 +41,9 @@ worker in `feishu-a`; recording bridge installed on the fixture PATH.
    Check saved returned message/chat IDs, exact raising-agent/orchestrator
    bindings and literal text. Same-agent/same-ask repeats within a fixed thirty
    minutes share the first DM; aliases and its original window survive restart.
-   Different agents, asks or recipients retain separate DMs. An uncertain send
-   is never retried automatically, including when the ask repeats.
+   Different agents, asks or recipients retain separate DMs. Only a confirmed DM
+   may suppress a repeat; failed or uncertain sends allow a new explicit ask to
+   send a new DM. The original attempted send is never retried automatically.
 3. Through Settings, select a missing explicit bridge path. Require Feishu off
    and no send for a new waiting tag. Restore PATH discovery and require Feishu
    on without replaying the off-period request.

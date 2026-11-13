@@ -30,6 +30,7 @@ impl BusState {
                 .values_mut()
                 .filter(|record| {
                     alert.sender.is_some()
+                        && record.message_id.is_some()
                         && record.raising_agent == alert.sender
                         && record.session == session
                         && record.recipient == recipient
@@ -68,6 +69,7 @@ impl BusState {
                     recipient: recipient.to_owned(),
                     ask_body: Some(alert.body),
                     aliases: Vec::new(),
+                    send_error: None,
                     created_at_ms: now_ms,
                     attempted: false,
                     message_id: None,
@@ -113,6 +115,7 @@ impl BusState {
         record.message_id = Some(message.to_owned());
         record.chat_id = Some(chat.to_owned());
         record.attempted = true;
+        record.send_error = None;
         Ok(())
     }
 }

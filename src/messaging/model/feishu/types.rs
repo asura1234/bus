@@ -31,6 +31,9 @@ pub(crate) struct OutboxRecord {
     pub(crate) ask_body: Option<String>,
     #[serde(default)]
     pub(crate) aliases: Vec<AlertRoute>,
+    // attempted without returned IDs is uncertain; retain command failures too.
+    #[serde(default)]
+    pub(crate) send_error: Option<String>,
     pub(crate) created_at_ms: u64,
     pub(crate) attempted: bool,
     pub(crate) message_id: Option<String>,

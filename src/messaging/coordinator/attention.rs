@@ -91,6 +91,17 @@ impl Runtime {
                 );
             }
             Err(error) => {
+                let mut state = worker.state.clone();
+                state
+                    .feishu
+                    .outbox
+                    .get_mut(&code)
+                    .ok_or("Unknown Feishu outbox record")?
+                    .send_error = Some(error.clone());
+                if let Err(save_error) = worker.save(state) {
+                    self.completion = Some((code, Err(error)));
+                    return Err(save_error);
+                }
                 let _log_only = crate::utils::error_pipe::suppress(true);
                 tracing::warn!(event = "bus.feishu.failed", code, %error, "Feishu send failed; outcome may be uncertain; no automatic retry");
                 self.status.error = Some(error);
@@ -212,9 +223,9 @@ impl Runtime {
                 self.status.pending = true;
             }
             Err(error) => {
-                let _log_only = crate::utils::error_pipe::suppress(true);
-                tracing::warn!(event = "bus.feishu.failed", code, %error, "Could not start bridge worker");
-                self.status.error = Some(error.to_string());
+                self.completion =
+                    Some((code, Err(format!("Could not start bridge worker: {error}"))));
+                self.collect_completion(worker, false)?;
             }
         }
         Ok(())

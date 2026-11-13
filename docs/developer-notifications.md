@@ -45,9 +45,11 @@ Bus stores no credentials and does not invoke lark-cli directly.
 Only literal `[waiting-on-you]` or `[waiting_on_you]` tags reach Feishu. Untagged
 posts, `@you` mentions and the legacy phrase stay in the TUI. Requests get separate
 DMs except when the same agent repeats the same normalized ask within thirty
-minutes of the first DM. Those repeats become durable aliases of its mapping;
+minutes of a confirmed DM (with a returned message_id). Those repeats become durable aliases of its mapping;
 the window survives restart and repeats do not extend it. Different recipients
-remain separate. The message
+remain separate. A failed or uncertain send cannot suppress a new explicit ask;
+it gets a new DM and window. Command errors are persisted beside the attempted
+marker and returned IDs. The message
 contains `sender is waiting on you: action` and a short `bus:CODE` request code.
 The complete action is preserved, with routing markers and terminal controls filtered.
 Attachment files are not uploaded.

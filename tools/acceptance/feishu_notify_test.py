@@ -61,8 +61,10 @@ class Run(helper.Run):
 
         sources = [self.post("master", agents[0], "[waiting-on-you] First decision 界 $HOME"),
                    self.post("master", agents[1], "[waiting_on_you] Second decision"),
-                   self.post("feishu-a", worker, "[waiting-on-you] Same decision"),
                    self.post("feishu-a", worker, "[waiting-on-you] Same decision")]
+        self.until(lambda: sum(r["message_id"] is not None for r in self.durable()["feishu"]["outbox"].values()) == 3,
+                   "initial DMs confirmed before suppressing a repeat")
+        sources.append(self.post("feishu-a", worker, "[waiting-on-you] Same decision"))
         self.until(lambda: len(self.calls()) == 3, "four requests share three DMs")
         self.until(lambda: sum(r["message_id"] is not None for r in self.durable()["feishu"]["outbox"].values()) == 3,
                    "returned message/chat mappings committed")

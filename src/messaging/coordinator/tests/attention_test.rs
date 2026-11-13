@@ -195,21 +195,70 @@ fn feishu_attempted_send_is_never_replayed_after_failure_or_runtime_restart() {
     f.pump();
     f.flush();
     assert_eq!(f.calls().len(), 1);
+}
+
+#[test]
+fn repeated_tagged_blocker_after_failed_delivery_can_be_sent_after_recovery() {
+    let mut f = Fixture::new();
+    std::fs::write(f.root.join("mode"), "fail").unwrap();
+    f.post("[waiting-on-you] Choose");
+    f.flush();
     std::fs::remove_file(f.root.join("mode")).unwrap();
     f.post("[waiting-on-you] Choose");
     f.flush();
     assert_eq!(
         f.calls().len(),
-        1,
-        "a repeated ask cannot retry an uncertain send"
+        2,
+        "a repeated explicit ask must reach Feishu after recovery"
     );
-    f.post("[waiting-on-you] Different ask after recovery");
+    let saved = f.worker.store.load().unwrap().unwrap();
+    assert_eq!(saved.feishu.outbox.len(), 2);
+    assert_eq!(
+        saved
+            .feishu
+            .outbox
+            .values()
+            .filter(|r| r.message_id.is_some())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn feishu_repeat_ask_after_an_uncertain_send_survives_restart_as_a_new_root() {
+    let mut f = Fixture::new();
+    std::fs::write(f.root.join("mode"), "hang").unwrap();
+    let first = f.post("[waiting-on-you] Choose");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    f.worker.finish_feishu();
+    std::fs::remove_file(f.root.join("mode")).unwrap();
+    let replacement = Worker::open(f.root.join("unused-uncertain"), Box::new(NoNative)).unwrap();
+    drop(std::mem::replace(&mut f.worker, replacement));
+    f.worker = Worker::open(f.root.join("session"), Box::new(NoNative)).unwrap();
+    f.worker.settings_path = Some(f.root.join("settings.json"));
+    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(10));
+    f.now += 60_000;
+    f.pump();
+    f.post("[waiting-on-you] Choose");
     f.flush();
     assert_eq!(
         f.calls().len(),
         2,
-        "a new explicit request may send after recovery"
+        "an uncertain send cannot suppress a repeated ask"
     );
+    let saved = f.worker.store.load().unwrap().unwrap();
+    let old = saved
+        .feishu
+        .outbox
+        .values()
+        .find(|r| r.source.prompt_id == first)
+        .unwrap();
+    assert!(old.attempted && old.message_id.is_none());
+    assert!(serde_json::to_value(old).unwrap()["send_error"].is_string());
 }
 
 #[test]
