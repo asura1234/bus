@@ -1,7 +1,7 @@
 use super::*;
 use crate::messaging::coordinator::{Method, ResponseResult};
 use crate::messaging::{
-    model::{AgentId, Provider},
+    model::{AgentId, PromptId, Provider},
     native::{Transport, TransportError},
 };
 use std::{
@@ -9,12 +9,6 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-
-// These are coordinator contract tests, not subprocess startup benchmarks.
-// Leave headroom for the stand-in interpreter under instrumented gate load;
-// production timeouts remain unchanged.
-const CLI_TIMEOUT: Duration = Duration::from_secs(30);
-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(45);
 
 struct NoNative;
 impl Transport for NoNative {
@@ -27,7 +21,7 @@ struct Fixture {
     worker: Worker,
     root: PathBuf,
     events: mpsc::Sender<BusEvent>,
-    _receiver: mpsc::Receiver<BusEvent>,
+    receiver: mpsc::Receiver<BusEvent>,
     agent: AgentId,
     now: u64,
 }
@@ -35,22 +29,25 @@ impl Fixture {
     fn new() -> Self {
         let root = crate::utils::test_temp::unique_temp_path("feishu-waiting");
         std::fs::create_dir_all(&root).unwrap();
-        let script = root.join("lark-cli");
+        let script = root.join("feishu-bridge");
         std::fs::write(&script, include_str!("waiting_cli_fixture.txt")).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut worker = Worker::open(root.join("session"), Box::new(NoNative)).unwrap();
         worker.settings_path = Some(root.join("settings.json"));
         settings::save(
             worker.settings_path.as_ref().unwrap(),
-            &settings::BusSettings::default(),
+            &settings::BusSettings {
+                feishu_bridge_path: Some(script.to_str().unwrap().into()),
+                ..Default::default()
+            },
         )
         .unwrap();
-        worker.attention.client = Client::on_path(&root, CLI_TIMEOUT);
+        worker.attention.client = Client::on_path(&root, Duration::from_secs(10));
         let mut state = worker.state.clone();
         let master = state.ensure_master_room();
         let work = state.create_room("work").unwrap();
         let agent = state
-            .create_agent(master, "orch", Provider::ClaudeCode, root.clone(), None)
+            .create_agent(master, "orch", Provider::Codex, root.clone(), None)
             .unwrap();
         state.bind_orchestrator(agent, work).unwrap();
         worker.save(state).unwrap();
@@ -59,7 +56,7 @@ impl Fixture {
             worker,
             root,
             events,
-            _receiver: receiver,
+            receiver,
             agent,
             now: 1000,
         };
@@ -69,23 +66,34 @@ impl Fixture {
     fn pump(&mut self) {
         self.worker.pump_feishu(&self.events, self.now).unwrap();
     }
-    fn post(&mut self, text: &str) {
+    fn post(&mut self, text: &str) -> PromptId {
         let mut state = self.worker.state.clone();
-        let master = state.master_room().unwrap().id;
-        state
-            .post_to_developer(master, self.agent, text.into(), vec![], self.now)
+        let source = state
+            .post_to_developer(
+                state.master_room().unwrap().id,
+                self.agent,
+                text.into(),
+                vec![],
+                self.now,
+            )
             .unwrap();
         self.worker.save(state).unwrap();
         self.pump();
+        source
     }
     fn flush(&mut self) {
-        self.now += 2000;
-        self.pump();
-        let deadline = Instant::now() + COMPLETION_TIMEOUT;
-        while self.worker.attention.job.is_some() {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            self.pump();
+            if self.worker.attention.job.is_none()
+                && self.worker.attention.retired.is_empty()
+                && self.worker.attention.completion.is_none()
+                && self.worker.attention.status.queued == 0
+            {
+                break;
+            }
             assert!(Instant::now() < deadline, "send did not complete");
             std::thread::sleep(Duration::from_millis(5));
-            self.pump();
         }
     }
     fn calls(&self) -> Vec<Vec<String>> {
@@ -103,363 +111,414 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.worker.attention.stop();
+        let retired = std::mem::take(&mut self.worker.attention.retired);
+        for job in retired {
+            let _ = job.join();
+        }
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
 #[test]
-fn feishu_waiting_variants_invoke_bot_dm_once_with_exact_action_and_argv() {
-    for marker in ["[waiting-on-you]", "[waiting_on_you]", "[WAITING_ON_YOU]"] {
-        let mut f = Fixture::new();
-        f.post(&format!(
-            "Summary\n{marker}\nPick one:\n- **B (recommended):** Approve access.\n- **A:** Keep waiting."
-        ));
-        f.flush();
-        assert_eq!(f.worker.attention.status.error, None, "{marker}");
-        f.now += 5000;
-        f.pump();
-        let calls = f.calls();
-        assert_eq!(
-            calls.len(),
-            1,
-            "{marker}; status={:?}; config={:?}; waiting={:?}; notices={:?}",
-            f.worker.attention.status,
-            f.worker.attention.config,
-            f.worker.attention.waiting,
-            f.worker
-                .state
-                .notices(f.worker.state.master_room().unwrap().id)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            &calls[0][..8],
-            [
-                "im",
-                "+messages-send",
-                "--as",
-                "bot",
-                "--user-id",
-                settings::DEFAULT_FEISHU_RECIPIENT,
-                "--text",
-                "orch is waiting on you: Pick one:\n- **B (recommended):** Approve access.\n- **A:** Keep waiting."
-            ]
-        );
-        assert_eq!(&calls[0][8..9], ["--idempotency-key"]);
-        assert_eq!(&calls[0][10..], ["--format", "json"]);
-    }
-}
-
-#[test]
-fn feishu_ignores_untagged_posts_and_the_legacy_phrase() {
-    // Status replies such as "nothing is waiting on you" must never page the developer.
-    for text in [
-        "Merged #179; nothing is waiting on you.",
-        "still waiting on you: Approve access",
-        "[needs_developer_attention] Approve access",
-        "Decide release timing",
-    ] {
-        let mut f = Fixture::new();
-        f.post(text);
-        f.flush();
-        f.now += 5000;
-        f.pump();
-        assert!(f.calls().is_empty(), "{text}");
-    }
-}
-
-#[test]
-fn feishu_full_unicode_action_reaches_cli_without_truncation() {
+fn feishu_distinct_asks_have_their_own_dm_and_durable_mapping_before_and_after_transport() {
     let mut f = Fixture::new();
-    let action = "界 full action ".repeat(100);
-    f.post(&format!(
-        "[waiting_on_you] {action}\nNext step: 开通访问权限"
-    ));
+    f.post("[waiting-on-you] Choose first");
+    f.post("[waiting-on-you] Choose second");
     f.flush();
-    assert_eq!(f.calls().len(), 1);
     assert_eq!(
-        f.calls()[0][7],
-        format!(
-            "orch is waiting on you: {}\nNext step: 开通访问权限",
-            action.trim()
-        )
+        f.calls().len(),
+        2,
+        "distinct asks must retain separate DMs and routes"
     );
+    assert_eq!(f.worker.state.feishu.outbox.len(), 2);
+    let saved = f.worker.store.load().unwrap().unwrap();
+    for record in saved.feishu.outbox.values() {
+        assert!(record.message_id.as_ref().unwrap().starts_with("om_fake_"));
+        assert_eq!(record.chat_id.as_deref(), Some("oc_dm"));
+        assert_eq!(record.orchestrator, Some(f.agent));
+        assert_eq!(record.raising_agent, Some(f.agent));
+        assert!(record.text.contains(&format!("bus:{}", record.code)));
+    }
+    assert_ne!(f.calls()[0][6], f.calls()[1][6]);
+    assert_eq!(f.worker.attention.status.error, None);
 }
 
 #[test]
-fn feishu_direct_messages_notify_and_legacy_off_cannot_silence_or_replay() {
+fn feishu_missing_plugin_turns_notifications_off_without_a_tui_error() {
     let mut f = Fixture::new();
-    f.post("[waiting-on-you] Approve access");
-    f.flush();
-    assert_eq!(f.calls().len(), 1);
-    assert_eq!(f.calls()[0][7], "orch is waiting on you: Approve access");
-    f.settings(|s| s.feishu_notifications = false);
-    f.post("[waiting_on_you] mandatory");
-    f.flush();
-    assert_eq!(f.calls().len(), 2);
-    f.settings(|s| s.feishu_notifications = true);
-    f.flush();
-    assert_eq!(f.calls().len(), 2);
-}
-
-#[test]
-fn feishu_bursts_coalesce_and_disable_is_rejected_without_losing_pending() {
-    let mut f = Fixture::new();
-    f.post("[waiting_on_you] first");
-    f.now += 1900;
-    f.post("[waiting-on-you] second");
+    f.settings(|s| s.feishu_bridge_path = Some("/missing/feishu-bridge".into()));
+    f.post("[waiting-on-you] Choose");
+    assert!(!f.worker.attention.status.enabled);
     assert!(f.calls().is_empty());
-    f.now += 100;
-    f.pump();
-    f.flush();
-    assert_eq!(f.calls().len(), 1);
-    assert_eq!(
-        f.calls()[0][7],
-        "orch is waiting on you: first\norch is waiting on you: second"
-    );
-    f.post("[waiting_on_you] cancelled");
-    assert!(f.worker.set_feishu_notifications(false, &f.events).is_err());
-    f.flush();
-    assert_eq!(f.calls().len(), 2);
+    assert!(f.worker.state.feishu.outbox.is_empty());
+    assert_eq!(f.worker.attention.status.error, None);
+    assert!(!f
+        .receiver
+        .try_iter()
+        .any(|event| matches!(event, BusEvent::CommandFinished { result: Err(_), .. })));
 }
 
 #[test]
-fn feishu_failure_logs_warning_and_never_blocks_coordinator_or_retries() {
+fn feishu_untagged_posts_and_legacy_phrases_do_not_send() {
+    let mut f = Fixture::new();
+    for text in [
+        "@you Choose",
+        "still waiting on you: Choose",
+        "Nothing is waiting on you",
+        "Choose",
+    ] {
+        f.post(text);
+    }
+    f.flush();
+    assert!(f.calls().is_empty());
+}
+
+#[test]
+fn feishu_complete_unicode_action_and_literal_shell_text_reach_the_bridge() {
+    let mut f = Fixture::new();
+    let action = format!("{}\nNext: `$HOME` 开通权限", "界".repeat(100));
+    f.post(&format!("[waiting-on-you] {action}"));
+    f.flush();
+    assert!(f.calls()[0][4].starts_with(&format!("orch is waiting on you: {}", action.trim())));
+}
+
+#[test]
+fn feishu_attempted_send_is_never_replayed_after_failure_or_runtime_restart() {
     let mut f = Fixture::new();
     std::fs::write(f.root.join("mode"), "fail").unwrap();
-    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-    #[derive(Clone)]
-    struct Writer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Writer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let writer = Writer(log.clone());
-    let subscriber = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .without_time()
-        .with_writer(move || writer.clone())
-        .finish();
-    tracing::subscriber::with_default(subscriber, || {
-        f.post("[waiting_on_you] action");
-        f.flush();
-        for _ in 0..5 {
-            f.now += 10_000;
-            f.pump();
-        }
-    });
-    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
-    assert!(
-        log.contains("WARN")
-            && log.contains("bus.feishu.failed")
-            && log.contains("exit code Some(7)"),
-        "{log}"
-    );
-    assert_eq!(f.calls().len(), 1);
-    std::fs::write(f.root.join("mode"), "hang").unwrap();
-    // The stand-in sleeps for 60 seconds, so this still exercises a real
-    // timeout without requiring the interpreter to start within one second.
-    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(10));
-    f.post("[waiting_on_you] timed out");
-    f.now += 2000;
-    let start = Instant::now();
-    f.pump();
-    assert!(start.elapsed() < Duration::from_millis(500));
+    f.post("[waiting-on-you] Choose");
     f.flush();
-    assert!(f
-        .worker
-        .attention
-        .status
-        .error
-        .as_deref()
-        .unwrap()
-        .contains("timed out"));
-    assert_eq!(f.calls().len(), 2);
-}
-
-#[test]
-fn feishu_missing_cli_and_configured_destination_and_override_are_bounded() {
-    let mut f = Fixture::new();
-    let program = f.root.join("lark-cli").to_string_lossy().into_owned();
-    f.settings(|s| {
-        s.feishu_recipient = "ou_configured".into();
-        s.feishu_cli_path = Some(program);
-    });
-    f.post("[waiting_on_you] configured");
-    f.flush();
-    assert_eq!(f.calls()[0][5], "ou_configured");
-    f.settings(|s| s.feishu_cli_path = Some("/missing/lark-cli".into()));
-    f.post("[waiting_on_you] missing");
-    f.flush();
-    assert!(f
-        .worker
-        .attention
-        .status
-        .error
-        .as_deref()
-        .unwrap()
-        .contains("not installed"));
-    assert_eq!(f.calls().len(), 1);
-}
-
-#[test]
-fn feishu_startup_history_and_destination_changes_do_not_replay() {
-    let mut f = Fixture::new();
-    f.post("[waiting_on_you] before restart");
+    assert!(f.worker.attention.status.error.is_some());
     let client = f.worker.attention.client.clone();
     f.worker.attention = Runtime::default();
     f.worker.attention.client = client;
     f.pump();
     f.flush();
-    assert!(f.calls().is_empty());
-    f.post("[waiting_on_you] old destination");
-    f.settings(|s| s.feishu_recipient = "ou_new".into());
-    f.flush();
     assert_eq!(f.calls().len(), 1);
-    assert_eq!(f.calls()[0][5], "ou_new");
-    assert_eq!(f.calls()[0][7], "orch is waiting on you: old destination");
-    f.post("[waiting_on_you] new action");
-    f.flush();
-    assert_eq!(f.calls().len(), 2);
-    assert_eq!(f.calls()[1][5], "ou_new");
-}
-
-#[test]
-fn feishu_upgrade_starts_mandatory_dms_and_ignores_legacy_off_choice() {
-    // Every settings.json written before waiting DMs serialized the old
-    // default-off `feishu_notifications` and the removed popup toggle.
-    let mut f = Fixture::new();
-    std::fs::write(
-        f.worker.settings_path.as_ref().unwrap(),
-        r#"{
-  "color_blind_mode": false,
-  "feishu_notifications": false,
-  "developer_notifications": true,
-  "feishu_notifications_generation": 0,
-  "master_sound": { "enabled": true, "name": null },
-  "room_sound": { "enabled": false, "name": null },
-  "max_compactions_per_agent": 5,
-  "sidebar_width": 28
-}"#,
-    )
-    .unwrap();
-    f.pump();
-    f.post("[waiting_on_you] Approve access");
-    f.flush();
-    assert_eq!(
-        f.calls().len(),
-        1,
-        "waiting DM stayed off after upgrade; enabled={}",
-        f.worker.attention.status.enabled
-    );
-    f.settings(|s| s.feishu_notifications = false);
-    f.post("[waiting_on_you] Disabled after upgrade");
-    f.flush();
-    assert_eq!(
-        f.calls().len(),
-        2,
-        "legacy off cannot disable developer alerts"
-    );
-}
-
-#[test]
-fn notify_you_legacy_off_cannot_disable_worker_notifications() {
-    let mut f = Fixture::new();
-    f.settings(|s| s.feishu_notifications = false);
-    let mut state = f.worker.state.clone();
-    let room = state
-        .rooms()
-        .find(|r| r.kind == crate::messaging::model::RoomKind::Work)
-        .unwrap()
-        .id;
-    let sender = state
-        .create_agent(room, "worker", Provider::Codex, f.root.clone(), None)
-        .unwrap();
-    state
-        .post_to_developer(
-            room,
-            sender,
-            "[waiting-on-you] Decide release timing".into(),
-            vec![],
-            f.now,
-        )
-        .unwrap();
-    f.worker.save(state).unwrap();
-    f.pump();
-    f.flush();
-    assert_eq!(f.calls().len(), 1);
-    assert_eq!(
-        f.calls()[0][7],
-        "worker is waiting on you: Decide release timing"
-    );
-    assert!(f.worker.set_feishu_notifications(false, &f.events).is_err());
 }
 
 #[test]
 fn repeated_tagged_blocker_after_failed_delivery_can_be_sent_after_recovery() {
     let mut f = Fixture::new();
     std::fs::write(f.root.join("mode"), "fail").unwrap();
-    f.post("[waiting-on-you] Unlock the device");
+    f.post("[waiting-on-you] Choose");
     f.flush();
-    assert!(f.worker.attention.status.error.is_some());
-    assert_eq!(f.calls().len(), 1);
     std::fs::remove_file(f.root.join("mode")).unwrap();
-    f.now += 5_000;
-    f.post("[waiting-on-you] Unlock the device");
+    f.post("[waiting-on-you] Choose");
     f.flush();
     assert_eq!(
         f.calls().len(),
         2,
-        "a failed attempt must not suppress a fresh explicit blocker after delivery recovers"
+        "a repeated explicit ask must reach Feishu after recovery"
     );
-    assert_eq!(f.worker.attention.status.error, None);
+    let saved = f.worker.store.load().unwrap().unwrap();
+    assert_eq!(saved.feishu.outbox.len(), 2);
+    assert_eq!(
+        saved
+            .feishu
+            .outbox
+            .values()
+            .filter(|r| r.message_id.is_some())
+            .count(),
+        1
+    );
 }
 
 #[test]
-fn repeated_tagged_ask_stays_deduplicated_after_sender_rename() {
+fn feishu_repeat_ask_after_an_uncertain_send_survives_restart_as_a_new_root() {
     let mut f = Fixture::new();
-    f.post("[waiting-on-you] Unlock the device");
-    f.flush();
-    assert_eq!(f.calls().len(), 1);
-    let mut state = f.worker.state.clone();
-    state.rename_agent(f.agent, "renamed-orch").unwrap();
-    f.worker.save(state).unwrap();
+    std::fs::write(f.root.join("mode"), "hang").unwrap();
+    let first = f.post("[waiting-on-you] Choose");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    f.worker.finish_feishu();
+    std::fs::remove_file(f.root.join("mode")).unwrap();
+    let replacement = Worker::open(f.root.join("unused-uncertain"), Box::new(NoNative)).unwrap();
+    drop(std::mem::replace(&mut f.worker, replacement));
+    f.worker = Worker::open(f.root.join("session"), Box::new(NoNative)).unwrap();
+    f.worker.settings_path = Some(f.root.join("settings.json"));
+    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(10));
+    f.now += 60_000;
     f.pump();
-    f.now += 5_000;
-    f.post("[waiting-on-you] Unlock the device");
+    f.post("[waiting-on-you] Choose");
     f.flush();
     assert_eq!(
         f.calls().len(),
-        1,
-        "renaming does not change the sender ID of an already paged ask"
+        2,
+        "an uncertain send cannot suppress a repeated ask"
     );
+    let saved = f.worker.store.load().unwrap().unwrap();
+    let old = saved
+        .feishu
+        .outbox
+        .values()
+        .find(|r| r.source.prompt_id == first)
+        .unwrap();
+    assert!(old.attempted && old.message_id.is_none());
+    assert!(serde_json::to_value(old).unwrap()["send_error"].is_string());
 }
 
 #[test]
-fn distinct_sender_reusing_a_name_can_page_its_own_tagged_ask() {
+fn feishu_bridge_failure_stays_in_logs_even_with_error_reporting_enabled() {
+    use tracing_subscriber::prelude::*;
     let mut f = Fixture::new();
-    f.post("[waiting-on-you] Unlock the device");
-    f.flush();
-    assert_eq!(f.calls().len(), 1);
+    f.worker.dev_enabled = true;
+    f.worker
+        .set_error_orchestrator(Some("orch".into()), &f.events)
+        .unwrap();
+    f.worker.refresh_error_pipe_at(100);
+    let log = f.worker.error_log_dir().join("server.log");
+    let subscriber =
+        tracing_subscriber::registry().with(crate::utils::error_pipe::CaptureLayer::new(log));
+    std::fs::write(f.root.join("mode"), "fail").unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        f.post("[waiting-on-you] Choose");
+        f.flush();
+    });
+    f.worker.refresh_error_pipe_at(10_000);
+    f.worker.refresh_error_pipe_at(20_000);
+    assert!(f.worker.attention.status.error.is_some());
+    assert_eq!(
+        f.worker.state.requests().count(),
+        0,
+        "Feishu failure must not enqueue an error report"
+    );
+    assert!(!f
+        .receiver
+        .try_iter()
+        .any(|event| matches!(event, BusEvent::CommandFinished { result: Err(_), .. })));
+}
+
+#[test]
+fn feishu_new_runtime_uses_history_as_baseline_but_keeps_persisted_pending_outbox() {
+    let mut f = Fixture::new();
     let mut state = f.worker.state.clone();
-    state.rename_agent(f.agent, "renamed-orch").unwrap();
-    let master = state.master_room().unwrap().id;
-    let replacement = state
-        .create_agent(master, "orch", Provider::Codex, f.root.clone(), None)
+    state
+        .post_to_developer(
+            state.master_room().unwrap().id,
+            f.agent,
+            "[waiting-on-you] Old history".into(),
+            vec![],
+            1,
+        )
         .unwrap();
     f.worker.save(state).unwrap();
-    f.agent = replacement;
+    let client = f.worker.attention.client.clone();
+    f.worker.attention = Runtime::default();
+    f.worker.attention.client = client;
     f.pump();
-    f.now += 5_000;
-    f.post("[waiting-on-you] Unlock the device");
+    f.flush();
+    assert!(f.calls().is_empty());
+    f.post("[waiting-on-you] Fresh request");
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+}
+
+#[test]
+fn feishu_successful_send_mapping_survives_unreadable_settings() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Choose");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !f.worker.attention.job.as_ref().unwrap().is_finished() {
+        assert!(Instant::now() < deadline, "bridge did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(f.calls().len(), 1);
+    let settings_path = f.worker.settings_path.as_ref().unwrap().clone();
+    let saved_settings = std::fs::read(&settings_path).unwrap();
+    std::fs::write(&settings_path, b"{malformed").unwrap();
+    f.pump();
+    std::fs::write(&settings_path, saved_settings).unwrap();
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "settings recovery must not resend");
+    let saved = f.worker.store.load().unwrap().unwrap();
+    let record = saved.feishu.outbox.values().next().unwrap();
+    assert_eq!(
+        record.message_id.as_deref(),
+        Some("om_fake_1"),
+        "a successful bridge completion must survive a settings read failure"
+    );
+    assert_eq!(record.chat_id.as_deref(), Some("oc_dm"));
+}
+
+#[test]
+fn feishu_successful_send_mapping_survives_worker_retirement() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Choose");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !f.worker.attention.job.as_ref().unwrap().is_finished() {
+        assert!(Instant::now() < deadline, "bridge did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // A settings failure can retire the worker just after its finished check.
+    f.worker.attention.stop();
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    let saved = f.worker.store.load().unwrap().unwrap();
+    let record = saved.feishu.outbox.values().next().unwrap();
+    assert_eq!(record.message_id.as_deref(), Some("om_fake_1"));
+}
+
+#[test]
+fn feishu_successful_send_mapping_survives_worker_shutdown() {
+    for explicit in [true, false] {
+        let mut f = Fixture::new();
+        f.post("[waiting-on-you] Choose");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !f.worker.attention.job.as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < deadline, "bridge did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let replacement = Worker::open(f.root.join("unused"), Box::new(NoNative)).unwrap();
+        let worker = std::mem::replace(&mut f.worker, replacement);
+        let snapshots = std::sync::Arc::new(std::sync::Mutex::new(std::sync::Arc::new(
+            worker.snapshot(),
+        )));
+        let (commands, receiver) = mpsc::channel();
+        if explicit {
+            commands
+                .send((1, crate::messaging::coordinator::BusCommand::Shutdown))
+                .unwrap();
+        }
+        drop(commands);
+        worker.run(receiver, f.events.clone(), snapshots);
+        let saved = crate::messaging::storage::state_store::JsonStore::new(
+            f.root.join("session/state.json"),
+        )
+        .load()
+        .unwrap()
+        .unwrap();
+        assert_eq!(f.calls().len(), 1);
+        assert_eq!(
+            saved
+                .feishu
+                .outbox
+                .values()
+                .next()
+                .unwrap()
+                .message_id
+                .as_deref(),
+            Some("om_fake_1")
+        );
+    }
+}
+
+#[test]
+fn feishu_repeat_ask_keeps_one_dm_and_both_persisted_request_routes() {
+    let mut f = Fixture::new();
+    let first = f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    f.now += 60_000;
+    let repeated = f.post("[waiting_on_you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "one shared DM within thirty minutes");
+    let mut saved = f.worker.store.load().unwrap().unwrap();
+    assert_eq!(saved.feishu.outbox.len(), 1);
+    let record = serde_json::to_value(saved.feishu.outbox.values().next().unwrap()).unwrap();
+    assert_eq!(record["source"]["prompt_id"], serde_json::json!(first));
+    assert_eq!(
+        record["aliases"][0]["source"]["prompt_id"],
+        serde_json::json!(repeated)
+    );
+    assert_eq!(record["message_id"], "om_fake_1");
+    assert_eq!(
+        record["aliases"][0]["raising_agent"],
+        serde_json::json!(f.agent)
+    );
+    // Re-observing retained history cannot append a logical source twice.
+    saved.prepare_feishu_alerts(
+        &BusState::new(),
+        &f.worker.data_dir.to_string_lossy(),
+        &settings::BusSettings::default().feishu_recipient,
+        f.now,
+    );
+    assert_eq!(saved.feishu.outbox.len(), 1);
+    assert_eq!(
+        saved.feishu.outbox.values().next().unwrap().aliases.len(),
+        1
+    );
+}
+
+#[test]
+fn feishu_repeat_ask_window_survives_restart_and_is_not_extended_by_a_repeat() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    let replacement = Worker::open(f.root.join("unused-restart"), Box::new(NoNative)).unwrap();
+    drop(std::mem::replace(&mut f.worker, replacement));
+    f.worker = Worker::open(f.root.join("session"), Box::new(NoNative)).unwrap();
+    f.worker.settings_path = Some(f.root.join("settings.json"));
+    f.worker.attention.client = Client::on_path(&f.root, Duration::from_secs(10));
+    f.now += 60_000;
+    f.pump();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 1, "restart must retain suppression");
+    f.now = 1_000 + 30 * 60_000;
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 2, "the window starts at the first request");
+}
+
+#[test]
+fn feishu_repeat_ask_does_not_reuse_a_dm_for_another_recipient() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    f.settings(|settings| settings.feishu_recipient = "ou_other_recipient".into());
+    f.now += 60_000;
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 2);
+    assert_eq!(f.calls()[1][2], "ou_other_recipient");
+}
+
+#[test]
+fn feishu_repeat_ask_keeps_different_raising_agents_separate() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    let mut state = f.worker.state.clone();
+    f.agent = state
+        .create_agent(
+            state.master_room().unwrap().id,
+            "other",
+            Provider::Codex,
+            f.root.clone(),
+            None,
+        )
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    assert_eq!(f.calls().len(), 2);
+}
+
+#[test]
+fn feishu_repeat_ask_does_not_guess_legacy_ask_identity() {
+    let mut f = Fixture::new();
+    f.post("[waiting-on-you] Restart Bus");
+    f.flush();
+    let mut saved = serde_json::to_value(&f.worker.state).unwrap();
+    for record in saved["feishu"]["outbox"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        record.as_object_mut().unwrap().remove("ask_body");
+        record.as_object_mut().unwrap().remove("aliases");
+    }
+    f.worker
+        .save(serde_json::from_value(saved).unwrap())
+        .unwrap();
+    f.post("[waiting-on-you] Restart Bus");
     f.flush();
     assert_eq!(
         f.calls().len(),
         2,
-        "a different sender ID must not inherit another sender's dedupe entry"
+        "legacy rows have no reliable normalized ask"
     );
 }

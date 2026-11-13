@@ -49,7 +49,7 @@ pub(crate) struct BusSettings {
     )]
     pub(crate) feishu_notifications: bool,
     pub(crate) feishu_recipient: String,
-    pub(crate) feishu_cli_path: Option<String>,
+    pub(crate) feishu_bridge_path: Option<String>,
     /// Installed developer-alert sound; None uses the system default.
     pub(crate) developer_sound: Option<String>,
     /// Default on for settings written before the sound had a checkbox.
@@ -89,7 +89,7 @@ impl Default for BusSettings {
             error_orchestrator: None,
             feishu_notifications: true,
             feishu_recipient: DEFAULT_FEISHU_RECIPIENT.into(),
-            feishu_cli_path: None,
+            feishu_bridge_path: None,
             developer_sound: None,
             developer_sound_enabled: true,
             master_sound: SoundPref {
@@ -258,6 +258,29 @@ pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feishu_bridge_setting_round_trips_without_adopting_the_removed_lark_path() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-feishu-bridge-setting");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        std::fs::write(&path, br#"{"feishu_cli_path":"/legacy/lark-cli"}"#).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.feishu_bridge_path, None);
+        let saved = update(&path, |settings| {
+            settings.feishu_bridge_path = Some("/private/plugin/feishu-bridge".into());
+        })
+        .unwrap();
+        assert_eq!(load(&path).unwrap(), saved);
+        assert_eq!(
+            saved.feishu_bridge_path.as_deref(),
+            Some("/private/plugin/feishu-bridge")
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(json.get("feishu_cli_path").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn feishu_notifications_default_on_with_recipient_setting() {

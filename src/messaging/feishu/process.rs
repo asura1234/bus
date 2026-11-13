@@ -24,7 +24,7 @@ impl Cancellation {
 #[derive(Clone)]
 pub(super) struct Process {
     program: OsString,
-    timeout: Duration,
+    timeout: Option<Duration>,
     #[cfg(test)]
     pub(super) path: Option<OsString>,
     /// Tests set this so the deadline starts after a grandchild is known to be running.
@@ -37,12 +37,14 @@ impl Default for Process {
         Self {
             // Unit tests must never fall through to the installed real CLI.
             program: if cfg!(test) {
-                "bus-test-no-real-lark-cli"
+                "bus-test-no-real-feishu-bridge"
             } else {
-                "lark-cli"
+                "feishu-bridge"
             }
             .into(),
-            timeout: Duration::from_secs(10),
+            // The bridge owns its configured auth/send command deadlines.
+            // Bus owns cancellation and must not truncate a valid bridge call.
+            timeout: None,
             #[cfg(test)]
             path: None,
             #[cfg(test)]
@@ -52,7 +54,7 @@ impl Default for Process {
 }
 
 impl Process {
-    pub(super) fn set_program(&mut self, program: &str) {
+    pub(super) fn set_program(&mut self, program: impl Into<OsString>) {
         self.program = program.into();
     }
 
@@ -65,7 +67,7 @@ impl Process {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|error| format!("Could not start lark-cli runtime: {error}"))?;
+            .map_err(|error| format!("Could not start feishu-bridge runtime: {error}"))?;
         runtime.block_on(self.execute(args, input, cancel))
     }
 
@@ -80,8 +82,6 @@ impl Process {
         crate::platform::configure_background_command(&mut command);
         command
             .args(args)
-            .env("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1")
-            .env("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -100,16 +100,16 @@ impl Process {
             }
             command.spawn().map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound {
-                    "lark-cli is not installed or not on PATH".to_owned()
+                    "feishu-bridge is not installed or not on PATH".to_owned()
                 } else {
-                    format!("Could not start lark-cli: {error}")
+                    format!("Could not start feishu-bridge: {error}")
                 }
             })?
         };
         let process_id = child.id();
-        let mut stdin = child.stdin.take().expect("lark-cli stdin was piped");
-        let stdout = child.stdout.take().expect("lark-cli stdout was piped");
-        let stderr = child.stderr.take().expect("lark-cli stderr was piped");
+        let mut stdin = child.stdin.take().expect("feishu-bridge stdin was piped");
+        let stdout = child.stdout.take().expect("feishu-bridge stdout was piped");
+        let stderr = child.stderr.take().expect("feishu-bridge stderr was piped");
         #[cfg(test)]
         if let Some(arm) = &self.arm_timeout {
             // The child is already spawned. Notify keeps a permit if the test
@@ -119,7 +119,7 @@ impl Process {
                 .is_err()
             {
                 terminate_tree(&mut child, process_id).await;
-                return Err("lark-cli readiness was not observed".into());
+                return Err("feishu-bridge readiness was not observed".into());
             }
         }
         let finished = {
@@ -135,15 +135,19 @@ impl Process {
                     child.wait(),
                 )
             };
-            tokio::select! {
-                result = tokio::time::timeout(self.timeout, work) => {
-                    result.map_err(|_| "lark-cli timed out".to_owned())
-                        .and_then(|result| result.map_err(|error| format!("lark-cli IO failed: {error}")))
+            let deadline = async {
+                match self.timeout {
+                    Some(timeout) => tokio::time::sleep(timeout).await,
+                    None => std::future::pending::<()>().await,
                 }
+            };
+            tokio::select! {
+                result = work => result.map_err(|error| format!("feishu-bridge IO failed: {error}")),
+                () = deadline => Err("feishu-bridge timed out".to_owned()),
                 () = wait_cancelled(cancel) => Err("Feishu notifications were disabled".to_owned()),
             }
         };
-        let (stdout, stderr, (), status) = match finished {
+        let (stdout, _stderr, (), status) = match finished {
             Ok(output) => output,
             Err(error) => {
                 terminate_tree(&mut child, process_id).await;
@@ -151,28 +155,19 @@ impl Process {
             }
         };
         if !status.success() {
-            let category = serde_json::from_slice::<Value>(&stderr)
-                .ok()
-                .and_then(|value| match value["error"]["type"].as_str() {
-                    Some("network") => Some("network"),
-                    Some("authorization") => Some("authorization"),
-                    Some("api") => Some("api"),
-                    _ => None,
-                })
-                .unwrap_or("command error");
             return Err(format!(
-                "lark-cli failed (exit code {:?}): {category}",
+                "feishu-bridge failed (exit code {:?})",
                 status.code()
             ));
         }
-        serde_json::from_slice(&stdout).map_err(|_| "lark-cli returned invalid JSON".into())
+        serde_json::from_slice(&stdout).map_err(|_| "feishu-bridge returned invalid JSON".into())
     }
 
     #[cfg(all(test, unix))]
     pub(super) fn at(program: impl Into<OsString>, timeout: Duration) -> Self {
         Self {
             program: program.into(),
-            timeout,
+            timeout: Some(timeout),
             path: None,
             arm_timeout: None,
         }
@@ -185,7 +180,7 @@ async fn read_limited(reader: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>
     if bytes.len() as u64 > MAX_OUTPUT {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "lark-cli output is too large",
+            "feishu-bridge output is too large",
         ));
     }
     Ok(bytes)
@@ -234,7 +229,7 @@ pub(super) fn fixture_lease() -> std::fs::File {
         .open(path)
         .expect("open fixture lock");
     file.lock()
-        .expect("serialize real lark-cli process fixtures");
+        .expect("serialize real feishu-bridge process fixtures");
     file
 }
 

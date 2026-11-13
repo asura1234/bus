@@ -67,6 +67,8 @@ pub(crate) struct BusState {
     pub(super) attention_episodes: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "super::AttentionDelivery::is_empty")]
     pub(super) attention_delivery: super::AttentionDelivery,
+    #[serde(default, skip_serializing_if = "super::feishu::FeishuState::is_empty")]
+    pub(crate) feishu: super::feishu::FeishuState,
     /// Settled requests and notices archived in `history.jsonl`, never in
     /// `state.json`; shared so cloning the state does not copy them.
     #[serde(skip)]
@@ -156,6 +158,7 @@ impl BusState {
             || self.spent_dialog_answers != previous.spent_dialog_answers
             || self.attention_episodes != previous.attention_episodes
             || self.attention_delivery != previous.attention_delivery
+            || self.feishu != previous.feishu
             || self.history != previous.history
             || self.agents.len() != previous.agents.len()
         {
@@ -201,6 +204,7 @@ impl BusState {
             spent_dialog_answers: BTreeMap::new(),
             attention_episodes: BTreeSet::new(),
             attention_delivery: super::AttentionDelivery::default(),
+            feishu: super::feishu::FeishuState::default(),
             history: Arc::default(),
         }
     }

@@ -242,12 +242,28 @@ class EndToEndArgumentTests(unittest.TestCase):
 
 
 class EndToEndEnvironmentTests(unittest.TestCase):
+    def test_real_provider_scratch_refuses_an_installed_feishu_bridge(self):
+        from tools.acceptance.harness_test import Bus
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data, programs = root / "data", root / "bin"
+            data.mkdir(mode=0o700)
+            programs.mkdir(mode=0o700)
+            plugin = programs / "feishu-bridge"
+            plugin.write_text("#!/bin/sh\nexit 97\n")
+            plugin.chmod(0o700)
+            bus = Bus(Path("/missing/no-process-is-started"), root, {
+                "BUS_DATA_DIR": str(data), "HOME": str(Path.home()), "PATH": str(programs),
+            }, real_providers=True)
+            with self.assertRaisesRegex(AssertionError, "feishu-bridge"):
+                bus.prepare_skills()
+
     def test_provider_path_exposes_selected_executables_and_bus_without_lark(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             providers = root / "providers"
             providers.mkdir()
-            for name in ("claude", "codex", "node", "lark-cli"):
+            for name in ("claude", "codex", "node", "lark-cli", "feishu-bridge"):
                 executable = providers / name
                 executable.write_text("#!/bin/sh\nexit 0\n")
                 executable.chmod(0o700)
@@ -259,6 +275,7 @@ class EndToEndEnvironmentTests(unittest.TestCase):
             run.bus, run.report = mock.Mock(env=dict(run.env)), {}
             run.prepare_provider_path()
             self.assertIsNone(e2e.shutil.which("lark-cli", path=run.env["PATH"]))
+            self.assertIsNone(e2e.shutil.which("feishu-bridge", path=run.env["PATH"]))
             self.assertEqual(run.bus.env["PATH"], run.env["PATH"])
             for name in ("claude", "codex", "node"):
                 selected = Path(e2e.shutil.which(name, path=run.env["PATH"]))

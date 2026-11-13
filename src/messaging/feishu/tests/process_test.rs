@@ -16,18 +16,18 @@ impl Fixture {
         let lease = super::fixture_lease();
         let root = crate::utils::test_temp::unique_temp_path("feishu-process");
         std::fs::create_dir_all(&root).unwrap();
-        let program = root.join("lark-cli");
+        let program = root.join("feishu-bridge");
         std::fs::write(&program, include_str!("process_fixture.txt")).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(root, lease)
     }
 
     fn process(&self) -> Process {
-        Process::at(self.0.join("lark-cli"), Duration::from_secs(10))
+        Process::at(self.0.join("feishu-bridge"), Duration::from_secs(10))
     }
 
     fn hanging_wrapper(&self) -> Process {
-        let program = self.0.join("lark-wrapper");
+        let program = self.0.join("bridge-wrapper");
         std::fs::write(
             &program,
             "#!/bin/sh\nsleep 60 &\nprintf '%s' \"$!\" > \"${0%/*}/grandchild.pid\"\nprintf '%s\\n' \"$!\" > \"${0%/*}/grandchild.ready\"\nwait\n",
@@ -218,7 +218,7 @@ fn feishu_process_cancellation_terminates_running_wrapper_and_grandchild() {
     let mut process = fixture.hanging_wrapper();
     // Ceiling only. Cancel runs when the ready pipe delivers the grandchild
     // pid, so a slow start cannot turn this into the timeout case.
-    process.timeout = Duration::from_secs(120);
+    process.timeout = Some(Duration::from_secs(120));
     let cancel = Cancellation::default();
     let job_cancel = cancel.clone();
     let ready = ReadyPipe::open(&fixture.0);

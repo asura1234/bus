@@ -13,12 +13,11 @@ coverage, not real-model acceptance. Repeat acceptance for the final head.
   `BUS_*`/`HERDR_*`, and check `--paths` before any control mutation. On a
   fresh `BUS_DATA_DIR` with no `settings.json`, `sbus settings` shows defaults:
   `feishu_waiting_notifications` true, `feishu_recipient`
-  `ou_ca1b530d792419a044e281f998ce68dc`, and `feishu_cli_path` null. Nested
-  `feishu.enabled` is true because that settings path exists. Do not call this
-  unconfigured, and do not run `sbus settings feishu-notifications --off`.
+  `ou_ca1b530d792419a044e281f998ce68dc`, and `feishu_bridge_path` null. Nested
+  `feishu.enabled` is false when the optional bridge is absent. Do not run `sbus settings feishu-notifications --off`.
   Isolation is the wrapper PATH `$scratch/bin:/usr/bin:/bin` not resolving
-  `lark-cli`: none of those three directories may contain an executable
-  `lark-cli`. Check those paths, not `command -v` in the tester's own shell.
+  `feishu-bridge`: none of those three directories may contain an executable
+  `feishu-bridge`. Check those paths, not `command -v` in the tester's own shell.
 - [ ] Use real provider executables and the account's existing logins. Run
   acceptance with the real `HOME` so those logins are read in place, plus a
   private `BUS_DATA_DIR` (mode 0700). A scratch `HOME` has no logins. Never
@@ -105,8 +104,9 @@ equal the full `git rev-parse HEAD`. The client is the coordinator/UI process;
 the server is the native process. Run `sbus settings` there too. With no `settings.json`,
 expect `result.settings.feishu_waiting_notifications` true,
 `result.settings.feishu_recipient` `ou_ca1b530d792419a044e281f998ce68dc`,
-`result.settings.feishu_cli_path` null, and `result.settings.feishu.enabled`
-true. A null CLI path execs `lark-cli` when that PATH resolves it, so the
+`result.settings.feishu_bridge_path` null, and `result.settings.feishu.enabled`
+false when the optional bridge is absent. An empty bridge path discovers `feishu-bridge`
+on PATH, so the
 scratch PATH is the isolation. Do not run
 `sbus settings feishu-notifications --off`.
 

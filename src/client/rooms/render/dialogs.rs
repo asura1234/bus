@@ -89,7 +89,7 @@ impl BusUi {
                 view.row(
                     Rect::new(x, y, width, 1),
                     if *cli {
-                        "lark-cli path (empty uses PATH)"
+                        "feishu-bridge path (empty uses PATH)"
                     } else {
                         "Feishu recipient open_id"
                     },
