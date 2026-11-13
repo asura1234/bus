@@ -282,7 +282,7 @@ fn fast_codex_bootstrap_exit_captures_screen_and_reports_exit_instead_of_timeout
         .unwrap();
     let a = worker.state.agent(agent).unwrap();
     let error = a.actionable_error.as_deref().unwrap();
-    assert!(error.contains("launch ended"), "{error}");
+    assert!(error.contains("provider exited during startup"), "{error}");
     assert!(!error.contains("within 30 seconds"), "{error}");
     assert!(error.contains("codex login"), "{error}");
     assert!(a
@@ -382,7 +382,7 @@ fn codex_bootstrap_retry_budget_and_backoff_survive_coordinator_restart() {
         .as_deref()
         .unwrap();
     assert!(error.contains("after 3 tries"), "{error}");
-    assert!(error.contains("launch ended"), "{error}");
+    assert!(error.contains("provider exited during startup"), "{error}");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

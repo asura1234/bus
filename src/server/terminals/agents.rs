@@ -166,6 +166,7 @@ impl App {
                     tracing::info!(event = "bus.agent.identity_cleared", reason = "launch_returned",
                         terminal_id = %terminal_id, launch = %self.terminal_runtimes.get(&terminal_id)
                             .map(|runtime| runtime.launch_diagnostics()).unwrap_or_default());
+                    terminal.record_managed_startup_exit(Instant::now());
                     terminal.clear_agent_name();
                     true
                 } else {
