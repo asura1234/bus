@@ -43,6 +43,9 @@ impl ScreenDetectionCache {
             .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
         let revision = self.content_seq.load(Ordering::Acquire);
         let content = terminal.detection_text();
+        // Dialog identity follows the visible viewport, including scrollback.
+        // Lifecycle, quota and compaction facts retain their active-screen view.
+        let viewport = terminal.visible_text();
         let coherent = revision.is_multiple_of(2)
             && revision == self.content_seq.load(Ordering::Acquire)
             && !terminal.synchronized_output_active();
@@ -56,13 +59,15 @@ impl ScreenDetectionCache {
                 .clone();
             let snapshot = match previous {
                 Some(mut previous)
-                    if previous.agent == agent && previous.text.as_ref() == content =>
+                    if previous.agent == agent
+                        && previous.text.as_ref() == content
+                        && previous.viewport.as_ref() == viewport =>
                 {
                     // Identical repaints advance coherence without rerunning classifiers.
                     previous.revision = revision;
                     Some(previous)
                 }
-                _ => self.classify(agent, revision, &content),
+                _ => self.classify(agent, revision, &content, &viewport),
             };
             if let Some(snapshot) =
                 snapshot.filter(|_| revision == self.content_seq.load(Ordering::Acquire))
@@ -129,6 +134,7 @@ impl ScreenDetectionCache {
         agent: Option<AgentKind>,
         revision: u64,
         text: &str,
+        viewport: &str,
     ) -> Option<ScreenDetection> {
         let mut last = self
             .last_classification
@@ -144,7 +150,7 @@ impl ScreenDetectionCache {
         drop(last);
         #[cfg(test)]
         self.classifications.fetch_add(1, Ordering::Relaxed);
-        Some(ScreenDetection::from_text(agent, revision, text))
+        Some(ScreenDetection::from_text(agent, revision, text, viewport))
     }
 
     #[cfg(test)]
@@ -182,6 +188,7 @@ impl ScreenDetectionCache {
 #[derive(Clone)]
 pub(crate) struct ScreenDetection {
     text: Arc<str>,
+    viewport: Arc<str>,
     agent: Option<AgentKind>,
     revision: u64,
     pub(crate) compaction_banner: bool,
@@ -191,9 +198,15 @@ pub(crate) struct ScreenDetection {
 }
 
 impl ScreenDetection {
-    pub(super) fn from_text(agent: Option<AgentKind>, revision: u64, text: &str) -> Self {
+    pub(super) fn from_text(
+        agent: Option<AgentKind>,
+        revision: u64,
+        text: &str,
+        viewport: &str,
+    ) -> Self {
         Self {
             text: Arc::from(text),
+            viewport: Arc::from(viewport),
             agent,
             revision,
             compaction_banner: crate::agents::compaction_banner::visible(
@@ -202,8 +215,8 @@ impl ScreenDetection {
             ),
             provider_quota: agent == Some(AgentKind::Cursor)
                 && crate::agents::providers::cursor::usage::is_restored_monthly_usage_limit(text),
-            dialog: crate::terminal::driver::blocker_from_text(text, false),
-            working_dialog: crate::terminal::driver::blocker_from_text(text, true),
+            dialog: crate::terminal::driver::blocker_from_text(viewport, false),
+            working_dialog: crate::terminal::driver::blocker_from_text(viewport, true),
         }
     }
 

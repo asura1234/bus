@@ -204,25 +204,35 @@ impl TerminalRuntime {
 
     /// Scroll up by N lines (into scrollback history).
     pub fn scroll_up(&self, lines: usize) {
-        self.terminal.scroll_up(lines);
-        self.compression.wake();
+        self.scroll_viewport(|terminal| terminal.scroll_up(lines));
     }
 
     /// Scroll down by N lines (toward live output).
     pub fn scroll_down(&self, lines: usize) {
-        self.terminal.scroll_down(lines);
-        self.compression.wake();
+        self.scroll_viewport(|terminal| terminal.scroll_down(lines));
     }
 
     /// Reset scroll to live view (offset = 0).
     pub fn scroll_reset(&self) {
-        self.terminal.scroll_reset();
-        self.compression.wake();
+        self.scroll_viewport(PaneTerminal::scroll_reset);
     }
 
     /// Set scrollback offset measured from the live bottom of the terminal.
     pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
-        self.terminal.set_scroll_offset_from_bottom(lines);
+        self.scroll_viewport(|terminal| terminal.set_scroll_offset_from_bottom(lines));
+    }
+
+    fn scroll_viewport(&self, change: impl FnOnce(&PaneTerminal)) {
+        let guard = self
+            .content_write_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
+        change(&self.terminal);
+        self.content_seq.fetch_add(1, Ordering::Release);
+        drop(guard);
+        // Scrolling changes dialog identity, not native output or activity.
+        self.screen_detection.notify_changed();
         self.compression.wake();
     }
 
