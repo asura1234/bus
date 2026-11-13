@@ -31,8 +31,8 @@ impl super::BusState {
     /// A native "confirmed" write can be false: Claude 2.1.310 blanked its
     /// composer while loading a pasted image and dropped the Enter (live
     /// 2026-11-13: the message sat unsent for 20 minutes, Active with no
-    /// bound). With hooks live, an idle agent that never went busy and sent
-    /// no submit hook within the confirmation grace did not take the message.
+    /// bound). With hooks live, an idle agent that never went busy on it and
+    /// sent no submit hook within the confirmation grace did not take it.
     pub(super) fn confirmed_write_never_started(
         &self,
         lead: &super::Request,
@@ -48,7 +48,10 @@ impl super::BusState {
             && agent.hook_setup_confirmed
             && agent.status == super::RuntimeStatus::Idle
             && !agent.dialog
-            && agent.busy_revision <= lead.submission_status_revision
+            // Work of the agent's own is not this write's turn; the bound
+            // then counts from the idle start after it.
+            && (agent.busy_revision <= lead.submission_status_revision
+                || lead.foreign_turn_started_at_ms.is_some())
             && !lead.trusted_start_bound
             && !lead.steered
             && !lead.restart_continuation

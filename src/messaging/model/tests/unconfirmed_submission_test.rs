@@ -585,3 +585,69 @@ fn a_turn_of_the_agents_own_does_not_take_steering_meant_for_an_unstarted_write(
     assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
     assert_eq!(state.next_queued_request(agent), Some(behind));
 }
+
+#[test]
+fn an_unstarted_write_fails_visibly_after_a_foreign_turn_ends_with_or_without_a_stop_hook() {
+    // Esc interrupts a Claude turn with no Stop hook, so the foreign turn never
+    // settles; its Working status must not count as the unstarted write's turn.
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        for interrupted in [true, false] {
+            let label = format!("{provider:?}, interrupted={interrupted}");
+            let (mut state, room, agent, _) = state_with_room_and_agents();
+            let (typed, behind) = falsely_confirmed_write(&mut state, room, agent, provider);
+            state.accept_callback(own_turn_callback(
+                agent,
+                6,
+                CallbackEventKind::PromptStarted,
+            ));
+            state
+                .observe_status(agent, RuntimeStatus::Working, 6_001)
+                .unwrap();
+            if !interrupted {
+                state.accept_callback(own_turn_callback(
+                    agent,
+                    7,
+                    CallbackEventKind::Final {
+                        text: "background check done".into(),
+                    },
+                ));
+            }
+            state
+                .observe_status(agent, RuntimeStatus::Idle, 7_000)
+                .unwrap();
+            assert!(
+                !state.turn_ended(state.request(typed).unwrap()),
+                "{label}: the foreign turn's end is not the unstarted write's"
+            );
+            let bound = 7_000 + UNCONFIRMED_SUBMISSION_MS;
+            state.fail_unconfirmed_submissions(bound - 1).unwrap();
+            assert_eq!(
+                state.request(typed).unwrap().phase,
+                RequestPhase::Active,
+                "{label}"
+            );
+            state
+                .observe_status(agent, RuntimeStatus::Idle, bound)
+                .unwrap();
+            state.fail_unconfirmed_submissions(bound).unwrap();
+            assert_eq!(state.next_steering(agent), None, "{label}");
+            let failed = state.request(typed).unwrap();
+            assert_eq!(failed.phase, RequestPhase::Abandoned, "{label}");
+            assert_eq!(
+                failed.failure_reason.as_deref(),
+                Some("submission_unconfirmed"),
+                "{label}"
+            );
+            assert!(
+                state
+                    .agent(agent)
+                    .unwrap()
+                    .actionable_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("before resending")),
+                "{label}"
+            );
+            assert_eq!(state.next_queued_request(agent), Some(behind), "{label}");
+        }
+    }
+}
