@@ -278,6 +278,19 @@ class Run:
         alias_turn = self.assert_delivery(worker_event, worker_receipt, self.same_second, self.orch_a)
         assert len({first_turn, second_turn, alias_turn}) == 3, "every logical source gets its own provider turn"
         assert len(self.requests_for(worker_event["message_id"])) == 2
+        call_count = len(self.calls())
+        late_source = self.post("work-a", self.worker, "[waiting-on-you] Same decision")
+        until(lambda: len(self.requests_for(worker_event["message_id"])) == 3,
+              "late alias must receive the cached reply before any Feishu replay")
+        mapping = self.state()["feishu"]["outbox"][self.same_first["outbox"]["code"]]
+        late = next(route for route in mapping["aliases"] if route["source"]["prompt_id"] == late_source)
+        late_route = dict(self.same_first, outbox=dict(mapping, **late))
+        late_turn = self.assert_delivery(worker_event, worker_receipt, late_route, self.orch_a)
+        assert len({first_turn, second_turn, alias_turn, late_turn}) == 4
+        assert len(self.calls()) == call_count, "a late alias cannot send another DM"
+        self.worker_routes = [self.same_first, self.same_second, late_route]
+        assert self.ingest(worker_event) == worker_receipt
+        assert len(self.requests_for(worker_event["message_id"])) == 3
         assert self.ingest(self.replay_event) == self.replay_receipt
         changed = dict(self.replay_event, text="CHANGED_REPLAY_MUST_NOT_RUN")
         assert self.ingest(changed) == self.replay_receipt
@@ -287,10 +300,9 @@ class Run:
             (self.event("om_in_nested", parent="om_in_worker", text="FEISHU_NESTED_REPLY"), self.same_first, self.orch_a),
         ]:
             receipt = self.ingest(event)
-            turn = self.assert_delivery(event, receipt, route, target)
-            if route["outbox"]["code"] == self.same_first["outbox"]["code"]:
-                other = self.same_second if route is self.same_first else self.same_first
-                assert self.assert_delivery(event, receipt, other, target) != turn
+            logical_routes = self.worker_routes if route["outbox"]["code"] == self.same_first["outbox"]["code"] else [route]
+            turns = {self.assert_delivery(event, receipt, logical, target) for logical in logical_routes}
+            assert len(turns) == len(logical_routes)
         assert len(self.requests_for("om_in_first")) == 1
 
     def refusal(self):
