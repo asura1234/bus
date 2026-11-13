@@ -231,3 +231,127 @@ fn launch_metrics_unconfirmed_join_is_not_usable_evidence() {
     std::fs::remove_dir_all(dir).unwrap();
     assert_eq!(saved["launch_attempts"]["1"]["outcome"], "pending");
 }
+
+#[test]
+fn launch_metrics_busy_skipped_screen_settles_at_native_start_not_turn_end() {
+    let (state, agent, mut worker, dir) = bound_turn(true);
+    let mut info = working_info(&state, agent);
+    info.screen_detection_skipped = true;
+    worker.save(state).unwrap();
+    worker.transport = Box::new(FakeTransport {
+        replies: vec![
+            Ok(ResponseResult::AgentList {
+                agents: vec![info.clone()],
+            }),
+            Ok(ResponseResult::AgentList { agents: vec![info] }),
+        ]
+        .into(),
+        calls: Arc::default(),
+        state_path: dir.join("state.json"),
+    });
+    worker.test_now_ms = Some(200);
+    worker.poll().unwrap();
+    assert_eq!(
+        ledger(&worker)["1"]["outcome"],
+        "usable",
+        "owned native start proves launch usability while the pane is busy"
+    );
+    assert_eq!(ledger(&worker)["1"]["settled_at_ms"], 200);
+    worker.test_now_ms = Some(9_000);
+    worker.poll().unwrap();
+    assert_eq!(
+        ledger(&worker)["1"]["settled_at_ms"],
+        200,
+        "launch latency must not include the rest of the running turn"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn launch_metrics_skipped_screen_does_not_suppress_launch_cancellation() {
+    for (flag, cause) in [
+        ("deletion_pending", "agent_deleted"),
+        ("interrupt_pending", "interrupted"),
+    ] {
+        let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+        seed_launch(&mut worker, agent, u64::MAX);
+        let mut doc = serde_json::to_value(&worker.state).unwrap();
+        doc["agents"][agent.0.to_string()][flag] = json!(true);
+        worker.save(serde_json::from_value(doc).unwrap()).unwrap();
+        let mut info = working_info(&worker.state, agent);
+        info.screen_detection_skipped = true;
+        worker.transport = Box::new(FakeTransport {
+            replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+            calls: Arc::default(),
+            state_path: dir.join("state.json"),
+        });
+        worker.test_now_ms = Some(200);
+        worker.poll().unwrap();
+        assert_eq!(ledger(&worker)["1"]["cause"], cause);
+        assert_eq!(ledger(&worker)["1"]["outcome"], "cancelled");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn launch_metrics_skipped_live_frame_without_fresh_start_preserves_wait_and_deadline() {
+    for wait in [None, Some(150)] {
+        let (state, agent, mut worker, dir) = bound_turn(false);
+        let mut doc = serde_json::to_value(&state).unwrap();
+        doc["launch_attempts"]["1"]["deadline_at_ms"] = json!(0);
+        doc["launch_attempts"]["1"]["dialog_wait_started_at_ms"] = json!(wait);
+        worker.save(serde_json::from_value(doc).unwrap()).unwrap();
+        let mut info = working_info(&worker.state, agent);
+        info.screen_detection_skipped = true;
+        worker.transport = Box::new(FakeTransport {
+            replies: vec![Ok(ResponseResult::AgentList { agents: vec![info] })].into(),
+            calls: Arc::default(),
+            state_path: dir.join("state.json"),
+        });
+        worker.test_now_ms = Some(200);
+        worker.poll().unwrap();
+        let record = ledger(&worker)["1"].clone();
+        assert_eq!(record["outcome"], "pending");
+        assert_eq!(record["dialog_wait_started_at_ms"], json!(wait));
+        assert_eq!(record["dialog_wait_ms"], 0);
+        assert_eq!(record["deadline_at_ms"], 0);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn launch_metrics_skipped_screen_keeps_cold_and_missing_hook_deadlines() {
+    for missing_hook in [false, true] {
+        let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+        seed_launch(&mut worker, agent, 0);
+        let mut doc = serde_json::to_value(&worker.state).unwrap();
+        doc["agents"][agent.0.to_string()]["session_binding_invalidated"] = json!(missing_hook);
+        worker.save(serde_json::from_value(doc).unwrap()).unwrap();
+        let previous = worker.state.agent(agent).unwrap().clone();
+        let mut info = working_info(&worker.state, agent);
+        info.native_ready = missing_hook;
+        info.screen_detection_skipped = true;
+        info.agent_status = schema::AgentStatus::Unknown;
+        crate::messaging::coordinator::launch_metrics::observe(
+            &mut worker.state,
+            &previous,
+            Some(&info),
+            200,
+        )
+        .unwrap();
+        assert_eq!(ledger(&worker)["1"]["outcome"], "failed");
+        assert_eq!(
+            ledger(&worker)["1"]["cause"],
+            if missing_hook {
+                "session_hook_missing"
+            } else {
+                "startup_timeout"
+            }
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

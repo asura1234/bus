@@ -59,9 +59,7 @@ impl Worker {
                 )?;
             }
             confirm_interactive_agent(&mut state, agent, info)?;
-            if !info.is_some_and(|info| pending_launch_screen(agent, info)) {
-                super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;
-            }
+            super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;
             // Missing screen facts cannot refresh an inconclusive status clock.
             if status != agent.status || !info.is_some_and(inconclusive_screen) {
                 state
@@ -438,22 +436,6 @@ pub(super) fn report_exit(
         }
     }
     Ok(())
-}
-
-// A missing live frame cannot close a dialog wait or prove a launch timeout.
-// Explicit input/resume errors and saved exits still reach their existing owner.
-fn pending_launch_screen(agent: &RoomAgent, info: &schema::AgentInfo) -> bool {
-    info.screen_detection_skipped
-        && info.native_ready
-        && info.launch_input_error.is_none()
-        && info
-            .native_resume
-            .as_ref()
-            .is_none_or(|resume| resume.error.is_none())
-        && !agent.exit_snapshot.as_ref().is_some_and(|exit| {
-            exit.launch_id == agent.runtime_identity.launch_id
-                && Some(exit.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
-        })
 }
 
 fn inconclusive_screen(info: &schema::AgentInfo) -> bool {
