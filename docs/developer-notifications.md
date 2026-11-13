@@ -83,7 +83,10 @@ stay parked. There is no matching by time, display name or most recent alert.
 
 Accepted replies become developer-authored Bus messages with structured
 `in_reply_to` provenance in history and the provider payload. They queue an
-independent turn for the exact recorded orchestrator. Unknown/ambiguous replies
+independent turn for each original or aliased source's exact recorded orchestrator.
+Aliases admitted after a reply receive its saved original text without a replay;
+each source has its own durable outcome, including individual target parking.
+Unknown/ambiguous replies
 stay undelivered; deleted rooms/orchestrators are parked without selecting a
 replacement. The deduplication receipt and queued message commit together.
 Authenticated replies that conflict with the original recipient or chat are

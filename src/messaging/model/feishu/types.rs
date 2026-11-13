@@ -90,6 +90,8 @@ pub(crate) struct InboxRecord {
     pub(crate) input: IncomingReply,
     pub(crate) code: Option<String>,
     pub(crate) outcome: IngestOutcome,
+    #[serde(default)]
+    pub(crate) alias_outcomes: Vec<IngestOutcome>,
     pub(crate) received_at_ms: u64,
 }
 

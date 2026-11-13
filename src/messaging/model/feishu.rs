@@ -126,7 +126,7 @@ impl BusState {
 
     // A reply may beat an outbound mapping or its backfilled inbound parent.
     // Revisit exact references only; a deleted known target stays parked.
-    fn resolve_parked_feishu(&mut self) -> Result<(), String> {
+    pub(crate) fn resolve_parked_feishu(&mut self) -> Result<(), String> {
         let mut pending: Vec<_> = self
             .feishu
             .inbox
@@ -159,6 +159,7 @@ impl BusState {
                 }
                 let outcome = self.enqueue_feishu_reply(
                     &record,
+                    record.route(),
                     input,
                     crate::messaging::storage::io::now_ms(),
                 )?;
@@ -171,6 +172,54 @@ impl BusState {
             if !resolved {
                 break;
             }
+        }
+        // Append-only aliases receive each original accepted reply once, including
+        // aliases admitted after that reply. Never use an edited replay's body.
+        let mut receipts: Vec<_> = self
+            .feishu
+            .inbox
+            .iter()
+            .map(|(key, receipt)| (receipt.received_at_ms, key.clone()))
+            .collect();
+        receipts.sort();
+        for (_, key) in receipts {
+            let receipt = &self.feishu.inbox[&key];
+            let Some(record) = receipt
+                .code
+                .as_ref()
+                .and_then(|code| self.feishu.outbox.get(code))
+            else {
+                continue;
+            };
+            if receipt.alias_outcomes.len() >= record.aliases.len()
+                || record.recipient != receipt.input.sender_id
+                || record
+                    .chat_id
+                    .as_deref()
+                    .is_some_and(|chat| chat != receipt.input.chat_id)
+            {
+                continue;
+            }
+            let (record, input, completed) = (
+                record.clone(),
+                receipt.input.clone(),
+                receipt.alias_outcomes.len(),
+            );
+            let mut outcomes = Vec::new();
+            for route in record.routes().skip(1 + completed) {
+                outcomes.push(self.enqueue_feishu_reply(
+                    &record,
+                    route,
+                    &input,
+                    crate::messaging::storage::io::now_ms(),
+                )?);
+            }
+            self.feishu
+                .inbox
+                .get_mut(&key)
+                .unwrap()
+                .alias_outcomes
+                .extend(outcomes);
         }
         Ok(())
     }
@@ -192,7 +241,8 @@ impl BusState {
             if record.input.sender_id != input.sender_id || record.input.chat_id != input.chat_id {
                 return Err("Feishu replay identity does not match the accepted message".into());
             }
-            return Ok(record.outcome.clone());
+            self.resolve_parked_feishu()?;
+            return Ok(self.feishu.inbox[&key].outcome.clone());
         }
         let (code, outcome) = match self.feishu.resolve(&input) {
             Ok(record) => {
@@ -212,7 +262,8 @@ impl BusState {
                     )
                 } else {
                     let record = record.clone();
-                    let outcome = self.enqueue_feishu_reply(&record, &input, now_ms)?;
+                    let outcome =
+                        self.enqueue_feishu_reply(&record, record.route(), &input, now_ms)?;
                     (Some(record.code), outcome)
                 }
             }
@@ -229,6 +280,7 @@ impl BusState {
                 input,
                 code,
                 outcome: outcome.clone(),
+                alias_outcomes: Vec::new(),
                 received_at_ms: now_ms,
             },
         );
@@ -241,14 +293,15 @@ impl BusState {
     fn enqueue_feishu_reply(
         &mut self,
         record: &OutboxRecord,
+        route: AlertRoute,
         input: &IncomingReply,
         now_ms: u64,
     ) -> Result<IngestOutcome, String> {
-        let Some(target) = record.orchestrator.filter(|target| {
+        let Some(target) = route.orchestrator.filter(|target| {
             self.agent(*target)
                 .is_some_and(|agent| !agent.deletion_pending && agent.orchestrates.is_some())
                 && self
-                    .room(record.room)
+                    .room(route.room)
                     .is_some_and(|room| !room.deletion_pending)
         }) else {
             return Ok(IngestOutcome::Parked {
@@ -257,7 +310,7 @@ impl BusState {
         };
         let ids = self
             .submit_bus_message_with(
-                record.room,
+                route.room,
                 Draft {
                     text: input.text.clone(),
                     files: Vec::new(),
@@ -271,9 +324,9 @@ impl BusState {
         let request_id = *ids.first().ok_or("Feishu reply did not create a request")?;
         let provenance = Box::new(InReplyTo {
             session: record.session.clone(),
-            source: record.source.clone(),
-            room: record.room,
-            raising_agent: record.raising_agent,
+            source: route.source,
+            room: route.room,
+            raising_agent: route.raising_agent,
             orchestrator: target,
             app_id: input.app_id.clone(),
             feishu_message_id: input.message_id.clone(),
@@ -290,7 +343,7 @@ impl BusState {
         let message_id = request.prompt.id;
         if let Some(prompt) = self
             .rooms
-            .get_mut(&record.room)
+            .get_mut(&route.room)
             .and_then(|room| room.latest_prompt.as_mut())
             .filter(|prompt| prompt.id == message_id)
         {

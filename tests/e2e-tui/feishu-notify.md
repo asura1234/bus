@@ -1,134 +1,97 @@
-# Feishu bridge request and reply acceptance
+# Feishu outbound notifications
 
 ## Run contract
 
-This is an opt-in private acceptance suite. Importing the Python module, including
-pytest collection, starts no Bus, provider, bridge or Feishu transport.
-
-Use the current-head author-worktree dev-tools binary:
+Use the author-worktree's current-head dev-tools binary with the opt-in driver:
 
 ```sh
 python3 tools/acceptance/feishu_notify_test.py \
-  --binary /absolute/private-target/debug/bus \
-  --name feishu-bridge-final
+  --binary /absolute/private-target/debug/bus --name feishu-outbound
 ```
 
-The script requires `--binary` to be an absolute executable and checks its
-`--identity` SHA against the checkout HEAD. It also checks the running scratch
-client and native server paths/SHAs. It does not build anything.
+Importing the module starts nothing. The script uses `notification_driver.py`,
+its own report document and the existing report renderer. It creates a fresh
+private driver session with fake providers, effect recorders and a closed PATH
+containing a recording `feishu-bridge`. The fixture reads the actual scratch
+`BUS_DATA_DIR/state.json` to verify the outbox before sending, then returns unique
+v1 message/chat IDs. It does not use credentials, real providers, the live Bus,
+desktop automation or real Feishu traffic.
 
-Reports and numbered control/ingest evidence are written beneath
-`temp/feishu-integration/acceptance/<name>-<unique>/`. A fresh owner-only runtime
-root `/private/tmp/bfi-<unique>` is recorded and retained; Darwin's socket paths
-cannot fit beneath the longer worktree artifact path. Every Bus control command,
-provider, settings file, HOME, effect recorder and bridge belongs to that private
-runtime. Inherited BUS/HERDR and provider configuration are replaced with a closed
-fixture environment. The suite never restarts, signals or queries a live Bus.
+Require both scratch runtime role SHAs and executable paths to identify the
+current-head supplied binary. Driver traces, screenshots, numbered calls,
+recorded bridge entries and report output are retained under
+`temp/notification-driver/`. Quiet windows use
+`wait --stable 3s --rows 0-0 --timeout 8s`. No skipped steps or failed-step retries.
+This procedure proves outbound behavior only.
 
-`claude` and `codex` on the fixture PATH are the supplied Bus binary's dev-tools
-provider stand-ins. `feishu-bridge` is a recording Python fixture. `lark-cli` is a
-failing sentinel, so a transport call fails the suite. No real provider account,
-Feishu credentials, outbound Feishu send or developer interaction is used.
+### FEISHU-01 — Optional bridge persists every request route
 
-A failure exits nonzero and leaves `report.json`, `report.md`, `failure.txt` and
-all command evidence. A pass proves only the evidence classes listed below; it
-does not satisfy the final real developer-reply acceptance hold.
+Preconditions: private fake orchestrators for `feishu-a` and `feishu-b`, plus a
+worker in `feishu-a`; recording bridge installed on the fixture PATH.
 
-### FEISHU-01 — Exact build and optional-plugin isolation
+1. Start the scratch driver and check both role identities. Open Settings and
+   require Feishu on, the recipient open_id and the `feishu-bridge path: PATH`
+   row. Capture the layout. Close Settings and post untagged progress; require
+   no bridge invocation after a quiet window.
+2. Post one waiting-tagged request from each orchestrator and two identical
+   tagged asks from the worker. Require exactly three independent v1 sends with
+   distinct request codes and idempotency keys, retaining all four source IDs:
+   the identical worker asks share one DM with a durable alias. The fake must verify
+   the actual persisted record and `attempted: true` before returning an ID.
+   Check saved returned message/chat IDs, exact raising-agent/orchestrator
+   bindings and literal text. Same-agent/same-ask repeats within a fixed thirty
+   minutes share the first DM; aliases and its original window survive restart.
+   Different agents, asks or recipients retain separate DMs. Only a confirmed DM
+   may suppress a repeat; failed or uncertain sends allow a new explicit ask to
+   send a new DM. The original attempted send is never retried automatically.
+3. Through Settings, select a missing explicit bridge path. Require Feishu off
+   and no send for a new waiting tag. Restore PATH discovery and require Feishu
+   on without replaying the off-period request.
+4. Make the fixture exit 7, then post a fresh waiting tag. Require one attempted
+   invocation, an uncertain outbox record without a returned message ID,
+   `bus.feishu.failed` in the private log and no retry. Confirm Bus remains
+   responsive, the error is absent from its TUI, and there is no terminal popup.
+5. Restore the fixture and use Settings to choose its explicit path and another
+   recipient open_id. Post a new waiting tag; require exactly one mapped DM to
+   that recipient. Verify the failed attempt is not replayed. Retain the full
+   bridge ledger and stop only this private driver session.
 
-1. Require the supplied binary's SHA and both scratch runtime role SHAs to equal
-   current HEAD; require all role executable paths to match the supplied binary.
-2. Check the private HOME/data permissions and fake-provider PATH. Start fake
-   orchestrators `orch-a` and `orch-b` bound to separate work rooms, plus
-   `worker-a` in `work-a`.
-3. Require settings to expose `feishu_bridge_path` and the configured recipient.
-   The old `feishu_cli_path` key must be absent. The fake installed bridge enables
-   Feishu; no real bridge or lark transport is selected.
 
-### FEISHU-02 — One persisted outbound record per Bus request
+## Inbound and real-bridge synthetic acceptance
 
-1. Post untagged progress and `[needs_developer_attention]` text. After a quiet
-   window, require zero bridge invocations.
-2. Post separate waiting tags from both orchestrators, then two identical tagged
-   asks from `worker-a`. Require exactly four bridge invocations, four route
-   codes, four stable idempotency keys and four distinct source prompt IDs.
-3. Inside each fake bridge invocation, read the actual scratch `state.json`.
-   Require exactly one matching persisted outbox record, `attempted: true`, the
-   correct session/source/raising-agent/orchestrator/recipient, and the exact text
-   and idempotency key passed through v1 `send --open-id ... --text ...
-   --idempotency-key ...`. The fake returns a unique `om_...` and `oc_dm`.
-4. Require Bus to persist all four returned IDs. A second request's text must not
-   be combined into the first DM. Verify both identical worker asks retain their
-   own source mappings to `orch-a`.
+Run `python3 tools/acceptance/feishu_reply_test.py --binary ABS_BUS --name UNIQUE`
+for the combined suite; add `--bridge-binary ABS_REVIEWED_BRIDGE` for the real
+bridge's private `listen --input` spool/sink boundary. Importing starts nothing.
+Reports and numbered commands remain in `temp/feishu-integration/acceptance/`;
+owner-only short runtime roots in `/private/tmp/bfi-*` are retained in the report.
+All HOME, settings, Bus identities and processes are private. Providers are the
+supplied dev-tools binary's stand-ins; a failing lark sentinel prevents real
+transport. Require the supplied identity and both runtime role SHAs/paths to
+match HEAD, private permissions, configured recipient/bridge and no legacy CLI key.
 
-### FEISHU-03 — Authenticated replies produce independent provider turns
-
-1. Invoke the actual standalone command with JSON stdin:
-   `bus feishu ingest --instance <scratch-data> --app-id cli_test`. Supply a
-   deliberately wrong private inherited BUS_DATA_DIR and worker caller identity;
-   only the explicit instance may receive the message.
-2. Reply to the first outbound DM with a bounded fake-provider work directive.
-   Once its provider start is bound, submit a worker-request reply to the same
-   orchestrator. Require two independent turns with distinct provider turn IDs.
-3. For each delivery, require a developer (`human`) prompt, unchanged reply text,
-   structured `in_reply_to` source/raising-agent/orchestrator/external-message
-   provenance, one recipient, `queue: true`, `start_bound: true`, a nonnull
-   `provider_started_at_ms`, and an ended fake-provider turn.
-4. Replay the original event and replay its external ID with changed text.
-   Require the same durable receipt and one original request.
-5. Exercise unknown direct-parent/root fallback, a standalone short request code,
-   and a nested reply to a previously ingested message. Require delivery only to
-   each recorded orchestrator, with one request per external message ID.
-
-### FEISHU-04 — Unknown, ambiguous and unauthorized replies stay undelivered
-
-1. Submit an unmapped reply, conflicting parent/root mappings, and two conflicting
-   request codes. Require durable parked receipts, retained inbox records and no
-   provider requests for those external IDs.
-2. Submit another sender, bot sender, group chat, wrong mapped chat and wrong app.
-   Require nonzero sink exits, no inbox consumption and no provider delivery.
-3. Delete `orch-b`, then create a replacement with its old name. Reply to the old
-   outbound mapping. Require parking rather than delivery to the replacement.
-4. Require logged parking diagnostics and no desktop/terminal notification
-   effects or Feishu error text in the scratch TUI.
-
-### FEISHU-05 — Missing plugin is off; send errors stay in logs
-
-1. Point the scratch bridge setting at a missing executable. Require disabled
-   Feishu and no send for a new waiting tag. Restore the fake plugin; the
-   off-period alert must not replay.
-2. Make the fake bridge fail with exit 7 and post a fresh waiting tag. Require
-   one attempted invocation, `bus.feishu.failed` with the exit category in the
-   private logs, a responsive Bus, and no automatic resend or error popup.
-3. Retain the failed attempted outbox record for uncertainty audit. Returning the
-   fixture to success must not silently resend it.
-
-### FEISHU-06 — Restart retains exactly-once receipts and attempted sends
-
-1. Save the original accepted request and bridge invocation count. Stop only the
-   private scratch client and native server; require no owned process leftovers.
-2. Start the same scratch data root with the same binary. Require different
-   client/native-server PIDs and exact-head identity again.
-3. Replay the original external event. Require the original receipt/request,
-   unchanged provider-turn evidence and no additional outbound invocation.
-4. Stop the private scratch session and retain its runtime/evidence paths. Any
-   cleanup error or owned process leftover makes the report fail.
-
-## Optional real bridge, synthetic input only
-
-After the separate bridge implementation is reviewed, the same suite can also
-exercise its real spool/sink boundary:
-
-```sh
-python3 tools/acceptance/feishu_notify_test.py \
-  --binary /absolute/private-target/debug/bus \
-  --bridge-binary /absolute/feishu-bridge \
-  --name feishu-bridge-synthetic
-```
-
-The script generates a private config/state directory with the test app, sender,
-chat and exact scratch Bus sink. It runs only `listen --input` against one
-flattened synthetic text event, then imports it again. Require one correlated
-fake-provider turn, a single Bus receipt and no invocation of the failing
-`lark-cli` sentinel. Bus outbound still uses the recording fake bridge. This is
-real bridge integration evidence without real Feishu transport or a live reply.
+1. Untagged/internal-only messages invoke nothing. Four tagged sources produce
+   three physical DMs, unique keys/codes and four durable logical routes. The fake
+   verifies exact persisted session, source, frozen binding, recipient, literal
+   text and attempted key before returning IDs; both worker aliases share IDs.
+2. Invoke actual `feishu ingest --instance ROOT --app-id cli_test` with JSON stdin
+   and deliberately wrong private inherited instance/agent identity. Only the
+   explicit instance receives it. Parent, unknown-parent/root fallback, unique
+   code and accepted nested ancestry route exactly. Each original/alias gets its
+   own developer prompt, unchanged text, structured source/raising-agent/target/
+   external-message provenance, one queue-only recipient, provider start timestamp
+   and ended independent turn ID, including while the orchestrator is busy.
+3. Unknown, conflicting ancestry or multiple codes park durably without requests.
+   Configured authenticated wrong-chat inputs also park; wrong sender/app, bot and
+   group inputs fail without consuming an ID. A deleted target never redirects
+   to its same-name replacement. Diagnostics stay in logs with no TUI/popup effects.
+4. Missing plugin disables sending without off-period replay. Exit-7 sends retain
+   attempted uncertainty, log the failure, keep Bus responsive and never retry.
+5. Stop only owned scratch roles, prove no leftovers, reopen the same data with
+   new PIDs and exact identities, and replay. Original receipts/provider evidence
+   remain; edits create no second instruction or send. Cleanup errors fail the run.
+6. Optional real bridge uses private config/app/sender/chat and the exact Bus sink.
+   Import the flattened event twice: one correlated provider turn and Bus receipt,
+   zero sentinel calls. Fake outbound remains isolated. Offline-spool recovery,
+   refusal recovery, late parents, registry-marker precedence, sibling acceptance
+   order and the immutable F2 workload are separate retained probes. None replaces
+   the master-owned live developer reply/replay check.
