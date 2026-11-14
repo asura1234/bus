@@ -501,3 +501,52 @@ fn driver_blocker_reads_captured_claude_multiselect() {
 
 #[path = "blocker_test.rs"]
 mod blocker_regressions;
+
+#[test]
+fn select_rejects_a_prefix_before_a_single_unicode_space() {
+    for gap in ["\u{00a0}", "\u{2003}"] {
+        let grid = menu(&format!("❯ Plan{gap}A\n  Cancel"));
+        assert!(
+            selection_step(&grid, "Plan").is_err(),
+            "one Unicode space inside a label is not a shortcut column: {gap:?}"
+        );
+    }
+}
+
+#[test]
+fn select_preserves_complete_labels_with_a_single_unicode_space() {
+    for gap in ["\u{00a0}", "\u{2003}"] {
+        let label = format!("Plan{gap}A");
+        let grid = menu(&format!("❯ {label}\n  Cancel"));
+        assert_eq!(selection_step(&grid, &label), Ok(SelectionStep::Confirm));
+    }
+}
+
+#[tokio::test]
+async fn select_preserves_internal_spaces_and_wide_labels() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(80, 12);
+    runtime.test_process_pty_bytes(
+        "目录  名称  Confirm                 z\r\n取消                 q".as_bytes(),
+    );
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(
+        selection_step(&grid, "目录  名称  Confirm"),
+        Ok(SelectionStep::Shortcut('z'))
+    );
+    assert!(selection_step(&grid, "目录").is_err());
+    let plain = menu("❯ Plan A\n  Plan  AB\n  Plan  1\n  Plan  (a)");
+    assert_eq!(selection_step(&plain, "Plan A"), Ok(SelectionStep::Confirm));
+    assert_eq!(
+        selection_step(&plain, "Plan  AB"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert_eq!(
+        selection_step(&plain, "Plan  1"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert_eq!(
+        selection_step(&plain, "Plan  (a)"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert!(selection_step(&plain, "Plan").is_err());
+}

@@ -235,8 +235,10 @@ fn without_shortcut_column(text: &str) -> &str {
     split_shortcut_column(text).0
 }
 
-/// A shortcut column is one letter set off by at least two spaces.
-/// A shorter gap stays part of the label, so a final word is not a key.
+/// A shortcut column is one letter set off by at least two ASCII spaces.
+/// A shorter gap stays part of the label, so one Unicode space or a final
+/// word is not a key. The gap is a character count: one NBSP is two UTF-8
+/// bytes and must not qualify.
 fn split_shortcut_column(text: &str) -> (&str, Option<char>) {
     let trimmed = text.trim_end();
     let Some(key) = trimmed.chars().next_back() else {
@@ -246,9 +248,10 @@ fn split_shortcut_column(text: &str) -> (&str, Option<char>) {
         return (text, None);
     }
     let prefix = &trimmed[..trimmed.len() - key.len_utf8()];
-    let gap = prefix.len() - prefix.trim_end().len();
-    if gap >= 2 && !prefix.trim().is_empty() {
-        (prefix.trim_end(), Some(key))
+    let label = prefix.trim_end_matches(' ');
+    let gap = prefix.len() - label.len();
+    if gap >= 2 && !label.trim().is_empty() {
+        (label, Some(key))
     } else {
         (text, None)
     }
