@@ -34,19 +34,32 @@ pub(super) const AGENT_STARTUP_GRACE_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(3);
 
 /// Current foreground controls override lifecycle signals; pending shortcuts
-/// coexist with positive activity. Exited processes keep their exit decision.
+/// coexist with positive activity. A title-only Blocked signal does not hide a
+/// live activity line when no input control is present. Exited processes keep
+/// their exit decision.
 pub(super) fn apply_driver_controls(
     content: &str,
     mut detection: AgentDetection,
     process_exited: bool,
 ) -> AgentDetection {
-    if !process_exited
-        && crate::terminal::driver::has_blocking_input_controls(content, detection.visible_working)
-    {
+    if process_exited {
+        return detection;
+    }
+    if crate::terminal::driver::has_blocking_input_controls(content, detection.visible_working) {
         detection.state = AgentState::Blocked;
         detection.visible_blocker = true;
         detection.visible_idle = false;
         detection.visible_working = false;
+        return detection;
+    }
+    if detection.state == AgentState::Blocked
+        && !crate::terminal::driver::has_blocking_input_controls(content, false)
+        && crate::terminal::driver::has_live_activity(content)
+    {
+        detection.state = AgentState::Working;
+        detection.visible_working = true;
+        detection.visible_blocker = false;
+        detection.visible_idle = false;
     }
     detection
 }

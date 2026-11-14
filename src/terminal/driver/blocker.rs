@@ -68,6 +68,37 @@ pub(crate) fn has_blocking_input_controls(screen: &str, working: bool) -> bool {
     .is_some_and(|controls| !working || controls.kind == ControlKind::Foreground)
 }
 
+/// A column-0 status line for a turn that is still running. Indented transcript
+/// quotes and queued-send hints are not that signal.
+pub(crate) fn has_live_activity(screen: &str) -> bool {
+    screen.lines().any(live_activity_row)
+}
+
+fn live_activity_row(row: &str) -> bool {
+    let row = row.trim_end();
+    let mut chars = row.chars();
+    let Some(marker) = chars.next() else {
+        return false;
+    };
+    if !matches!(
+        marker,
+        '•' | '◦' | '⏺' | '✶' | '✻' | '✳' | '⏸' | '⏵' | '◆' | '*' | '·'
+    ) {
+        return false;
+    }
+    let lower = chars.as_str().trim_start().to_lowercase();
+    let Some(head) = lower.split_whitespace().next() else {
+        return false;
+    };
+    let status = head.trim_end_matches(['…', '.', ':', '·']);
+    if status != "working" && status != "waiting" {
+        return false;
+    }
+    lower.contains("esc to interrupt")
+        || lower.contains("ctrl+c to stop")
+        || lower.contains("esc to stop")
+}
+
 /// The same prompt/border/footer boundaries used by the composer reader.
 /// Editable rows cannot introduce controls or change a control fingerprint.
 pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> {
