@@ -1,5 +1,6 @@
 //! `agent interrupt`: the provider's stop key was pressed, so the running turn
-//! and the messages waiting for the agent close instead of running on.
+//! closes instead of running on. A message that never joined that turn stays
+//! queued for the next one.
 use super::{
     AgentId, Author, BusState, ModelError, Prompt, PromptId, RequestId, RequestPhase, RoomId,
 };
@@ -42,11 +43,15 @@ impl BusState {
         Ok(())
     }
 
-    /// Closes `agent`'s open turn, with every message typed into it, and its
-    /// queue as interrupted. A reply captured before the stop took effect means
-    /// the turn ended on its own first: that reply still completes it, but not
-    /// the messages typed in that no hook placed in that turn. The agent ran
-    /// those after the reply, and the stop ended them.
+    /// Closes `agent`'s open turn, and every message typed into it, as
+    /// interrupted. A message that is still queued and never joined the turn
+    /// stays queued for the next one. A blocked-dialog notice, a restart
+    /// continuation of this turn, and a provider-retry hold, including every
+    /// request that hold has already prepared, close with the turn so they
+    /// are not replayed. A reply captured before the stop took
+    /// effect means the turn ended on its own first: that reply still
+    /// completes it, but not the messages typed in that no hook placed in
+    /// that turn. The agent ran those after the reply, and the stop ended them.
     pub(crate) fn close_interrupted(
         &mut self,
         agent: AgentId,
@@ -57,7 +62,9 @@ impl BusState {
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.interrupt_pending = false;
-        let held = agent_state.provider_retry.take().map(|hold| hold.lead);
+        let hold = agent_state.provider_retry.take();
+        let held = hold.as_ref().map(|retry| retry.lead);
+        let prepared = hold.map(|retry| retry.queued_ids).unwrap_or_default();
         let current = agent_state.current_request;
         let mut closed = Vec::new();
         let replied = current
@@ -106,12 +113,16 @@ impl BusState {
             }
         }
         for queued in self.queued_requests(agent).to_vec() {
+            if !self.queued_request_stops_with_the_turn(queued, current, held, &prepared) {
+                continue;
+            }
             self.recover_idle_request(queued, now_ms)?;
             if let Some(request) = self.requests.get_mut(&queued) {
                 request.failure_reason = Some(INTERRUPTED.into());
             }
             closed.push(queued);
         }
+        self.release_settled_interrupt_queue(agent, &closed);
         for request in &closed {
             tracing::info!(
                 event = "bus.message.recovered",
@@ -122,6 +133,47 @@ impl BusState {
             );
         }
         Ok(closed)
+    }
+
+    /// A queued request closes with the interrupted turn only when it belongs
+    /// to that turn. Ordinary accepted work stays queued.
+    fn queued_request_stops_with_the_turn(
+        &self,
+        queued: RequestId,
+        current: Option<RequestId>,
+        held: Option<RequestId>,
+        prepared: &[RequestId],
+    ) -> bool {
+        let Some(request) = self.requests.get(&queued) else {
+            return false;
+        };
+        if request.settled() || request.phase != RequestPhase::Queued {
+            return false;
+        }
+        request.restart_continuation
+            || self.is_dialog_notice(queued)
+            || held.is_some_and(|id| id == queued)
+            || current.is_some_and(|id| id == queued)
+            || prepared.contains(&queued)
+    }
+
+    /// A request this close already settled must not stay at the head of the
+    /// delivery queue. `abandon_current_request` does not remove queue ids,
+    /// and the scan above skips anything that close already settled.
+    fn release_settled_interrupt_queue(&mut self, agent: AgentId, closed: &[RequestId]) {
+        let mut leaving = closed.to_vec();
+        for id in closed {
+            leaving.extend(self.group_members(*id));
+        }
+        leaving.retain(|id| {
+            self.requests
+                .get(id)
+                .is_some_and(|request| request.settled())
+        });
+        let Some(queue) = self.queues.get_mut(&agent) else {
+            return;
+        };
+        queue.retain(|id| !leaving.contains(id));
     }
 
     /// Records in `room`'s history that `author` interrupted `agent`. Like a

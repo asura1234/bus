@@ -425,8 +425,9 @@ Bus presses the provider's stop key once, waits until the turn has ended and
 reports `stopped`, `already_idle` or `failed` with a reason. The new instruction
 arrives as a normal new message with its own reply. The interrupted message
 closes as `interrupted`: a running `send --async` or `wait` on it ends with
-`message_interrupted` instead of waiting on. Messages queued for the worker
-close with it, so send what it should do next after the stop. `--room ROOM`
+`message_interrupted` instead of waiting on. Messages already queued, which
+never joined that turn, stay queued and are delivered next; do not resend
+them. `--room ROOM`
 stops every working or blocked agent in the room. Nothing is killed and the worker keeps
 its context.
 

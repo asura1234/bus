@@ -318,6 +318,7 @@ impl BusState {
                 if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
                     agent.actionable_error = None;
                 }
+                self.release_parked_prepared_retry(callback.agent_id, request_id);
                 if continuation {
                     CallbackDisposition::AcceptedContinuation
                 } else {

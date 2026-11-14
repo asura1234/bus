@@ -129,7 +129,7 @@ fn an_orchestrator_interrupt_is_recorded_as_written_by_it() {
 }
 
 #[test]
-fn the_interrupted_turn_and_the_queue_close_as_interrupted_once_the_agent_is_idle() {
+fn the_interrupted_turn_closes_and_a_queued_message_runs_next() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         let mut fixture = Fixture::new(provider);
         let lead = running(&mut fixture, "write the parser", "turn-1");
@@ -143,7 +143,7 @@ fn the_interrupted_turn_and_the_queue_close_as_interrupted_once_the_agent_is_idl
         // No Stop hook follows a provider interrupt; the idle screen ends it,
         // before the reply settlement could call it reply_not_captured.
         fixture.status(RuntimeStatus::Idle);
-        for id in [lead, joined, queued] {
+        for id in [lead, joined] {
             let request = fixture.request(id);
             assert_eq!(
                 request.phase,
@@ -156,21 +156,21 @@ fn the_interrupted_turn_and_the_queue_close_as_interrupted_once_the_agent_is_idl
                 "{provider:?} {id:?}"
             );
         }
+        assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+        assert!(fixture.request(queued).failure_reason.is_none());
         let agent = fixture.worker.state.agent(fixture.agent).unwrap();
         assert!(!agent.interrupt_pending);
         assert_eq!(agent.current_request, None);
-        assert!(fixture
-            .worker
-            .state
-            .queued_requests(fixture.agent)
-            .is_empty());
-        // A message sent after the stop is a normal new turn.
-        let next = fixture.send("pause and report your status", false);
+        assert_eq!(
+            fixture.worker.state.queued_requests(fixture.agent),
+            &[queued]
+        );
+        // The message that was waiting is the next turn, not a steer.
         fixture.deliver();
-        assert_eq!(fixture.request(next).group, None);
+        assert_eq!(fixture.request(queued).group, None);
         assert_eq!(
             fixture.typed_content().last().unwrap(),
-            &("pause and report your status".into(), false),
+            &("then write the docs".into(), false),
             "{provider:?}"
         );
     }
@@ -619,7 +619,7 @@ fn native_receipt(f: &mut Fixture, terminal: &str, session: &str) {
 }
 
 #[test]
-fn native_interrupt_completion_closes_its_turn_and_queue_beside_a_blocked_draft() {
+fn native_interrupt_completion_closes_its_turn_and_keeps_a_blocked_drafts_queue() {
     let mut f = Fixture::new(Provider::Codex);
     let lead = running(&mut f, "work", "turn-1");
     let queued = f.send("later", true);
@@ -627,9 +627,13 @@ fn native_interrupt_completion_closes_its_turn_and_queue_beside_a_blocked_draft(
     native_receipt(&mut f, "terminal", "session");
     let response = interrupt(&mut f, json!({"agent":"builder"}));
     assert_eq!(response.result["agents"][0]["outcome"], "stopped");
-    for id in [lead, queued] {
-        assert_eq!(f.request(id).failure_reason.as_deref(), Some("interrupted"));
-    }
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert!(f.request(queued).failure_reason.is_none());
+    assert_eq!(f.worker.state.queued_requests(f.agent), &[queued]);
     let agent = f.worker.state.agent(f.agent).unwrap();
     assert!(!agent.interrupt_pending);
     assert_eq!(agent.current_request, None);
@@ -918,6 +922,255 @@ fn late_unconfirmed_native_interrupt_preserves_a_successor_stop_wait() {
     assert_eq!(state.agent(f.agent).unwrap().current_request, Some(fresh));
 }
 
+/// Live session 2b704f6e8df6bedd, message 13324 / request 13325: a send accepted
+/// as queued while an interrupt was still outstanding was abandoned when the
+/// turn later went idle. `message status` showed stage abandoned, reason
+/// interrupted, delivery_error null, and the text was never typed.
+#[test]
+fn queued_messages_survive_an_interrupt_closed_turn_and_deliver_next() {
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Cursor,
+        Provider::Grok,
+    ] {
+        let mut fixture = Fixture::new(provider);
+        let lead = running(&mut fixture, "write the parser", "turn-1");
+        // Grok does not steer a same-room send into a running turn; that send
+        // is already an ordinary queued message and is covered below.
+        let steered = (provider != Provider::Grok).then(|| {
+            let steered = fixture.send("use the streaming API instead", false);
+            fixture.deliver();
+            assert_eq!(
+                fixture.request(steered).group,
+                Some(lead),
+                "{provider:?} steering did not join the open turn"
+            );
+            steered
+        });
+        assert!(interrupt(&mut fixture, json!({"agent": "builder"})).ok);
+        // The stop key was pressed; the provider is still working, which is
+        // the interrupt_failed window. A normal send must queue, not join.
+        fixture.status(RuntimeStatus::Working);
+        let first = fixture.send("first follow-up", false);
+        let second = fixture.send("second follow-up", true);
+        let typed_before = fixture.typed_content().len();
+        fixture.deliver();
+        assert_eq!(
+            fixture.typed_content().len(),
+            typed_before,
+            "{provider:?} typed a follow-up into the stopped turn"
+        );
+        fixture.status(RuntimeStatus::Idle);
+        assert_eq!(
+            fixture.request(lead).failure_reason.as_deref(),
+            Some("interrupted"),
+            "{provider:?}"
+        );
+        if let Some(steered) = steered {
+            assert_eq!(
+                fixture.request(steered).failure_reason.as_deref(),
+                Some("interrupted"),
+                "{provider:?} steered member"
+            );
+        }
+        assert_eq!(
+            fixture.worker.state.queued_requests(fixture.agent),
+            &[first, second],
+            "{provider:?}"
+        );
+        for id in [first, second] {
+            let request = fixture.request(id);
+            assert_eq!(request.phase, RequestPhase::Queued, "{provider:?} {id:?}");
+            assert!(
+                request.failure_reason.is_none(),
+                "{provider:?} queued request closed: {request:?}"
+            );
+            let message = request.prompt.id;
+            let status = fixture.worker.control_message(message).unwrap();
+            assert_eq!(status["complete"], false, "{provider:?} {status}");
+            assert_eq!(
+                status["requests"][0]["stage"], "queued",
+                "{provider:?} {status}"
+            );
+            assert_ne!(
+                status["requests"][0]["reason"], "interrupted",
+                "{provider:?} silent abandon: {status}"
+            );
+        }
+        fixture.deliver();
+        assert_eq!(
+            fixture
+                .typed_content()
+                .last()
+                .map(|(text, steer)| (text.as_str(), *steer)),
+            Some(("first follow-up", false)),
+            "{provider:?}"
+        );
+        assert_ne!(fixture.request(first).phase, RequestPhase::Queued);
+        assert_eq!(fixture.request(second).phase, RequestPhase::Queued);
+        assert_eq!(
+            fixture.worker.state.queued_requests(fixture.agent),
+            &[second]
+        );
+    }
+}
+
+#[test]
+fn interrupting_an_idle_agent_keeps_a_queue_that_never_started() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let first = fixture.send("first queued task", false);
+    let second = fixture.send("second queued task", true);
+    let response = interrupt(&mut fixture, json!({"agent": "builder"}));
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result["agents"][0]["outcome"], "already_idle");
+    assert!(keys(&fixture).is_empty());
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[first, second]
+    );
+    for id in [first, second] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Queued);
+        assert!(fixture.request(id).failure_reason.is_none());
+    }
+    let notices: Vec<_> = fixture
+        .worker
+        .state
+        .notices(fixture.room)
+        .map(|notice| notice.text.clone())
+        .collect();
+    assert!(
+        notices.iter().all(|text| !text.starts_with("Interrupted ")),
+        "an idle queue is not an interrupted turn: {notices:?}"
+    );
+    fixture.deliver();
+    assert_eq!(
+        fixture
+            .typed_content()
+            .last()
+            .map(|(text, steer)| (text.as_str(), *steer)),
+        Some(("first queued task", false))
+    );
+    assert_eq!(fixture.request(second).phase, RequestPhase::Queued);
+}
+
+/// A relaunch observes Unavailable and clears `interrupt_pending` without
+/// draining the queue. The bound turn continues; a message that never joined
+/// it stays queued behind that continuation.
+#[test]
+fn a_queued_message_survives_restart_while_an_interrupt_is_pending() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    assert!(interrupt(&mut fixture, json!({"agent": "builder"})).ok);
+    assert!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .interrupt_pending
+    );
+    let queued = fixture.send("survive the restart", true);
+    fixture.deliver();
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    let placeholder = Worker::open(
+        fixture.dir.join("restart-placeholder"),
+        Box::new(super::Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        Box::new(super::Native(fixture.native.clone())),
+    )
+    .unwrap();
+    fixture.worker.serving_generation = 2;
+    assert!(
+        !fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .interrupt_pending,
+        "a relaunch ends the stop; it must not abandon the queue as interrupted"
+    );
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    let continued = fixture.request(lead);
+    assert!(
+        continued.restart_continuation && !continued.settled(),
+        "{continued:?}"
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert!(fixture.request(queued).failure_reason.is_none());
+    fixture.deliver();
+    let notice = fixture.typed().last().unwrap().0.clone();
+    assert!(
+        notice.contains("Bus restarted"),
+        "the bound turn continues after restart: {notice}"
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert!(fixture.request(queued).failure_reason.is_none());
+}
+
+#[test]
+fn grok_user_interrupt_closes_the_bound_turn_and_keeps_the_queue() {
+    let mut fixture = Fixture::new(Provider::Grok);
+    let lead = running(&mut fixture, "write the parser", "turn-1");
+    let queued = fixture.send("next task", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    fixture.record(json!({
+        "hookEventName": "stop_cancelled",
+        "sessionId": "session",
+        "promptId": "turn-1",
+        "reason": "user_interrupt"
+    }));
+    fixture.consume();
+    let lead_request = fixture.request(lead);
+    assert_eq!(lead_request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        lead_request.failure_reason.as_deref(),
+        Some("provider_error: user_interrupt")
+    );
+    let lead_message = lead_request.prompt.id;
+    let status = fixture.worker.control_message(lead_message).unwrap();
+    assert_eq!(status["requests"][0]["stage"], "abandoned", "{status}");
+    assert_eq!(
+        status["requests"][0]["reason"], "provider_error: user_interrupt",
+        "{status}"
+    );
+    let error = fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .actionable_error
+        .clone()
+        .unwrap_or_default();
+    assert!(
+        error.contains("user_interrupt"),
+        "the sender-visible agent error omitted the interrupt: {error}"
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert!(fixture.request(queued).failure_reason.is_none());
+    let queued_message = fixture.request(queued).prompt.id;
+    let queued_status = fixture.worker.control_message(queued_message).unwrap();
+    assert_eq!(
+        queued_status["requests"][0]["stage"], "queued",
+        "{queued_status}"
+    );
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    assert_eq!(
+        fixture
+            .typed_content()
+            .last()
+            .map(|(text, steer)| (text.as_str(), *steer)),
+        Some(("next task", false))
+    );
+}
+
 #[test]
 fn unconfirmed_native_interrupt_clears_only_the_matching_visual_wait() {
     let mut f = Fixture::new(Provider::Codex);
@@ -1039,4 +1292,49 @@ fn native_interrupt_attempt_does_not_roll_back_when_model_save_fails() {
         .unwrap());
     assert!(state.agent(f.agent).unwrap().interrupt_pending);
     assert!(!state.request(lead).unwrap().settled());
+}
+
+#[test]
+fn interrupting_a_queued_restart_continuation_releases_the_waiting_message() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "original task", "turn-1");
+    let queued = fixture.send("waiting follow-up", true);
+    let placeholder = Worker::open(
+        fixture.dir.join("restart-placeholder"),
+        Box::new(super::Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        Box::new(super::Native(fixture.native.clone())),
+    )
+    .unwrap();
+    fixture.worker.serving_generation = 2;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert!(fixture.request(lead).restart_continuation);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[lead, queued]
+    );
+    fixture
+        .worker
+        .state
+        .close_interrupted(fixture.agent, fixture.now)
+        .unwrap();
+    assert!(fixture.request(lead).settled());
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[queued],
+        "the closed restart continuation must leave the delivery queue"
+    );
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed_content().last().unwrap(),
+        &("waiting follow-up".into(), false)
+    );
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }

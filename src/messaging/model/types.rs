@@ -397,7 +397,8 @@ pub(crate) struct RoomAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) superseded_session_id: Option<String>,
     /// `agent interrupt` pressed the provider's stop key: the next idle status
-    /// closes the running turn and the queue as interrupted.
+    /// closes the running turn as interrupted. Messages still queued, which
+    /// never joined that turn, stay queued for the next one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_pending: bool,
     /// When the agent entered its current `status`, or its visible dialog

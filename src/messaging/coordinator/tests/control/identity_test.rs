@@ -225,9 +225,78 @@ fn identity_interrupt_preserves_receipt_context_and_target_room_notice() {
     w.state
         .observe_status(target, RuntimeStatus::Idle, 1)
         .unwrap();
-    let request = w
+    w.state
+        .set_agent_runtime_identity(
+            target,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    w.state.confirm_hook_setup(target).unwrap();
+    let running = w
         .state
         .submit_message_from(
+            home,
+            Draft {
+                text: "running work".into(),
+                files: vec![],
+                recipient_ids: [target].into(),
+            },
+            Author::Developer,
+            2,
+        )
+        .unwrap()[0];
+    w.state.begin_submission(running, "launch", 3).unwrap();
+    w.state
+        .record_submission(
+            running,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn-1".into()),
+            },
+        )
+        .unwrap();
+    let payload = w.state.render_request_payload(running).unwrap();
+    assert_eq!(
+        w.state.accept_callback(ProviderCallback {
+            callback_id: "identity-interrupt-start".into(),
+            sequence: 4,
+            occurred_at_ms: 4,
+            agent_id: target,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(payload),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    assert_eq!(
+        w.state.accept_callback(ProviderCallback {
+            callback_id: "identity-interrupt-background".into(),
+            sequence: 5,
+            occurred_at_ms: 5,
+            agent_id: target,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: None,
+            prompt_payload: None,
+            kind: CallbackEventKind::BackgroundPending,
+        }),
+        CallbackDisposition::AcceptedProgress
+    );
+    w.state
+        .observe_status(target, RuntimeStatus::Idle, 6)
+        .unwrap();
+    let request = w
+        .state
+        .submit_message_with(
             home,
             Draft {
                 text: "queued work".into(),
@@ -235,7 +304,8 @@ fn identity_interrupt_preserves_receipt_context_and_target_room_notice() {
                 recipient_ids: [target].into(),
             },
             Author::Developer,
-            2,
+            7,
+            true,
         )
         .unwrap()[0];
     let response = call(
@@ -253,9 +323,12 @@ fn identity_interrupt_preserves_receipt_context_and_target_room_notice() {
     );
     assert!(w.state.room(conversation).unwrap().notices.is_empty());
     assert_eq!(
-        w.state.request(request).unwrap().failure_reason.as_deref(),
+        w.state.request(running).unwrap().failure_reason.as_deref(),
         Some("interrupted")
     );
+    let waiting = w.state.request(request).unwrap();
+    assert_eq!(waiting.phase, RequestPhase::Queued);
+    assert!(waiting.failure_reason.is_none(), "{waiting:?}");
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

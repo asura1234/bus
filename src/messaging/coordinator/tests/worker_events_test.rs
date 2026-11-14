@@ -795,25 +795,43 @@ fn interrupted_and_deleted_agent_requests_end_without_a_notice() {
     for deleted in [false, true] {
         let mut f = Fixture::new();
         let orch = f.orch;
-        let source = f.send(Author::Agent(orch), "work");
-        let mut state = f.worker.state.clone();
         if deleted {
+            let source = f.send(Author::Agent(orch), "work");
+            let mut state = f.worker.state.clone();
             state.prepare_delete_agent(f.agent).unwrap();
             state
                 .recover_idle_request(source, io::now_ms() - 4_000)
                 .unwrap();
+            let r = state.request(source).unwrap();
+            assert!(
+                matches!(r.phase, crate::messaging::model::RequestPhase::Abandoned),
+                "deleted={deleted} {r:?}"
+            );
+            f.worker.save(state).unwrap();
         } else {
+            let lead = running(&mut f, Author::Agent(orch));
+            let mut state = f.worker.state.clone();
             state.begin_interrupt(f.agent).unwrap();
+            f.worker.save(state).unwrap();
+            let queued = f.send(Author::Agent(orch), "still queued");
+            let mut state = f.worker.state.clone();
             state
                 .close_interrupted(f.agent, io::now_ms() - 4_000)
                 .unwrap();
+            let r = state.request(lead).unwrap();
+            assert!(
+                matches!(r.phase, crate::messaging::model::RequestPhase::Abandoned),
+                "{r:?}"
+            );
+            assert_eq!(
+                r.failure_reason.as_deref(),
+                Some(crate::messaging::model::INTERRUPTED)
+            );
+            let waiting = state.request(queued).unwrap();
+            assert_eq!(waiting.phase, crate::messaging::model::RequestPhase::Queued);
+            assert!(waiting.failure_reason.is_none(), "{waiting:?}");
+            f.worker.save(state).unwrap();
         }
-        let r = state.request(source).unwrap();
-        assert!(
-            matches!(r.phase, crate::messaging::model::RequestPhase::Abandoned),
-            "deleted={deleted} {r:?}"
-        );
-        f.worker.save(state).unwrap();
         collect(&mut f);
         assert!(f.notices().is_empty(), "deleted={deleted}");
     }

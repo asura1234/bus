@@ -442,7 +442,7 @@ impl Worker {
     }
 
     /// One agent's part of an interrupt, as its result row: the stop key for
-    /// a working or blocked agent, the held turn and queue closed for an idle one.
+    /// a working or blocked agent, the held turn closed for an idle one.
     fn interrupt_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
@@ -466,7 +466,8 @@ impl Worker {
             }
             RuntimeStatus::Idle if !needs_stop(state, agent) => {
                 // Nothing to stop. A turn Bus still holds (settling, or
-                // waiting on background shells) and the queue close.
+                // waiting on background shells) closes. Messages that never
+                // joined it stay queued.
                 let closed = state
                     .close_interrupted(id, now)
                     .map_err(|e| e.to_string())?;
