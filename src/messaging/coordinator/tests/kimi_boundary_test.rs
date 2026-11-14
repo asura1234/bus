@@ -139,11 +139,17 @@ fn kimi_interrupt_control_sends_esc_once_and_settles_after_idle() {
     assert_eq!(keys, [vec!["esc".to_owned()]]);
     assert!(!f.request(lead).settled());
     f.status(RuntimeStatus::Idle);
-    for id in [lead, queued] {
-        assert_eq!(f.request(id).failure_reason.as_deref(), Some("interrupted"));
-    }
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert_eq!(f.request(queued).phase, RequestPhase::Queued);
+    assert!(f.request(queued).failure_reason.is_none());
     let fresh = f.send("after interrupt", false);
     f.deliver();
+    assert_ne!(f.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(f.request(queued).group, None);
+    assert_eq!(f.request(fresh).phase, RequestPhase::Queued);
     assert_eq!(f.request(fresh).group, None);
     assert!(!f.typed().last().unwrap().1);
 }
