@@ -309,7 +309,9 @@ Never send reset slash commands through send: they cannot produce a normal reply
 const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi, Ctrl+C for Cursor and Grok. Wait
 up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
-Running/queued/settling requests close as interrupted; no later replay. History
+Running and settling requests close as interrupted; no later replay of that turn.
+Messages still queued, which never joined the turn, stay queued and run next.
+A blocked-dialog notice is not replayed. History
 records Interrupted NAME by --as (otherwise developer) in the target's home room.
 An explicit reply sent before the stop stays on the request. --text sends a new normal message
 after the stop, including to successfully stopped agents if another stop fails.

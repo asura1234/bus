@@ -14,6 +14,11 @@ pub(crate) struct ProviderRetry {
     pub(crate) quota: bool,
     #[serde(default)]
     pub(crate) queued: bool,
+    /// Ids prepare put back on the queue for this hold. Empty until then.
+    /// Interrupt closes them with the hold; clearing `group` must not make
+    /// a cancelled member look like work that never joined the turn.
+    #[serde(default)]
+    pub(crate) queued_ids: Vec<RequestId>,
 }
 
 impl BusState {
@@ -32,6 +37,7 @@ impl BusState {
             retry_at_ms: owner.observed_at_ms.saturating_add(5_000),
             quota: false,
             queued: true,
+            queued_ids: Vec::new(),
         });
     }
 
@@ -270,6 +276,7 @@ impl BusState {
                 continue;
             }
             let next_lead = pending[0];
+            let queued_ids = pending.clone();
             let continuation = lead.restart_continuation;
             if continuation {
                 let Some(generation) = lead.delivery_epoch.as_ref().map(|epoch| epoch.generation)
@@ -311,6 +318,7 @@ impl BusState {
             owner.provider_retry = Some(ProviderRetry {
                 lead: next_lead,
                 queued: true,
+                queued_ids,
                 ..hold
             });
             owner.delivery_rejection = None;
@@ -384,6 +392,10 @@ impl BusState {
             prompt_id = request.prompt.id.0, room_id = request.room_id.0, provider = ?owner.provider,
             session_id = ?request.provider_session_id, turn_id = ?request.provider_turn_id,
             attempts, retry_at_ms, reset_at_ms, quota, error, "Provider failure held for retry");
+        let queued_ids = existing
+            .as_ref()
+            .map(|hold| hold.queued_ids.clone())
+            .unwrap_or_default();
         let owner = self.agents.get_mut(&agent).expect("held agent");
         owner.provider_retry = Some(ProviderRetry {
             lead: existing.as_ref().map_or(id, |h| h.lead),
@@ -393,6 +405,7 @@ impl BusState {
                 .map_or(retry_at_ms, |h| h.retry_at_ms.max(retry_at_ms)),
             quota: quota || existing.as_ref().is_some_and(|h| h.quota),
             queued: false,
+            queued_ids,
         });
         if let Some(hold) = existing {
             owner.current_request = Some(hold.lead);

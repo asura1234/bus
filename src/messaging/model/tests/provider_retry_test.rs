@@ -761,13 +761,15 @@ fn provider_flake_review_interrupt_closes_the_independent_hold_before_and_after_
             ));
         }
         state.close_interrupted(agent, 200).unwrap();
-        for id in [lead, queued] {
-            assert_eq!(
-                state.request(id).unwrap().failure_reason.as_deref(),
-                Some("interrupted")
-            );
-            assert!(state.request(id).unwrap().settled());
-        }
+        assert_eq!(
+            state.request(lead).unwrap().failure_reason.as_deref(),
+            Some("interrupted")
+        );
+        assert!(state.request(lead).unwrap().settled());
+        let waiting = state.request(queued).unwrap();
+        assert_eq!(waiting.phase, RequestPhase::Queued, "{waiting:?}");
+        assert!(waiting.failure_reason.is_none(), "{waiting:?}");
+        assert_eq!(state.queued_requests(agent), &[queued]);
         if finished {
             let settled = state.request(member).unwrap();
             assert_eq!(settled.phase, RequestPhase::Completed);
@@ -1025,4 +1027,26 @@ fn restart_settling_an_independent_input_keeps_the_provider_retry_hold() {
         !state.request(lead).unwrap().settled(),
         "the held delivery stays open for provider retry"
     );
+}
+
+#[test]
+fn interrupting_a_prepared_retry_closes_every_prior_turn_member() {
+    let (mut state, agent, lead, member, queued) = steering_failure(true, false);
+    assert!(state.retry_provider_requests(1_000_000));
+    assert_eq!(state.queued_requests(agent), &[lead, member, queued]);
+    assert_eq!(state.request(member).unwrap().group, None);
+    assert!(state.request(member).unwrap().provider_retry_attempts > 0);
+    state.close_interrupted(agent, 1_000_001).unwrap();
+    assert!(state.request(lead).unwrap().settled());
+    assert_eq!(
+        state.request(member).unwrap().phase,
+        RequestPhase::Abandoned,
+        "a prepared retry member belongs to the stopped turn, not fresh queued work"
+    );
+    assert_eq!(
+        state.request(member).unwrap().failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.queued_requests(agent), &[queued]);
 }
