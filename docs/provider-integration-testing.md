@@ -190,13 +190,12 @@ does not save the agent. Read `PATH`, then run the same add with
 `--consent-hooks`. Expect `ok: true` and
 `result` `{agent_id, stage: "launching"}`.
 
-Once a Codex or Cursor hook file is current, skip that missing-hook check. An
-add without `--consent-hooks` succeeds and saves the agent. Add the name once.
-
-Once `.grok/hooks/bus.json` is current, an add without `--consent-hooks` still
-fails and still does not save the agent. `error.message` is
-`Setup confirmation required for PATH. MESSAGE`. Retry that same name once
-with `--consent-hooks`, then stop.
+Once a Codex, Cursor, or Grok hook file is current, skip that missing-hook check.
+An add without `--consent-hooks` succeeds and saves the agent. Add the name once.
+For Grok, also add a MASTER orchestrator in the same project without renewed
+consent and require the hook file's bytes and modification time to stay unchanged.
+If hooks change during launch preparation, the add must fail before capture is
+initialized and must preserve the changed file.
 
 Run only the sequence that matches the provider under test. A fresh
 `$scratch/project` has no hook files, so Codex, Cursor, and Grok take the
@@ -204,7 +203,7 @@ missing-file sequence. Continue with observe/press for the agent that
 returned `ok: true`.
 
 ```sh
-# Claude, or Codex/Cursor after its hook file is current. One add.
+# Claude, or Codex/Cursor/Grok after its hook file is current. One add.
 sbus room create provider-test
 sbus agent add --room ROOM --name new-worker --provider PROVIDER \
   --pwd "$scratch/project"
