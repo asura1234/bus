@@ -1293,3 +1293,48 @@ fn native_interrupt_attempt_does_not_roll_back_when_model_save_fails() {
     assert!(state.agent(f.agent).unwrap().interrupt_pending);
     assert!(!state.request(lead).unwrap().settled());
 }
+
+#[test]
+fn interrupting_a_queued_restart_continuation_releases_the_waiting_message() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "original task", "turn-1");
+    let queued = fixture.send("waiting follow-up", true);
+    let placeholder = Worker::open(
+        fixture.dir.join("restart-placeholder"),
+        Box::new(super::Native(fixture.native.clone())),
+    )
+    .unwrap();
+    drop(std::mem::replace(&mut fixture.worker, placeholder));
+    fixture.worker = Worker::open(
+        fixture.dir.clone(),
+        Box::new(super::Native(fixture.native.clone())),
+    )
+    .unwrap();
+    fixture.worker.serving_generation = 2;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert!(fixture.request(lead).restart_continuation);
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[lead, queued]
+    );
+    fixture
+        .worker
+        .state
+        .close_interrupted(fixture.agent, fixture.now)
+        .unwrap();
+    assert!(fixture.request(lead).settled());
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[queued],
+        "the closed restart continuation must leave the delivery queue"
+    );
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed_content().last().unwrap(),
+        &("waiting follow-up".into(), false)
+    );
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
