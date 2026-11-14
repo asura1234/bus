@@ -382,13 +382,9 @@ Run checks and remediation until every reviewer is Ready:
    orchestrator to decide and record. Turn remaining nonblocking work into follow-up
    steps with its recommendations and acceptance checks.
 4. Keep fixing until the reviewer is Ready. That closes the review phase: from
-   then on, fixes are verified by the gate, not by another review round. Run the
-   gate on the final head; once it passes, run exactly one delta review of
-   everything that changed since the reviewed head - fix commits, rebases and
-   merge-conflict resolutions together - before merging. If that delta review
-   finds a defect, fix it, re-gate, and delta-review only the new delta. Do not
-   start a delta review before the gate passes, and do not review each fix: both
-   spend a lane on a head that still has to earn its gate. A change that only
+   then on, the gate is the only post-review verification. Run the gate on that
+   head and merge on the gate-green head. Fix commits, rebases and
+   merge-conflict resolutions are not reviewed again. A change that only
    touches markdown or plans/ needs no gate at all. Hold and escalate only real
    decisions: sharp reviewer disagreements, goal changes, or destructive or
    outward-facing actions without existing authorization. Keep independent work
@@ -541,9 +537,10 @@ Run this audit every few events and on a timer while work remains open:
   it with other merges frozen, so the base cannot move under the gate. A gate
   that aborts because HEAD or the worktree moved proves nothing. Never let a
   second merge move the base while a gate is in flight.
-- A patch-identical rebase carries its review forward; a changed patch is
-  covered by the single post-gate delta review. A markdown-only or plans-only
-  change needs no gate and no delta review: merge it on review.
+- A patch-identical rebase carries its review forward. Once review has closed
+  at Ready, a changed patch is not a new review: the gate is the only
+  post-review verification, and the PR merges on the gate-green head. A
+  markdown-only or plans-only change needs no gate: merge it on review.
 
 For example, you have seven open PRs; Ready work stands still for about 1h45m,
 and only two merge in about 3h. You trust an unreachable-device report and pause
