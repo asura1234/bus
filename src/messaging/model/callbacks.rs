@@ -145,19 +145,36 @@ impl BusState {
     /// Records that a turn the agent ran on its own finished after Bus typed
     /// its unbound current request.
     fn note_foreign_turn_settled(&mut self, callback: &ProviderCallback) {
-        let Some(request) = self.unbound_request(callback.agent_id).map(|r| r.id) else {
-            return;
-        };
-        if let Some(request) = self.requests.get_mut(&request).filter(|request| {
-            request.expected_launch_id.as_deref() == Some(callback.launch_id.as_str())
-                && request
-                    .submission_boundary
-                    .is_some_and(|boundary| callback.sequence > boundary)
-        }) {
+        if let Some(request) = self.unbound_request_typed_before(callback) {
             request
                 .foreign_turn_settled_at_ms
                 .get_or_insert(callback.occurred_at_ms);
         }
+    }
+
+    /// Records that the agent started a turn of its own after Bus typed its
+    /// unbound current request (live 2026-11-13: a Claude task notification
+    /// made the agent Working, and a message steered into the unstarted
+    /// request reached the model but was abandoned with it).
+    fn note_foreign_turn_started(&mut self, callback: &ProviderCallback) {
+        if let Some(request) = self.unbound_request_typed_before(callback) {
+            request
+                .foreign_turn_started_at_ms
+                .get_or_insert(callback.occurred_at_ms);
+        }
+    }
+
+    fn unbound_request_typed_before(
+        &mut self,
+        callback: &ProviderCallback,
+    ) -> Option<&mut Request> {
+        let request = self.unbound_request(callback.agent_id)?.id;
+        self.requests.get_mut(&request).filter(|request| {
+            request.expected_launch_id.as_deref() == Some(callback.launch_id.as_str())
+                && request
+                    .submission_boundary
+                    .is_some_and(|boundary| callback.sequence > boundary)
+        })
     }
 
     fn accept_callback_for_request(
@@ -189,6 +206,7 @@ impl BusState {
             .as_deref()
             .is_some_and(crate::agents::providers::cursor::final_reply::is_background_task_notice)
         {
+            self.note_foreign_turn_started(&callback);
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
@@ -245,6 +263,7 @@ impl BusState {
             if !request.trusted_start_bound && request.foreign_turn_settled_at_ms.is_some() {
                 self.release_unbound_request(callback.agent_id, callback.occurred_at_ms);
             }
+            self.note_foreign_turn_started(&callback);
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }

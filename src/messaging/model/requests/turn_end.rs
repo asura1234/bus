@@ -47,6 +47,11 @@ impl BusState {
         if lead.awaiting_background {
             return false;
         }
+        // A turn the agent started on its own explains its Working status, and
+        // an interrupted one sends no Stop. Only a start hook shows this ran.
+        if !lead.trusted_start_bound && lead.foreign_turn_started_at_ms.is_some() {
+            return false;
+        }
         // Screen activity alone cannot confirm an uncertain submission;
         // a confirmed write may finish without a captured start hook.
         if !matches!(

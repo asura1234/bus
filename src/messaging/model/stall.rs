@@ -26,3 +26,39 @@ pub(super) fn submission_confirmation_grace(provider: super::Provider) -> u64 {
         UNCONFIRMED_SUBMISSION_MS
     }
 }
+
+impl super::BusState {
+    /// A native "confirmed" write can be false: Claude 2.1.310 blanked its
+    /// composer while loading a pasted image and dropped the Enter (live
+    /// 2026-11-13: the message sat unsent for 20 minutes, Active with no
+    /// bound). With hooks live, an idle agent that never went busy on it and
+    /// sent no submit hook within the confirmation grace did not take it.
+    pub(super) fn confirmed_write_never_started(
+        &self,
+        lead: &super::Request,
+        agent: &super::RoomAgent,
+        now_ms: u64,
+    ) -> bool {
+        let progress = lead
+            .progress_at_ms
+            .unwrap_or(0)
+            .max(lead.latency.native.enter_written_at_ms.unwrap_or(0))
+            .max(agent.status_since_ms);
+        agent.provider != super::Provider::Kimi
+            && agent.hook_setup_confirmed
+            && agent.status == super::RuntimeStatus::Idle
+            && !agent.dialog
+            // Work of the agent's own is not this write's turn; the bound
+            // then counts from the idle start after it.
+            && (agent.busy_revision <= lead.submission_status_revision
+                || lead.foreign_turn_started_at_ms.is_some())
+            && !lead.trusted_start_bound
+            && !lead.steered
+            && !lead.restart_continuation
+            && lead.restart_resume.is_none()
+            && lead.pending_final.is_none()
+            && !lead.awaiting_background
+            && lead.turn_ended_at_ms.is_none()
+            && now_ms.saturating_sub(progress) >= UNCONFIRMED_SUBMISSION_MS
+    }
+}

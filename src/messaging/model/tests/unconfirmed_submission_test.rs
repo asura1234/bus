@@ -389,3 +389,265 @@ fn unconfirmed_settlement_preserves_each_native_cleanup_outcome() {
         }
     }
 }
+
+/// Replays live request 11513 (2026-11-13): Claude dropped the Enter after an
+/// image paste, yet Bus recorded the write as confirmed. The idle agent never
+/// went busy and no submit hook arrived.
+fn falsely_confirmed_write(
+    state: &mut BusState,
+    room: RoomId,
+    agent: AgentId,
+    provider: Provider,
+) -> (RequestId, RequestId) {
+    state.agents.get_mut(&agent).unwrap().provider = provider;
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 1_000)
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    let typed = submit_text(state, room, agent, "grey square\n\"/tmp/IMG_0055.PNG\"");
+    state.begin_submission(typed, "launch-codex", 5).unwrap();
+    state
+        .record_native_timestamps(
+            typed,
+            NativeSubmissionTimestamps {
+                enter_written_at_ms: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state
+        .record_submission(
+            typed,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Active);
+    let behind = submit_text(state, room, agent, "filter MR by author");
+    (typed, behind)
+}
+
+#[test]
+fn a_confirmed_write_the_idle_agent_never_started_fails_visibly_after_the_bound() {
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        for restart in [false, true] {
+            let (mut state, room, agent, _) = state_with_room_and_agents();
+            let (typed, behind) = falsely_confirmed_write(&mut state, room, agent, provider);
+            let bound = 2_000 + UNCONFIRMED_SUBMISSION_MS;
+            state
+                .observe_status(agent, RuntimeStatus::Idle, bound - 1)
+                .unwrap();
+            state.fail_unconfirmed_submissions(bound - 1).unwrap();
+            assert_eq!(state.request(typed).unwrap().phase, RequestPhase::Active);
+            if restart {
+                state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+            }
+            assert_eq!(
+                recovery_at(&state, typed, bound).as_deref(),
+                Some("submission_unconfirmed"),
+                "{provider:?}: message status must name the stall"
+            );
+            state.fail_unconfirmed_submissions(bound).unwrap();
+            let failed = state.request(typed).unwrap();
+            assert_eq!(failed.phase, RequestPhase::Abandoned, "{provider:?}");
+            assert_eq!(
+                failed.failure_reason.as_deref(),
+                Some("submission_unconfirmed")
+            );
+            assert!(
+                state
+                    .agent(agent)
+                    .unwrap()
+                    .actionable_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("before resending")),
+                "{provider:?}: the unsent composer text must not be silent"
+            );
+            assert_eq!(state.next_queued_request(agent), Some(behind));
+        }
+    }
+}
+
+#[test]
+fn a_confirmed_write_keeps_its_turn_when_work_hooks_or_dialogs_explain_the_wait() {
+    let far = 2_000 + 100 * UNCONFIRMED_SUBMISSION_MS;
+    for case in [
+        "went_busy",
+        "hooks_unconfirmed",
+        "kimi",
+        "dialog",
+        "start_bound",
+    ] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let provider = if case == "kimi" {
+            Provider::Kimi
+        } else {
+            Provider::ClaudeCode
+        };
+        let (typed, _) = falsely_confirmed_write(&mut state, room, agent, provider);
+        match case {
+            "went_busy" => {
+                state
+                    .observe_status(agent, RuntimeStatus::Working, 2_500)
+                    .unwrap();
+                state
+                    .observe_status(agent, RuntimeStatus::Idle, 3_000)
+                    .unwrap();
+            }
+            "hooks_unconfirmed" => {
+                state.agents.get_mut(&agent).unwrap().hook_setup_confirmed = false
+            }
+            "dialog" => state.agents.get_mut(&agent).unwrap().dialog = true,
+            "start_bound" => {
+                state.requests.get_mut(&typed).unwrap().trusted_start_bound = true;
+            }
+            _ => {}
+        }
+        state.fail_unconfirmed_submissions(far).unwrap();
+        assert_ne!(
+            state.request(typed).unwrap().failure_reason.as_deref(),
+            Some("submission_unconfirmed"),
+            "{case}"
+        );
+    }
+}
+
+fn own_turn_callback(agent: AgentId, sequence: u64, kind: CallbackEventKind) -> ProviderCallback {
+    ProviderCallback {
+        callback_id: format!("own-turn-{sequence}"),
+        sequence,
+        occurred_at_ms: sequence * 1_000,
+        agent_id: agent,
+        launch_id: "launch-codex".into(),
+        provider_session_id: Some("provider-session".into()),
+        provider_turn_id: Some("own-turn".into()),
+        provider_prompt_id: None,
+        prompt_payload: Some("<task-notification>background command completed".into()),
+        kind,
+    }
+}
+
+#[test]
+fn a_turn_of_the_agents_own_does_not_take_steering_meant_for_an_unstarted_write() {
+    // Live 2026-11-13: a Claude task notification made the agent Working, so
+    // 11518 was steered into unstarted 11513 and abandoned with it although
+    // the model answered it. It must wait, and the release must be visible.
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let (typed, behind) = falsely_confirmed_write(&mut state, room, agent, Provider::ClaudeCode);
+    assert_eq!(
+        state.accept_callback(own_turn_callback(
+            agent,
+            6,
+            CallbackEventKind::PromptStarted
+        )),
+        CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn)
+    );
+    assert!(state
+        .request(typed)
+        .unwrap()
+        .foreign_turn_started_at_ms
+        .is_some());
+    state
+        .observe_status(agent, RuntimeStatus::Working, 6_001)
+        .unwrap();
+    assert_eq!(
+        state.next_steering(agent),
+        None,
+        "a message steered into the unstarted write would share its abandonment"
+    );
+    state.accept_callback(own_turn_callback(
+        agent,
+        7,
+        CallbackEventKind::Final {
+            text: "background check done".into(),
+        },
+    ));
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 7_001)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 7_000 + UNBOUND_SETTLE_MS)
+        .unwrap();
+    let released = state.request(typed).unwrap();
+    assert_eq!(released.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        released.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .is_some_and(|error| error.contains("before resending")));
+    assert_eq!(state.request(behind).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.next_queued_request(agent), Some(behind));
+}
+
+#[test]
+fn an_unstarted_write_fails_visibly_after_a_foreign_turn_ends_with_or_without_a_stop_hook() {
+    // Esc interrupts a Claude turn with no Stop hook, so the foreign turn never
+    // settles; its Working status must not count as the unstarted write's turn.
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        for interrupted in [true, false] {
+            let label = format!("{provider:?}, interrupted={interrupted}");
+            let (mut state, room, agent, _) = state_with_room_and_agents();
+            let (typed, behind) = falsely_confirmed_write(&mut state, room, agent, provider);
+            state.accept_callback(own_turn_callback(
+                agent,
+                6,
+                CallbackEventKind::PromptStarted,
+            ));
+            state
+                .observe_status(agent, RuntimeStatus::Working, 6_001)
+                .unwrap();
+            if !interrupted {
+                state.accept_callback(own_turn_callback(
+                    agent,
+                    7,
+                    CallbackEventKind::Final {
+                        text: "background check done".into(),
+                    },
+                ));
+            }
+            state
+                .observe_status(agent, RuntimeStatus::Idle, 7_000)
+                .unwrap();
+            assert!(
+                !state.turn_ended(state.request(typed).unwrap()),
+                "{label}: the foreign turn's end is not the unstarted write's"
+            );
+            let bound = 7_000 + UNCONFIRMED_SUBMISSION_MS;
+            state.fail_unconfirmed_submissions(bound - 1).unwrap();
+            assert_eq!(
+                state.request(typed).unwrap().phase,
+                RequestPhase::Active,
+                "{label}"
+            );
+            state
+                .observe_status(agent, RuntimeStatus::Idle, bound)
+                .unwrap();
+            state.fail_unconfirmed_submissions(bound).unwrap();
+            assert_eq!(state.next_steering(agent), None, "{label}");
+            let failed = state.request(typed).unwrap();
+            assert_eq!(failed.phase, RequestPhase::Abandoned, "{label}");
+            assert_eq!(
+                failed.failure_reason.as_deref(),
+                Some("submission_unconfirmed"),
+                "{label}"
+            );
+            assert!(
+                state
+                    .agent(agent)
+                    .unwrap()
+                    .actionable_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("before resending")),
+                "{label}"
+            );
+            assert_eq!(state.next_queued_request(agent), Some(behind), "{label}");
+        }
+    }
+}

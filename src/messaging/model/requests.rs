@@ -94,6 +94,7 @@ impl BusState {
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
         request_state.foreign_turn_settled_at_ms = None;
+        request_state.foreign_turn_started_at_ms = None;
         // Starts the idle recovery clock at the submission.
         request_state.progress_at_ms = Some(submitted_at_ms);
         Ok(())
@@ -271,7 +272,10 @@ impl BusState {
             return None;
         }
         match lead.phase {
-            RequestPhase::Completed | RequestPhase::Abandoned | RequestPhase::Active => None,
+            RequestPhase::Completed | RequestPhase::Abandoned => None,
+            RequestPhase::Active => self
+                .confirmed_write_never_started(lead, agent, now_ms)
+                .then(|| "submission_unconfirmed".into()),
             // This is a deliberate wait on developer-owned input, not a failed
             // delivery. Persisting the reason also protects the queue on restart.
             RequestPhase::Queued
@@ -383,16 +387,27 @@ impl BusState {
     /// its own, once the agent proved it moved on: it finished a turn of its
     /// own and then started another, began a new provider session, or went
     /// idle. The typed text may have joined the agent's own turn, so its reply,
-    /// if any, is in the terminal. Bus says nothing: it never authors a message,
-    /// and a waiting sender sees the request `abandoned`.
+    /// if any, is in the terminal, or it may still sit in the composer. Bus
+    /// authors no message: a waiting sender sees the request `abandoned`, and
+    /// the agent carries the unknown-outcome error (live 2026-11-13: two
+    /// releases with no reason left the developer's text unsent, unexplained).
     pub(crate) fn release_unbound_request(
         &mut self,
         agent: AgentId,
         now_ms: u64,
     ) -> Option<RequestId> {
         let request = self.unbound_request(agent)?.id;
+        let prompt = self.requests.get(&request)?.prompt.id;
         self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())
             .ok()?;
+        let message = self
+            .requests
+            .get(&request)
+            .and_then(Request::submission_notice)
+            .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
+        if let Some(error) = self.request_failure_error(request, message) {
+            let _ = self.set_agent_error(agent, Some(error));
+        }
         tracing::info!(
             event = "bus.message.recovered",
             request_id = request.0,
@@ -423,7 +438,12 @@ impl BusState {
             .keys()
             .filter_map(|agent| self.unbound_request(*agent))
             .filter(|request| can_reconcile(request.agent_id))
-            .filter(|request| request.phase == RequestPhase::Submitting)
+            .filter(|request| {
+                matches!(
+                    request.phase,
+                    RequestPhase::Submitting | RequestPhase::Active
+                )
+            })
             .filter(|request| {
                 self.recovery_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
             })
@@ -459,7 +479,8 @@ impl BusState {
     /// its turn visibly runs, or while the idle agent has no answer yet and
     /// waits for background work that turn started (shells, agents, crons),
     /// bound by its submit hook, with no final reply yet. A Working turn whose
-    /// native write already succeeded can take a steer before that hook binds.
+    /// native write already succeeded can take a steer before that hook binds,
+    /// unless the agent has since started a turn of its own.
     /// A write that is still Submitting occupies the submission window, so the
     /// queue waits for a later tick instead of typing over it. Only the lead's
     /// own room can steer ordinary work; blocked-dialog notices may interrupt
@@ -481,6 +502,9 @@ impl BusState {
         if (agent_state.status == RuntimeStatus::Idle && !lead.awaiting_background)
             || lead.phase != RequestPhase::Active
             || (!lead.trusted_start_bound && agent_state.status != RuntimeStatus::Working)
+            // Working that a turn of the agent's own explains says nothing
+            // about the unstarted lead: a member would share its abandonment.
+            || (!lead.trusted_start_bound && lead.foreign_turn_started_at_ms.is_some())
             || lead.pending_final.is_some()
             || lead.turn_ended_at_ms.is_some()
             // An uncertain member may still occupy the native composer. Its
