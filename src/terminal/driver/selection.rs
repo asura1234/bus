@@ -4,6 +4,8 @@ use super::Grid;
 pub(crate) enum SelectionStep {
     Confirm,
     Move(&'static str),
+    /// The option row's trailing shortcut column. That key selects immediately.
+    Shortcut(char),
 }
 
 /// Move one option at a time: menu rows may wrap or contain explanatory lines.
@@ -24,6 +26,11 @@ pub(crate) fn selection_step(grid: &Grid, label: &str) -> Result<SelectionStep, 
             "Option label is missing or ambiguous; read the screen or send explicit keys".into(),
         );
     };
+    // A separated shortcut column is the selection itself. Grok's folder-trust
+    // rows have no focus marker, and the visible key (not Enter) chooses them.
+    if let Some(key) = option_shortcut(&rows[*target]) {
+        return Ok(SelectionStep::Shortcut(key));
+    }
     let (focused, _) = selection_focus_for_label(grid, Some(label))?;
     Ok(match target.cmp(&focused) {
         std::cmp::Ordering::Equal => SelectionStep::Confirm,
@@ -193,6 +200,16 @@ pub(crate) fn selection_identity(
 }
 
 pub(super) fn option_body(row: &str) -> (&str, bool) {
+    let (row, selected) = option_row(row);
+    (without_shortcut_column(row), selected)
+}
+
+/// Visible one-letter shortcut drawn in its own column, if this row has one.
+pub(super) fn option_shortcut(row: &str) -> Option<char> {
+    split_shortcut_column(option_row(row).0).1
+}
+
+fn option_row(row: &str) -> (&str, bool) {
     let row = row.trim().trim_matches(['│', '┃', '║']).trim();
     let selected = row.starts_with(['❯', '❭', '›', '>', '●', '◉', '▶', '→']);
     let row = if selected {
@@ -212,6 +229,29 @@ pub(super) fn option_body(row: &str) -> (&str, bool) {
         row
     };
     (row, selected)
+}
+
+fn without_shortcut_column(text: &str) -> &str {
+    split_shortcut_column(text).0
+}
+
+/// A shortcut column is one letter set off by at least two spaces.
+/// A shorter gap stays part of the label, so a final word is not a key.
+fn split_shortcut_column(text: &str) -> (&str, Option<char>) {
+    let trimmed = text.trim_end();
+    let Some(key) = trimmed.chars().next_back() else {
+        return (text, None);
+    };
+    if !key.is_ascii_alphabetic() {
+        return (text, None);
+    }
+    let prefix = &trimmed[..trimmed.len() - key.len_utf8()];
+    let gap = prefix.len() - prefix.trim_end().len();
+    if gap >= 2 && !prefix.trim().is_empty() {
+        (prefix.trim_end(), Some(key))
+    } else {
+        (text, None)
+    }
 }
 
 pub(super) fn option_label(row: &str) -> (&str, bool) {
