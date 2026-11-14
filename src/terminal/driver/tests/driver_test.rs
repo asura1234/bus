@@ -45,6 +45,164 @@ fn select_does_not_depend_on_option_numbers_or_physical_row_distance() {
     assert!(selection_step(&menu("  Yes\n  No"), "No").is_err());
 }
 
+fn grok_trust_rows() -> String {
+    let screen =
+        include_str!("../../../../tests/fixtures/grok-dialog/native-1.0.70-startup-trust.txt");
+    screen
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            *line == "Do you trust the contents of this directory?"
+                || line.starts_with("Yes, proceed")
+                || line.starts_with("No, quit")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn select_grok_folder_trust_uses_the_shortcut_column_without_a_marker() {
+    let screen = grok_trust_rows();
+    let proceed = screen
+        .lines()
+        .find(|line| line.starts_with("Yes, proceed"))
+        .unwrap();
+    let quit = screen
+        .lines()
+        .find(|line| line.starts_with("No, quit"))
+        .unwrap();
+    assert_eq!(proceed, "Yes, proceed                 y");
+    assert_eq!(quit, "No, quit                     n");
+    let grid = menu(&screen);
+    assert_eq!(
+        selection_step(&grid, "Yes, proceed"),
+        Ok(SelectionStep::Shortcut('y'))
+    );
+    assert_eq!(
+        selection_step(&grid, "No, quit"),
+        Ok(SelectionStep::Shortcut('n'))
+    );
+    assert!(selection_step(&grid, "Yes").is_err());
+    assert!(selection_step(&grid, "Yes, proceed ").is_err());
+    assert!(selection_step(&grid, proceed).is_err());
+}
+
+#[tokio::test]
+async fn press_grok_trust_select_enqueues_the_shortcut_and_rejects_a_partial_label() {
+    use crate::protocol::api::schema::{AgentPressParams, TerminalObservation};
+    let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 12);
+    runtime.test_process_pty_bytes(grok_trust_rows().replace('\n', "\r\n").as_bytes());
+    let observe_now = || {
+        let (grid, content_revision) = observe(&runtime).unwrap();
+        TerminalObservation {
+            terminal_id: "terminal".into(),
+            pane_id: "pane".into(),
+            content_revision,
+            text: grid.text(),
+            focus: None,
+            focus_occurrence: 0,
+            grid,
+        }
+    };
+    let rejected = press(
+        &runtime,
+        AgentPressParams {
+            target: "pane".into(),
+            expected_terminal_id: None,
+            select: Some("Yes".into()),
+            text: None,
+            keys: vec![],
+            submit: false,
+        },
+        observe_now(),
+    );
+    assert_eq!(
+        rejected.unwrap_err().0,
+        "selection_unavailable",
+        "a prefix of the visible label must not choose a row"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "a rejected select enqueues nothing"
+    );
+    let selected = press(
+        &runtime,
+        AgentPressParams {
+            target: "pane".into(),
+            expected_terminal_id: None,
+            select: Some("Yes, proceed".into()),
+            text: None,
+            keys: vec![],
+            submit: false,
+        },
+        observe_now(),
+    )
+    .unwrap();
+    assert_eq!(selected.keys, vec!["y".to_owned()]);
+    assert!(!selected.selection_pending);
+    assert_eq!(writes.try_recv().unwrap().as_ref(), b"y");
+}
+
+#[test]
+fn select_codex_folder_trust_keeps_marker_navigation() {
+    let grid = menu(
+        "Do you trust the contents of this directory?\n/private/tmp/tui-driver-project\n\n› 1. Yes, trust this directory\n  2. No, exit\n\nenter to confirm · esc to cancel",
+    );
+    assert_eq!(
+        selection_step(&grid, "Yes, trust this directory"),
+        Ok(SelectionStep::Confirm)
+    );
+    assert_eq!(
+        selection_step(&grid, "No, exit"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert!(selection_step(&grid, "Yes").is_err());
+    assert!(selection_step(&grid, "Yes, trust").is_err());
+}
+
+#[test]
+fn select_marked_shortcut_column_still_uses_the_visible_key() {
+    let grid = menu("❯ Yes, proceed                 y\n  No, quit                     n");
+    assert_eq!(
+        selection_step(&grid, "Yes, proceed"),
+        Ok(SelectionStep::Shortcut('y'))
+    );
+    assert_eq!(
+        selection_step(&grid, "No, quit"),
+        Ok(SelectionStep::Shortcut('n'))
+    );
+}
+
+#[test]
+fn select_does_not_treat_a_prefix_or_keys_only_row_as_the_labelled_option() {
+    let prefixed = menu("Yes                 y\nYes, proceed        p");
+    assert_eq!(
+        selection_step(&prefixed, "Yes"),
+        Ok(SelectionStep::Shortcut('y'))
+    );
+    assert_eq!(
+        selection_step(&prefixed, "Yes, proceed"),
+        Ok(SelectionStep::Shortcut('p'))
+    );
+    assert!(selection_step(&prefixed, "Ye").is_err());
+    assert!(selection_step(&menu("y\nn"), "y").is_err());
+    assert!(selection_step(&menu("y\nn"), "Yes, proceed").is_err());
+    let marked_keys = menu("❯ y\n  n");
+    assert_eq!(
+        selection_step(&marked_keys, "y"),
+        Ok(SelectionStep::Confirm)
+    );
+    assert_eq!(
+        selection_step(&marked_keys, "n"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert!(selection_step(
+        &menu("Yes, proceed                 y\nYes, proceed                 z"),
+        "Yes, proceed"
+    )
+    .is_err());
+}
+
 #[test]
 fn driver_encodes_shell_answers_control_keys_and_arbitrary_text() {
     let encode = |name: &str| {
@@ -343,3 +501,52 @@ fn driver_blocker_reads_captured_claude_multiselect() {
 
 #[path = "blocker_test.rs"]
 mod blocker_regressions;
+
+#[test]
+fn select_rejects_a_prefix_before_a_single_unicode_space() {
+    for gap in ["\u{00a0}", "\u{2003}"] {
+        let grid = menu(&format!("❯ Plan{gap}A\n  Cancel"));
+        assert!(
+            selection_step(&grid, "Plan").is_err(),
+            "one Unicode space inside a label is not a shortcut column: {gap:?}"
+        );
+    }
+}
+
+#[test]
+fn select_preserves_complete_labels_with_a_single_unicode_space() {
+    for gap in ["\u{00a0}", "\u{2003}"] {
+        let label = format!("Plan{gap}A");
+        let grid = menu(&format!("❯ {label}\n  Cancel"));
+        assert_eq!(selection_step(&grid, &label), Ok(SelectionStep::Confirm));
+    }
+}
+
+#[tokio::test]
+async fn select_preserves_internal_spaces_and_wide_labels() {
+    let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(80, 12);
+    runtime.test_process_pty_bytes(
+        "目录  名称  Confirm                 z\r\n取消                 q".as_bytes(),
+    );
+    let (grid, _) = observe(&runtime).unwrap();
+    assert_eq!(
+        selection_step(&grid, "目录  名称  Confirm"),
+        Ok(SelectionStep::Shortcut('z'))
+    );
+    assert!(selection_step(&grid, "目录").is_err());
+    let plain = menu("❯ Plan A\n  Plan  AB\n  Plan  1\n  Plan  (a)");
+    assert_eq!(selection_step(&plain, "Plan A"), Ok(SelectionStep::Confirm));
+    assert_eq!(
+        selection_step(&plain, "Plan  AB"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert_eq!(
+        selection_step(&plain, "Plan  1"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert_eq!(
+        selection_step(&plain, "Plan  (a)"),
+        Ok(SelectionStep::Move("down"))
+    );
+    assert!(selection_step(&plain, "Plan").is_err());
+}

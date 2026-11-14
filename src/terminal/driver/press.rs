@@ -56,6 +56,7 @@ pub(crate) fn press(
             match step {
                 SelectionStep::Move(key) => (vec![key.to_owned()], true),
                 SelectionStep::Confirm => (vec!["enter".into()], false),
+                SelectionStep::Shortcut(key) => (vec![key.to_string()], false),
             }
         }
     } else {
