@@ -761,13 +761,15 @@ fn provider_flake_review_interrupt_closes_the_independent_hold_before_and_after_
             ));
         }
         state.close_interrupted(agent, 200).unwrap();
-        for id in [lead, queued] {
-            assert_eq!(
-                state.request(id).unwrap().failure_reason.as_deref(),
-                Some("interrupted")
-            );
-            assert!(state.request(id).unwrap().settled());
-        }
+        assert_eq!(
+            state.request(lead).unwrap().failure_reason.as_deref(),
+            Some("interrupted")
+        );
+        assert!(state.request(lead).unwrap().settled());
+        let waiting = state.request(queued).unwrap();
+        assert_eq!(waiting.phase, RequestPhase::Queued, "{waiting:?}");
+        assert!(waiting.failure_reason.is_none(), "{waiting:?}");
+        assert_eq!(state.queued_requests(agent), &[queued]);
         if finished {
             let settled = state.request(member).unwrap();
             assert_eq!(settled.phase, RequestPhase::Completed);

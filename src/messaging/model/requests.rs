@@ -493,7 +493,8 @@ impl BusState {
         ) || agent_state.dialog
             || agent_state.provider_retry.is_some()
             || agent_state.deletion_pending
-            // A pressed stop key ends the turn: its queue closes with it.
+            // A pressed stop key refuses steering. Accepted messages stay
+            // queued for the next turn instead of being typed into this one.
             || agent_state.interrupt_pending
         {
             return None;

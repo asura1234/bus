@@ -887,7 +887,7 @@ fn snapshot_with_terminal_reason(reason: &str) -> (BusUi, BusSnapshot, RequestId
             true,
         )
         .unwrap()[0];
-    snapshot.state.close_interrupted(agent, 2000).unwrap();
+    snapshot.state.recover_idle_request(request, 2000).unwrap();
     // Exercise the saved terminal reason consumed by the UI, including retirement
     // records from earlier versions. The request identity survives the round trip.
     let mut saved = serde_json::to_value(&snapshot.state).unwrap();
