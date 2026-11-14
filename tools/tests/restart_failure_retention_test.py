@@ -186,7 +186,7 @@ def test_actual_rust_wrapper_roots_pass_the_python_entry_boundary():
     repo = Path(__file__).resolve().parents[2]
     source = (repo / "tests/tui/native_restart_test.rs").read_text()
     factory = (repo / "src/utils/tests/temp_path_test.rs").read_text()
-    label = re.search(r'unique_temp_path\("([^\"]+)"\)', source).group(1)
+    label = re.search(r'let fixture = .*unique_temp_path\("([^\"]+)"\)', source).group(1)
     template = re.search(r'"(b\{:x\}-\{:x\}-\{:x\}-\{label\})"', factory).group(1)
     compact = re.search(r'with_file_name\(format!\("([^\"]+)"\)\)', source).group(1)
     assert f'strip_suffix("-{label}")' in source and "strip_prefix('b')" in source
