@@ -955,6 +955,17 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
         "--timeout",
         "20s",
     ]);
+    // Coordinator Working can precede submission. Wait for the fake itself so
+    // the follower steers a running turn instead of joining its initial batch.
+    wait_for_scripted_screen(
+        &session,
+        "c1",
+        if provider == "codex" {
+            " Working ("
+        } else {
+            " Generating ("
+        },
+    );
     let steer = send("steer in");
     for id in [&lead, &steer] {
         let settled = session.ok(&["wait", "--message", id, "--timeout", "40s"]);
