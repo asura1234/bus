@@ -216,6 +216,68 @@ fn grok_prepare_rejects_invalid_input_before_initializer_or_hook_writes() {
 }
 
 #[test]
+fn grok_prepare_reuses_current_hooks_without_reconfirming_or_rewriting() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("");
+    let spec = f.spec("", false);
+    let hook = f.project.join(".grok/hooks/bus.json");
+    let bytes = fs::read(&hook).unwrap();
+    let modified = fs::metadata(&hook).unwrap().modified().unwrap();
+    assert!(common::setup_notice(ProviderKind::Grok, &f.project, &spec.hooks.binary).is_none());
+    let initialized = std::cell::Cell::new(false);
+    common::prepare(&spec, |_| {
+        initialized.set(true);
+        Ok(())
+    })
+    .unwrap();
+    assert!(initialized.get());
+    assert_eq!(fs::read(&hook).unwrap(), bytes);
+    assert_eq!(fs::metadata(&hook).unwrap().modified().unwrap(), modified);
+}
+
+#[test]
+fn grok_prepare_requires_consent_for_missing_or_changed_hooks() {
+    let f = Fixture::new();
+    f.install();
+    let spec = f.spec("", false);
+    let result = common::prepare(&spec, |_| panic!("unconfirmed hooks initialized capture"));
+    assert!(result.unwrap_err().contains("Setup confirmation required"));
+    assert!(!f.project.join(".grok").exists());
+    f.prepare("");
+    let hook = f.project.join(".grok/hooks/bus.json");
+    let changed = b"{\"hooks\":{}}";
+    fs::write(&hook, changed).unwrap();
+    let result = common::prepare(&spec, |_| panic!("changed hooks initialized capture"));
+    assert!(result.unwrap_err().contains("Setup confirmation required"));
+    assert_eq!(fs::read(&hook).unwrap(), changed);
+}
+
+#[test]
+fn grok_prepare_rechecks_unconfirmed_hooks_after_identity_queries() {
+    let f = Fixture::new();
+    f.install();
+    f.prepare("");
+    let hook = f.project.join(".grok/hooks/bus.json");
+    let executable = f.bin.join("grok");
+    let script = fs::read_to_string(&executable).unwrap();
+    let quoted_hook = crate::platform::remote_reattach_program(&hook.to_string_lossy());
+    fs::write(
+        &executable,
+        script.replacen(
+            "--version) ",
+            &format!("--version) printf '%s' '{{\"hooks\":{{}}}}' > {quoted_hook}; "),
+            1,
+        ),
+    )
+    .unwrap();
+    let spec = f.spec("", false);
+    let result = common::prepare(&spec, |_| panic!("changed hooks initialized capture"));
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(fs::read_to_string(&hook).unwrap(), "{\"hooks\":{}}");
+}
+
+#[test]
 fn grok_run_scoped_permissions_do_not_replace_saved_user_choices() {
     let f = Fixture::new();
     f.install();
