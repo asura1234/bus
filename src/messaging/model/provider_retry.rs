@@ -17,6 +17,7 @@ pub(crate) struct ProviderRetry {
     /// Ids prepare put back on the queue for this hold. Empty until then.
     /// Interrupt closes them with the hold; clearing `group` must not make
     /// a cancelled member look like work that never joined the turn.
+    /// A refused submit keeps this list. An accepted submit drops it.
     #[serde(default)]
     pub(crate) queued_ids: Vec<RequestId>,
 }
@@ -31,14 +32,35 @@ impl BusState {
         let Some(owner) = self.agents.get_mut(&request.agent_id) else {
             return;
         };
+        // begin_submission parks the prepared ids on the hold. Rebuilding
+        // from an empty list would make those members look newly queued.
+        let queued_ids = owner
+            .provider_retry
+            .as_ref()
+            .map(|hold| hold.queued_ids.clone())
+            .unwrap_or_default();
         owner.provider_retry = Some(ProviderRetry {
             lead: id,
             attempts: request.provider_retry_attempts,
             retry_at_ms: owner.observed_at_ms.saturating_add(5_000),
             quota: false,
             queued: true,
-            queued_ids: Vec::new(),
+            queued_ids,
         });
+    }
+
+    /// Drops a hold that begin_submission parked for an in-flight prepared
+    /// retry. A refusal rebuilds that hold; acceptance must not leave it
+    /// blocking the next delivery.
+    pub(super) fn release_parked_prepared_retry(&mut self, agent: AgentId, request: RequestId) {
+        let Some(owner) = self.agents.get_mut(&agent) else {
+            return;
+        };
+        if owner.provider_retry.as_ref().is_some_and(|hold| {
+            !hold.queued && (hold.lead == request || hold.queued_ids.contains(&request))
+        }) {
+            owner.provider_retry = None;
+        }
     }
 
     pub(super) fn apply_error_callback(
@@ -130,6 +152,17 @@ impl BusState {
             return None;
         }
         let hold = owner.provider_retry.as_ref()?;
+        // begin_submission parks prepared ids while that lead is Submitting.
+        // This callback is that attempt, not a later native input.
+        if !hold.queued
+            && owner.current_request == Some(hold.lead)
+            && self
+                .requests
+                .get(&hold.lead)
+                .is_some_and(|request| request.phase == RequestPhase::Submitting)
+        {
+            return None;
+        }
         if owner.current_request.is_some_and(|id| id != hold.lead) {
             // Independently attributed native work keeps the ordinary continuation contract.
             return None;
@@ -260,6 +293,11 @@ impl BusState {
             let Some(lead) = self.requests.get(&hold.lead) else {
                 continue;
             };
+            // begin_submission parks the prepared ids with queued false while
+            // the attempt is Submitting. Preparing again would duplicate it.
+            if lead.phase == RequestPhase::Submitting {
+                continue;
+            }
             if now_ms < hold.retry_at_ms
                 || owner.status != RuntimeStatus::Idle
                 || owner.dialog

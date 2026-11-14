@@ -82,7 +82,16 @@ impl BusState {
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = Some(request);
-        agent.provider_retry = None;
+        if let Some(hold) = agent.provider_retry.as_mut().filter(|hold| {
+            !hold.queued_ids.is_empty()
+                && (hold.lead == request || hold.queued_ids.contains(&request))
+        }) {
+            // A refusal rebuilds the hold from these ids. Keep them parked
+            // until that outcome; do not start this retry a second time.
+            hold.queued = false;
+        } else {
+            agent.provider_retry = None;
+        }
         let request_state = self
             .requests
             .get_mut(&request)
@@ -178,6 +187,7 @@ impl BusState {
                 provider_session_id,
                 provider_turn_id,
             } => {
+                self.release_parked_prepared_retry(agent_id, request);
                 if let Some(agent) = self.agents.get_mut(&agent_id) {
                     agent.delivery_rejection = None;
                 }
@@ -198,6 +208,7 @@ impl BusState {
             SubmissionOutcome::Uncertain { message } => {
                 request_state.uncertain_outcome = true;
                 request_state.submission_error = Some(message.clone());
+                self.release_parked_prepared_retry(agent_id, request);
                 let agent = self
                     .agents
                     .get_mut(&agent_id)

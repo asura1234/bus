@@ -1050,3 +1050,98 @@ fn interrupting_a_prepared_retry_closes_every_prior_turn_member() {
     assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
     assert_eq!(state.queued_requests(agent), &[queued]);
 }
+
+#[test]
+fn interrupting_a_rejected_prepared_retry_closes_every_prior_turn_member() {
+    let (mut state, agent, lead, member, queued) = steering_failure(true, false);
+    assert!(state.retry_provider_requests(1_000_000));
+    assert_eq!(state.queued_requests(agent), &[lead, member, queued]);
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 30).unwrap();
+    state
+        .record_submission(lead, SubmissionOutcome::ComposerBusy)
+        .unwrap();
+    assert!(
+        state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .queued
+    );
+    assert_eq!(state.queued_requests(agent), &[lead, member, queued]);
+    state.close_interrupted(agent, 1_000_001).unwrap();
+    assert!(state.request(lead).unwrap().settled());
+    assert_eq!(
+        state.request(member).unwrap().phase,
+        RequestPhase::Abandoned,
+        "a definite retry refusal must preserve cancellation ownership of prior turn members"
+    );
+    assert_eq!(
+        state.request(member).unwrap().failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.queued_requests(agent), &[queued]);
+}
+
+#[test]
+fn interrupting_a_definitely_rejected_prepared_retry_closes_every_prior_turn_member() {
+    let (mut state, agent, lead, member, queued) = steering_failure(true, false);
+    assert!(state.retry_provider_requests(1_000_000));
+    assert_eq!(state.queued_requests(agent), &[lead, member, queued]);
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 30).unwrap();
+    state
+        .record_submission(
+            lead,
+            SubmissionOutcome::DefinitelyRejected {
+                message: "agent is not ready".into(),
+            },
+        )
+        .unwrap();
+    assert!(
+        state
+            .agent(agent)
+            .unwrap()
+            .provider_retry
+            .as_ref()
+            .unwrap()
+            .queued
+    );
+    assert_eq!(state.queued_requests(agent), &[lead, member, queued]);
+    state.close_interrupted(agent, 1_000_001).unwrap();
+    assert!(state.request(lead).unwrap().settled());
+    assert_eq!(
+        state.request(member).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        state.request(member).unwrap().failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.queued_requests(agent), &[queued]);
+}
+
+#[test]
+fn a_confirmed_prepared_retry_releases_the_parked_hold() {
+    let (mut state, agent, lead, member, queued) = steering_failure(true, false);
+    assert!(state.retry_provider_requests(1_000_000));
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 30).unwrap();
+    state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("retry-turn".into()),
+            },
+        )
+        .unwrap();
+    assert!(state.agent(agent).unwrap().provider_retry.is_none());
+    assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Active);
+    assert!(!state.request(member).unwrap().settled());
+    assert!(!state.request(queued).unwrap().settled());
+}
