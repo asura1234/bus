@@ -1102,3 +1102,11 @@ idle then deliver, and an approval card without `--yolo`.
   Claude and Codex round trips with owned start binding and separate native
   turn-end proof, including a large plain paste with literal full-width-colon
   image paths, queued followers, steering and private-root resume.
+
+- **2026-11-14 — Grok current-hook consent:** When the shared setup check
+  finds current hooks, it skips confirmation. Grok launch preparation must
+  accept that same state without rewriting the hook file. Recheck under the
+  descriptor-pinned hook transaction after executable identity queries; changed
+  or missing hooks still require confirmation before capture is initialized.
+  Cover adding a second Grok agent (including a MASTER orchestrator) in the
+  same project, and a hook file changed during identity validation.

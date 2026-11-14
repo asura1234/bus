@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Mode {
     Install,
+    /// New launch with current hooks: validate under the lock without rewriting.
+    Reuse,
     Resume,
 }
 

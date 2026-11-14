@@ -161,7 +161,10 @@ fn transact_with_home<T>(
         );
     }
     let merged = hook_json::merge_hooks(document.clone(), contract, binary)?;
-    if mode == Mode::Resume && document == merged {
+    if mode == Mode::Reuse && document != merged {
+        return Err("Grok project hooks changed; retry setup confirmation".into());
+    }
+    if mode != Mode::Install && document == merged {
         target.verify()?;
         target.hooks.keep();
         target.config.keep();

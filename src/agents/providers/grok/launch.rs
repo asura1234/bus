@@ -325,21 +325,22 @@ pub(crate) fn prepare(
     if let Some(session) = &adopted_session {
         args.splice(0..0, resume_args(session));
     }
-    let notice = setup_notice(&common::project_root(&cwd));
     if !spec.consent_project_hooks {
-        return Err(format!(
-            "Setup confirmation required for {}. {}",
-            notice.path.display(),
-            notice.message
-        ));
+        if let Some(notice) = common::setup_notice(ProviderKind::Grok, &cwd, &spec.hooks.binary) {
+            return Err(format!(
+                "Setup confirmation required for {}. {}",
+                notice.path.display(),
+                notice.message
+            ));
+        }
     }
-    let (_, _, selected, home) = super::project_hooks::update(
-        &cwd,
-        &spec.hooks.binary,
-        super::project_hooks::Mode::Install,
-        None,
-        resolve_identity,
-    )?;
+    let mode = if spec.consent_project_hooks {
+        super::project_hooks::Mode::Install
+    } else {
+        super::project_hooks::Mode::Reuse
+    };
+    let (_, _, selected, home) =
+        super::project_hooks::update(&cwd, &spec.hooks.binary, mode, None, resolve_identity)?;
     let env = environment_for(&spec.hooks, &selected.alias, &home)?;
     selected.verify()?;
     initialize(&spec.hooks)?;
