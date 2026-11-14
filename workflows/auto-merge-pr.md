@@ -96,7 +96,7 @@ start answer; do not ask for per-PR merge OK. A draft-only, manual-test or other
 developer hold remains binding. Clarify missing intent or authority only for the
 affected part; keep independent work moving.
 
-## Gate and delta review
+## Gate and merge
 
 The review-and-repair loop above is the review phase. Use one reviewer by
 default; add a second independent lane only when the change is high-risk
@@ -111,19 +111,18 @@ Once the reviewer is Ready on a head, that phase closes:
    failures inside it and re-run until green; escalate only when the correct fix
    would change the PR's intended behavior. A gate whose run aborts because HEAD
    or the worktree moved proves nothing; re-run it on a frozen head.
-3. After the gate passes, run exactly one delta review of everything that
-   changed since the reviewed head - fix commits, rebases and merge resolutions
-   together, not one review per batch. Do not start it before the gate passes. A
-   patch-identical replay changes nothing and needs no delta.
-4. Merge on a clean delta. If the delta review finds a defect, fix it, re-gate,
-   and delta-review only the new delta.
+
+Merge on that gate-green head. The gate is the only post-review verification.
+Fix commits, rebases, merge resolutions and any other change the gate produced
+do not open another review round. Behavioural changes still get their normal
+review before the gate.
 
 Merge order is part of the gate: merge each PR as soon as its gate is green,
 land small independent PRs first, and converge a long-lived branch or train onto
 the current base with other merges frozen so the base cannot move under its gate.
 Do not resume the queue until that merge completes.
 
-A change that only touches markdown or plans/ needs no gate and no delta review:
+A change that only touches markdown or plans/ needs no gate:
 merge it on review, or directly when the whole workflow is docs-only.
 
 For an explicit **manual-test hold**, the owner runs `merge-pr --hold-before-merge`.
@@ -138,8 +137,8 @@ does not clear them or authorize a goal change.
 
 Keep fixing until the reviewer is Ready. During the review phase, review,
 verification, bot/GitHub comments and developer feedback all enter the same
-repair loop. Once that phase closes, repairs are verified by the gate and then
-by the single post-gate delta review, not by another review round. There is no
+repair loop. Once that phase closes, repairs are verified by the gate, not
+by another review round. There is no
 repair counter or cap to configure, inherit or reset. These rules apply during
 `merge-pr` too.
 

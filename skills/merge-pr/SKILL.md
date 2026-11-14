@@ -69,6 +69,9 @@ IF mergeable != "MERGEABLE"
 
 **Review before CI**: fixes from review advance HEAD and invalidate the running CI, not the other way around (see guide.md).
 
+IF the current HEAD is the gate-green head from section 5
+  Skip this section and continue at section 3. That head's review phase is already closed.
+
 IF host == codeup:
   Use `pr_host comments --pr <pr> --output <run-dir>/codeup-comments.md`; wait for `aiReviewPending` to clear.
   If `openCount` is nonzero, invoke `address-review-comments pr --free-form-file <file>`, reply to each comment
@@ -117,7 +120,7 @@ IF host == github:
   -- Why 🟢 cannot be a release condition, and why this path does not need `--admin`, are in guide.md
   --   "The merge gate is 'the author adjudicated', not 'the reviewer agreed'".
 
-  -- Sections 2/5 advance HEAD and therefore loop; continue until the merge conditions in section 6 hold, with no round cap. Hold and escalate sharp reviewer disagreements, goal changes, or destructive or outward-facing actions without existing authorization.
+  -- Section 2 advances HEAD and loops, with no round cap, until the review phase closes. Section 5's gate-green head does not reopen it. Hold and escalate sharp reviewer disagreements, goal changes, or destructive or outward-facing actions without existing authorization.
   -- **The convergence criterion is "nothing left to handle", not "someone reviewed"**; the loop must include one `fetch` (guide.md).
 
 ========== 3. Wait for CI to converge (wait last) ==========
@@ -166,7 +169,7 @@ IF host == github:
     IF the fix exceeds this PR's locked goal
       STOP and hand it to the developer to rule; do not widen scope to turn CI green.
 
-    Return to section 1 and retake the signals (HEAD has changed; review must cover it again).
+    Return to section 1 and retake the signals (HEAD has changed; this gate-green head does not need another review).
 
 ========== 6. Merge ==========
 
@@ -183,13 +186,15 @@ IF host == github:
   IF this `fetch` returns `status == head-moved`
     Return to **section 1** and retake everything: a racy snapshot would merge with stale CI, review state and `merge_head`.
   IF this `fetch` opened a round to handle (`status == created`, or the latest round has `triaged == false`)
+    AND the current HEAD is not the gate-green head from section 5
     Return to section 2 to handle it; do not STOP here.
   -- The order cannot be reversed; reasons in guide.md "Branch first, then assert".
+  -- A round that exists only because section 5 moved HEAD is not another review.
 
   Assert: pending is empty; every entry in `failed` and `other` is attributed and **none is IN-SCOPE**;
   no unhandled FLAG; mergeable == "MERGEABLE"; isDraft == false;
-  **review covers the current HEAD** (`coveredAtHead == true`, or the developer explicitly confirmed release);
-  **and this `fetch` opened no round to handle** (`no-comments`, or the latest round has `triaged == true`).
+  **review covers the current HEAD** (`coveredAtHead == true`, or the current HEAD is the gate-green head from section 5, or the developer explicitly confirmed release);
+  **and this `fetch` opened no round to handle** (`no-comments`, or the latest round has `triaged == true`, or the current HEAD is the gate-green head from section 5).
   -- The criterion is `triaged`, not `reviewExists` or reviewer agreement; see guide.md "The criterion that a round is done".
   IF `verdict.approved == false`
     Merge as usual, but report the verdict, unresolved findings, dispositions and counter-evidence; **do not use `--admin`**.

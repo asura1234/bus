@@ -276,6 +276,8 @@ HEAD. Running unattended to this point would merge with a whole round of comment
 This is the price of swapping the order of sections 2/3 (review before CI): while waiting on the slowest signal, the fastest signal can move again.
 The price is worth paying, but the window must be closed in section 6.
 
+That retake is for a new round on the head the review phase already covered. Once gate-and-fix has passed, merge that gate-green head. Do not require another review of its fix commits, rebases, or merge resolutions.
+
 ## merge_head must be read, not hand-written
 
 `--match-head-commit` must take the **full 40-character sha**, read with `git rev-parse`; never hand-complete it from a short sha.
