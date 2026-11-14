@@ -280,6 +280,45 @@ async fn driver_working_episode_omits_only_pending_answer_shortcuts() {
 }
 
 #[tokio::test]
+async fn captured_working_codex_screen_is_not_a_dialog() {
+    let captured = include_str!("../../../../tests/fixtures/codex-activity/working-room-1.txt");
+    let mut episodes = Vec::new();
+    for seconds in ["2m 38s", "17m 40s"] {
+        let screen = captured.replace("2m 38s", seconds);
+        let grid = captured_grid(&screen);
+        assert!(
+            !has_input_controls(&grid.text()),
+            "working chrome is not an input control: {seconds}"
+        );
+        let idle = blocker(&grid, false);
+        let working = blocker(&grid, true);
+        assert!(idle.is_none(), "idle read: {seconds} {idle:?}");
+        assert!(working.is_none(), "working read: {seconds} {working:?}");
+        episodes.push(working);
+    }
+    assert_eq!(episodes[0], episodes[1]);
+}
+
+#[tokio::test]
+async fn foreground_dialog_episode_ignores_the_working_timer() {
+    let screen = include_str!("../../../../tests/fixtures/codex-question/expanded-working.txt");
+    let later = screen.replace("(51s", "(52s");
+    let first = blocker(&captured_grid(screen), true);
+    let second = blocker(&captured_grid(&later), true);
+    assert!(first.is_some(), "the expanded question is one dialog");
+    assert_eq!(first, second, "the timer is not a new episode");
+}
+
+#[tokio::test]
+async fn a_trust_prompt_has_one_stable_episode() {
+    let screen = include_str!("../../../../tests/fixtures/grok-dialog/trust.txt");
+    let first = blocker(&captured_grid(screen), false);
+    let second = blocker(&captured_grid(screen), false);
+    assert!(first.is_some(), "a trust prompt is a dialog");
+    assert_eq!(first, second);
+}
+
+#[tokio::test]
 async fn driver_native_composer_mode_and_newline_keys_are_not_blocking_controls() {
     // Exact Grok 1.0.70 frame/footer contract from the real-frame submission
     // fixture in server/api/agents/tests/owned_draft_cleanup_test.rs. This is

@@ -34,19 +34,32 @@ pub(super) const AGENT_STARTUP_GRACE_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(3);
 
 /// Current foreground controls override lifecycle signals; pending shortcuts
-/// coexist with positive activity. Exited processes keep their exit decision.
+/// coexist with positive activity. A title-only Blocked signal does not hide a
+/// live activity line when no input control is present. Exited processes keep
+/// their exit decision.
 pub(super) fn apply_driver_controls(
     content: &str,
     mut detection: AgentDetection,
     process_exited: bool,
 ) -> AgentDetection {
-    if !process_exited
-        && crate::terminal::driver::has_blocking_input_controls(content, detection.visible_working)
-    {
+    if process_exited {
+        return detection;
+    }
+    if crate::terminal::driver::has_blocking_input_controls(content, detection.visible_working) {
         detection.state = AgentState::Blocked;
         detection.visible_blocker = true;
         detection.visible_idle = false;
         detection.visible_working = false;
+        return detection;
+    }
+    if detection.state == AgentState::Blocked
+        && !crate::terminal::driver::has_blocking_input_controls(content, false)
+        && crate::terminal::driver::has_live_activity(content)
+    {
+        detection.state = AgentState::Working;
+        detection.visible_working = true;
+        detection.visible_blocker = false;
+        detection.visible_idle = false;
     }
     detection
 }
@@ -622,5 +635,66 @@ mod tests {
         mark_detection_content_changed(&seq);
 
         assert_eq!(seq.load(Ordering::Relaxed), 1);
+    }
+
+    fn published(agent: AgentKind, screen: &str, title: &str) -> AgentDetection {
+        apply_driver_controls(
+            screen,
+            crate::agents::detect_agent_with_osc(Some(agent), screen, title, ""),
+            false,
+        )
+    }
+
+    #[test]
+    fn action_required_title_does_not_block_a_live_working_screen() {
+        // Captured from codex worker 12114 while Bus had posted false Blocked
+        // notices and `bus state` showed working with dialog=false. The working
+        // line sits above the footer, so the bottom-four fallback never sees it.
+        let captured = include_str!("../../../tests/fixtures/codex-activity/working-room-1.txt");
+        for screen in [captured.to_owned(), captured.replace("2m 38s", "17m 40s")] {
+            let result = published(AgentKind::Codex, &screen, "[ ! ] Action Required | bus");
+            assert_eq!(result.state, AgentState::Working, "{screen}");
+            assert!(result.visible_working, "{screen}");
+            assert!(!result.visible_blocker, "{screen}");
+        }
+    }
+
+    #[test]
+    fn a_queued_send_hint_or_quoted_working_line_stays_blocked() {
+        for screen in [
+            "• Messages to be submitted after next tool call (press esc to interrupt and send immediately)\n› Ask Codex to do anything\n",
+            "› Explain the text ◦ Working (3s • esc to interrupt)\n",
+        ] {
+            let result = published(AgentKind::Codex, screen, "[ ! ] Action Required | bus");
+            assert_eq!(result.state, AgentState::Blocked, "{screen}");
+            assert!(result.visible_blocker, "{screen}");
+        }
+    }
+
+    #[test]
+    fn a_real_trust_prompt_stays_blocked_under_an_action_required_title() {
+        let screen = include_str!("../../../tests/fixtures/grok-dialog/trust.txt");
+        let result = published(AgentKind::Grok, screen, "[ ! ] Action Required");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
+        assert!(!result.visible_working);
+    }
+
+    #[test]
+    fn a_foreground_question_beside_a_working_line_stays_blocked() {
+        let screen = include_str!("../../../tests/fixtures/codex-question/expanded-working.txt");
+        let later = screen.replace("(51s", "(52s");
+        for screen in [screen, later.as_str()] {
+            let result = published(AgentKind::Codex, screen, "[ ! ] Action Required | bus");
+            assert_eq!(result.state, AgentState::Blocked, "{screen}");
+            assert!(result.visible_blocker, "{screen}");
+        }
+    }
+
+    #[test]
+    fn an_empty_action_required_screen_stays_blocked() {
+        let result = published(AgentKind::Codex, "", "Action Required");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
     }
 }
