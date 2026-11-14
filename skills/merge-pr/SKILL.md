@@ -5,8 +5,7 @@ description: Watch an open PR's two signals until it can merge — CI conclusion
 
 # Merge PR
 
-Read [guide.md](guide.md) completely: the three acceptable kinds of attribution evidence, why log
-tails must not be read, and why only the latest comment round is handled all live there. Without it this skill will release red checks it caused itself. Bus result delivery and evidence paths follow the [Bus communication guide](../_bus/docs/bus-communication-guide.md#verdicts-and-results).
+Read [guide.md](guide.md) completely: the three acceptable kinds of attribution evidence, why log tails must not be read, and why only the latest comment round is handled all live there. Without it this skill will release red checks it caused itself. Bus result delivery and evidence paths follow the [Bus communication guide](../_bus/docs/bus-communication-guide.md#verdicts-and-results).
 Resolve `skill_dir` to this skill directory. All host operations use `python3 "<skill_dir>/../_bus/cli_extensions/pr_host.py"` (`pr_host`).
 Run `pr_host host`; stop on an unknown host. For Codeup, read `../_bus/docs/codeup-pr-workflow.md`.
 
@@ -27,16 +26,14 @@ Capture: HEAD, branch, base, isDraft, mergeable, mergeStateStatus, checkCount,
 pending / passed / failed / **other**, plus this PR's `topLevel` and `files`.
 scope is the first-hand basis for every attribution below; get it first.
 -- This section takes a single snapshot only; waiting belongs to section 3, and must come after review handling (guide.md).
-On GitHub the source of truth for `checks` is `statusCheckRollup`, at **per-check** granularity; do not switch to
-workflow-granularity run listings (reasons in guide.md "Per check, not per workflow").
+On GitHub the source of truth for `checks` is `statusCheckRollup`, at **per-check** granularity; do not switch to workflow-granularity run listings (reasons in guide.md "Per check, not per workflow").
 IF checks reports `isDraft == true`
   Run: `pr_host ready --pr <pr>`, then return to this section and retake the signals; continue only after confirming `isDraft == false`.
   If it fails, STOP and report verbatim; do not skip past it.
 -- Reasons in guide.md "Draft becomes ready first, no stop".
 -- `checkCount == 0` does not STOP here: the 0 in the tens of seconds right after a push is temporary; the later wait handles it.
 ========== 1b. Converge first when diverged from origin/<base_branch> ==========
-The entry is a **positive enumeration**; only these two states enter this section. It must not be written as a negation (reasons in guide.md "Why the entry must be a positive
-enumeration"):
+The entry is a **positive enumeration**; only these two states enter this section. It must not be written as a negation (reasons in guide.md "Why the entry must be a positive enumeration"):
   divergent = (mergeable == "CONFLICTING")
               OR (mergeable == "MERGEABLE" AND mergeStateStatus == "BEHIND")
 IF NOT divergent
@@ -59,8 +56,7 @@ Return to section 1 and retake the signals.
 ========== 1c. Other non-mergeable states ==========
 
 IF mergeable == "UNKNOWN":
-  This is the normal state after every push, not unmergeable. Sleep poll_seconds and return to section 1 to retake; STOP only when it is
-  still `UNKNOWN` at max_wait. The only correct action is **to ask again** (guide.md "Why the entry must be a positive enumeration").
+  This is the normal state after every push, not unmergeable. Sleep poll_seconds and return to section 1 to retake; STOP only when it is still `UNKNOWN` at max_wait. The only correct action is **to ask again** (guide.md "Why the entry must be a positive enumeration").
 
 IF mergeable != "MERGEABLE"
   STOP and report mergeStateStatus. Non-mergeable states section 1b cannot handle go to the developer.
@@ -71,7 +67,6 @@ IF mergeable != "MERGEABLE"
 
 IF the current HEAD is the gate-green head from section 5
   Skip this section and continue at section 3. That head's review phase is already closed.
-
 IF host == codeup:
   Use `pr_host comments --pr <pr> --output <run-dir>/codeup-comments.md`; wait for `aiReviewPending` to clear.
   If `openCount` is nonzero, invoke `address-review-comments pr --free-form-file <file>`, reply to each comment
@@ -185,11 +180,9 @@ IF host == github:
   **Branch first, then assert**:
   IF this `fetch` returns `status == head-moved`
     Return to **section 1** and retake everything: a racy snapshot would merge with stale CI, review state and `merge_head`.
-  IF this `fetch` opened a round to handle (`status == created`, or the latest round has `triaged == false`)
-    AND the current HEAD is not the gate-green head from section 5
+  IF this `fetch` opened a round to handle (`status == created`, or the latest round has `triaged == false`) AND the current HEAD is not the gate-green head from section 5
     Return to section 2 to handle it; do not STOP here.
-  -- The order cannot be reversed; reasons in guide.md "Branch first, then assert".
-  -- A round that exists only because section 5 moved HEAD is not another review.
+  -- The order cannot be reversed; reasons in guide.md "Branch first, then assert". A round that exists only because section 5 moved HEAD is not another review.
 
   Assert: pending is empty; every entry in `failed` and `other` is attributed and **none is IN-SCOPE**;
   no unhandled FLAG; mergeable == "MERGEABLE"; isDraft == false;
