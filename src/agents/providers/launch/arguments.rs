@@ -166,7 +166,19 @@ fn option_end(provider: ProviderKind, args: &[String], index: usize) -> Option<u
     }
     match arity(provider, arg)? {
         0 => Some(index + 1),
-        1 => Some((index + 2).min(args.len())),
+        1 => {
+            // Kimi's optional session id must not swallow the next flag.
+            if provider == ProviderKind::Kimi
+                && super::super::kimi::launch::session_value_is_optional(arg)
+                && !args
+                    .get(index + 1)
+                    .is_some_and(|value| !value.starts_with('-'))
+            {
+                Some(index + 1)
+            } else {
+                Some((index + 2).min(args.len()))
+            }
+        }
         _ => {
             let mut end = index + 1;
             while args.get(end).is_some_and(|value| !value.starts_with('-')) {

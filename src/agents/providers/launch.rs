@@ -162,6 +162,20 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
     if provider == ProviderKind::Codex {
         arguments::remove_codex_approval_options(args);
     }
+    if provider == ProviderKind::Kimi {
+        for index in arguments::runtime_option_positions(provider, args)
+            .into_iter()
+            .rev()
+        {
+            match kimi::launch::normalize_yolo_option(&args[index]) {
+                Some(Some(replacement)) => args[index] = replacement,
+                Some(None) => {
+                    args.remove(index);
+                }
+                None => {}
+            }
+        }
+    }
     let (flag, aliases): (&str, &[&str]) = match provider {
         ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => (
             "--dangerously-skip-permissions",
@@ -173,7 +187,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
         ),
         ProviderKind::Cursor => ("--force", &["--force", "--yolo", "-f"]),
         ProviderKind::Grok => ("--always-approve", &["--always-approve", "--yolo"]),
-        ProviderKind::Kimi => ("--yolo", &["--yolo", "-y"]),
+        ProviderKind::Kimi => ("--auto", &["--auto"]),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => return,
     };

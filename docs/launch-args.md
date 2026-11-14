@@ -45,15 +45,17 @@ The startup flag can precede `resume` or follow its selector.
 | Claude Code | `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | Codex | `--yolo` | `--yolo`, `--dangerously-bypass-approvals-and-sandbox` |
 | Cursor | `--force` | `--force`, `--yolo`, `-f` |
-| Kimi | `--yolo` | `--yolo`, `-y` |
+| Kimi | `--auto` | `--auto`; legacy `--yolo` and short `-y` clusters are replaced by `--auto`, preserving other bundled options and values |
 
-Evidence checked locally on 2026-10-16: Claude Code 2.1.301 `--help` describes
-`--dangerously-skip-permissions` as bypassing permission checks. Codex 0.163.0
-`--help` documents `--dangerously-bypass-approvals-and-sandbox`; its hidden
-`--yolo` alias is accepted by `codex --yolo --version`. Cursor
-2026.10.14-0f9edde `--help` documents `-f, --force` as allowing commands unless
-explicitly denied and `--yolo` as its alias. Kimi 2.4.0 accepts `--yolo` and
-`-y`; it rejects either alias combined with `--auto`, on both add and resume.
+Evidence checked locally on 2026-11-02: Kimi 2.4.1 `--help` describes `--yolo`
+as Ask When Needed and `--auto` as Never Ask. Claude Code 2.1.301 `--help`
+describes `--dangerously-skip-permissions` as bypassing permission checks.
+Codex 0.163.0 `--help` documents
+`--dangerously-bypass-approvals-and-sandbox`; its hidden `--yolo` alias is
+accepted by `codex --yolo --version`. Cursor 2026.10.14-0f9edde `--help`
+documents `-f, --force` as allowing commands unless explicitly denied and
+`--yolo` as its alias. Kimi rejects `--auto` combined with `--yolo` or `-y`;
+Bus's yolo normalization removes those legacy aliases from effective argv.
 
 Codex MASTER agents receive the bypass flag on add and resume with `--yolo`.
 
@@ -63,9 +65,14 @@ Quit and resume without `--yolo` to return to normal permissions; explicit
 provider options in an agent's own `--args` still replay as requested.
 During a yolo run, Bus omits Codex's mutually exclusive `-a` /
 `--ask-for-approval` (including attached values) and `--approve-for-me` from
-effective argv so Codex can start with bypass enabled. Their original tokens
-remain saved and replay on a later normal run. Compatible options such as
-`--sandbox` remain in place. The private run marker is not exported into panes.
+effective argv so Codex can start with bypass enabled. For Kimi, Bus replaces
+legacy `--yolo` / `-y` options with `--auto` and does not duplicate an explicit
+`--auto`. These original tokens remain saved and replay on a later normal run.
+Bus rejects `--auto` combined with a legacy `--yolo` or `-y` alias before
+saving, including while Bus `--yolo` is on, because a normal resume would
+reject that saved record.
+Compatible options such as Codex `--sandbox` remain in place. The private run
+marker is not exported into panes.
 Attaching to a running daemon with a different `--yolo` setting is refused;
 quit its UI or use `bus stop`, then resume with the desired setting.
 Without this startup flag, launch behavior and orchestrators' handling of
@@ -137,7 +144,7 @@ command/option position:
 | Claude | `--bare`, `--safe-mode` | These explicitly disable hooks required for session ownership and request completion. |
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
 | Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, or positional input | These replace Bus's interactive prompt, agent file, session, or version/help ownership. |
-| Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this permission combination; Bus also rejects Bus `--yolo` with saved `--auto` on resume. |
+| Kimi | `--auto` with `--yolo`, hidden `--yes` or `--auto-approve`, or a short cluster whose `y` is a flag | Kimi rejects this native permission combination. Bus rejects that raw combination before saving, including while Bus `--yolo` is on. Hidden `-C` is a boolean and hidden `-r` / `--resume` take an optional session id, so neither hides a later `--auto` and yolo flag. An unmapped letter does not hide a `y` in the same cluster. During a yolo run, normalization still removes that legacy yolo bit from effective argv before this check, including on resume of an already saved alias. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`

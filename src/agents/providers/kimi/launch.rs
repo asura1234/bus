@@ -160,7 +160,7 @@ fn resolve_executable(source: &Path) -> Result<PathBuf, String> {
             .trim()
             .split('.')
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-        || !["--session", "--agent-file", "--yolo"]
+        || !["--session", "--agent-file", "--yolo", "--auto"]
             .iter()
             .all(|flag| String::from_utf8_lossy(&help.stdout).contains(flag))
     {
@@ -365,12 +365,117 @@ pub(crate) fn rebind_hooks(hooks: &HookContext) -> Result<bool, String> {
     Ok(changed)
 }
 
+#[derive(Clone, Copy)]
+enum ShortValue {
+    Flag,
+    Required,
+    Optional,
+}
+
+const SHORT_OPTIONS: &[(char, ShortValue)] = &[
+    ('V', ShortValue::Flag),
+    ('S', ShortValue::Optional),
+    // Hidden boolean. Kimi folds it into the same continue bit as `-c`.
+    ('C', ShortValue::Flag),
+    ('c', ShortValue::Flag),
+    ('y', ShortValue::Flag),
+    // Hidden optional session id, the same shape as `-S` / `--session`.
+    ('r', ShortValue::Optional),
+    ('m', ShortValue::Required),
+    ('p', ShortValue::Required),
+    ('h', ShortValue::Flag),
+];
+
+struct ParsedShortOption {
+    yolo: bool,
+    normalized: Option<String>,
+    takes_next_value: bool,
+    optional_next: bool,
+}
+
+/// Kimi 2.4.1 sets one yolo bit from `--yolo` or the hidden `--yes` and
+/// `--auto-approve` flags. An equals form is a different token, not this bit.
+const YOLO_LONG_OPTIONS: &[&str] = &["--yolo", "--yes", "--auto-approve"];
+
+fn parse_short_option(name: &str) -> Option<ParsedShortOption> {
+    if name.len() < 2 || !name.starts_with('-') || name.starts_with("--") {
+        return None;
+    }
+    let mut yolo = false;
+    let mut normalized = "-".to_owned();
+    let mut takes_next_value = false;
+    let mut optional_next = false;
+    let mut saw_unmapped = false;
+    for (index, flag) in name.char_indices().skip(1) {
+        if flag == 'y' {
+            yolo = true;
+            continue;
+        }
+        let Some(value) = SHORT_OPTIONS
+            .iter()
+            .find_map(|(candidate, value)| (*candidate == flag).then_some(*value))
+        else {
+            // A `y` anywhere in the cluster is still Kimi's yolo bit (`-Qy`).
+            // Keep the unmapped letter. A cluster with no `y` stays
+            // unrecognized below so its arity is not guessed.
+            saw_unmapped = true;
+            normalized.push(flag);
+            continue;
+        };
+        normalized.push(flag);
+        if !matches!(value, ShortValue::Flag) {
+            let value_start = index + flag.len_utf8();
+            normalized.push_str(&name[value_start..]);
+            if value_start == name.len() {
+                takes_next_value = true;
+                optional_next = matches!(value, ShortValue::Optional);
+            }
+            break;
+        }
+    }
+    // `-ry` is a resume id because `-r` consumed `y`. An unmapped cluster
+    // with no yolo bit (`-Q`) still has unknown arity.
+    if saw_unmapped && !yolo {
+        return None;
+    }
+    Some(ParsedShortOption {
+        yolo,
+        normalized: (normalized.len() > 1).then_some(normalized),
+        takes_next_value,
+        optional_next,
+    })
+}
+
+pub(crate) fn normalize_yolo_option(name: &str) -> Option<Option<String>> {
+    if YOLO_LONG_OPTIONS.contains(&name) {
+        return Some(None);
+    }
+    parse_short_option(name).and_then(|option| option.yolo.then_some(option.normalized))
+}
+
+pub(crate) fn is_yolo_option(name: &str) -> bool {
+    normalize_yolo_option(name).is_some()
+}
+
+/// Kimi `-S` / `--session` and hidden `-r` / `--resume` take an optional id.
+/// A following token that starts with `-` is the next option, not that id.
+pub(crate) fn session_value_is_optional(name: &str) -> bool {
+    name == "--session"
+        || name == "--resume"
+        || parse_short_option(name).is_some_and(|option| option.optional_next)
+}
+
 pub(crate) fn option_arity(name: &str) -> Option<usize> {
+    if YOLO_LONG_OPTIONS.contains(&name) {
+        return Some(0);
+    }
+    if let Some(option) = parse_short_option(name) {
+        return Some(usize::from(option.takes_next_value));
+    }
     match name {
-        "-S" | "--session" | "--agent-file" | "--agent" | "-m" | "--model" | "--output-format"
-        | "-p" | "--prompt" | "--skills-dir" | "--add-dir" => Some(1),
-        "-y" | "--yolo" | "--auto" | "--continue" | "-c" | "--plan" | "--help" | "-h"
-        | "--version" | "-V" => Some(0),
+        "--session" | "--resume" | "--agent-file" | "--agent" | "--model" | "--output-format"
+        | "--prompt" | "--skills-dir" | "--add-dir" => Some(1),
+        "--auto" | "--continue" | "--plan" | "--help" | "--version" => Some(0),
         _ => None,
     }
 }
@@ -465,15 +570,21 @@ pub(crate) fn resumable_options(args: &[String]) -> Vec<String> {
             result.extend_from_slice(&args[index..]);
             break;
         }
+        let separated_value = arity == Some(1)
+            && !args[index].contains('=')
+            && !(session_value_is_optional(&args[index])
+                && !args
+                    .get(index + 1)
+                    .is_some_and(|value| !value.starts_with('-')));
         if option != "--agent-file" && option != "--session" && option != "-S" {
             result.push(args[index].clone());
-            if arity == Some(1) && !args[index].contains('=') {
+            if separated_value {
                 if let Some(value) = args.get(index + 1) {
                     result.push(value.clone());
                 }
             }
         }
-        index += 1 + usize::from(arity == Some(1) && !args[index].contains('='));
+        index += 1 + usize::from(separated_value);
     }
     result
 }
@@ -571,11 +682,10 @@ fn environment_for(
 }
 
 pub(crate) fn validate_run_permissions(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|arg| arg == "--auto")
-        && args
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
+    let positions = common::argument_positions(ProviderKind::Kimi, args);
+    let has_auto = positions.iter().any(|&index| args[index] == "--auto");
+    let has_yolo = positions.iter().any(|&index| is_yolo_option(&args[index]));
+    if has_auto && has_yolo {
         return Err("Kimi --auto and --yolo cannot be combined".into());
     }
     Ok(())
@@ -588,18 +698,12 @@ pub(crate) fn prepare(
     let cwd = common::canonical_directory(&spec.cwd)?;
     let mut options = common::parse_path_tokens(&spec.extra_args).map_err(|e| e.to_string())?;
     let adopted_session = validate_owned_launch(&options)?;
+    // Normal resume replays these tokens without yolo normalization. Reject a
+    // combination that replay cannot accept before it is saved.
     validate_run_permissions(&options)?;
-    if crate::utils::env::yolo_enabled() && options.iter().any(|arg| arg == "--auto") {
-        return Err("Bus --yolo conflicts with Kimi --auto; choose one permission mode".into());
-    }
     let saved_options = options.clone();
-    if crate::utils::env::yolo_enabled()
-        && !options
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--yolo" | "-y"))
-    {
-        options.insert(0, "--yolo".into());
-    }
+    common::apply_run_permissions(ProviderKind::Kimi, &mut options);
+    validate_run_permissions(&options)?;
     let source = source_home()?;
     let executable = resolve_executable(&source)?;
     let home = private_home(&source, &spec.hooks)?;
