@@ -23,6 +23,9 @@ use std::{
 #[path = "tests/focus_test.rs"]
 mod focus_tests;
 
+#[path = "ui/settings_fields.rs"]
+mod settings_fields;
+
 /// Which screen the Bus view shows. A change repaints every terminal cell, so
 /// cells a terminal shows differently from the last frame (which the diff
 /// encoder would never revisit, like the blank right margin) heal on every
@@ -294,32 +297,6 @@ impl BusUi {
     /// The saved sidebar width; the shell's layout clamps it to the terminal.
     pub(in crate::client) fn sidebar_width(&self) -> u16 {
         self.settings.sidebar_width
-    }
-
-    /// The compaction limit's Settings focus index, after the sound rows.
-    pub(super) fn compaction_field(&self) -> usize {
-        self.room_sound_field(self.sound_settings_targets().len())
-    }
-
-    pub(super) fn idle_agents_field(&self) -> usize {
-        self.compaction_field() + 1
-    }
-
-    pub(super) fn idle_alert_minutes_field(&self) -> usize {
-        self.idle_agents_field() + 1
-    }
-
-    pub(super) fn disk_warning_field(&self) -> usize {
-        self.idle_alert_minutes_field() + 1
-    }
-
-    pub(super) fn disk_critical_field(&self) -> usize {
-        self.disk_warning_field() + 1
-    }
-
-    /// The sidebar width's Settings focus index, after the disk thresholds.
-    pub(super) fn sidebar_width_field(&self) -> usize {
-        self.disk_critical_field() + 1
     }
 
     /// The overlay row's Settings focus index, after notification settings.
