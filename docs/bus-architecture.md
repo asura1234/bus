@@ -190,7 +190,7 @@ Files are split by ownership, not by helper.
     - `rooms.rs`, `agents.rs` (participants, `orchestrates` link), `requests.rs` (queue, coalesce, steer, settle)
     - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup)
     - `compactions.rs` (per-tick limit notice with saved latches, via `rooms::post_bus_notice`). Claude counts a SessionStart hook whose source is `compact`. Grok counts one episode of the compaction banner already read from the pane.
-    - `idle_agents.rs` (per-room idle-count crossing notices to the bound orchestrator, with in-memory coordinator latches; see [idle agents alert](idle-agents-alert.md))
+    - `idle_agents.rs` (per-room idle-count crossing and per-agent idle-duration notices to the bound orchestrator; the count latch is in memory and the duration episode is saved on the agent; see [idle agents alert](idle-agents-alert.md))
     - `attention.rs` (MASTER developer-attention notices via `post_developer_attention`); both notice paths use
       `Author::Bus`, shown as the grey sender `bus`
     - `tests/{rooms_test,agents_test,requests_test,callbacks_test}.rs`
