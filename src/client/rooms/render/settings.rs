@@ -1,6 +1,6 @@
 //! The Settings screen: color blind mode, the sound rows, the compaction
-//! limit, idle agents alert, disk thresholds, sidebar width and dev performance
-//! overlay.
+//! limit, idle agents alert, idle-duration minutes, disk thresholds, sidebar
+//! width and dev performance overlay.
 use super::super::BusUi;
 use super::text::display;
 use super::{Action, SoundSettingsLine, SoundTarget, View};
@@ -73,6 +73,12 @@ impl BusUi {
             label: "Idle agents alert (1–10)",
             value: self.settings.idle_agents_alert.to_string(),
             adjust: Action::AdjustIdleAgentsAlert,
+        });
+        lines.push(SoundSettingsLine::Stepper {
+            field: self.idle_alert_minutes_field(),
+            label: "Idle alert (minutes, 1–60)",
+            value: self.settings.idle_alert_minutes.to_string(),
+            adjust: Action::AdjustIdleAlertMinutes,
         });
         lines.push(SoundSettingsLine::Empty(""));
         lines.push(SoundSettingsLine::Heading("DISK"));

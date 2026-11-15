@@ -405,6 +405,15 @@ pub(crate) struct RoomAgent {
     /// last closed while Idle. Recovery deadlines counts usable idle time.
     #[serde(default)]
     pub(crate) status_since_ms: u64,
+    /// Start of the current sitting-idle episode. Unavailable and Launching,
+    /// including the restart poll gap, do not clear it. Working, blocked, and
+    /// a message do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sitting_idle_since_ms: Option<u64>,
+    /// Episode start already reported to the room orchestrator.
+    /// A later episode has a different start and may notify once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) idle_duration_notice_since_ms: Option<u64>,
     /// When the agent's status was last polled. The model has no clock of its
     /// own, so a submission is timed by the poll that preceded it.
     #[serde(default)]

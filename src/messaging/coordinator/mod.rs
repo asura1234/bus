@@ -101,6 +101,7 @@ pub(crate) enum BusCommand {
     SetAllRoomsSoundName(Option<String>),
     SetMaxCompactionsPerAgent(u32),
     SetIdleAgentsAlert(u32),
+    SetIdleAlertMinutes(u32),
     SetDiskWarningGb(u32),
     SetDiskCriticalGb(u32),
     /// The room sidebar's width in cells, clamped to the settings range.

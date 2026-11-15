@@ -80,6 +80,8 @@ impl BusState {
                 superseded_session_id: None,
                 interrupt_pending: false,
                 status_since_ms: 0,
+                sitting_idle_since_ms: None,
+                idle_duration_notice_since_ms: None,
                 observed_at_ms: 0,
                 delivery_rejection: None,
                 exit_snapshot: None,

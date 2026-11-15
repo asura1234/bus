@@ -52,13 +52,18 @@ impl Worker {
             .and_then(|path| settings::load(path).ok())
             .unwrap_or_default();
         let mut state = self.state.clone();
-        let now = crate::messaging::storage::io::now_ms();
+        let now = self.now_ms();
         let compactions = state
             .notify_compaction_limits(saved.max_compactions_per_agent, now)
             .map_err(|error| error.to_string())?;
         let mut alerted = self.idle_alerted_rooms.clone();
         let idle = state
-            .notify_idle_agents(saved.idle_agents_alert, now, &mut alerted)
+            .notify_idle_agents(
+                saved.idle_agents_alert,
+                saved.idle_alert_minutes,
+                now,
+                &mut alerted,
+            )
             .map_err(|error| error.to_string())?;
         if compactions || idle {
             self.save(state)?;
@@ -79,6 +84,22 @@ impl Worker {
             .as_deref()
             .ok_or("Bus settings location unavailable")?;
         let saved = settings::update(path, |settings| settings.idle_agents_alert = limit)?;
+        self.refresh_setting_notices()?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
+    }
+
+    pub(super) fn set_idle_alert_minutes(
+        &mut self,
+        minutes: u32,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        settings::validate_idle_alert_minutes(minutes)?;
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.idle_alert_minutes = minutes)?;
         self.refresh_setting_notices()?;
         let _ = events.send(BusEvent::SettingsChanged(saved));
         Ok(())

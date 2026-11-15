@@ -305,8 +305,12 @@ impl BusUi {
         self.compaction_field() + 1
     }
 
-    pub(super) fn disk_warning_field(&self) -> usize {
+    pub(super) fn idle_alert_minutes_field(&self) -> usize {
         self.idle_agents_field() + 1
+    }
+
+    pub(super) fn disk_warning_field(&self) -> usize {
+        self.idle_alert_minutes_field() + 1
     }
 
     pub(super) fn disk_critical_field(&self) -> usize {
