@@ -990,22 +990,19 @@ fn captured_payload(text: &str, dir: &str, images: usize) -> String {
 
 #[test]
 fn claude_shell_escaped_screenshot_chip_can_receive_enter_and_neighbors_stay_put() {
-    let typed = "\
-[Bus message 14882 from you]
-/Users/dylanliu/Downloads/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png 
-when thumbnail strips are loading we should still show a background solid color 
-I think it was a green color. don't show black ";
-    let chip = "\
-[Image #205][Bus message 14882 from you]
-when thumbnail strips are loading we should still show a background solid color 
-I think it was a green color. don't show black ";
+    let path = "/Users/dylanliu/Downloads/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png";
+    let loading = "when thumbnail strips are loading we should still show a background solid color";
+    let color = "I think it was a green color. don't show black";
+    // The incident paste kept a trailing ASCII space on the path and both captions.
+    let typed = format!("[Bus message 14882 from you]\n{path} \n{loading} \n{color} ");
+    let chip = format!("[Image #205][Bus message 14882 from you]\n{loading} \n{color} ");
     let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
-    let screen = frame(chip);
+    let screen = frame(&chip);
     assert_eq!(
-        observe(AgentKind::Claude, &screen, typed),
+        observe(AgentKind::Claude, &screen, &typed),
         InputObservation::Pending
     );
-    assert!(paste_ready(AgentKind::Claude, &screen, typed));
+    assert!(paste_ready(AgentKind::Claude, &screen, &typed));
     let follow_up = "do this as a separate bugfix for video editor";
     assert_eq!(
         observe(AgentKind::Claude, &screen, follow_up),
@@ -1039,12 +1036,12 @@ I think it was a green color. don't show black ";
     assert!(paste_ready(AgentKind::Claude, &only, image_only));
     let codex = |body: &str| format!("────────────────\n› {body}\n────────────────");
     assert_eq!(
-        observe(AgentKind::Codex, &codex(typed), typed),
+        observe(AgentKind::Codex, &codex(&typed), &typed),
         InputObservation::Pending,
         "codex keeps the escaped path as text"
     );
     assert_eq!(
-        observe(AgentKind::Codex, &codex(chip), typed),
+        observe(AgentKind::Codex, &codex(&chip), &typed),
         InputObservation::Other
     );
     let footer =

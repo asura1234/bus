@@ -267,11 +267,11 @@ fn is_unquoted_png_path(line: &str) -> bool {
 /// A pasted macOS screenshot is one shell word: backslash-escaped ASCII
 /// spaces, a trailing paste space, and U+202F left intact before AM/PM.
 /// Claude reads that word and replaces the whole line with a leading chip.
-/// An escaped path inside a sentence stays text; only a line that is that
-/// one word is lifted.
+/// An escaped path inside a sentence stays text. A backslash that does not
+/// escape a space stays literal, so `/tmp/one\image.png` is not this form.
 fn is_shell_escaped_png_line(line: &str) -> bool {
     let trimmed = line.trim_end_matches(' ');
-    if trimmed.is_empty() || !trimmed.contains('\\') {
+    if !trimmed.contains("\\ ") || !backslash_escapes_only_spaces(trimmed) {
         return false;
     }
     let Ok(tokens) = crate::agents::providers::launch::parse_path_tokens(trimmed) else {
@@ -288,6 +288,16 @@ fn is_shell_escaped_png_line(line: &str) -> bool {
         && path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
+fn backslash_escapes_only_spaces(line: &str) -> bool {
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' && characters.next() != Some(' ') {
+            return false;
+        }
+    }
+    true
 }
 
 /// Claude 2.1.310 can move an inline escaped PNG token onto a new line even

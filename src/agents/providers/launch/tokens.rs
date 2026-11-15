@@ -64,7 +64,7 @@ pub(crate) fn parse_path_tokens(input: &str) -> Result<Vec<String>, PathParseErr
                     };
                     token.push(escaped);
                 }
-                character if matches!(character, ' ' | '\t' | '\n' | '\r') => {
+                ' ' | '\t' | '\n' | '\r' => {
                     if token_started {
                         tokens.push(std::mem::take(&mut token));
                         token_started = false;
