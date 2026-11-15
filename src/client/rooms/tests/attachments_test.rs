@@ -428,6 +428,28 @@ fn corrupt_pasted_image_data_is_logged_without_a_dialog_and_never_saved() {
 }
 
 #[test]
+fn macos_screenshot_paste_with_narrow_nbsp_attaches_instead_of_staying_text() {
+    let dir = thumbnail_dir("nbsp-screenshot");
+    let path = png(
+        &dir,
+        "Screenshot 2026-11-15 at 10.27.59\u{202f}PM.png",
+        (20, 10),
+    );
+    let (mut ui, room, _) = fixture();
+    let pasted = format!("{} ", path.display().to_string().replace(' ', "\\ "));
+    paste(&mut ui, &pasted);
+    let attached = attached_paths(&ui);
+    assert_eq!(attached.len(), 1, "the screenshot path must attach: {attached:?}");
+    assert_eq!(std::fs::read(&attached[0]).unwrap(), std::fs::read(&path).unwrap());
+    assert!(
+        ui.locals.get(&room).unwrap().text.text.is_empty(),
+        "the escaped path must not remain composer text: {:?}",
+        ui.locals.get(&room).unwrap().text.text
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn valid_images_attach_by_drop_pasted_path_and_pasted_data_as_before() {
     let dir = thumbnail_dir("valid-attach");
     let dropped = png(&dir, "good drop.png", (20, 10));

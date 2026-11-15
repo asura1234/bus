@@ -989,6 +989,80 @@ fn captured_payload(text: &str, dir: &str, images: usize) -> String {
 }
 
 #[test]
+fn claude_shell_escaped_screenshot_chip_can_receive_enter_and_neighbors_stay_put() {
+    let typed = "\
+[Bus message 14882 from you]
+/Users/dylanliu/Downloads/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png 
+when thumbnail strips are loading we should still show a background solid color 
+I think it was a green color. don't show black ";
+    let chip = "\
+[Image #205][Bus message 14882 from you]
+when thumbnail strips are loading we should still show a background solid color 
+I think it was a green color. don't show black ";
+    let frame = |body: &str| format!("────────────────\n❯ {body}\n────────────────");
+    let screen = frame(chip);
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, typed),
+        InputObservation::Pending
+    );
+    assert!(paste_ready(AgentKind::Claude, &screen, typed));
+    let follow_up = "do this as a separate bugfix for video editor";
+    assert_eq!(
+        observe(AgentKind::Claude, &screen, follow_up),
+        InputObservation::Other,
+        "a follow-up must not be submitted into the unsent image draft"
+    );
+    assert!(!paste_ready(AgentKind::Claude, &screen, follow_up));
+    let follow_screen = frame(follow_up);
+    assert_eq!(
+        observe(AgentKind::Claude, &follow_screen, follow_up),
+        InputObservation::Pending
+    );
+    assert!(paste_ready(AgentKind::Claude, &follow_screen, follow_up));
+    let plain = frame("alpha");
+    assert_eq!(
+        observe(AgentKind::Claude, &plain, "alpha"),
+        InputObservation::Pending
+    );
+    let multiline = frame("alpha\nbeta");
+    assert_eq!(
+        observe(AgentKind::Claude, &multiline, "alpha\nbeta"),
+        InputObservation::Pending
+    );
+    assert!(paste_ready(AgentKind::Claude, &multiline, "alpha\nbeta"));
+    let image_only = "/tmp/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png";
+    let only = frame("[Image #1]");
+    assert_eq!(
+        observe(AgentKind::Claude, &only, image_only),
+        InputObservation::Pending
+    );
+    assert!(paste_ready(AgentKind::Claude, &only, image_only));
+    let codex = |body: &str| format!("────────────────\n› {body}\n────────────────");
+    assert_eq!(
+        observe(AgentKind::Codex, &codex(typed), typed),
+        InputObservation::Pending,
+        "codex keeps the escaped path as text"
+    );
+    assert_eq!(
+        observe(AgentKind::Codex, &codex(chip), typed),
+        InputObservation::Other
+    );
+    let footer =
+        "  Enter:send  │  Shift+Enter/Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+.:shortcuts";
+    let grok_text = "keep the green background";
+    let grok = grok_native_composer(&[grok_text], footer);
+    assert_eq!(
+        observe(AgentKind::Grok, &grok, grok_text),
+        InputObservation::Pending
+    );
+    let grok_lines = grok_native_composer(&["alpha", "beta"], footer);
+    assert_eq!(
+        observe(AgentKind::Grok, &grok_lines, "alpha\nbeta"),
+        InputObservation::Pending
+    );
+}
+
+#[test]
 fn claude_shows_a_pasted_image_path_as_a_leading_image_chip_that_is_still_our_draft() {
     for (screen, text, dir) in [
         (

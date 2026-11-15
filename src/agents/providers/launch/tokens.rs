@@ -1,4 +1,6 @@
 //! Literal shell-style tokenization shared by pasted paths and launch argv.
+//! Separators are the default shell IFS characters. Unicode spaces such as
+//! U+202F in a macOS screenshot name stay inside the token.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PathParseError {
@@ -62,7 +64,7 @@ pub(crate) fn parse_path_tokens(input: &str) -> Result<Vec<String>, PathParseErr
                     };
                     token.push(escaped);
                 }
-                character if character.is_whitespace() => {
+                character if matches!(character, ' ' | '\t' | '\n' | '\r') => {
                     if token_started {
                         tokens.push(std::mem::take(&mut token));
                         token_started = false;

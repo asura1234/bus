@@ -111,6 +111,14 @@ mod tests {
             parse_path_tokens(r#""C:\Users\Dylan Liu\file.md""#).expect("windows path"),
             vec![r#"C:\Users\Dylan Liu\file.md"#]
         );
+        // macOS screenshot names put U+202F before AM/PM. Shell IFS does not
+        // split on it, so the pasted path is one token.
+        let screenshot =
+            "/Users/dylanliu/Downloads/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png ";
+        assert_eq!(
+            parse_path_tokens(screenshot).expect("screenshot"),
+            vec!["/Users/dylanliu/Downloads/Screenshot 2026-11-15 at 10.27.59\u{202f}PM.png"]
+        );
         assert!(matches!(
             parse_path_tokens("'/tmp/unterminated"),
             Err(PathParseError::UnterminatedQuote)
