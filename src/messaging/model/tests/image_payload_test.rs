@@ -108,6 +108,92 @@ fn claude_escaped_inline_png_reflow_preserves_the_entire_literal_path() {
 }
 
 #[test]
+fn claude_shell_escaped_screenshot_line_matches_its_leading_image_chip() {
+    let body = "/Users/dylanliu/Downloads/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png \nwhen thumbnail strips are loading we should still show a background solid color \nI think it was a green color. don't show black ";
+    let (mut state, room, _, claude) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, claude, body);
+    let typed = state.render_request_payload(request).unwrap();
+    let path_line = body.lines().next().unwrap();
+    let without_path = typed.replacen(&format!("{path_line}\n"), "", 1);
+    let accepted = format!("[Image #205]{without_path}");
+    assert!(
+        state
+            .request(request)
+            .unwrap()
+            .matches_callback_payload(&accepted, Provider::ClaudeCode),
+        "claude lifts the escaped screenshot line"
+    );
+    assert!(state
+        .request(request)
+        .unwrap()
+        .matches_callback_payload(&typed, Provider::ClaudeCode));
+    assert!(!state
+        .request(request)
+        .unwrap()
+        .matches_callback_payload(&accepted.replace("green", "blue"), Provider::ClaudeCode));
+    assert!(!state
+        .request(request)
+        .unwrap()
+        .matches_callback_payload(&format!("[Image #206]{accepted}"), Provider::ClaudeCode));
+    let multiline = submit_text(&mut state, room, claude, "alpha\nbeta");
+    let multiline_typed = state.render_request_payload(multiline).unwrap();
+    let image_only = submit_text(
+        &mut state,
+        room,
+        claude,
+        "/tmp/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png",
+    );
+    let image_typed = state.render_request_payload(image_only).unwrap();
+    let image_header = image_typed.lines().next().unwrap();
+    let image_chip = format!("[Image #1]{image_header}");
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Grok,
+        Provider::Cursor,
+    ] {
+        assert!(
+            state
+                .request(multiline)
+                .unwrap()
+                .matches_callback_payload(&multiline_typed, provider),
+            "multiline text: {provider:?}"
+        );
+        assert!(
+            state
+                .request(request)
+                .unwrap()
+                .matches_callback_payload(&typed, provider),
+            "literal escaped text stays an exact match: {provider:?}"
+        );
+    }
+    assert!(state
+        .request(image_only)
+        .unwrap()
+        .matches_callback_payload(&image_chip, Provider::ClaudeCode));
+    assert!(!state
+        .request(image_only)
+        .unwrap()
+        .matches_callback_payload(&format!("{image_chip}extra"), Provider::ClaudeCode));
+    for provider in [Provider::Codex, Provider::Grok, Provider::Cursor] {
+        assert!(
+            !state
+                .request(request)
+                .unwrap()
+                .matches_callback_payload(&accepted, provider),
+            "only claude lifts an unquoted escaped path: {provider:?}"
+        );
+        assert!(
+            !state
+                .request(image_only)
+                .unwrap()
+                .matches_callback_payload(&image_chip, provider),
+            "image-only chip is claude: {provider:?}"
+        );
+    }
+}
+
+#[test]
 fn codex_unquoted_png_remains_in_its_literal_text_paste() {
     let typed = "[Bus message 6 from you]\nLiteral image text\n/private/tmp/fixture.png";
     let (images, remaining) = crate::agents::providers::codex::hooks::image_paste_parts(typed);

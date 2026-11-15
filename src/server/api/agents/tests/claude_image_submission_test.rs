@@ -145,3 +145,35 @@ async fn focused_idle_claude_submits_text_after_the_owned_paste_frame() {
 async fn focused_idle_claude_submits_text_and_restores_half_typed_draft() {
     focused_delivery("half-typed developer draft", false).await;
 }
+
+#[tokio::test]
+async fn focused_idle_claude_submits_a_shell_escaped_screenshot_only_after_its_chip() {
+    let _scratch = Scratch::new();
+    let text =
+        "/tmp/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png \nkeep the green background";
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    if let Method::AgentPromptIfIdle(params) = &mut method {
+        params.text = text.into();
+    }
+    let response = start(&mut app, method);
+    assert_eq!(
+        step(&mut writes, &response, "paste").await,
+        Bytes::from(format!("\x1b[200~{text}\x1b[201~"))
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), writes.recv())
+            .await
+            .is_err(),
+        "Enter must wait until the escaped screenshot is an image chip"
+    );
+    redraw(
+        &app,
+        AgentKind::Claude,
+        "[Image #9]keep the green background",
+    );
+    assert_eq!(step(&mut writes, &response, "submit").await.as_ref(), b"\r");
+    let reply = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap())
+        .await
+        .unwrap();
+    assert!(reply.contains("agent_prompted"), "{reply}");
+}

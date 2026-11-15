@@ -166,8 +166,9 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
     (length, count)
 }
 
-/// Claude Code lifts quoted image paths and unquoted absolute PNG paths alone
-/// or after a caption into attachments. Its composer and submit hook show one
+/// Claude Code lifts quoted image paths, unquoted absolute PNG paths, and a
+/// shell-escaped absolute PNG line (a macOS screenshot paste) alone or after
+/// a caption into attachments. Its composer and submit hook show one
 /// `[Image #N]` placeholder per image first (N counts the session's images),
 /// followed by the remaining lines with blank ones dropped. Returns how many
 /// lines of `typed` it lifts and the text left behind.
@@ -243,7 +244,7 @@ fn image_line_text(line: &str, unquoted_png: bool) -> Option<&str> {
     if !unquoted_png {
         return None;
     }
-    if is_unquoted_png_path(line) {
+    if is_unquoted_png_path(line) || is_shell_escaped_png_line(line) {
         return Some("");
     }
     let (caption, path) = line.rsplit_once(": ")?;
@@ -261,6 +262,42 @@ fn is_unquoted_png_path(line: &str) -> bool {
         && Path::new(line)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
+/// A pasted macOS screenshot is one shell word: backslash-escaped ASCII
+/// spaces, a trailing paste space, and U+202F left intact before AM/PM.
+/// Claude reads that word and replaces the whole line with a leading chip.
+/// An escaped path inside a sentence stays text. A backslash that does not
+/// escape a space stays literal, so `/tmp/one\image.png` is not this form.
+fn is_shell_escaped_png_line(line: &str) -> bool {
+    let trimmed = line.trim_end_matches(' ');
+    if !trimmed.contains("\\ ") || !backslash_escapes_only_spaces(trimmed) {
+        return false;
+    }
+    let Ok(tokens) = crate::agents::providers::launch::parse_path_tokens(trimmed) else {
+        return false;
+    };
+    let [token] = tokens.as_slice() else {
+        return false;
+    };
+    let path = Path::new(token.as_str());
+    path.is_absolute()
+        && !token
+            .chars()
+            .any(|character| matches!(character, '"' | '\'' | '\\' | '\n' | '\r'))
+        && path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
+fn backslash_escapes_only_spaces(line: &str) -> bool {
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' && characters.next() != Some(' ') {
+            return false;
+        }
+    }
+    true
 }
 
 /// Claude 2.1.310 can move an inline escaped PNG token onto a new line even
