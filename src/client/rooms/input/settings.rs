@@ -47,6 +47,21 @@ impl BusUi {
         }
     }
 
+    pub(super) fn adjust_idle_alert_minutes(&mut self, up: bool) {
+        use crate::messaging::prefs::settings::{MAX_IDLE_ALERT_MINUTES, MIN_IDLE_ALERT_MINUTES};
+        self.settings_field = self.idle_alert_minutes_field();
+        let current = self.settings.idle_alert_minutes;
+        let next = if up {
+            current.saturating_add(1).min(MAX_IDLE_ALERT_MINUTES)
+        } else {
+            current.saturating_sub(1).max(MIN_IDLE_ALERT_MINUTES)
+        };
+        if next != current {
+            self.settings.idle_alert_minutes = next;
+            self.queue(BusCommand::SetIdleAlertMinutes(next), Effect::None);
+        }
+    }
+
     pub(super) fn adjust_disk_threshold(&mut self, warning: bool, up: bool) {
         use crate::messaging::prefs::settings::{MAX_DISK_FREE_GB, MIN_DISK_FREE_GB};
         let (field, current, min, max) = if warning {

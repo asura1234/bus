@@ -74,6 +74,8 @@ pub(super) enum Action {
     AdjustCompactionLimit(bool),
     /// Raises (true) or lowers the idle agents alert by one.
     AdjustIdleAgentsAlert(bool),
+    /// Raises (true) or lowers the idle-duration threshold by one minute.
+    AdjustIdleAlertMinutes(bool),
     AdjustDiskWarningGb(bool),
     AdjustDiskCriticalGb(bool),
     /// Widens (true) or narrows the room sidebar by one cell.

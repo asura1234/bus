@@ -539,6 +539,32 @@ fn settings_idle_agents_alert_mouse_controls_respect_the_allowed_range() {
 }
 
 #[test]
+fn settings_idle_alert_minutes_is_visible_and_stops_at_one_and_sixty() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    let screen = room_screen(&mut ui, 120, 40);
+    assert!(screen.contains("Idle alert (minutes, 1–60)"), "{screen}");
+    for _ in 0..ui.idle_alert_minutes_field() {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    assert_eq!(ui.settings_field, ui.idle_alert_minutes_field());
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(ui.settings.idle_alert_minutes, 6);
+    assert!(ui.pending.iter().any(|pending| {
+        matches!(pending.command, BusCommand::SetIdleAlertMinutes(6))
+    }));
+    ui.settings.idle_alert_minutes = 60;
+    let before = ui.pending.len();
+    ui.action(render::Action::AdjustIdleAlertMinutes(true));
+    assert_eq!(ui.settings.idle_alert_minutes, 60);
+    assert_eq!(ui.pending.len(), before);
+    ui.settings.idle_alert_minutes = 1;
+    ui.action(render::Action::AdjustIdleAlertMinutes(false));
+    assert_eq!(ui.settings.idle_alert_minutes, 1);
+    assert_eq!(ui.pending.len(), before);
+}
+
+#[test]
 fn settings_sidebar_width_is_visible_and_editable_with_arrow_keys() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::Settings);

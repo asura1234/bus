@@ -91,7 +91,7 @@ fn setup_with(
 /// Sets each agent's status as first seen `ago_ms` before now.
 fn observe(worker: &mut Worker, agents: &[AgentId], status: RuntimeStatus, ago_ms: u64) {
     let mut state = worker.state.clone();
-    let at = io::now_ms().saturating_sub(ago_ms);
+    let at = worker.now_ms().saturating_sub(ago_ms);
     for agent in agents {
         state.observe_status(*agent, status, at).unwrap();
     }
@@ -108,7 +108,7 @@ fn idle(worker: &mut Worker, agents: &[AgentId]) {
 }
 
 fn staff(worker: &mut Worker, agent: AgentId, ago_ms: u64, failure: Option<&str>) {
-    let at = io::now_ms().saturating_sub(ago_ms);
+    let at = worker.now_ms().saturating_sub(ago_ms);
     let room = worker.state.agent(agent).unwrap().room_id;
     let mut state = worker.state.clone();
     let request = state
@@ -690,5 +690,301 @@ fn a_worker_staffed_inside_two_minutes_does_not_block_a_different_spare_roster()
     );
     assert!(posted[1].text.contains("w3"), "{}", posted[1].text);
     assert!(!posted[1].text.contains("w2"), "{}", posted[1].text);
+    cleanup(r);
+}
+
+fn duration_notices(worker: &Worker, room: RoomId) -> Vec<crate::messaging::model::Prompt> {
+    let mut prompts = BTreeMap::new();
+    for request in worker.state.requests().filter(|r| r.room_id == room) {
+        prompts.insert(request.prompt.id, request.prompt.clone());
+    }
+    prompts
+        .into_values()
+        .filter(|prompt| prompt.text.contains("sitting idle longer than"))
+        .collect()
+}
+
+const EPISODE: u64 = 1_700_000_000_000;
+
+fn freeze(worker: &mut Worker, now_ms: u64) {
+    worker.test_now_ms = Some(now_ms);
+}
+
+/// Forces Idle at an absolute `status_since_ms`. A saved episode clock stays.
+fn sit_at(worker: &mut Worker, agents: &[AgentId], status_since_ms: u64) {
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    for agent in agents {
+        let key = agent.0.to_string();
+        value["agents"][&key]["status"] = json!("idle");
+        value["agents"][&key]["status_since_ms"] = json!(status_since_ms);
+        value["agents"][&key]["dialog"] = json!(false);
+    }
+    worker.save(serde_json::from_value(value).unwrap()).unwrap();
+}
+
+/// After reopen, show Idle again without moving the persisted episode clock.
+fn show_idle(worker: &mut Worker, agents: &[AgentId]) {
+    let mut value = serde_json::to_value(&worker.state).unwrap();
+    for agent in agents {
+        let key = agent.0.to_string();
+        value["agents"][&key]["status"] = json!("idle");
+        value["agents"][&key]["dialog"] = json!(false);
+    }
+    worker.save(serde_json::from_value(value).unwrap()).unwrap();
+}
+
+/// Forces Idle and backdates `status_since_ms`. A second `observe` of Idle would not move it.
+fn sit(worker: &mut Worker, agents: &[AgentId], ago_ms: u64) {
+    sit_at(worker, agents, worker.now_ms().saturating_sub(ago_ms));
+}
+
+#[test]
+fn one_idle_work_room_agent_is_named_once_after_the_default_five_minutes() {
+    let mut r = setup(true, 1);
+    let agent = r.workers[0];
+    freeze(&mut r.worker, EPISODE);
+    sit_at(&mut r.worker, &[agent], EPISODE);
+    freeze(&mut r.worker, EPISODE + 5 * 60_000);
+    refresh(&mut r.worker);
+    assert!(
+        duration_notices(&r.worker, r.room).is_empty(),
+        "exactly five minutes is not longer than the threshold"
+    );
+    freeze(&mut r.worker, EPISODE + 5 * 60_000 + 1);
+    refresh(&mut r.worker);
+    let posted = duration_notices(&r.worker, r.room);
+    assert_eq!(posted.len(), 1, "one notice after the default five minutes");
+    let id = agent.0;
+    assert_eq!(
+        posted[0].text,
+        format!("w0 (agent {id}) has been sitting idle longer than 5 minutes.")
+    );
+    assert_eq!(posted[0].author, Author::Bus);
+    assert_eq!(posted[0].recipient_ids, [r.orchestrator.unwrap()].into());
+    assert!(!posted[0].text.contains("[waiting-on-you]"));
+    let master = r.worker.state.master_room().unwrap().id;
+    assert!(duration_notices(&r.worker, master).is_empty());
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+fn minutes(worker: &mut Worker, value: u32) {
+    std::fs::write(
+        worker.settings_path.as_ref().unwrap(),
+        json!({"idle_alert_minutes": value}).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn busy_blocked_and_queued_agents_do_not_get_an_idle_duration_notice() {
+    let mut r = setup(true, 4);
+    let w = r.workers.clone();
+    sit(&mut r.worker, &w, 6 * 60_000);
+    observe(&mut r.worker, &[w[0]], RuntimeStatus::Working, 0);
+    observe(&mut r.worker, &[w[1]], RuntimeStatus::Blocked, 0);
+    let mut state = r.worker.state.clone();
+    state.observe_dialog(w[2], true, io::now_ms()).unwrap();
+    state
+        .submit_message_from(
+            r.room,
+            crate::messaging::model::Draft {
+                text: "still queued".into(),
+                files: Vec::new(),
+                recipient_ids: [w[2]].into(),
+            },
+            Author::Developer,
+            1,
+        )
+        .unwrap();
+    r.worker.save(state).unwrap();
+    refresh(&mut r.worker);
+    let posted = duration_notices(&r.worker, r.room);
+    assert_eq!(
+        posted.len(),
+        1,
+        "{}",
+        posted.first().map(|p| p.text.clone()).unwrap_or_default()
+    );
+    assert!(
+        posted[0].text.starts_with("w3 (agent "),
+        "{}",
+        posted[0].text
+    );
+    assert!(!posted[0].text.contains("w0"), "{}", posted[0].text);
+    assert!(!posted[0].text.contains("w1"), "{}", posted[0].text);
+    assert!(!posted[0].text.contains("w2"), "{}", posted[0].text);
+    cleanup(r);
+}
+
+#[test]
+fn a_message_or_later_activity_starts_a_new_idle_episode() {
+    let mut r = setup(true, 1);
+    let agent = r.workers[0];
+    freeze(&mut r.worker, EPISODE);
+    sit_at(&mut r.worker, &[agent], EPISODE);
+    refresh(&mut r.worker);
+    let message_at = EPISODE + 60_000;
+    freeze(&mut r.worker, message_at);
+    staff(&mut r.worker, agent, 0, None);
+    let quiet_until = message_at + 5 * 60_000;
+    freeze(&mut r.worker, quiet_until);
+    refresh(&mut r.worker);
+    assert!(
+        duration_notices(&r.worker, r.room).is_empty(),
+        "a message resets the idle clock"
+    );
+    freeze(&mut r.worker, quiet_until + 1);
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    observe(&mut r.worker, &[agent], RuntimeStatus::Working, 0);
+    refresh(&mut r.worker);
+    let again = quiet_until + 1;
+    sit_at(&mut r.worker, &[agent], again);
+    freeze(&mut r.worker, again + 5 * 60_000);
+    refresh(&mut r.worker);
+    assert_eq!(
+        duration_notices(&r.worker, r.room).len(),
+        1,
+        "exactly five minutes of the new episode stays quiet"
+    );
+    freeze(&mut r.worker, again + 5 * 60_000 + 1);
+    refresh(&mut r.worker);
+    assert_eq!(
+        duration_notices(&r.worker, r.room).len(),
+        2,
+        "a new idle episode after activity notifies once"
+    );
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 2);
+    cleanup(r);
+}
+
+#[test]
+fn an_idle_episode_survives_restart_without_a_second_notice() {
+    let mut r = setup(true, 1);
+    let agent = r.workers[0];
+    freeze(&mut r.worker, EPISODE);
+    sit_at(&mut r.worker, &[agent], EPISODE);
+    freeze(&mut r.worker, EPISODE + 6 * 60_000);
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    r = reopen(r);
+    freeze(&mut r.worker, EPISODE + 10 * 60_000);
+    show_idle(&mut r.worker, &[agent]);
+    assert_eq!(
+        r.worker.state.agent(agent).unwrap().sitting_idle_since_ms,
+        Some(EPISODE)
+    );
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+#[test]
+fn restart_still_notifies_once_when_the_threshold_passes_after_resume() {
+    let mut r = setup(true, 1);
+    let agent = r.workers[0];
+    freeze(&mut r.worker, EPISODE);
+    sit_at(&mut r.worker, &[agent], EPISODE);
+    freeze(&mut r.worker, EPISODE + 4 * 60_000);
+    refresh(&mut r.worker);
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+    assert_eq!(
+        r.worker.state.agent(agent).unwrap().sitting_idle_since_ms,
+        Some(EPISODE)
+    );
+    r = reopen(r);
+    freeze(&mut r.worker, EPISODE + 4 * 60_000);
+    show_idle(&mut r.worker, &[agent]);
+    assert_eq!(
+        r.worker.state.agent(agent).unwrap().sitting_idle_since_ms,
+        Some(EPISODE),
+        "restart keeps the episode clock"
+    );
+    refresh(&mut r.worker);
+    assert!(
+        duration_notices(&r.worker, r.room).is_empty(),
+        "still under the threshold after restart"
+    );
+    freeze(&mut r.worker, EPISODE + 5 * 60_000);
+    refresh(&mut r.worker);
+    assert!(
+        duration_notices(&r.worker, r.room).is_empty(),
+        "exactly five minutes after resume is quiet"
+    );
+    freeze(&mut r.worker, EPISODE + 5 * 60_000 + 1);
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+#[test]
+fn the_idle_minutes_setting_is_the_duration_threshold() {
+    let mut r = setup(true, 1);
+    let agent = r.workers[0];
+    minutes(&mut r.worker, 1);
+    freeze(&mut r.worker, EPISODE);
+    sit_at(&mut r.worker, &[agent], EPISODE);
+    freeze(&mut r.worker, EPISODE + 60_000);
+    refresh(&mut r.worker);
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+    freeze(&mut r.worker, EPISODE + 60_001);
+    refresh(&mut r.worker);
+    let posted = duration_notices(&r.worker, r.room);
+    assert_eq!(posted.len(), 1);
+    assert!(
+        posted[0].text.contains("longer than 1 minute."),
+        "{}",
+        posted[0].text
+    );
+    let (events, _receiver) = mpsc::channel();
+    assert!(r
+        .worker
+        .command(BusCommand::SetIdleAlertMinutes(0), &events)
+        .is_err());
+    assert!(r
+        .worker
+        .command(BusCommand::SetIdleAlertMinutes(61), &events)
+        .is_err());
+    r.worker
+        .command(BusCommand::SetIdleAlertMinutes(1), &events)
+        .unwrap();
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+#[test]
+fn raising_the_minutes_threshold_above_the_current_idle_time_stays_quiet() {
+    let mut r = setup(true, 1);
+    minutes(&mut r.worker, 10);
+    sit(&mut r.worker, &r.workers, 6 * 60_000);
+    refresh(&mut r.worker);
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+    let (events, receiver) = mpsc::channel();
+    r.worker
+        .command(BusCommand::SetIdleAlertMinutes(1), &events)
+        .unwrap();
+    assert!(receiver.try_iter().any(|event| {
+        matches!(event, BusEvent::SettingsChanged(saved) if saved.idle_alert_minutes == 1)
+    }));
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+#[test]
+fn a_master_orchestrator_is_not_an_idle_duration_notice() {
+    let mut r = setup(true, 1);
+    sit(&mut r.worker, &[r.workers[0]], 4 * 60_000);
+    sit(&mut r.worker, &[r.orchestrator.unwrap()], 10 * 60_000);
+    refresh(&mut r.worker);
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+    let master = r.worker.state.master_room().unwrap().id;
+    assert!(duration_notices(&r.worker, master).is_empty());
     cleanup(r);
 }

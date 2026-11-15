@@ -27,3 +27,27 @@ restarting Bus starts fresh episodes after workers qualify as idle again.
 A room without an eligible bound orchestrator stays quiet. If one is later
 bound while the room is over the limit, it receives the first reminder. Idle
 reminders never fall back to the developer or MASTER, and never page Feishu.
+
+## One agent idle longer than the minutes setting
+
+`idle_alert_minutes` is a second Settings value, **Idle alert (minutes, 1–60)**,
+default **5**. It does not replace the spare-count limit above. Both notices
+are posted by the same `notify_idle_agents` path.
+
+When one work-room agent has been shown Idle, with no current or queued
+message, for **more than** that many minutes, Bus sends one notice only to
+that room's bound orchestrator. The text names the agent id and name and says
+the agent has been sitting idle longer than the threshold. MASTER orchestrators
+never qualify. Working, blocked (including a dialog), launching, unavailable,
+and pending-deletion agents do not qualify.
+
+Working, blocked (including a dialog), a current or queued message, or a
+completed message newer than the saved start resets the clock to the later of
+the status change and that message. Unavailable and Launching, including the
+restart poll gap, do not. The same episode does not notify again. After the
+agent is active and then idle again, the new episode may notify once. The
+episode start is saved on the agent, and the notice records that same start, so
+a restart neither repeats a notice nor forgets time already idle. An episode
+that crosses the threshold only after restart still notifies once.
+Changing the minutes value does not repeat an episode that already notified.
+A room with no bound orchestrator stays quiet until one is bound.

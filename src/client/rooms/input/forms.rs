@@ -233,6 +233,8 @@ impl BusUi {
                     self.adjust_compaction_limit(code == KeyCode::Right);
                 } else if self.settings_field == self.idle_agents_field() {
                     self.adjust_idle_agents_alert(code == KeyCode::Right);
+                } else if self.settings_field == self.idle_alert_minutes_field() {
+                    self.adjust_idle_alert_minutes(code == KeyCode::Right);
                 } else if self.settings_field == self.disk_warning_field() {
                     self.adjust_disk_threshold(true, code == KeyCode::Right);
                 } else if self.settings_field == self.disk_critical_field() {
