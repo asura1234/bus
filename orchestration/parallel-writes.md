@@ -1,6 +1,7 @@
 # Parallel writes
 
-This guide is for orchestrators and workers changing several places at once.
+This guide is for orchestrators and workers whose separate tasks change the
+repository at the same time.
 The [orchestrator rules](orchestrator-rules.md) bind the orchestrator; every
 parallel worker receives this guide and its ownership map in its brief.
 
@@ -14,11 +15,13 @@ The path remains the same for that session across worker hand-offs and resumes.
 
 ## Before parallel work starts
 
-Split a change that spans several places across agents running in parallel.
-Use the acceptance checklist to assign an item or group to each worker. Strongly
+Each agent owns one independent task. When several of those tasks write at
+once, split the write areas across agents. Devices, build slots, worktrees
+and disk decide how many can run; serialize only dependent steps. Use the
+acceptance checklist to assign an item or group to each worker. Strongly
 encourage parallel subagents for investigation and fixes; the parent worker
-subdivides its own write area and remains responsible for it. Order dependent
-steps explicitly.
+subdivides its own write area and remains responsible for it. Subagents stay
+inside that one task. Order dependent steps explicitly.
 
 Default to one shared branch. Before dispatch, write an ownership map by
 directory or file in the workflow's Coordination section and copy the relevant

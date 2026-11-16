@@ -188,7 +188,7 @@ For an Unavailable agent, follow the
 [binding replacement rule](orchestrator-rules.md#unavailable-agents).
 Use `request recover REQUEST_ID --confirm` only after checking
 identity/status and effects; it closes work, never undoes or replays it.
-Use `agent interrupt --help` to stop a turn; `agent clear --help` for fresh context.
+Use `agent interrupt --help` to stop a turn. `agent clear` resets a provider context; scheduling does not use it to assign a new task (`bus agent add` does).
 Sending provider reset slash commands as messages leaves requests unanswered.
 
 ## UI, settings and cleanup
