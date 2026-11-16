@@ -11,10 +11,10 @@ status do not count toward the first reminder. The orchestrator itself never cou
 
 When a work room has **more than** the limit, Bus sends one Bus-authored notice
 only to that room's bound orchestrator. It names the room, count, limit and idle
-agents, and tells the orchestrator not to give them a new task. Delete the
-ones no longer needed with `bus agent delete NAME --confirm`. A new task gets
-a new agent with `bus agent add`. Idle agents use RAM and
-require pane polling even when they have no work.
+agents, and tells the orchestrator not to give them a new task. Agents no longer
+needed are deleted with `bus agent delete NAME --confirm`; a new task gets a new
+agent with `bus agent add`. Idle agents use RAM and require pane polling even
+when they have no work.
 
 The room stays quiet while the qualified count remains above the limit. Once
 it falls to the limit or below, the next crossing sends another notice. Raising
