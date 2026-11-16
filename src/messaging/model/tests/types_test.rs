@@ -674,7 +674,10 @@ fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
     let message = state.request(sent).unwrap().prompt.id.0;
     assert_eq!(
         state.render_request_payload(sent).unwrap(),
-        format!("builder:\n[Bus message {message} from builder]\nplease recheck")
+        format!(
+            "builder (room {room}):\n[Bus message {message} from builder (room {room})]\nplease recheck",
+            room = room.0
+        )
     );
 
     let numeric = state
@@ -693,7 +696,7 @@ fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
         )
         .unwrap()[0];
     let message = state.request(sent).unwrap().prompt.id.0;
-    let label = format!("7 (agent {})", numeric.0);
+    let label = format!("7 (agent {}) (room {})", numeric.0, room.0);
     assert_eq!(
         state.render_request_payload(sent).unwrap(),
         format!("{label}:\n[Bus message {message} from {label}]\nnumeric sender")
@@ -738,8 +741,8 @@ fn multi_recipient_header_resolves_current_names_and_freezes_for_retries() {
     let id = requests[0];
     let message = state.request(id).unwrap().prompt.id.0;
     let expected = format!(
-        "builder (agent {}):\n[Bus message {message} from builder (agent {}) to renamed reviewer, renamed builder [deleted]]\nshared task",
-        builder.0, builder.0
+        "builder (agent {}) (room {}):\n[Bus message {message} from builder (agent {}) (room {}) to renamed reviewer, renamed builder [deleted]]\nshared task",
+        builder.0, room.0, builder.0, room.0
     );
     assert_eq!(state.render_request_payload(id).unwrap(), expected);
     state.rename_agent(reviewer, "renamed again").unwrap();

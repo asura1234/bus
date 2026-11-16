@@ -137,6 +137,8 @@ orchestrator.
 
 A reply is just another message. Bus does not capture a turn's final text as a reply, and nothing waits on one. When the recipient's turn ends, that request settles and the next queued message can be delivered. An explicit `bus send --reply-to MESSAGE_ID` may settle the request earlier, while the turn is still open. Either way the request is terminal by the end of the turn.
 
+If you receive a message, reply in the room it arrived in. `bus send --reply-to` infers that room, so the answer stays in the conversation the sender is watching. The sender header names the sender's home room, which can differ from that conversation. When you send a message into another room, expect the reply in that conversation, not in the recipient's home room.
+
 If you want an answer, say in the message whom to reply to and in which room. For example: report to @orchestrator in #build when complete. The agent you named sends a normal message to that agent in that room.
 
 If the target agent no longer exists on Bus when you reply, ignore it. Do not retry and do not treat it as an error.
@@ -149,7 +151,7 @@ The `--reply-to` receipt reports `requester_turn_queued:false`: no requester tur
 was queued. If the requester must act, deliver the result with a fresh normal
 `bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT` instead.
 
-To settle a request before its turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check `ok:true` and `stage:"replied"`. A deliverable message starts with `[Bus message N from NAME]`; that N is the message ID. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header.
+To settle a request before its turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check `ok:true` and `stage:"replied"`. A deliverable message starts with `[Bus message N from NAME (room R)]` when the sender has a room (`from you` for the developer); that N is the message ID. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header.
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 

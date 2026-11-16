@@ -96,6 +96,10 @@ pub(crate) use self::stall::UNCONFIRMED_SUBMISSION_MS;
 mod tests;
 
 #[cfg(test)]
+#[path = "tests/sender_header_test.rs"]
+mod sender_header_test;
+
+#[cfg(test)]
 #[path = "tests/launch_attempts_test.rs"]
 mod launch_attempts_test;
 

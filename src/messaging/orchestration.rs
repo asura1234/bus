@@ -169,12 +169,12 @@ pub(crate) fn agent_onboarding(
          Use the PR or task peers named in your brief, if any; message the orchestrator if a peer is missing or replaced. \
          For verdict and result recipients, delivery and evidence paths, follow the Bus communication guide. \
          Message shared-file owners before editing; follow {}/parallel-writes.md. \
-         If you want an answer, say whom to reply to and in which room (for example: report to @orchestrator in #build when complete). If that agent no longer exists on Bus when you reply, ignore it; do not retry and do not treat it as an error. Deliverable messages start with [Bus message N from NAME]. To settle a request before its turn ends, use bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\". If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header. \
+         If you want an answer, say whom to reply to and in which room (for example: report to @orchestrator in #build when complete). If that agent no longer exists on Bus when you reply, ignore it; do not retry and do not treat it as an error. Deliverable messages start with [Bus message N from NAME (room R)]. To settle a request before its turn ends, use bus send --reply-to N --as {} --text 'YOUR ANSWER', run it in the foreground, and check ok:true and stage:\"replied\". If it fails, check the existing answer with bus message status N before resending. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header. \
          For repository tasks, the agent and harness report meaningful status changes as described in that guide; Bus does not monitor repositories. \
          The orchestrator owns staffing and recovery, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
-         Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER; IDs appear only for numeric or historical names. \
+         Bus adds one sender header: 'name (room R):' on every message; IDs appear only for numeric or historical names. \
          Send only the body; do not add a 'from X', 'X here' or signature line.",
         id.0,
         room.0,

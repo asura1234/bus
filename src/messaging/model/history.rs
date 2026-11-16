@@ -389,6 +389,13 @@ impl super::BusState {
         format!("{name} [deleted]")
     }
 
+    /// Home room of a live or retired agent. None when the identity is gone.
+    pub(crate) fn agent_home_room(&self, id: AgentId) -> Option<RoomId> {
+        self.agent(id)
+            .map(|agent| agent.room_id)
+            .or_else(|| self.retired_agent(id).map(|agent| agent.room))
+    }
+
     pub(crate) fn history_room_name(&self, id: RoomId) -> Option<&str> {
         self.room(id)
             .map(|r| r.name.as_str())
