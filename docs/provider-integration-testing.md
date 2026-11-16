@@ -434,8 +434,10 @@ older dated testing lessons refer to automatic capture.
     message status. This may settle before `turn_ended`; retain separate native
     turn-end proof. A native final does not replace an explicit reply.
 
-  Deliverable prompts carry one short `[Bus message N from NAME]` header
-  (`from you` when the developer sent it). Blocked, No-reply, and idle-agent
+  Deliverable prompts carry a sender line `name (room R):` when the author
+  is an agent with a known room, then one short
+  `[Bus message N from NAME (room R)]` header (`from you`, with no room, when
+  the developer sent it). Blocked, No-reply, and idle-agent
   notices have no header. Match the native prompt on the task body. Do not
   require the old multi-line reply hint in the delivered text. That hint lives
   in the system prompt and `bus send --help`. Reply semantics are unchanged.
@@ -803,7 +805,7 @@ idle then deliver, and an approval card without `--yolo`.
 - **2026-10-31 — slim reply header:** Symptom: a long per-message reply hint
   inflated prompts and was repeated on notices that need no reply. Cause: the
   hint belongs in the system prompt and `bus send --help`. Test: a deliverable
-  message shows one `[Bus message N from NAME]` line (`from you` for the
+  message shows one `[Bus message N from NAME (room R)]` line (`from you` for the
   developer); a Blocked, No-reply, or idle-agent notice has none. Rule: bind
   the native prompt on the task body. Do not require the old hint in the
   delivered text. Reply semantics stay the foreground `--reply-to` check.
