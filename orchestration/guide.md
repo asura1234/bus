@@ -17,8 +17,8 @@ room do the work. The orchestrator runs it.
 
 - **It delegates everything.** The orchestrator does not write code, run
   builds, or review diffs itself. It sends that work to the room's agents and
-  reads their replies. This keeps its own context free for the whole job, while
-  each worker starts with fresh context.
+  reads their replies. This keeps its own context free for the whole job. Each
+  new worker starts with fresh context on exactly one independent task.
 - **It stays available.** The developer can ask it a question or change direction at
   any time, and it passes that steering to the agents doing the work.
 - **It lives in MASTER.** Orchestrators are agents in the MASTER room, each
@@ -131,8 +131,8 @@ Before work starts, put the PR's **owner, verifier and reviewer** names and IDs
 in every worker brief, with the PR (or task key until it exists), worktree,
 branch, acceptance checklist and current head. List every required reviewer.
 Keep the same `PR → owner → verifier → reviewer` roster in the workflow.
-Assign **one verifier per 1–2 PRs**; distribute more PRs across additional
-verifiers instead of making one verifier the room's hub.
+One verifier's single verification task covers **1–2 PRs**; distribute more PRs
+across additional verifiers instead of making one verifier the room's hub.
 
 1. **Owner → peers:** send the PR, exact full head SHA, worktree and checks to
    the assigned verifier and reviewers. On **every push**, re-send the new head
@@ -193,8 +193,9 @@ a retry grep. A retry filter can hide a successful Ready or merge result.
 When a completion notification arrives, read the actual reply with
 `bus message status`; the command description describes the assignment, not its
 outcome. Immediately turn the result into an executing next step or an explicit
-disposition: Ready gets a verifier or a hold reason, and merged/done gets cleanup
-or reuse. Do independent cleanup before a new blocking verifier wait, or dispatch
+disposition: Ready gets a verifier or a hold reason, and merged/done gets
+cleanup. Delete the finished agent once its follow-ups have owners; do not
+give it another task. Do independent cleanup before a new blocking verifier wait, or dispatch
 cleanup and verification separately. A cleanup loop after a long `--async` wait
 has not executed merely because you announced it.
 
@@ -223,9 +224,11 @@ log, and report milestones in MASTER.
 
 Decide how agents share the repository before sending parallel work:
 
-- Whenever a change spans several places, split it across parallel agents.
-  Order dependencies explicitly. Strongly encourage workers to use subagents
-  per acceptance item or group for both investigation and fixes.
+- Split independent work across agents whenever devices, build slots,
+  worktrees and disk allow. Serialize only dependent steps. Strongly
+  encourage workers to use subagents per acceptance item or group for both
+  investigation and fixes; those subagents stay inside the parent worker's
+  one task and ownership.
 - Follow [Parallel writes](parallel-writes.md), the shared guide for
   orchestrators and workers, for ownership maps, shared-file locks, worktrees,
   integration and cleanup. Use its [workspace policy](parallel-writes.md#reviews-and-investigations)
@@ -314,6 +317,12 @@ acceptance; the actual acceptance still has to pass on the exact head.
 
 ## Choose agents and models
 
+- **One agent, one task.** Each agent owns exactly one independent task. A
+  new task is `bus agent add`. When its part is done and follow-ups have
+  owners, delete it with `bus agent delete`. Do not hand an existing agent a
+  new, unrelated task. `bus agent clear` is not a reuse path for new work.
+  Devices, build slots, worktrees and disk decide how many agents can run;
+  serialize only dependent steps.
 - **Use different models for review.** Reviewers on different providers catch
   different problems.
 - **Save quota for review.** `bus state` shows 5-hour and weekly usage per
@@ -322,13 +331,15 @@ acceptance; the actual acceptance still has to pass on the exact head.
   is below about 25% of its weekly allowance, stop giving it coding tasks and
   keep it for review. Unknown usage is unknown, not full.
 - **Move work when a provider runs out.** If an agent hits a usage limit, add an
-  agent on another provider (`bus agent add`) and hand the work over.
+  agent on another provider (`bus agent add`), hand that same task over, and
+  delete the limited agent once the new one owns it.
 - **Watch context health.** `bus state` shows how many times each agent's
   context has been compacted. On Bus's `reached N compactions` notice at
   **Settings → Max compactions per agent**, automatically follow
   [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md).
-  Clear a worker before an unrelated task. The orchestrator never clears or
-  replaces itself, because it carries the context of the whole effort.
+  That replacement continues the same task on a new agent. The orchestrator
+  never clears or replaces itself, because it carries the context of the whole
+  effort.
 
 ## The review loop
 
@@ -552,7 +563,9 @@ PRs go unseen for about 45 minutes during a delivery outage.
 Instead, check the device list yourself: it shows availability in two seconds.
 Reconcile PR and delivery state, drop stale holds, remove the added scope, reuse
 the exact-head evidence and carry it through unchanged-diff rebases. Log the
-process change and assign the next work to idle capacity immediately.
+process change and assign the next independent task to a new agent when
+devices, build slots, worktrees and disk allow. Do not hand it to an agent
+that already owns a different task.
 
 ## Evidence behind the result and continuation rules
 

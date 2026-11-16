@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 /// Preserve the original alert's minimum idle interval.
 pub(crate) const MIN_IDLE_FOR_ALERT_MS: u64 = 60_000;
 const STAFFING_GRACE_MS: u64 = 2 * MIN_IDLE_FOR_ALERT_MS;
-const IDLE_ALERT_ACTION: &str = ". Give them parallel work or delete the ones you no longer need (bus agent delete NAME --confirm).";
+const IDLE_ALERT_ACTION: &str = ". Do not give them a new task. Delete the ones you no longer need (bus agent delete NAME --confirm). A new task gets a new agent (bus agent add).";
 const MS_PER_MINUTE: u64 = 60_000;
 
 impl BusState {

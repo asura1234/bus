@@ -94,7 +94,8 @@ weekly allowance falls below about 25%.
 ## PR peers
 
 Replace names/IDs in this live roster and affected worker briefs whenever staffing
-changes; announce replacements to their peers. Assign one verifier per 1–2 PRs.
+changes; announce replacements to their peers. One verifier's single verification
+task covers 1–2 PRs.
 
 | PR / task | Owner (name/ID) | Verifier (name/ID) | Reviewer(s) (name/ID) |
 |---|---|---|---|

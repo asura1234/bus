@@ -98,12 +98,15 @@ the wrapper remains held.
     unchanged, record that evidence, carry verification forward to the new head
     and re-run only fast gates. Re-verify on the slow resource only when the
     PR's own changes moved.
-  - Re-check standing notes and brief text against current facts before reuse;
-    drop stale holds while honoring current explicit holds.
+  - Re-check standing notes and brief text against current facts before reusing
+    them for the same task; drop stale holds while honoring current explicit
+    holds. Do not reuse the agent itself for a different task.
   - Your own notes to workers must not widen a PR's locked goal.
   - Don't wait silently. Audit on a timer for missing finals, queued or
-    undelivered messages, idle agents with work waiting and dead agents;
-    re-staff or chase. If delivery stops progressing, read PR state, `bus history`
+    undelivered messages, idle agents with work waiting and dead agents.
+    Chase an owner whose own task is waiting. Replace a dead or Unavailable
+    agent with a new agent for that same open task. Do not hand the waiting
+    work to an agent that already owns a different task. If delivery stops progressing, read PR state, `bus history`
     and `bus message status` yourself; apply [process every result](#process-every-result).
 
   Momentum is your job, and Bus only works when you drive it.
@@ -212,8 +215,9 @@ the wrapper remains held.
   never discard it into `/dev/null`, `sent`, or a retry-only grep. On a completion
   notification, read the reply with `bus message status`; do not guess from the
   command description. Immediately record a next step and owner: Ready gets a
-  verifier or explicit hold reason; merged/done gets cleanup or reuse. Do cleanup
-  before a new blocking wait, or run it independently. After a restart, reconcile
+  verifier or explicit hold reason; merged/done gets cleanup. Delete the
+  finished agent once its follow-ups have owners; do not give it another task.
+  Do cleanup before a new blocking wait, or run it independently. After a restart, reconcile
   the room with `bus state` plus GitHub before anything else.
 
 - **Secure continuation before ending a turn.** Every active item has a next
@@ -224,17 +228,19 @@ the wrapper remains held.
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the developer.
 - **Keep PR peers connected.** Name owner, verifier and reviewer in every brief
-  and the live workflow roster; update both on replacement. Assign one verifier
-  per 1–2 PRs. Exchange heads and verdicts directly, coordinate
+  and the live workflow roster; update both on replacement. One verifier's
+  single verification task covers 1–2 PRs. Exchange heads and verdicts
+  directly, coordinate
   [shared files](parallel-writes.md) before editing, and have owners merge through
   `auto-merge-pr`'s guarded owner-run path. Staffing stays with the orchestrator;
   verdicts and results follow the
   [Bus communication guide](bus-communication-guide.md#verdicts-and-results).
   *Why:* peer loops keep progress moving. Follow the
   [peer messaging SOP](orchestrator-guide.md#open-peer-messaging).
-- **Parallelism is king.** Whenever a change must land in several places,
-  split it across agents running in parallel; order only dependent steps.
-  *Why:* finding and fixing one place at a time creates repeated review loops.
+- **Parallelism is king.** Split independent work across agents whenever
+  devices, build slots, worktrees and disk allow. Serialize only dependent
+  steps. *Why:* finding and fixing one place at a time creates repeated review
+  loops, and one agent holding several independent tasks blocks the rest.
 - **Assign write ownership before parallel work.** Give each agent a directory
   or file area in its brief; agents write only there. Lock shared files to one
   writer at a time, or give them one owner. Use separate worktrees and branches
@@ -246,15 +252,20 @@ the wrapper remains held.
 - **Give every parallel worker the installed write guide.** Each brief tells
   the worker to read the absolute session `docs/parallel-writes.md` path and
   includes its ownership map; resolve the path before sending the brief.
-- **Compartmentalize, within reason.** Break big work into manageable pieces;
-  give each agent one piece plus limited context on how it fits the bigger
-  picture. *Why:* one giant ask in one terminal is daunting and goes worse.
-- **Size the team to the current step.** Add workers with `bus agent add`
-  when a parallel step starts and delete them with `bus agent delete` when
-  their part is done and required follow-ups have owners; do not keep idle agents
-  around for later steps. An agent waiting on a peer is not idle; never message
-  agents just to keep them busy. *Why:* work lives in files and commits, so a deleted
-  worker loses nothing; a fresh one is briefed from those files.
+- **Compartmentalize, within reason.** Break big work into manageable pieces.
+  Each agent owns exactly one independent task, plus limited context on how it
+  fits the bigger picture. A worker's subagents stay inside that one task and
+  that worker's ownership. *Why:* one giant ask in one terminal is daunting
+  and goes worse.
+- **Size the team to the current step.** Each agent owns exactly one
+  independent task. A new task gets a new agent with `bus agent add`. Delete
+  it with `bus agent delete` when its part is done and required follow-ups
+  have owners. Do not hand an existing agent a new, unrelated task, and do not
+  keep idle agents around for later steps. `bus agent clear` is not a reuse
+  path for new work. An agent waiting on a peer is not idle; never message
+  agents just to keep them busy. Devices, build slots, worktrees and disk
+  decide how many agents can run. *Why:* work lives in files and commits, so a
+  deleted worker loses nothing; a fresh one is briefed from those files.
 - **Keep follow-ups in the running workflow file, not in your context.**
   Unless the graph has a pause or developer check before them, execute them in
   order; never defer them to later. If the room has no running workflow, create
@@ -336,12 +347,14 @@ the wrapper remains held.
   asking each time, only in the room you orchestrate, and record each add or
   delete in the workflow log. *Why:* the right team changes as the work does,
   and the log keeps every change visible.
-- **Give a worker a fresh context before an unrelated task.** When a worker
-  has finished one task and the next one is unrelated, run
-  `bus agent clear AGENT` first, then send the new task. It works for every
-  provider (Bus types `/clear` or `/new-chat` and keeps the agent bound). Never
-  send `/clear` with `bus send`. *Why:* leftover context from the old task costs
-  tokens and misleads the agent.
+- **Do not reuse an agent for a new task.** A new independent task is
+  `bus agent add`. When the finished agent's part is done and its follow-ups
+  have owners, delete it with `bus agent delete`. `bus agent clear` resets a
+  provider context in the same terminal (Bus types `/clear` or `/new-chat`
+  and keeps the agent bound). That is not a reuse path for new work. Never
+  send `/clear` with `bus send`. The same agent keeps review fixes and
+  follow-ups that still belong to its one task. *Why:* leftover context from
+  another task costs tokens and misleads the agent.
 - **Replace a worker on its compaction-limit notice.** Automatically follow
   [agent-handover](https://github.com/asura1234/bus/blob/master/workflows/agent-handover.md)
   when Bus sends `bus → orchestrator: AGENT reached N compactions` at **Settings →
@@ -349,10 +362,10 @@ the wrapper remains held.
   the same provider and role requirements, and how to brief it from the note
   and delete the old agent. *Why:* each compaction loses detail, and quality
   drops after several.
-- **Never clear or replace yourself.** The two rules above apply to workers
-  only: the orchestrator never resets its own context and is never replaced
-  for compactions. *Why:* you carry the context, carry-over and situational
-  awareness for the whole effort.
+- **Never clear or replace yourself.** The worker rules above do not apply
+  to you: the orchestrator never resets its own context, is never replaced
+  for compactions, and is not deleted when a worker task ends. *Why:* you
+  carry the context, carry-over and situational awareness for the whole effort.
 
 <a id="unavailable-agents"></a>
 

@@ -292,6 +292,46 @@ fn compaction_notice_instructions_replace_the_worker_from_a_temp_handover_note()
 }
 
 #[test]
+fn one_independent_task_per_agent_and_clear_is_not_a_reuse_path() {
+    let prompt = flat(DEFAULT_PROMPT);
+    let rules = flat(include_str!("../../../orchestration/rules.md"));
+    let guide = flat(include_str!("../../../orchestration/guide.md"));
+    let writes = flat(include_str!("../../../orchestration/parallel-writes.md"));
+    let cli = flat(include_str!("../../../orchestration/how-to-bus-cli.md"));
+    for text in [&prompt, &rules, &guide] {
+        assert!(
+            text.contains("exactly one independent task"),
+            "missing one-task rule: {text}"
+        );
+        assert!(
+            text.contains("`bus agent clear` is not a reuse path for new work")
+                || text.contains("Do not use `bus agent clear` to hand any worker a new task"),
+            "missing clear-is-not-reuse: {text}"
+        );
+        assert!(
+            text.contains("devices, build slots, worktrees and disk"),
+            "missing resource qualifier: {text}"
+        );
+        assert!(
+            !text.contains("Give a worker a fresh context before an unrelated task"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Run `bus agent clear` before giving a worker an unrelated task"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Clear a worker before an unrelated task"),
+            "{text}"
+        );
+    }
+    assert!(rules.contains("**Do not reuse an agent for a new task.**"));
+    assert!(writes.contains("Each agent owns one independent task."));
+    assert!(cli.contains("scheduling does not use it to assign a new task"));
+    assert!(prompt.contains("An idle agent is not a slot for a new task."));
+}
+
+#[test]
 fn fill_replaces_every_placeholder() {
     let data = Path::new("/data");
     let text = fill(DEFAULT_PROMPT, &values(Some(("pr-123", 7)), data));
