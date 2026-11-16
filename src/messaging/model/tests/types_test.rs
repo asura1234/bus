@@ -707,8 +707,8 @@ fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
     for text in [
         "builder. Blocked, needs help to continue.\nInspect: bus agent observe 'builder'",
         "No reply (abandoned: reply_not_captured)",
-        "2 agents in room 1 are idle (limit 0): reviewer. Give them parallel work \
-         or delete the ones you no longer need (bus agent delete NAME --confirm).",
+        "2 agents in room 1 are idle (limit 0): reviewer. Do not give them a new task. \
+         Delete the ones you no longer need (bus agent delete NAME --confirm). A new task gets a new agent (bus agent add).",
     ] {
         state
             .post_bus_notice(room, Some(orchestrator), text.into(), 13)

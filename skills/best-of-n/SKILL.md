@@ -19,7 +19,7 @@ this skill share the same priors and cannot produce the same disagreement.
 Use the installed Bus executable (or the absolute executable supplied by the active Bus session).
 Resolve it once as BUS_CLI. If unavailable, report the missing tool or consume caller-provided proposals;
 never build or start Bus from the target repository as an implicit prerequisite. Read the active session's
-communication/CLI guide before creating agents. Reuse existing agents, follow the
+communication/CLI guide before creating agents. A new dispute question is a new agent (`bus agent add`). An agent already opened for this same dispute keeps that one task. Do not hand the question to an agent that owns a different task. Follow the
 [workspace policy](../_bus/orchestration/parallel-writes.md#reviews-and-investigations),
 and preserve the selected BUS_DATA_DIR for control calls.
 

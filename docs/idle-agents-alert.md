@@ -11,8 +11,9 @@ status do not count toward the first reminder. The orchestrator itself never cou
 
 When a work room has **more than** the limit, Bus sends one Bus-authored notice
 only to that room's bound orchestrator. It names the room, count, limit and idle
-agents, and asks the orchestrator to give them parallel work or delete those no
-longer needed with `bus agent delete NAME --confirm`. Idle agents use RAM and
+agents, and tells the orchestrator not to give them a new task. Delete the
+ones no longer needed with `bus agent delete NAME --confirm`. A new task gets
+a new agent with `bus agent add`. Idle agents use RAM and
 require pane polling even when they have no work.
 
 The room stays quiet while the qualified count remains above the limit. Once

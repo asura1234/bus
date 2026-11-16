@@ -131,7 +131,7 @@ Before work starts, put the PR's **owner, verifier and reviewer** names and IDs
 in every worker brief, with the PR (or task key until it exists), worktree,
 branch, acceptance checklist and current head. List every required reviewer.
 Keep the same `PR → owner → verifier → reviewer` roster in the workflow.
-Assign **one verifier per 1–2 PRs**; distribute more PRs across additional
+One verifier's one task covers **1–2 PRs**; distribute more PRs across additional
 verifiers instead of making one verifier the room's hub.
 
 1. **Owner → peers:** send the PR, exact full head SHA, worktree and checks to

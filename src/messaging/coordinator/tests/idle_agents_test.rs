@@ -192,8 +192,8 @@ fn crossing_default_limit_fires_once_with_actionable_text_only_to_the_orchestrat
     assert_eq!(
         posted[0].text,
         format!(
-        "6 agents in room {} are idle (limit 5): w0, w1, w2, w3, w4, w5. Give them parallel work \
-         or delete the ones you no longer need (bus agent delete NAME --confirm).", r.room.0
+        "6 agents in room {} are idle (limit 5): w0, w1, w2, w3, w4, w5. Do not give them a new task. \
+         Delete the ones you no longer need (bus agent delete NAME --confirm). A new task gets a new agent (bus agent add).", r.room.0
     )
     );
     assert!(!posted[0].text.contains("[waiting-on-you]"));
