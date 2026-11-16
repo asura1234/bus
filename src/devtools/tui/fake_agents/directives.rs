@@ -124,6 +124,10 @@ mod tests {
             "fake reply: Inspect the parser"
         );
         assert_eq!(
+            super::reply("[Bus message 42 from codex1 (room 3)]\nInspect the parser"),
+            "fake reply: Inspect the parser"
+        );
+        assert_eq!(
             super::reply(
                 "[Bus message 42; answer with bus send --reply-to 42 --as 7 --text 'YOUR ANSWER']\nInspect the parser"
             ),

@@ -859,7 +859,7 @@ fn fresh_launch_instructions_keep_bus_protocol_without_creating_a_task() {
     ] {
         assert!(text.contains(phrase), "missing {phrase}: {text}");
     }
-    assert!(text.contains("[Bus message N from NAME]"));
+    assert!(text.contains("[Bus message N from NAME (room R)]"));
     assert!(text.contains(&format!(
         "bus send --reply-to N --as {} --text 'YOUR ANSWER'",
         agent.0

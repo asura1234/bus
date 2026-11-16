@@ -119,7 +119,7 @@ fn selector_label_numeric_names_include_ids_without_an_id_collision() {
         format!("999999 (agent {})", sender.0)
     );
     assert!(payload_from(&mut w, room, sender, peer)
-        .starts_with(&format!("999999 (agent {}):\n", sender.0)));
+        .starts_with(&format!("999999 (agent {}) (room {}):\n", sender.0, room.0)));
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -149,7 +149,10 @@ fn selector_label_unused_historical_name_includes_the_senders_id() {
     w.state.rename_agent(sender, "current-name").unwrap();
     assert_eq!(
         test_request_payload(&mut w.state, request).unwrap(),
-        format!("codex1 (agent {}):\nbefore rename", sender.0)
+        format!(
+            "codex1 (agent {}) (room {}):\nbefore rename",
+            sender.0, room.0
+        )
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -289,7 +292,7 @@ fn selector_label_legacy_ambiguous_name_keeps_the_real_sender_id() {
         crate::messaging::coordinator::tests::support::test_prompt_content(&payload_from(
             &mut w, room, sender, peer
         )),
-        format!("codex1 (agent {}):\nhello", sender.0)
+        format!("codex1 (agent {}) (room {}):\nhello", sender.0, room.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();

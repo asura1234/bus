@@ -313,6 +313,84 @@ mod tests {
             .iter()
             .any(|line| line.text.contains("renamed")));
     }
+
+    #[test]
+    fn room_chat_header_names_the_senders_room() {
+        use crate::messaging::model::{Author, Draft};
+        let mut state = BusState::default();
+        let room = state.create_room("work").unwrap();
+        let author = state
+            .create_agent(room, "builder", Provider::Codex, "/project".into(), None)
+            .unwrap();
+        let peer = state
+            .create_agent(
+                room,
+                "reviewer",
+                Provider::ClaudeCode,
+                "/project".into(),
+                None,
+            )
+            .unwrap();
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "hello".into(),
+                    files: Vec::new(),
+                    recipient_ids: [peer].into(),
+                },
+                Author::Agent(author),
+                1,
+            )
+            .unwrap();
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "from you".into(),
+                    files: Vec::new(),
+                    recipient_ids: [peer].into(),
+                },
+                Author::Developer,
+                2,
+            )
+            .unwrap();
+        let mut history = History::default();
+        let lines = history.lines(
+            &state,
+            state.room(room).unwrap(),
+            80,
+            1,
+            1000,
+            &mut Default::default(),
+        );
+        let agent_header = lines
+            .iter()
+            .find(|line| line.text.contains("builder"))
+            .expect("agent header");
+        assert!(
+            agent_header
+                .text
+                .contains(&format!("builder (room {})", room.0)),
+            "room chat header lacks the room id: {}",
+            agent_header.text
+        );
+        assert!(
+            agent_header.text.contains("→ reviewer"),
+            "{}",
+            agent_header.text
+        );
+        let you_header = lines
+            .iter()
+            .find(|line| line.text.starts_with("You →"))
+            .expect("developer header");
+        assert!(
+            !you_header.text.contains("(room"),
+            "the developer has no sender room: {}",
+            you_header.text
+        );
+    }
+
     #[test]
     fn day_cutoff_is_elapsed_time_not_midnight() {
         let at = 1_800_000_000_000;

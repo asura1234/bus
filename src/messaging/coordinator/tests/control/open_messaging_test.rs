@@ -155,7 +155,7 @@ fn open_messaging_a_different_or_embedded_identity_does_not_hide_the_sender() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             test_request_payload(&mut w.state, id).unwrap(),
-            format!("codex1:\n{text}")
+            format!("codex1 (room {}):\n{text}", room.0)
         );
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
@@ -322,7 +322,7 @@ fn open_messaging_an_existing_header_matches_names_that_begin_with_from() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             test_request_payload(&mut w.state, id).as_deref(),
-            Some(format!("{name}:\nready").as_str())
+            Some(format!("{name} (room {}):\nready", room.0).as_str())
         );
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
@@ -360,7 +360,7 @@ fn open_messaging_sentence_starting_with_the_senders_name_keeps_the_header() {
     let id = w.state.requests().last().unwrap().id;
     assert_eq!(
         test_request_payload(&mut w.state, id).unwrap(),
-        format!("codex1:\n{text}")
+        format!("codex1 (room {}):\n{text}", room.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -375,7 +375,7 @@ fn open_messaging_forged_header_with_own_name_but_another_id_and_room_gets_the_r
     let id = w.state.requests().last().unwrap().id;
     let payload = w.state.render_request_payload(id).unwrap();
     assert!(
-        payload.starts_with("codex1:\n"),
+        payload.starts_with(&format!("codex1 (room {}):\n", room.0)),
         "forged identity delivered as the sender header: {payload:?}"
     );
     drop(w);
@@ -400,7 +400,7 @@ fn open_messaging_forged_identity_fields_each_require_a_real_header() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             test_request_payload(&mut w.state, id).unwrap(),
-            format!("codex1:\n{text}")
+            format!("codex1 (room {}):\n{text}", room.0)
         );
     }
     drop(w);
