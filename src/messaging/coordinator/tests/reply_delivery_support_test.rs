@@ -48,6 +48,8 @@ struct Terminal {
     images: Vec<String>,
     submitted: Vec<String>,
     submitted_images: Vec<Vec<String>>,
+    /// Provider stop keys (`esc`/`ctrl+c`) the interrupt path pressed.
+    stops: u32,
     captured_screen: Option<String>,
     clock: crate::terminal::runtime::SubmissionClock,
 }
@@ -128,6 +130,7 @@ impl NativeServer {
                 images: Vec::new(),
                 submitted: Vec::new(),
                 submitted_images: Vec::new(),
+                stops: 0,
                 captured_screen: None,
                 clock,
             },
@@ -174,6 +177,9 @@ impl NativeServer {
                 } else if text == "\x0b" {
                     terminal.draft.clear();
                     terminal.images.clear();
+                } else if text == "\x1b" || text == "\x03" {
+                    // The provider's stop key: `bus send --mode interrupt`.
+                    terminal.stops += 1;
                 } else {
                     assert_eq!(text, "\x01", "unexpected terminal input");
                 }
@@ -646,6 +652,14 @@ impl Delivery {
             .unwrap()
             .set_detected_state(Some(kind), status);
     }
+    /// Drain terminal input so stop keys pressed by an interrupt are visible.
+    pub(crate) fn pump(&self) {
+        self.native.lock().unwrap().pump();
+    }
+    /// Provider stop keys the interrupt path pressed on this agent's terminal.
+    pub(crate) fn stop_keys(&self, agent: AgentId) -> u32 {
+        self.native.lock().unwrap().terminals[&agent].stops
+    }
     pub(crate) fn typed(&self, agent: AgentId) -> Vec<String> {
         self.native.lock().unwrap().terminals[&agent]
             .submitted
@@ -760,11 +774,16 @@ impl Delivery {
         self.tick();
     }
     pub(crate) fn spool_start(&mut self, agent: AgentId, turn: &str, text: &str) {
+        // Agent-authored payloads keep their `name (room N):` header line;
+        // match those by the message tail like a developer payload exactly.
         let text = self
             .typed(agent)
             .into_iter()
             .rev()
-            .find(|payload| super::tests::support::test_prompt_content(payload) == text)
+            .find(|payload| {
+                let content = super::tests::support::test_prompt_content(payload);
+                content == text || content.ends_with(&format!("\n{text}"))
+            })
             .unwrap_or_else(|| text.to_owned());
         let provider = self.state().agent(agent).unwrap().provider;
         let key = match provider {

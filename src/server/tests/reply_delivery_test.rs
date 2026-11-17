@@ -664,6 +664,7 @@ async fn queued_worker_notice_after_held_master_turn_reaches_work_room_and_maste
 async fn captured_stop_survives_a_no_stop_wake_and_restart_before_the_next_request() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], false);
     let agent = f.agents[0];
+    let sender = f.add_owned(f.work, Provider::Codex, "sender", false);
     let first = f.send(agent, f.work, "first", false, None);
     f.tick();
     f.start(agent, "one", "first");
@@ -680,9 +681,10 @@ async fn captured_stop_survives_a_no_stop_wake_and_restart_before_the_next_reque
     f.tick();
     f.elapse(31_000);
     f.assert_reply(first, "captured before wake");
-    let next = f.send(agent, f.work, "queued", true, None);
+    let next = f.send(agent, f.work, "queued", true, Some(sender));
     f.tick();
-    f.start(agent, "two", "queued");
+    let payload = f.typed(agent).last().unwrap().clone();
+    f.start(agent, "two", &payload);
     f.stop(agent, "two", "queued answer", json!([]), json!([]));
     f.assert_reply(next, "queued answer");
 }
@@ -714,16 +716,20 @@ async fn background_pending_cannot_discard_captured_reply_or_block_queue() {
         ] {
             let mut f = Delivery::new(&[Provider::ClaudeCode], master);
             let agent = f.agents[0];
+            // Only an agent may ask for queued delivery; the developer's
+            // messages always interrupt.
+            let sender = f.add_owned(f.master, Provider::Codex, "sender", false);
             let room = if master { f.master } else { f.work };
             let first = f.send(agent, room, "status", false, None);
             f.tick();
             f.start(agent, "one", "status");
             f.stop(agent, "one", "captured status", tasks, crons);
-            let next = f.send(agent, room, "queued", true, None);
+            let next = f.send(agent, room, "queued", true, Some(sender));
             f.tick();
             f.elapse(3_600_000);
             f.assert_reply(first, "captured status");
-            f.start(agent, "two", "queued");
+            let payload = f.typed(agent).last().unwrap().clone();
+            f.start(agent, "two", &payload);
             f.stop(agent, "two", "next answer", json!([]), json!([]));
             f.assert_reply(next, "next answer");
             f.reopen();
@@ -739,11 +745,13 @@ async fn coalesced_sends_share_one_answer_and_one_history_publication() {
     for provider in [Provider::ClaudeCode, Provider::Codex] {
         let mut f = Delivery::new(&[provider], false);
         let agent = f.agents[0];
+        // Developer messages interrupt; coalescing is agent-authored delivery.
+        let sender = f.add_owned(f.work, Provider::Codex, "sender", false);
         f.status(agent, AgentState::Blocked);
         f.tick();
         let ids: Vec<_> = ["first", "second", "third"]
             .iter()
-            .map(|text| f.send(agent, f.work, text, false, None))
+            .map(|text| f.send(agent, f.work, text, false, Some(sender)))
             .collect();
         f.tick();
         f.status(agent, AgentState::Idle);
@@ -769,8 +777,8 @@ async fn coalesced_sends_share_one_answer_and_one_history_publication() {
         }
         assert_eq!(f.state().room(f.work).unwrap().unread_count, unread);
         assert_eq!(
-            unread, 0,
-            "a captured final is not a publication, despite three requests"
+            unread, 3,
+            "one unread per enqueued agent message; a shared final publishes once"
         );
     }
 }
@@ -937,13 +945,14 @@ async fn codex_image_and_correlation_text_are_submitted_together_and_bind_the_re
 async fn codex_startup_dialog_keeps_requests_queued_until_composer_recovers() {
     let mut f = Delivery::new(&[Provider::Codex], false);
     let agent = f.agents[0];
+    let sender = f.add_owned(f.work, Provider::ClaudeCode, "sender", false);
     f.draw(
         agent,
         Some(include_str!(
             "../../../tests/fixtures/codex-update/chooser-0.162.ansi"
         )),
     );
-    let request = f.send(agent, f.work, "do not lose this", true, None);
+    let request = f.send(agent, f.work, "do not lose this", true, Some(sender));
     f.tick();
     assert_eq!(
         f.state().request(request).unwrap().phase,
@@ -955,7 +964,8 @@ async fn codex_startup_dialog_keeps_requests_queued_until_composer_recovers() {
     );
     f.draw(agent, None);
     f.tick();
-    f.start(agent, "after-update", "do not lose this");
+    let payload = f.typed(agent).last().unwrap().clone();
+    f.start(agent, "after-update", &payload);
     f.stop(
         agent,
         "after-update",
@@ -1075,10 +1085,11 @@ async fn identical_autonomous_orchestrator_reports_are_distinct_across_turns() {
 async fn codex_rollout_provider_error_is_explicit_and_does_not_poison_next_reply() {
     let mut f = Delivery::new(&[Provider::Codex], false);
     let agent = f.agents[0];
+    let sender = f.add_owned(f.work, Provider::ClaudeCode, "sender", false);
     let first = f.send(agent, f.work, "capacity test", false, None);
     f.tick();
     f.start(agent, "capacity", "capacity test");
-    let next = f.send(agent, f.work, "retry task", true, None);
+    let next = f.send(agent, f.work, "retry task", true, Some(sender));
     f.append_transcript(agent, json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"capacity","last_agent_message":null,"error":{"message":"Model at capacity","codex_error_info":"server_overloaded"}}}));
     f.status(agent, AgentState::Idle);
     f.tick();
@@ -1100,7 +1111,8 @@ async fn codex_rollout_provider_error_is_explicit_and_does_not_poison_next_reply
     );
     f.assert_reply(first, "capacity recovered");
     f.tick();
-    f.start(agent, "retry", "retry task");
+    let payload = f.typed(agent).last().unwrap().clone();
+    f.start(agent, "retry", &payload);
     f.stop(agent, "retry", "retry succeeded", json!([]), json!([]));
     f.assert_reply(next, "retry succeeded");
 }
@@ -1255,6 +1267,9 @@ fn delivery_cycle(f: &mut Delivery, round: usize) {
             .enumerate()
             .map(|(n, &agent)| {
                 let shared = &shared;
+                // Queued delivery belongs to agents; a developer message
+                // interrupts instead, so another room agent authors it.
+                let author = agents[(n + 1) % agents.len()];
                 scope.spawn(move || {
                     let prompt = format!("soak-{round}-{n}");
                     let first = shared
@@ -1266,7 +1281,7 @@ fn delivery_cycle(f: &mut Delivery, round: usize) {
                         room,
                         &format!("queued-{round}-{n}"),
                         true,
-                        None,
+                        Some(author),
                     );
                     (n, agent, first, next)
                 })
@@ -1464,10 +1479,11 @@ async fn orchestrator_inbox_admits_master_peers_before_background_shells_finish(
 async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_answer() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
+    let sender = f.add_owned(f.master, Provider::Codex, "sender", false);
     let held = f.send(orch, f.master, "status", false, None);
     f.tick();
     f.start(orch, "status-turn", "status");
-    let ordinary = f.send(orch, f.master, "ordinary followup", true, None);
+    let ordinary = f.send(orch, f.master, "ordinary followup", true, Some(sender));
     // Queue the actual notice while the provider is still generating.
     let notice = f.blocked_worker_notice(orch);
     assert_eq!(
@@ -1507,7 +1523,13 @@ async fn orchestrator_inbox_steers_real_blocked_notices_and_preserves_the_held_a
     f.stop(orch, "notice-turn", "help given", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(notice, "help given");
-    assert_eq!(f.typed_content(orch).last().unwrap(), "ordinary followup");
+    assert!(
+        f.typed_content(orch)
+            .last()
+            .unwrap()
+            .ends_with("ordinary followup"),
+        "the queued agent message must run after the notice turn"
+    );
     f.start(orch, "ordinary-turn", "ordinary followup");
     f.stop(
         orch,
@@ -1638,13 +1660,17 @@ fn orchestrator_inbox_burst(round: usize) {
 async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_reply() {
     let mut f = Delivery::new(&[Provider::Codex], false);
     let orch = f.add_orchestrator();
+    let sender = f.add_owned(f.master, Provider::ClaudeCode, "sender", false);
     let held = f.send(orch, f.work, "notice", false, None);
     f.tick();
     f.start(orch, "held", "notice");
     f.stop(orch, "held", "", json!([]), json!([{"cron_id":"cron"}]));
-    let next = f.send(orch, f.master, "next", true, None);
+    let next = f.send(orch, f.master, "next", true, Some(sender));
     f.tick();
-    assert_eq!(f.typed_content(orch).last().unwrap(), "next");
+    assert!(
+        f.typed_content(orch).last().unwrap().ends_with("next"),
+        "the queued agent message must reach the orchestrator"
+    );
     assert_eq!(
         f.state().request(held).unwrap().phase,
         RequestPhase::Abandoned
@@ -1657,7 +1683,7 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
 }
 
 #[tokio::test]
-async fn orchestrator_inbox_unclaimed_steering_is_uncertain_without_blocking_the_next_room() {
+async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_the_inbox() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
     let lead = f.send(orch, f.master, "first", false, None);
@@ -1665,40 +1691,35 @@ async fn orchestrator_inbox_unclaimed_steering_is_uncertain_without_blocking_the
     f.start(orch, "shared", "first");
     let folded = f.send(orch, f.master, "folded followup", false, None);
     f.tick();
-    assert_eq!(f.state().request(folded).unwrap().group, Some(lead));
-    assert!(!f.state().request(folded).unwrap().trusted_start_bound);
+    // The developer's message ends the turn instead of joining it.
+    assert_eq!(f.state().request(folded).unwrap().group, None);
+    assert!(f.state().agent(orch).unwrap().interrupt_pending);
+    f.pump();
+    assert_eq!(f.stop_keys(orch), 1);
     f.stop(
         orch,
         "shared",
-        "combined answer",
+        "stopped mid-answer",
         json!([{"id":"wait","type":"shell","status":"running","command":"sleep 3600"}]),
         json!([]),
     );
-    let next = f.send(orch, f.work, "new room", true, None);
-    // No matching hook or transcript claimed this input. At the idle boundary
-    // it must surface uncertainty immediately, without borrowing the answer.
+    f.status(orch, AgentState::Idle);
     f.tick();
+    // The developer's interrupt ends the turn, and the follow-up was never
+    // part of it.
     assert_eq!(
-        f.typed_content(orch).last().unwrap(),
-        "new room",
-        "folded steering blocked the inbox"
+        f.state().request(lead).unwrap().failure_reason.as_deref(),
+        Some("interrupted")
     );
-    f.assert_reply(lead, "combined answer");
-    assert_eq!(
-        f.state().request(folded).unwrap().phase,
-        RequestPhase::Abandoned
-    );
-    assert_eq!(
-        f.state().request(folded).unwrap().failure_reason.as_deref(),
-        Some("submission_unconfirmed")
-    );
-    assert!(f.state().request(folded).unwrap().pending_final.is_none());
-    assert!(f.state().request(folded).unwrap().uncertain_outcome);
-    assert_eq!(f.state().request(next).unwrap().group, None);
-    f.start(orch, "new", "new room");
-    f.stop(orch, "new", "new answer", json!([]), json!([]));
+    assert_eq!(f.state().request(folded).unwrap().group, None);
+    assert!(f.state().request(folded).unwrap().failure_reason.is_none());
+    // The follow-up starts the next turn; the inbox is not blocked.
+    let payload = f.typed(orch).last().unwrap().clone();
+    assert!(payload.ends_with("folded followup"), "{payload}");
+    f.start(orch, "folded", &payload);
+    f.stop(orch, "folded", "folded answer", json!([]), json!([]));
     f.elapse(31_000);
-    f.assert_reply(next, "new answer");
+    f.assert_reply(folded, "folded answer");
 }
 
 #[tokio::test]
@@ -1829,31 +1850,27 @@ async fn orchestrator_independent_requests_remain_separate_when_idle_and_after_r
 }
 
 #[tokio::test]
-async fn orchestrator_independent_policy_preserves_developer_and_worker_steering() {
+async fn worker_agent_steering_is_unchanged() {
     for provider in [Provider::ClaudeCode, Provider::Codex] {
-        for orchestrator in [false, true] {
-            let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
-            let (sender, other) = (f.agents[0], f.agents[1]);
-            let target_room = if orchestrator { f.master } else { f.work };
-            let target = f.add_owned(target_room, provider, "target", orchestrator);
-            let lead = f.send(target, f.work, "original request", false, Some(sender));
-            f.tick();
-            let payload = f.typed(target).last().unwrap().clone();
-            f.start(target, "shared-turn", &payload);
-            let author = (!orchestrator).then_some(other);
-            let steer = f.send(target, f.work, "intentional steering", false, author);
-            f.tick();
-            assert_eq!(f.state().request(steer).unwrap().group, Some(lead));
-            let payload = f.typed(target).last().unwrap().clone();
-            f.start(target, "shared-turn", &payload);
-            f.stop(target, "shared-turn", "shared answer", json!([]), json!([]));
-            f.elapse(31_000);
-            f.assert_reply(lead, "shared answer");
-            // The worker-led group's one MASTER decision is checked with its lead.
-            let member = f.state().request(steer).unwrap();
-            assert_eq!(member.phase, RequestPhase::Completed);
-            assert_eq!(member.reply(), f.state().request(lead).unwrap().reply());
-        }
+        let mut f = Delivery::new(&[Provider::Codex, Provider::Codex], false);
+        let (sender, other) = (f.agents[0], f.agents[1]);
+        let target = f.add_owned(f.work, provider, "target", false);
+        let lead = f.send(target, f.work, "original request", false, Some(sender));
+        f.tick();
+        let payload = f.typed(target).last().unwrap().clone();
+        f.start(target, "shared-turn", &payload);
+        let steer = f.send(target, f.work, "intentional steering", false, Some(other));
+        f.tick();
+        assert_eq!(f.state().request(steer).unwrap().group, Some(lead));
+        let payload = f.typed(target).last().unwrap().clone();
+        f.start(target, "shared-turn", &payload);
+        f.stop(target, "shared-turn", "shared answer", json!([]), json!([]));
+        f.elapse(31_000);
+        f.assert_reply(lead, "shared answer");
+        // The worker-led group's one MASTER decision is checked with its lead.
+        let member = f.state().request(steer).unwrap();
+        assert_eq!(member.phase, RequestPhase::Completed);
+        assert_eq!(member.reply(), f.state().request(lead).unwrap().reply());
     }
 }
 

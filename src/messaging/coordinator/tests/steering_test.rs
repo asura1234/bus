@@ -19,6 +19,9 @@ mod dialog_reconciliation_tests;
 #[path = "busy_steer_test.rs"]
 mod busy_steer_tests;
 
+#[path = "delivery_mode_test.rs"]
+mod delivery_mode_tests;
+
 #[path = "steer_failure_test.rs"]
 mod steer_failure_tests;
 

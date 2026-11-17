@@ -55,11 +55,16 @@ A provider turn is the agent's execution context. Ordinary agent-authored reques
 orchestrators, including worker reports, wait for independent turns without steering or coalescing.
 Messages to busy Grok agents also wait for the turn to end; these waits are intended.
 Same-room messages to working workers of every provider except Grok can steer into the running
-turn's group; `--queue` gets an independent idle turn. Cross-room messages wait for a new turn.
-Developer steering is unchanged. If a message would be held and you need an immediate reaction,
-run `bus agent interrupt AGENT`, then send the new instruction; otherwise waiting is fine.
-Interrupt stops in-flight builds, Git operations and device runs; use it only to change course,
-never just to close a request. See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
+turn's group (the default); `--queue` waits for an independent idle turn and never joins.
+Cross-room messages wait for a new turn. `--mode interrupt|steer|queue` chooses
+delivery per message: interrupt ends the running turn now with the provider's
+stop key and runs the message next; steer joins it; queue waits for the next
+turn. Every developer path (send, the room composer and Feishu replies)
+interrupts and cannot be weakened with `--queue` or `--mode steer`. Orchestrator
+messages default to steer-or-queue and may pass `--mode`; other agent messages
+keep that default and cannot interrupt. Interrupt stops in-flight builds, Git
+operations and device runs; use it only to change course.
+See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
 Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests without capturing its final text as a reply.
 
 A reply lands in the message's room, equally for developer and agent senders. A turn no message started
@@ -188,7 +193,8 @@ For an Unavailable agent, follow the
 [binding replacement rule](orchestrator-rules.md#unavailable-agents).
 Use `request recover REQUEST_ID --confirm` only after checking
 identity/status and effects; it closes work, never undoes or replays it.
-Use `agent interrupt --help` to stop a turn. `agent clear` resets a provider context; scheduling does not use it to assign a new task (`bus agent add` does).
+Use `agent interrupt --help` to stop a turn without a message, or `bus send --mode interrupt` to
+stop it and deliver the new instruction as the next turn. `agent clear` resets a provider context; scheduling does not use it to assign a new task (`bus agent add` does).
 Sending provider reset slash commands as messages leaves requests unanswered.
 
 ## UI, settings and cleanup
@@ -200,8 +206,9 @@ a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in 
 tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable
 file rows. Clicking an image opens file detail.
 
-Enter steers; Option/Alt+Enter queues. Ctrl+J or supported Shift+Enter adds a
-newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
+Enter and Option/Alt+Enter send; every developer message interrupts the
+recipient's turn and runs next (agent messages still steer or queue). Ctrl+J or
+supported Shift+Enter adds a newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
 visibility and color-blind mode; `bus settings --help` explains shared defaults.
 Room sound rings for agent finals/posts, never developer sends. MASTER defaults
 on, work rooms off; startup/resume has a two-second grace and bursts ring once.

@@ -7,6 +7,7 @@ fn reply_diagnostics_hybrid_flags_never_send_and_show_the_reply_form() {
         vec!["--to", "orchestrator"],
         vec!["--room", "1", "--to", "orchestrator"],
         vec!["--queue"],
+        vec!["--mode", "queue"],
         vec!["--async"],
         vec!["--file", "/tmp/verdict.txt"],
     ] {
@@ -35,7 +36,7 @@ fn reply_diagnostics_hybrid_flags_never_send_and_show_the_reply_form() {
             error.contains("bus send --reply-to 28089 --as=26457 --text '...'"),
             "{error}"
         );
-        for flag in ["--room", "--to", "--queue", "--async", "--file"] {
+        for flag in ["--room", "--to", "--queue", "--mode", "--async", "--file"] {
             assert!(error.contains(flag), "{error}");
         }
     }
@@ -55,7 +56,7 @@ fn reply_diagnostics_help_explains_when_a_reply_has_been_delivered() {
     assert!(help.contains("stage:\"replied\""), "{help}");
     assert!(help.contains("before resending"), "{help}");
     assert!(
-        help.contains("Excludes --room, --to, --queue, --async and --file"),
+        help.contains("Excludes --room, --to, --queue, --mode, --async and --file"),
         "{help}"
     );
 }

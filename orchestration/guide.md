@@ -421,26 +421,29 @@ reports get their own turn. It also holds messages to busy Grok agents.
 These waits are intended. Same-room messages to working workers of every
 provider except Grok steer into the running turn; cross-room and `--queue` sends wait.
 
-When a message would be held and you need an immediate reaction, interrupt the
-agent first, then send the new instruction. Otherwise waiting for the turn to
-end is fine. Interrupt stops in-flight work, including builds, Git operations
-and device runs. Use it only to change course, never just to close
-a request. A message saying "pause" or "stop" does not stop a turn.
+When a message would be held and you need an immediate reaction, send it with
+`bus send --mode interrupt`: Bus presses the stop key and the message runs as
+the next turn. You can also interrupt the agent first and then send the new
+instruction. Otherwise waiting for the turn to end is fine. Interrupt stops
+in-flight work, including builds, Git operations and device runs. Use it only
+to change course, never just to close a request. A message saying "pause" or
+"stop" does not stop a turn. The developer's messages always interrupt.
 
 ```sh
+bus send --room ROOM --as YOU --to AGENT --mode interrupt --text "Change course: ..."
 bus agent interrupt AGENT --as YOU
-bus send --room ROOM --as YOU --to AGENT --text "Change course: ..."
 ```
 
-Bus presses the provider's stop key once, waits until the turn has ended and
-reports `stopped`, `already_idle` or `failed` with a reason. The new instruction
-arrives as a normal new message with its own reply. The interrupted message
-closes as `interrupted`: a running `send --async` or `wait` on it ends with
-`message_interrupted` instead of waiting on. Messages already queued, which
-never joined that turn, stay queued and are delivered next; do not resend
-them. `--room ROOM`
-stops every working or blocked agent in the room. Nothing is killed and the worker keeps
-its context.
+`bus send --mode interrupt` presses the provider's stop key once and returns
+`stage:"queued"` immediately; the message runs as the next turn and its reply
+proves completion. `agent interrupt` remains for stopping a turn without a
+message and waits until idle, reporting `stopped`, `already_idle` or `failed`
+with a reason. The interrupted message closes as `interrupted`: a running
+`send --async` or `wait` on it ends with `message_interrupted` instead of
+waiting on. Messages already queued, which never joined that turn, stay queued
+and are delivered next; do not resend them. `--room ROOM` stops every working
+or blocked agent in the room. Nothing is killed and the worker keeps its
+context.
 
 ## Unblock agents
 

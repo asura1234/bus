@@ -1,6 +1,7 @@
 use super::*;
 use crate::messaging::prefs::settings;
 use crate::messaging::storage::state_store::SaveStage;
+use std::sync::{Arc, Mutex};
 
 fn mapped_worker() -> (Worker, PathBuf, String) {
     let (mut worker, work, _, root) = fixture();
@@ -230,6 +231,72 @@ fn feishu_reply_fans_out_to_persisted_repeats_and_a_late_alias_once() {
         4,
         "chat conflicts cannot fan out to any alias"
     );
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Records native methods so the Feishu path's interrupt is observable.
+struct Recording(Arc<Mutex<Vec<String>>>);
+
+impl Transport for Recording {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(crate::protocol::api::api_method_name(&method).to_string());
+        Ok(ResponseResult::Ok {})
+    }
+}
+
+#[test]
+fn feishu_developer_reply_interrupts_the_orchestrators_running_turn() {
+    let (mut worker, root, _) = mapped_worker();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(Recording(calls.clone()));
+    let mut state = worker.state.clone();
+    let orch = state
+        .agents()
+        .find(|agent| agent.orchestrates.is_some())
+        .unwrap()
+        .id;
+    state
+        .set_agent_runtime_identity(
+            orch,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(orch).unwrap();
+    state
+        .observe_status(orch, RuntimeStatus::Working, 20)
+        .unwrap();
+    worker.save(state).unwrap();
+    let response = call(&mut worker, "feishu-interrupt", "feishu.ingest", params());
+    assert!(response.ok, "{response:?}");
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|method| method == "agent.send_keys"),
+        "the Feishu reply is a developer message and must interrupt: {calls:?}"
+    );
+    assert!(worker.state.agent(orch).unwrap().interrupt_pending);
+    let request = worker
+        .state
+        .requests()
+        .find(|request| {
+            request.agent_id == orch
+                && request.prompt.author == crate::messaging::model::Author::Developer
+                && request.queue_only
+                && request.phase == RequestPhase::Queued
+        })
+        .expect("Feishu reply request");
+    assert_eq!(request.group, None);
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();
 }

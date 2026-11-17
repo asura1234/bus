@@ -92,7 +92,12 @@ pub(super) fn cli() -> Command {
                 )
                 .arg(value_arg("file").long("file").action(ArgAction::Append))
                 .arg(value_arg("as").long("as"))
-                .arg(flag("queue"))
+                .arg(flag("queue").conflicts_with("mode"))
+                .arg(
+                    value_arg("mode")
+                        .long("mode")
+                        .value_parser(["interrupt", "steer", "queue"]),
+                )
                 .arg(flag("async")),
         )
         .subcommand(
@@ -597,6 +602,7 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
             .iter()
             .any(|key| args.contains_id(key))
             || args.get_flag("queue")
+            || args.contains_id("mode")
             || args.get_flag("async")
         {
             // The full reply form is actionable even when an agent combined
@@ -616,7 +622,7 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
                 .map(|author| format!(" --as={}", quote(author)))
                 .unwrap_or_default();
             return Err(format!(
-                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --async and --file. Use: bus send --reply-to {}{} --text '...'",
+                "Nothing was sent. --reply-to infers the room and recipient; omit --room, --to, --queue, --mode, --async and --file. Use: bus send --reply-to {}{} --text '...'",
                 quote(message), author
             ));
         }
@@ -644,6 +650,9 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
     }
     if args.get_flag("queue") {
         params["queue"] = json!(true);
+    }
+    if let Some(mode) = args.get_one::<String>("mode") {
+        params["mode"] = json!(mode);
     }
     let follow = args.get_flag("async");
     if follow

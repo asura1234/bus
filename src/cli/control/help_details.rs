@@ -61,6 +61,9 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
             "default: none; optional conversation context"
         }
         ("send", "as") => "default: infer agent caller; developer outside agent panes",
+        ("send", "mode") => {
+            "default: interrupt for the developer; today's steer-or-queue for agents"
+        }
         ("agent interrupt", "as") | ("request recover", "as") => "default: developer",
         (_, "as") => "default: no author context or waiter lease",
         (_, "args") => "default: empty string",
@@ -313,15 +316,17 @@ Running and settling requests close as interrupted; no later replay of that turn
 Messages still queued, which never joined the turn, stay queued and run next.
 A blocked-dialog notice is not replayed. History
 records Interrupted NAME by --as (otherwise developer) in the target's home room.
-An explicit reply sent before the stop stays on the request. --text sends a new normal message
-after the stop, including to successfully stopped agents if another stop fails.
+An explicit reply sent before the stop stays on the request. --text sends a new message
+after the stop, including to successfully stopped agents if another stop fails;
+that message is a normal next-turn delivery. For one command that stops the turn
+and delivers the new instruction, use `bus send --mode interrupt` instead.
 Result: single agent {agent_id,name,room_id,conversation_room_id,author_id,outcome,
   reason?,key?,message_id?}; room form: {room_id,conversation_room_id,author_id,
   agents:[...],message_id?}. outcome: stopped, already_idle, failed.
 Errors: interrupt_failed (exit 1) with per-agent reason (launching/unavailable,
 key refused, or not idle within 15s); inspect state before another action.
 Follow-up send errors use common errors and can retain result.applied. Waiters
-on interrupted work return message_interrupted. Use send to steer without stopping."#;
+on interrupted work return message_interrupted."#;
 
 const MESSAGE_SEEN: &str = r#"Acknowledge a reply to your own request only AFTER reading its output.
 Uses the recipient request ID, not the message ID. Seeing a shared final covers
@@ -386,7 +391,7 @@ See docs/developer-notifications.md for recipient and CLI configuration."#;
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
 Bus refuses new worker sends in MASTER (master_reserved); use your own room, or --reply-to for a MASTER request.
 Use --reply-to MESSAGE [--as AGENT] --text ANSWER to complete only your recipient
-request mid-turn. It infers room/sender; excludes room,to,queue,async,file.
+request mid-turn. It infers room/sender; excludes room,to,queue,mode,async,file.
 Run replies in the foreground; require ok:true and stage:"replied" before claiming
 delivery. If the reply fails, check the existing answer with bus message status
 MESSAGE before resending. Identical text is a no-op; an uncorrelated send never
@@ -438,13 +443,20 @@ follow orchestration/bus-communication-guide.md#waiting-on-you for asks and repl
 The YOU checkbox controls audio only; developer sends never notify.
 See docs/developer-notifications.md for setup, reply routing and deduplication.
 Use --file repeatedly; attachments are validated before queueing.
+--mode chooses delivery to each agent recipient: interrupt ends the recipient's
+running turn now with the provider's stop key and runs this message as the next
+turn; steer joins the running turn when eligible; queue waits for the next turn
+and never joins. The developer's messages always interrupt and cannot be
+weakened: --queue and --mode steer/queue are refused. An orchestrator may pass
+--mode; without it, delivery is today's steer-or-queue. Other agents keep that
+default and cannot interrupt. --queue equals --mode queue.
 Ordinary agent-authored requests to orchestrators get independent queued turns
-and replies, without steering or coalescing. Developer steering is unchanged.
-Other same-room working recipients receive steering into their current turn group;
-Claude/Codex take it into that turn, Cursor into its next generation answering
-the group. --queue gives its own idle turn/reply and never joins. Cross-room
-messages wait for a new turn. Blocked/launching recipients queue; accumulated
-ordinary messages form one ordered prompt/group with batch position/time headers.
+and replies, without steering or coalescing.
+Other same-room working recipients of a steer delivery receive it in their
+current turn group; Claude/Codex take it into that turn, Cursor into its next
+generation answering the group. Cross-room messages wait for a new turn.
+Blocked/launching recipients queue; accumulated ordinary messages form one
+ordered prompt/group with batch position/time headers.
 An explicit --reply-to settles that request while the turn stays open and does not
 release the queue. The turn's final text is not a reply and does not replace an
 earlier explicit reply. When the turn ends, every still-open request in it settles
@@ -532,7 +544,8 @@ Errors: timeout (exit 1): retain result and continue inspecting; it does not
 cancel work. agent_waiting_on_dialog: use agent observe and agent press, then wait again.
 message_abandoned: inspect reason; repair startup/provider and explicitly resend
 only closed work after checking effects. message_provider_error: a non-transient provider failure ended the turn,
-worth retrying after repair. message_interrupted: inspect history for who stopped it.
+worth retrying after repair. message_interrupted: the turn was stopped; inspect history and the message that
+ended it (a send-triggered interrupt posts no separate notice).
 bus_down: async only, four consecutive transport failures; restore session and
 resume wait. Bounded transport failures report immediately; accepted disconnects
 and live overload back off/retry (a live response resets the async failure budget).

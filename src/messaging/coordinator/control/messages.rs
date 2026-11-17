@@ -6,6 +6,36 @@ use super::{
 };
 use serde_json::{json, Value};
 
+/// What `message.send` does with a recipient that is running a turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SendDelivery {
+    /// End the running turn now with the provider's stop key; the message is
+    /// the next turn.
+    Interrupt,
+    /// Join the running turn when the queue head is eligible, else wait.
+    Steer,
+    /// Wait for the next turn and never join the running one.
+    Queue,
+}
+
+impl SendDelivery {
+    fn parse(value: &Value) -> Result<Self, String> {
+        match value.as_str() {
+            Some("interrupt") => Ok(Self::Interrupt),
+            Some("steer") => Ok(Self::Steer),
+            Some("queue") => Ok(Self::Queue),
+            Some(other) => Err(format!(
+                "--mode must be interrupt, steer or queue, not {other:?}"
+            )),
+            None => Err("--mode must be interrupt, steer or queue".into()),
+        }
+    }
+
+    fn queue_only(self) -> bool {
+        matches!(self, Self::Interrupt | Self::Queue)
+    }
+}
+
 impl Worker {
     pub(super) fn execute_messages(
         &mut self,
@@ -142,6 +172,7 @@ impl Worker {
         if to_developer {
             return self.control_send_to_developer(p, room, author, selectors.len(), files);
         }
+        let delivery = self.send_delivery(author, p)?;
         let recipients: AgentRecipients = if selectors == ["all"] {
             // An agent's broadcast goes to everyone else in the room.
             let recipients: AgentRecipients = self
@@ -177,19 +208,28 @@ impl Worker {
             }
         }
         let mut state = self.state.clone();
+        let now = crate::messaging::storage::io::now_ms();
         let ids = state
             .submit_message_with(
                 room,
                 Draft {
                     text: optional_text(p, "text")?.unwrap_or_default().into(),
                     files,
-                    recipient_ids: recipients,
+                    recipient_ids: recipients.clone(),
                 },
                 author.map_or(Author::Developer, Author::Agent),
-                crate::messaging::storage::io::now_ms(),
-                p.get("queue").and_then(Value::as_bool).unwrap_or(false),
+                now,
+                delivery.queue_only(),
             )
             .map_err(|e| e.to_string())?;
+        if delivery == SendDelivery::Interrupt {
+            // The message is queued as its own next turn, so closing the turn
+            // it interrupts cannot reach it. `interrupt_queued_message` is
+            // the same path `agent interrupt` uses: one stop key per turn,
+            // and the turn closes when the provider next reports idle.
+            let interrupter = author.map_or(Author::Developer, Author::Agent);
+            self.interrupt_queued_message(&mut state, room, &recipients, &interrupter, now);
+        }
         let message = state
             .request(ids[0])
             .ok_or("Submitted request missing")?
@@ -210,6 +250,47 @@ impl Worker {
             receipt["author_id"] = json!(author);
         }
         Ok(receipt)
+    }
+
+    /// Resolve who may choose a delivery mode.
+    ///
+    /// The developer's messages always interrupt and cannot be weakened. An
+    /// orchestrator may choose `--mode`; without it, today's steer-or-queue
+    /// delivery is unchanged. Other agents keep that default and cannot
+    /// interrupt a turn. `--queue` stays the legacy spelling of `--mode queue`.
+    fn send_delivery(&self, author: Option<AgentId>, p: &Value) -> Result<SendDelivery, String> {
+        let explicit = p.get("mode").map(SendDelivery::parse).transpose()?;
+        let queue = match p.get("queue") {
+            None => false,
+            Some(Value::Bool(queue)) => *queue,
+            Some(_) => return Err("queue must be a boolean".into()),
+        };
+        if queue && explicit.is_some() {
+            return Err("--queue equals --mode queue; pass only one of them".into());
+        }
+        let Some(author) = author else {
+            if queue || matches!(explicit, Some(SendDelivery::Steer | SendDelivery::Queue)) {
+                return Err(
+                    "The developer's messages always interrupt the running turn; --mode interrupt is the only choice (--queue and --mode steer/queue are refused)".into(),
+                );
+            }
+            return Ok(SendDelivery::Interrupt);
+        };
+        let orchestrator = self.state.agent(author).is_some_and(|agent| {
+            agent.orchestrates.is_some()
+                || self
+                    .state
+                    .master_room()
+                    .is_some_and(|master| agent.room_id == master.id)
+        });
+        match explicit {
+            Some(SendDelivery::Interrupt) if !orchestrator => Err(
+                "Only the developer and orchestrators choose --mode interrupt; agent messages keep their steer-or-queue delivery".into(),
+            ),
+            Some(mode) => Ok(mode),
+            None if queue => Ok(SendDelivery::Queue),
+            None => Ok(SendDelivery::Steer),
+        }
     }
 
     /// Only new agent sends are restricted. Correlated answers take their room
@@ -435,6 +516,9 @@ impl Worker {
             .ok_or("--to you requires --as AGENT: the developer cannot message themselves")?;
         if p.get("queue").and_then(Value::as_bool).unwrap_or(false) {
             return Err("--queue does not apply to --to you".into());
+        }
+        if p.get("mode").is_some() {
+            return Err("--mode does not apply to --to you".into());
         }
         let mut state = self.state.clone();
         let message = state
