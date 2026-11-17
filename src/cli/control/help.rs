@@ -75,11 +75,12 @@ fn argument_help(id: &str) -> &'static str {
         "as" => "Author agent name or ID for attribution and conversation context",
         "to" => "Comma-separated agent selectors, all, orchestrator, or you (human)",
         "file" => "Attach a file by path; repeat for multiple files",
-        "queue" => "Queue delivery until the selected agents are idle",
+        "queue" => "Queue delivery until the selected agents are idle (alias for --mode queue)",
+        "mode" => "Delivery: interrupt ends the recipient's running turn now and runs this message next; steer joins the running turn when eligible; queue waits for the next turn. Developer sends always interrupt; orchestrator messages default to steer-or-queue",
         "async" => "Wait without an overall deadline for agent replies or settlement",
         "message" => "Message ID returned by send",
         "reply-to" => {
-            "Answer this message and complete only your recipient request, without ending your turn. No requester turn is queued; use a fresh normal send if the requester must act. Excludes --room, --to, --queue, --async and --file. Run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status N before resending"
+            "Answer this message and complete only your recipient request, without ending your turn. No requester turn is queued; use a fresh normal send if the requester must act. Excludes --room, --to, --queue, --mode, --async and --file. Run in the foreground and check ok:true and stage:\"replied\" before claiming delivery; if it fails, check the existing answer with bus message status N before resending"
         }
         "request" => "Request ID returned by message status",
         "timeout" => "Wait deadline in seconds, from 1 through 600",

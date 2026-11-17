@@ -61,6 +61,9 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
             "default: none; optional conversation context"
         }
         ("send", "as") => "default: infer agent caller; developer outside agent panes",
+        ("send", "mode") => {
+            "default: interrupt for the developer; steer for orchestrator and agent messages"
+        }
         ("agent interrupt", "as") | ("request recover", "as") => "default: developer",
         (_, "as") => "default: no author context or waiter lease",
         (_, "args") => "default: empty string",
@@ -386,7 +389,7 @@ See docs/developer-notifications.md for recipient and CLI configuration."#;
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
 Bus refuses new worker sends in MASTER (master_reserved); use your own room, or --reply-to for a MASTER request.
 Use --reply-to MESSAGE [--as AGENT] --text ANSWER to complete only your recipient
-request mid-turn. It infers room/sender; excludes room,to,queue,async,file.
+request mid-turn. It infers room/sender; excludes room,to,queue,mode,async,file.
 Run replies in the foreground; require ok:true and stage:"replied" before claiming
 delivery. If the reply fails, check the existing answer with bus message status
 MESSAGE before resending. Identical text is a no-op; an uncorrelated send never
@@ -438,13 +441,20 @@ follow orchestration/bus-communication-guide.md#waiting-on-you for asks and repl
 The YOU checkbox controls audio only; developer sends never notify.
 See docs/developer-notifications.md for setup, reply routing and deduplication.
 Use --file repeatedly; attachments are validated before queueing.
+--mode chooses delivery to each agent recipient: interrupt ends the recipient's
+running turn now with the provider's stop key and runs this message as the next
+turn; steer joins the running turn when eligible; queue waits for the next turn
+and never joins. The developer's messages always interrupt and cannot be
+weakened: --queue and --mode steer/queue are refused. An orchestrator may pass
+--mode; without it, delivery is today's steer-or-queue. Other agents keep that
+default and cannot interrupt. --queue equals --mode queue.
 Ordinary agent-authored requests to orchestrators get independent queued turns
-and replies, without steering or coalescing. Developer steering is unchanged.
-Other same-room working recipients receive steering into their current turn group;
-Claude/Codex take it into that turn, Cursor into its next generation answering
-the group. --queue gives its own idle turn/reply and never joins. Cross-room
-messages wait for a new turn. Blocked/launching recipients queue; accumulated
-ordinary messages form one ordered prompt/group with batch position/time headers.
+and replies, without steering or coalescing.
+Other same-room working recipients of a steer delivery receive it in their
+current turn group; Claude/Codex take it into that turn, Cursor into its next
+generation answering the group. Cross-room messages wait for a new turn.
+Blocked/launching recipients queue; accumulated ordinary messages form one
+ordered prompt/group with batch position/time headers.
 An explicit --reply-to settles that request while the turn stays open and does not
 release the queue. The turn's final text is not a reply and does not replace an
 earlier explicit reply. When the turn ends, every still-open request in it settles

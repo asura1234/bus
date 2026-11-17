@@ -161,8 +161,10 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 - Agent messages to busy orchestrators get their own turn; messages to busy
   Grok agents also wait. Same-room messages to working workers of every provider
   except Grok steer. If a message would be held and you need an immediate reaction,
-  run `bus agent interrupt AGENT --as {{AGENT_NAME}}`, then send the new instruction.
-  Otherwise waiting for the turn to end is fine.
+  send it with `--mode interrupt`: Bus presses the stop key and the message runs
+  next. (`bus agent interrupt AGENT --as {{AGENT_NAME}}` then a send also works.)
+  Otherwise waiting for the turn to end is fine. The developer's messages always
+  interrupt.
   Interrupt stops in-flight builds, Git operations and device runs:
   use it only to change course, never just to close a request.
   [Guide]({{DOCS}}/orchestrator-guide.md#immediate-reaction-or-waiting).

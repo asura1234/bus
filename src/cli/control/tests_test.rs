@@ -55,6 +55,7 @@ fn reply_to_infers_the_conversation_with_explicit_or_inferred_recipient_identity
         vec!["--room", "other"],
         vec!["--to", "someone"],
         vec!["--queue"],
+        vec!["--mode", "queue"],
         vec!["--async"],
         vec!["--file", "/tmp/file"],
     ] {
@@ -1501,6 +1502,44 @@ fn send_queue_asks_for_an_own_turn_and_is_omitted_otherwise() {
     assert!(steering.params.get("queue").is_none());
     let help = command_help(&["send"]);
     assert!(help.contains("--as") && help.contains("--queue"));
+}
+
+#[test]
+fn send_mode_chooses_interrupt_steer_or_queue() {
+    for mode in ["interrupt", "steer", "queue"] {
+        let parsed = command(&[
+            "send", "--room", "r", "--to", "a", "--text", "t", "--mode", mode,
+        ])
+        .unwrap();
+        assert_eq!(parsed.params["mode"], mode);
+        assert!(parsed.params.get("queue").is_none());
+    }
+    let omitted = command(&["send", "--room", "r", "--to", "a", "--text", "t"]).unwrap();
+    assert!(
+        omitted.params.get("mode").is_none(),
+        "the coordinator resolves the default from the author"
+    );
+    assert!(
+        command(&["send", "--room", "r", "--to", "a", "--text", "t", "--mode", "later"]).is_err()
+    );
+    assert!(command(&[
+        "send",
+        "--room",
+        "r",
+        "--to",
+        "a",
+        "--text",
+        "t",
+        "--queue",
+        "--mode",
+        "interrupt"
+    ])
+    .is_err());
+    let help = command_help(&["send"]);
+    assert!(
+        help.contains("--mode") && help.contains("interrupt") && help.contains("steer"),
+        "{help}"
+    );
 }
 
 #[test]

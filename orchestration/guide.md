@@ -421,11 +421,13 @@ reports get their own turn. It also holds messages to busy Grok agents.
 These waits are intended. Same-room messages to working workers of every
 provider except Grok steer into the running turn; cross-room and `--queue` sends wait.
 
-When a message would be held and you need an immediate reaction, interrupt the
-agent first, then send the new instruction. Otherwise waiting for the turn to
-end is fine. Interrupt stops in-flight work, including builds, Git operations
-and device runs. Use it only to change course, never just to close
-a request. A message saying "pause" or "stop" does not stop a turn.
+When a message would be held and you need an immediate reaction, send it with
+`bus send --mode interrupt`: Bus presses the stop key and the message runs as
+the next turn. You can also interrupt the agent first and then send the new
+instruction. Otherwise waiting for the turn to end is fine. Interrupt stops
+in-flight work, including builds, Git operations and device runs. Use it only
+to change course, never just to close a request. A message saying "pause" or
+"stop" does not stop a turn. The developer's messages always interrupt.
 
 ```sh
 bus agent interrupt AGENT --as YOU

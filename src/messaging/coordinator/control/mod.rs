@@ -513,7 +513,7 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "message.send",
         "send",
         &[
-            "room", "to", "text", "files", "as", "queue", "reply_to", "caller",
+            "room", "to", "text", "files", "as", "queue", "mode", "reply_to", "caller",
         ],
         true,
         Tier::Agent,

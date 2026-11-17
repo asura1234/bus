@@ -203,9 +203,10 @@ the wrapper remains held.
 - **Wait when a message is held; interrupt to change course.** Agent messages
   to busy orchestrators get independent turns; messages to busy Grok wait until
   its turn ends. Same-room sends to working workers of every provider except Grok steer.
-  If a message would be held and you need an immediate reaction, run
-  `bus agent interrupt AGENT`, then send the new instruction. Otherwise waiting
-  for the turn to end is fine. Interrupt stops in-flight builds, Git operations
+  If a message would be held and you need an immediate reaction, send it with
+  `--mode interrupt`: Bus presses the stop key and the message runs next.
+  Otherwise waiting for the turn to end is fine. The developer's messages always
+  interrupt. Interrupt stops in-flight builds, Git operations
   and device runs; never use it just to close a request.
   [Guide](orchestrator-guide.md#immediate-reaction-or-waiting).
 

@@ -173,6 +173,20 @@ Agents are only Idle, Working, Blocked or Unavailable. Working means the request
 
 **Lead with the outcome.** PR link, exact head SHA, verdict or the decision needed, first. Details go in a file, linked.
 
+### Delivery mode
+
+`bus send --mode interrupt|steer|queue` decides what happens to a recipient's
+running turn. `interrupt` ends it now with the provider's stop key and runs the
+message as the next turn; `steer` joins the running turn and surfaces at its
+next model step; `queue` waits for the turn to end. Interrupt discards
+in-flight work, so use it to change course, never to hurry an answer.
+
+The developer's messages always interrupt and cannot be weakened: `--queue`
+and `--mode steer`/`queue` are refused for them. Orchestrator messages default
+to the steer-or-queue delivery and may pass `--mode` explicitly. Agent-authored
+messages keep that default and cannot interrupt. `--queue` equals `--mode
+queue`.
+
 ## Language and courtesy
 
 Write for a busy colleague who reads many messages a day.

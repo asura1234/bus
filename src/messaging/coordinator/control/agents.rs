@@ -433,7 +433,7 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rows = Vec::new();
         for id in targets {
-            rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now)?);
+            rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now, true)?);
         }
         self.save(state)?;
         Ok(
@@ -443,13 +443,15 @@ impl Worker {
 
     /// One agent's part of an interrupt, as its result row: the stop key for
     /// a working or blocked agent, the held turn closed for an idle one.
-    fn interrupt_agent(
+    /// `message.send` reuses it for an interrupt-mode delivery.
+    pub(in crate::messaging::coordinator) fn interrupt_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
         id: AgentId,
         room: RoomId,
         interrupter: &crate::messaging::model::Author,
         now: u64,
+        announce: bool,
     ) -> Result<Value, String> {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id": id, "name": agent.name});
@@ -459,9 +461,7 @@ impl Worker {
                 state
                     .close_interrupted(id, now)
                     .map_err(|e| e.to_string())?;
-                state
-                    .post_interrupt_notice(room, interrupter.clone(), id, now)
-                    .map_err(|e| e.to_string())?;
+                self.interrupt_notice(state, id, room, interrupter, now, announce)?;
                 row["outcome"] = json!("already_idle");
             }
             RuntimeStatus::Idle if !needs_stop(state, agent) => {
@@ -473,14 +473,12 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
                 // Their waiters point to the history for who stopped them.
                 if !closed.is_empty() {
-                    state
-                        .post_interrupt_notice(room, interrupter.clone(), id, now)
-                        .map_err(|e| e.to_string())?;
+                    self.interrupt_notice(state, id, room, interrupter, now, announce)?;
                 }
                 row["outcome"] = json!("already_idle");
             }
             RuntimeStatus::Idle | RuntimeStatus::Working | RuntimeStatus::Blocked => {
-                return self.interrupt_running_agent(state, id, room, interrupter, now);
+                return self.interrupt_running_agent(state, id, room, interrupter, now, announce);
             }
             other => {
                 row["outcome"] = json!("failed");
@@ -494,6 +492,28 @@ impl Worker {
         Ok(row)
     }
 
+    /// `agent interrupt` posts "Interrupted AGENT." so waiters learn who
+    /// stopped the turn. A send-triggered interrupt stays silent: the message
+    /// itself explains the turn ending and already publishes in that room.
+    fn interrupt_notice(
+        &self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+        room: RoomId,
+        interrupter: &crate::messaging::model::Author,
+        now: u64,
+        announce: bool,
+    ) -> Result<(), String> {
+        if announce {
+            state
+                .post_interrupt_notice(room, interrupter.clone(), id, now)
+                .map_err(|e| e.to_string())?;
+        } else {
+            state.cancel_pending_launch(id, crate::messaging::model::INTERRUPTED, now);
+        }
+        Ok(())
+    }
+
     fn interrupt_running_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
@@ -501,6 +521,7 @@ impl Worker {
         room: RoomId,
         interrupter: &crate::messaging::model::Author,
         now: u64,
+        announce: bool,
     ) -> Result<Value, String> {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id":id,"name":agent.name});
@@ -549,9 +570,7 @@ impl Worker {
                     false
                 };
                 if completed {
-                    state
-                        .post_interrupt_notice(room, interrupter.clone(), id, now)
-                        .map_err(|e| e.to_string())?;
+                    self.interrupt_notice(state, id, room, interrupter, now, announce)?;
                     row["outcome"] = json!("stopped");
                 } else {
                     row["outcome"] = json!("failed");
@@ -590,9 +609,7 @@ impl Worker {
                     "Interrupt admission completed"
                 );
                 state.begin_interrupt(id).map_err(|e| e.to_string())?;
-                state
-                    .post_interrupt_notice(room, interrupter.clone(), id, now)
-                    .map_err(|e| e.to_string())?;
+                self.interrupt_notice(state, id, room, interrupter, now, announce)?;
                 row["outcome"] = json!("interrupting");
                 row["key"] = json!(key);
             }

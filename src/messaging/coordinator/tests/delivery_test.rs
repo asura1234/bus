@@ -2300,6 +2300,13 @@ fn delivery_latency_excludes_idle_dialog_wait() {
 
     let (mut worker, agent, room, dir, calls) =
         fixture(Provider::Codex, vec![composer_available()]);
+    // A developer message would interrupt the blocked turn; this test needs a
+    // request that waits behind the dialog, which only an agent may ask for.
+    let mut state = worker.state.clone();
+    let sender = state
+        .create_agent(room, "sender", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    worker.save(state).unwrap();
     worker
         .state
         .observe_dialog(agent, true, io::now_ms())
@@ -2312,6 +2319,7 @@ fn delivery_latency_excludes_idle_dialog_wait() {
         .control_send(&json!({
             "room": room.0.to_string(),
             "to": [agent.0.to_string()],
+            "as": sender.0.to_string(),
             "text": "measure only Bus overhead"
         }))
         .unwrap();
@@ -2351,6 +2359,11 @@ fn delivery_latency_excludes_idle_dialog_wait() {
 fn stale_delivery_wait_does_not_mark_the_request_that_is_sent() {
     let (mut worker, agent, room, dir, calls) =
         fixture(Provider::Codex, vec![composer_available()]);
+    let mut state = worker.state.clone();
+    let sender = state
+        .create_agent(room, "sender", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    worker.save(state).unwrap();
     worker
         .state
         .observe_dialog(agent, true, io::now_ms())
@@ -2359,6 +2372,7 @@ fn stale_delivery_wait_does_not_mark_the_request_that_is_sent() {
         .control_send(&json!({
             "room": room.0.to_string(),
             "to": [agent.0.to_string()],
+            "as": sender.0.to_string(),
             "text": "this request never waited"
         }))
         .unwrap();
