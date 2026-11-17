@@ -443,8 +443,7 @@ impl Worker {
 
     /// One agent's part of an interrupt, as its result row: the stop key for
     /// a working or blocked agent, the held turn closed for an idle one.
-    /// `message.send` reuses it for an interrupt-mode delivery.
-    pub(in crate::messaging::coordinator) fn interrupt_agent(
+    fn interrupt_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
         id: AgentId,
