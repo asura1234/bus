@@ -198,6 +198,9 @@ class Run:
     def worker_cases(self):
         self.room = self.cli("room", "create", "grok-fake")["room_id"]
         self.worker = self.add(self.room, "grok-worker")
+        # Developer messages always interrupt; queued/steering cases need an
+        # agent author.
+        self.sender = self.add(self.room, "grok-sender")
 
         def round_trip():
             message = self.send(self.room, self.worker, "fake:raw-reply WORKER_OK")
@@ -205,7 +208,8 @@ class Run:
         self.case("worker-round-trip", round_trip)
 
         def queued():
-            ids = [self.send(self.room, self.worker, f"fake:raw-reply QUEUED_{n}", queue=True) for n in range(3)]
+            ids = [self.send(self.room, self.worker, f"fake:raw-reply QUEUED_{n}",
+                             author=self.sender, queue=True) for n in range(3)]
             rows = [self.settle(i) for i in ids]
             for n, status in enumerate(rows):
                 self.native_answer(status, f"QUEUED_{n}")
@@ -227,7 +231,8 @@ class Run:
             first = self.send(self.room, self.worker, "fake:work 8 fake:raw-reply STEERING_OK")
             poll(lambda: self.cli("message", "status", first),
                  lambda s: s["requests"][0]["stage"] == "delivered" and s["requests"][0]["start_bound"])
-            second = self.send(self.room, self.worker, "fake:raw-reply STEERING_CORRECTION")
+            second = self.send(self.room, self.worker, "fake:raw-reply STEERING_CORRECTION",
+                               author=self.sender)
             pending = self.cli("message", "status", second)["requests"][0]
             assert pending["stage"] == "queued" and pending["group"] is None, pending
             rows = [self.settle(first), self.settle(second)]

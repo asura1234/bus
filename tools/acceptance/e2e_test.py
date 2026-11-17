@@ -398,16 +398,25 @@ class Run:
             self.agents[provider] = self.bus.cli(
                 "agent", "add", "--room", self.room, "--name", provider, "--provider", provider,
                 "--pwd", WORKSPACE, "--consent-hooks")["agent_id"]
-        self.wait_ready(self.args.providers, self.report["setup"])
+        # Developer messages now always interrupt, so queued/steering cases
+        # need a non-developer author. One room agent serves every provider.
+        self.sender = "sender"
+        self.agents[self.sender] = self.bus.cli(
+            "agent", "add", "--room", self.room, "--name", "e2e-sender",
+            "--provider", self.args.providers[0], "--pwd", WORKSPACE,
+            "--consent-hooks")["agent_id"]
+        self.wait_ready(self.args.providers + [self.sender], self.report["setup"])
 
     # Messages --------------------------------------------------------------
 
     def token(self, provider, case, n=1):
         return f"E2E_{provider.upper()}_{case.upper()}_{n}_{os.urandom(3).hex().upper()}"
 
-    def send(self, providers, text, row, queue=False, room=None, files=()):
+    def send(self, providers, text, row, queue=False, room=None, files=(), author=None):
         to = ",".join(str(self.agents[p]) for p in providers)
-        extra = ["--queue"] if queue else []
+        extra = ["--as", str(self.agents[author])] if author else []
+        if queue:
+            extra += ["--queue"]
         for path in files:
             extra += ["--file", path]
         return self.bus.cli("send", "--room", room or self.room, "--to", to, "--text", text, *extra, row=row)
@@ -470,8 +479,9 @@ class Run:
         tokens, ids = [], []
         for n in range(1, 4):
             tokens.append(self.token(provider, "queued", n))
-            # --queue gives each message its own turn instead of steering the first.
-            ids.append(self.send([provider], round_trip_prompt(tokens[-1]), row, queue=True)["message_id"])
+            # An agent-authored --queue gives each message its own turn.
+            ids.append(self.send([provider], round_trip_prompt(tokens[-1]), row, queue=True,
+                                 author=self.sender)["message_id"])
         statuses = self.settle(ids, row)
         received = []
         for message_id, token in zip(ids, tokens):
@@ -500,7 +510,9 @@ class Run:
         time.sleep(3)
         queued_followup = provider in {"grok", orchestrator_key("grok")}
         correction = round_trip_prompt(new) if queued_followup else steering_correction(old, new)
-        second = self.send([provider], correction, row, room=room)["message_id"]
+        # Steering belongs to agent messages; a developer message is an
+        # interrupt, covered by case_interrupt.
+        second = self.send([provider], correction, row, room=room, author=self.sender)["message_id"]
         statuses = self.settle([first, second], row)
         first_request = statuses[first]["requests"][0]
         joined = statuses[second]["requests"][0]
@@ -512,6 +524,35 @@ class Run:
             assert joined.get("group") == first_request["request_id"], f"correction did not join the turn: {joined}"
         self.verify(statuses[first], {self.agents[provider]: old if queued_followup else new}, row)
         self.verify(statuses[second], {self.agents[provider]: new}, row)
+
+    def case_interrupt(self, provider, row, room=None, case="interrupt"):
+        """A developer message mid-turn ends it; the follow-up runs next."""
+        self.wait_ready([provider], row.setdefault("ready", {}))
+        old, new = self.token(provider, case, 1), self.token(provider, case, 2)
+        first = self.send([provider], steering_task(old, room == "master"), row, room=room)["message_id"]
+        deadline = time.monotonic() + 120
+        while True:  # Wait until the turn runs, bound by its submit hook.
+            status = row["last_status"] = self.bus.cli("message", "status", first)
+            agent = next(a for a in self.bus.cli("diagnostics")["agents"]
+                         if a["agent_id"] == self.agents[provider])
+            if status["requests"][0]["stage"] == "delivered" and agent["status"] == "working":
+                break
+            if status["complete"]:
+                raise AssertionError("the task finished before it could be interrupted")
+            for agent_id in status.get("waiting_on_dialog") or []:
+                self.answer_dialogs(provider, "allow", row)
+            assert time.monotonic() < deadline, f"task never started working: {agent}"
+            time.sleep(0.5)
+        time.sleep(3)
+        second = self.send([provider], round_trip_prompt(new), row, room=room)["message_id"]
+        statuses = self.settle([first, second], row)
+        first_request = statuses[first]["requests"][0]
+        assert first_request["stage"] == "abandoned", first_request
+        assert first_request["reason"] == "interrupted", first_request
+        joined = statuses[second]["requests"][0]
+        assert joined.get("group") is None, joined
+        self.verify(statuses[second], {self.agents[provider]: new}, row)
+        row["interrupt"] = {"first": first_request, "second": joined}
 
     def case_background(self, provider, row, room=None, case="background"):
         status = self.round_trip(provider, row, case,
@@ -564,7 +605,7 @@ class Run:
         plan = [("plain", lambda: self.round_trip(key, row, case, n=len(steps) + 1, room="master")),
                 ("image", lambda: self.round_trip(key, row, case, text=attachment_prompt, n=len(steps) + 1,
                                                   room="master", files=[image])),
-                ("steering", lambda: self.case_steering(key, row, room="master", case=f"{case}_steer")),
+                ("interrupt", lambda: self.case_interrupt(key, row, room="master", case=f"{case}_interrupt")),
                 ("background", lambda: self.case_background(key, row, room="master", case=f"{case}_bg")),
                 ("after", lambda: self.round_trip(key, row, case, n=len(steps) + 1, room="master"))]
         for name, step in plan:
