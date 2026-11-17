@@ -945,8 +945,8 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
         );
     }
 
-    // A message sent while the fake works is typed into its running
-    // turn, whose one reply answers both.
+    // A developer message sent while the fake works interrupts that turn and
+    // runs as the next turn; it never joins the turn it ends.
     let lead = send("fake:work 6 long task");
     session.ok(&[
         "wait",
@@ -956,7 +956,7 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
         "20s",
     ]);
     // Coordinator Working can precede submission. Wait for the fake itself so
-    // the follower steers a running turn instead of joining its initial batch.
+    // the next message interrupts a running turn, not its initial batch.
     wait_for_scripted_screen(
         &session,
         "c1",
@@ -966,15 +966,25 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
             " Generating ("
         },
     );
-    let steer = send("steer in");
-    for id in [&lead, &steer] {
-        let settled = session.ok(&["wait", "--message", id, "--timeout", "40s"]);
-        assert_turn_ended(&settled);
-    }
+    let follow = send("stop and take the next task");
+    let (code, interrupted) = tui(
+        &session.0,
+        &["wait", "--message", &lead, "--timeout", "40s"],
+    );
+    assert_eq!(
+        code, 1,
+        "the interrupted turn must not settle as a reply: {interrupted}"
+    );
+    assert_eq!(
+        interrupted["error"]["code"], "message_interrupted",
+        "{interrupted}"
+    );
+    let settled = session.ok(&["wait", "--message", &follow, "--timeout", "40s"]);
+    assert_turn_ended(&settled);
     let screen = agent_screen(&session, "c1");
     assert!(
-        screen.contains("fake reply: fake:work 6 long task") && screen.contains("steer in"),
-        "the steer should join the running turn's answer: {screen}"
+        screen.contains("fake reply: stop and take the next task"),
+        "the message must answer in its own turn: {screen}"
     );
 }
 
@@ -1884,12 +1894,32 @@ fn scriptable_fake_waits_for_dialog_choice_before_replying() {
             .contains("Continue bootstrap"),
         "{bootstrap}"
     );
+    // Queue the target behind the bootstrap dialog from another agent: a
+    // developer message would interrupt the blocked turn instead of waiting.
+    let (code, sender) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "dialog-sender",
+            "--provider",
+            "fake",
+            "--pwd",
+            work.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{sender}");
     let (code, sent) = parse(scratch_bus(
         &session,
         &[
             "send",
             "--room",
             "bus",
+            "--as",
+            "dialog-sender",
             "--to",
             "dialog-worker",
             "--text",
