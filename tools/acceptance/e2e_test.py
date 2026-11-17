@@ -325,6 +325,20 @@ class Run:
         frame = (found["terminal_id"], found["content_revision"])
         if self.answered_frames.get(agent) == frame:
             return False
+        # Claude Code can show a one-time gateway notice above the composer
+        # ("We're changing auto mode ... Enter to continue"). It is not a Bus
+        # dialog and has no selectable row; Enter continues without changing work.
+        if ("auto mode to no longer charge" in found["text"]
+                and "Enter to continue" in found["text"]):
+            result = self.bus.cli("agent", "press", agent, "--key", "enter",
+                                  "--terminal-id", found["terminal_id"], row=row)
+            assert result.get("outcome") == "sent" and not result.get("selection_pending"), \
+                f"gateway notice was not dismissed; inspect before continuing: {result}"
+            with self.lock:
+                self.report["dialogs"].append({"provider": provider, "purpose": "notice",
+                                               "observation": found, "result": result})
+            self.answered_frames[agent] = frame
+            return True
         label = pick_option(found, purpose)
         result = self.bus.cli("agent", "press", agent, "--select", label, "--terminal-id",
                               found["terminal_id"], row=row)
