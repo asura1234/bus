@@ -361,6 +361,7 @@ class EndToEndDialogTests(unittest.TestCase):
     def test_grok_busy_followup_checks_queued_separate_turns_and_both_tokens(self):
         run = e2e.Run.__new__(e2e.Run)
         run.agents = {"grok": 3}
+        run.sender = "sender"
         run.wait_ready, run.verify = mock.Mock(), mock.Mock()
         run.token = mock.Mock(side_effect=["OLD", "NEW"])
         run.send = mock.Mock(side_effect=[{"message_id": 10}, {"message_id": 12}])
