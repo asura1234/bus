@@ -105,8 +105,22 @@ fn blocked_dialog_notice_bypasses_cross_room_head_during_active_or_background_tu
             "the notice must steer, not start a parallel turn"
         );
         // A priority write is never replayed once native submission succeeded.
+        // A developer message in the agent's home room is not cross-room work:
+        // it may join the same turn when that turn runs in a work room, after
+        // the notice. The notice itself still goes first and never repeats.
         f.deliver();
-        assert_eq!(f.typed(), typed);
+        let after = f.typed();
+        assert_eq!(&after[..2], &typed[..], "the notice is not replayed");
+        if master_turn {
+            assert_eq!(after.len(), typed.len(), "the work-room head still waits");
+            assert_eq!(f.worker.state.queued_requests(f.agent), &[head, follower]);
+        } else {
+            assert_eq!(after.len(), typed.len() + 1);
+            assert!(after[2].0.contains("ordinary cross-room message"));
+            assert!(after[2].1, "the MASTER head steers into the same turn");
+            assert_eq!(f.worker.state.queued_requests(f.agent), &[follower]);
+            f.started("turn-1", &after[2].0);
+        }
         f.started("turn-1", &typed[1].0);
         f.stopped("turn-1", "notice handled");
         f.consume();
@@ -117,7 +131,12 @@ fn blocked_dialog_notice_bypasses_cross_room_head_during_active_or_background_tu
         assert_eq!(f.request(notice).delivery_stage(), "ended");
         assert!(f.reply(lead).is_none());
         assert_eq!(f.request(lead).delivery_stage(), "ended");
-        assert_eq!(f.request(head).phase, RequestPhase::Queued);
+        if master_turn {
+            assert_eq!(f.request(head).phase, RequestPhase::Queued);
+        } else {
+            assert_eq!(f.request(head).delivery_stage(), "ended");
+            assert_eq!(f.request(follower).phase, RequestPhase::Queued);
+        }
     }
 }
 
@@ -163,12 +182,22 @@ fn blocked_dialog_falls_back_on_its_own_deadline_when_orchestrator_is_blocked() 
 
 #[test]
 fn ordinary_messages_cannot_gain_dialog_priority_by_copying_notice_text() {
-    let (mut f, codex, _, head, notice) = blocked_behind_other_room(false, false);
+    let (mut f, codex, _, _head, notice) = blocked_behind_other_room(false, false);
     f.worker.finish_closed_dialog(codex).unwrap();
     let spoof = f.send("feishu-pull. Blocked, needs help to continue.", false);
     f.deliver();
-    assert_eq!(f.typed().len(), 1);
-    assert_eq!(f.worker.state.queued_requests(f.agent)[0], head);
+    // The developer's home-room head steers as usual; the spoof behind it does
+    // not gain the dialog notice's priority.
+    let typed = f.typed();
+    assert_eq!(typed.len(), 2);
+    assert!(typed[1].0.contains("ordinary cross-room message"));
+    assert!(typed[1].1);
+    assert!(!typed
+        .iter()
+        .any(|(text, _)| text.contains("feishu-pull. Blocked")));
+    // Developer messages keep their own priority class ahead of the notice,
+    // which is ordinary work again once its dialog closed.
+    assert_eq!(f.worker.state.queued_requests(f.agent), &[spoof, notice]);
     assert_eq!(f.request(notice).phase, RequestPhase::Queued);
     assert_eq!(f.request(spoof).phase, RequestPhase::Queued);
 }

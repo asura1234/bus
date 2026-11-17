@@ -494,8 +494,10 @@ impl BusState {
     /// unless the agent has since started a turn of its own.
     /// A write that is still Submitting occupies the submission window, so the
     /// queue waits for a later tick instead of typing over it. Only the lead's
-    /// own room can steer ordinary work; blocked-dialog notices may interrupt
-    /// any room's turn, including when older cross-room work heads the queue.
+    /// own room can steer ordinary work, plus a developer message in the
+    /// agent's home room: one terminal runs that turn, and the developer is not
+    /// another room's work. Blocked-dialog notices may interrupt any room's
+    /// turn, including when older cross-room work heads the queue.
     pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
         let agent_state = self.agents.get(&agent)?;
         if !matches!(
@@ -546,7 +548,13 @@ impl BusState {
         {
             return None;
         }
-        (self.can_join_turn(queued) && queued.room_id == lead.room_id).then_some((first, lead.id))
+        // A developer talking to the agent in its home room reaches the one
+        // terminal running this turn. Ordinary cross-room messages still wait
+        // for a new turn so each room receives its own reply.
+        let home_room_developer =
+            queued.prompt.author == Author::Developer && queued.room_id == agent_state.room_id;
+        (self.can_join_turn(queued) && (queued.room_id == lead.room_id || home_room_developer))
+            .then_some((first, lead.id))
     }
 
     /// Moves `request` from the queue into `lead`'s group before Bus types it

@@ -845,6 +845,136 @@ fn orchestrator_independent_policy_covers_legacy_queued_records_without_the_flag
     }
 }
 
+/// The developer talks to an orchestrator in its home room. One terminal
+/// serves every room the agent works in, so that message must join whatever
+/// turn the agent is running instead of waiting for a work-room turn to end.
+#[test]
+fn developer_message_in_the_agents_home_room_steers_a_work_room_turn() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Kimi] {
+        let (mut state, work, sender, _) = state_with_room_and_agents();
+        let master = state.ensure_master_room();
+        let orch = state
+            .create_agent(master, "orch", provider, "/repo".into(), None)
+            .unwrap();
+        state.bind_orchestrator(orch, work).unwrap();
+        let identity = state.agent(sender).unwrap().runtime_identity.clone();
+        state.set_agent_runtime_identity(orch, identity).unwrap();
+        state.confirm_hook_setup(orch).unwrap();
+        // A worker report starts the orchestrator's own queued turn.
+        let lead = state
+            .submit_message_with(
+                work,
+                Draft {
+                    text: "worker report".into(),
+                    files: vec![],
+                    recipient_ids: [orch].into(),
+                },
+                Author::Agent(sender),
+                10,
+                false,
+            )
+            .unwrap()[0];
+        assert!(
+            state.request(lead).unwrap().queue_only,
+            "{provider:?}: a worker report owns an independent turn"
+        );
+        start_request(&mut state, lead, "launch-codex", 20);
+        state
+            .observe_status(orch, RuntimeStatus::Working, 22)
+            .unwrap();
+        // The developer asks in MASTER, the orchestrator's home room.
+        let ask = state
+            .submit_message_from(
+                master,
+                Draft {
+                    text: "what is the verdict?".into(),
+                    files: vec![],
+                    recipient_ids: [orch].into(),
+                },
+                Author::Developer,
+                30,
+            )
+            .unwrap()[0];
+        assert_eq!(state.request(ask).unwrap().room_id, master);
+        assert_eq!(
+            state.next_steering(orch),
+            Some((ask, lead)),
+            "{provider:?}: a home-room developer ask must join the running turn"
+        );
+    }
+}
+
+/// The same join after restart: nothing may depend on in-memory state, and an
+/// agent-authored message from another room must still wait for a new turn.
+#[test]
+fn developer_home_room_steer_survives_restart_and_agent_cross_room_input_does_not() {
+    let (mut state, work, sender, _) = state_with_room_and_agents();
+    let master = state.ensure_master_room();
+    let orch = state
+        .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+        .unwrap();
+    state.bind_orchestrator(orch, work).unwrap();
+    let identity = state.agent(sender).unwrap().runtime_identity.clone();
+    state.set_agent_runtime_identity(orch, identity).unwrap();
+    state.confirm_hook_setup(orch).unwrap();
+    let lead = state
+        .submit_message_with(
+            work,
+            Draft {
+                text: "worker report".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(sender),
+            10,
+            false,
+        )
+        .unwrap()[0];
+    start_request(&mut state, lead, "launch-codex", 20);
+    state
+        .observe_status(orch, RuntimeStatus::Working, 22)
+        .unwrap();
+    let ask = state
+        .submit_message_from(
+            master,
+            Draft {
+                text: "what is the verdict?".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Developer,
+            30,
+        )
+        .unwrap()[0];
+    let peer = state
+        .submit_message_from(
+            master,
+            Draft {
+                text: "peer question".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            Author::Agent(sender),
+            40,
+        )
+        .unwrap()[0];
+    let mut restored: BusState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    // The developer's ask is the queue head; the peer's message waits behind it.
+    assert_eq!(restored.queued_requests(orch), &[ask, peer]);
+    assert_eq!(restored.next_steering(orch), Some((ask, lead)));
+
+    restored.begin_steering(ask, lead).unwrap();
+    assert_eq!(restored.queued_requests(orch), &[peer]);
+    assert_eq!(
+        restored.next_steering(orch),
+        None,
+        "an agent-authored cross-room message keeps its own queued turn"
+    );
+    assert_eq!(restored.request(peer).unwrap().phase, RequestPhase::Queued);
+    assert!(!restored.request(peer).unwrap().steered);
+}
+
 #[test]
 fn delivery_timestamps_round_trip_and_legacy_requests_default_to_empty() {
     let (mut state, _, request) = idle_with_queued(1_000, "timed");

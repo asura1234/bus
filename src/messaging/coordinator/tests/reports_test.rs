@@ -40,9 +40,10 @@ fn feishu_exhausted_quota_uses_newest_observation_across_codex_agents() {
 }
 
 /// Accepts every native call, as a server that types prompts does.
-struct Accepting;
+struct Accepting(std::sync::Arc<std::sync::Mutex<Vec<Method>>>);
 impl Transport for Accepting {
-    fn request(&mut self, _method: Method) -> Result<ResponseResult, TransportError> {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        self.0.lock().unwrap().push(method);
         Ok(ResponseResult::Ok {})
     }
 }
@@ -54,6 +55,7 @@ struct Fixture {
     orchestrator: AgentId,
     builder: AgentId,
     dir: PathBuf,
+    calls: std::sync::Arc<std::sync::Mutex<Vec<Method>>>,
 }
 
 impl Drop for Fixture {
@@ -66,7 +68,8 @@ impl Drop for Fixture {
 /// Each agent has its own launch (`orch` and `builder`) and session.
 fn fixture(provider: Provider) -> Fixture {
     let dir = crate::utils::test_temp::unique_temp_path("bus-reports");
-    let mut worker = Worker::open(dir.clone(), Box::new(Accepting)).unwrap();
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut worker = Worker::open(dir.clone(), Box::new(Accepting(calls.clone()))).unwrap();
     let mut state = worker.state.clone();
     let master = state.master_room().unwrap().id;
     let room = state.create_room("work").unwrap();
@@ -109,6 +112,7 @@ fn fixture(provider: Provider) -> Fixture {
         orchestrator,
         builder,
         dir,
+        calls,
     }
 }
 
@@ -132,6 +136,23 @@ impl Fixture {
         ] {
             callbacks::append(&spool, launch, Provider::ClaudeCode, value, &[], false).unwrap();
         }
+        self.worker.consume_callbacks(agent, &spool).unwrap();
+    }
+
+    /// The provider's submit hook for a turn that is still running.
+    fn claude_start(&mut self, agent: AgentId, turn: &str, prompt: &str) {
+        let launch = self.launch(agent);
+        let session = format!("session-{launch}");
+        let spool = self.dir.join("callbacks").join(launch);
+        callbacks::append(
+            &spool,
+            launch,
+            Provider::ClaudeCode,
+            json!({"hook_event_name":"UserPromptSubmit","session_id":session,"prompt_id":turn,"prompt":prompt}),
+            &[],
+            false,
+        )
+        .unwrap();
         self.worker.consume_callbacks(agent, &spool).unwrap();
     }
 
@@ -498,9 +519,17 @@ fn state_saved_without_report_turns_loads_and_dedupes_as_before() {
     let elsewhere = bus.dir.with_extension("elsewhere");
     drop(std::mem::replace(
         &mut bus.worker,
-        Worker::open(elsewhere.clone(), Box::new(Accepting)).unwrap(),
+        Worker::open(
+            elsewhere.clone(),
+            Box::new(Accepting(std::sync::Arc::default())),
+        )
+        .unwrap(),
     ));
-    let reopened = Worker::open(bus.dir.clone(), Box::new(Accepting)).unwrap();
+    let reopened = Worker::open(
+        bus.dir.clone(),
+        Box::new(Accepting(std::sync::Arc::default())),
+    )
+    .unwrap();
     drop(std::mem::replace(&mut bus.worker, reopened));
     std::fs::remove_dir_all(elsewhere).unwrap();
     assert!(bus
@@ -568,9 +597,17 @@ fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
     let elsewhere = bus.dir.with_extension("restart-placeholder");
     drop(std::mem::replace(
         &mut bus.worker,
-        Worker::open(elsewhere.clone(), Box::new(Accepting)).unwrap(),
+        Worker::open(
+            elsewhere.clone(),
+            Box::new(Accepting(std::sync::Arc::default())),
+        )
+        .unwrap(),
     ));
-    let reopened = Worker::open(bus.dir.clone(), Box::new(Accepting)).unwrap();
+    let reopened = Worker::open(
+        bus.dir.clone(),
+        Box::new(Accepting(std::sync::Arc::default())),
+    )
+    .unwrap();
     drop(std::mem::replace(&mut bus.worker, reopened));
     std::fs::remove_dir_all(elsewhere).unwrap();
 
@@ -884,4 +921,86 @@ fn a_late_decision_for_a_developer_lead_with_worker_notification_reaches_master_
         );
         assert!(bus.room_reports().is_empty(), "{:?}", bus.room_reports());
     }
+}
+
+/// The developer is one person talking to one terminal. A MASTER ask must join
+/// the work-room turn that terminal is already running, not wait for it to end.
+#[test]
+fn a_developer_ask_in_master_steers_into_the_work_room_turn() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (master, room, orchestrator, builder) =
+        (bus.master, bus.room, bus.orchestrator, bus.builder);
+    let typed = bus.deliver(
+        room,
+        Author::Agent(builder),
+        orchestrator,
+        "Worker status: running.",
+    );
+    let lead = bus
+        .worker
+        .state
+        .agent(orchestrator)
+        .unwrap()
+        .current_request
+        .unwrap();
+    bus.claude_start(orchestrator, "work-turn", &typed);
+    let mut state = bus.worker.state.clone();
+    state
+        .observe_status(
+            orchestrator,
+            RuntimeStatus::Working,
+            crate::messaging::storage::io::now_ms(),
+        )
+        .unwrap();
+    bus.worker.save(state).unwrap();
+    assert!(bus.worker.state.request(lead).unwrap().trusted_start_bound);
+
+    let mut state = bus.worker.state.clone();
+    let ask = state
+        .submit_message_from(
+            master,
+            Draft {
+                text: "What is the verdict?".into(),
+                files: Vec::new(),
+                recipient_ids: [orchestrator].into(),
+            },
+            Author::Developer,
+            crate::messaging::storage::io::now_ms(),
+        )
+        .unwrap()[0];
+    bus.worker.save(state).unwrap();
+    bus.worker.submit_ready().unwrap();
+
+    let request = bus.worker.state.request(ask).unwrap();
+    assert_eq!(request.group, Some(lead), "the MASTER ask joined the turn");
+    assert!(request.steered);
+    assert!(
+        request.latency.picked_at_ms.is_some(),
+        "Bus typed the ask now, not at the work-room turn's end"
+    );
+    assert_eq!(
+        bus.worker
+            .state
+            .agent(orchestrator)
+            .unwrap()
+            .current_request,
+        Some(lead)
+    );
+    assert!(bus.worker.state.queued_requests(orchestrator).is_empty());
+    let prompts: Vec<_> = bus
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|method| match method {
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+                Some((params.text.clone(), params.steer))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts.len(), 2, "the worker report and the developer ask");
+    assert!(!prompts[0].1);
+    assert!(prompts[1].1, "the MASTER ask is typed as a steer write");
+    assert!(prompts[1].0.contains("What is the verdict?"));
 }

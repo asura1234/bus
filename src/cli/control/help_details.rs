@@ -443,8 +443,10 @@ and replies, without steering or coalescing. Developer steering is unchanged.
 Other same-room working recipients receive steering into their current turn group;
 Claude/Codex take it into that turn, Cursor into its next generation answering
 the group. --queue gives its own idle turn/reply and never joins. Cross-room
-messages wait for a new turn. Blocked/launching recipients queue; accumulated
-ordinary messages form one ordered prompt/group with batch position/time headers.
+messages wait for a new turn, except a developer message sent to the agent in
+its home room, which steers into the turn that agent is running.
+Blocked/launching recipients queue; accumulated ordinary messages form one
+ordered prompt/group with batch position/time headers.
 An explicit --reply-to settles that request while the turn stays open and does not
 release the queue. The turn's final text is not a reply and does not replace an
 earlier explicit reply. When the turn ends, every still-open request in it settles
