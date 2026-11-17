@@ -62,7 +62,7 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
         }
         ("send", "as") => "default: infer agent caller; developer outside agent panes",
         ("send", "mode") => {
-            "default: interrupt for the developer; steer for orchestrator and agent messages"
+            "default: interrupt for the developer; today's steer-or-queue for agents"
         }
         ("agent interrupt", "as") | ("request recover", "as") => "default: developer",
         (_, "as") => "default: no author context or waiter lease",
@@ -316,15 +316,17 @@ Running and settling requests close as interrupted; no later replay of that turn
 Messages still queued, which never joined the turn, stay queued and run next.
 A blocked-dialog notice is not replayed. History
 records Interrupted NAME by --as (otherwise developer) in the target's home room.
-An explicit reply sent before the stop stays on the request. --text sends a new normal message
-after the stop, including to successfully stopped agents if another stop fails.
+An explicit reply sent before the stop stays on the request. --text sends a new message
+after the stop, including to successfully stopped agents if another stop fails;
+that message is a normal next-turn delivery. For one command that stops the turn
+and delivers the new instruction, use `bus send --mode interrupt` instead.
 Result: single agent {agent_id,name,room_id,conversation_room_id,author_id,outcome,
   reason?,key?,message_id?}; room form: {room_id,conversation_room_id,author_id,
   agents:[...],message_id?}. outcome: stopped, already_idle, failed.
 Errors: interrupt_failed (exit 1) with per-agent reason (launching/unavailable,
 key refused, or not idle within 15s); inspect state before another action.
 Follow-up send errors use common errors and can retain result.applied. Waiters
-on interrupted work return message_interrupted. Use send to steer without stopping."#;
+on interrupted work return message_interrupted."#;
 
 const MESSAGE_SEEN: &str = r#"Acknowledge a reply to your own request only AFTER reading its output.
 Uses the recipient request ID, not the message ID. Seeing a shared final covers
@@ -542,7 +544,8 @@ Errors: timeout (exit 1): retain result and continue inspecting; it does not
 cancel work. agent_waiting_on_dialog: use agent observe and agent press, then wait again.
 message_abandoned: inspect reason; repair startup/provider and explicitly resend
 only closed work after checking effects. message_provider_error: a non-transient provider failure ended the turn,
-worth retrying after repair. message_interrupted: inspect history for who stopped it.
+worth retrying after repair. message_interrupted: the turn was stopped; inspect history and the message that
+ended it (a send-triggered interrupt posts no separate notice).
 bus_down: async only, four consecutive transport failures; restore session and
 resume wait. Bounded transport failures report immediately; accepted disconnects
 and live overload back off/retry (a live response resets the async failure budget).

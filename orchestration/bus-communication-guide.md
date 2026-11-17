@@ -181,10 +181,12 @@ message as the next turn; `steer` joins the running turn and surfaces at its
 next model step; `queue` waits for the turn to end. Interrupt discards
 in-flight work, so use it to change course, never to hurry an answer.
 
-The developer's messages always interrupt and cannot be weakened: `--queue`
-and `--mode steer`/`queue` are refused for them. Orchestrator messages default
-to the steer-or-queue delivery and may pass `--mode` explicitly. Agent-authored
-messages keep that default and cannot interrupt. `--queue` equals `--mode
+Every developer path — `bus send`, the room composer, and Feishu replies —
+always interrupts and cannot be weakened: `--queue` and `--mode steer`/`queue`
+are refused for the developer. Orchestrator messages default to steer when
+eligible, else queue, and may pass `--mode` explicitly; a request to an
+orchestrator recipient always waits for its own turn. Other agent messages keep
+that steer-or-queue default and cannot interrupt. `--queue` equals `--mode
 queue`.
 
 ## Language and courtesy

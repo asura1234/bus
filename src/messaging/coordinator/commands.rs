@@ -1,7 +1,7 @@
 //! Single-writer command dispatch.
 use super::{
-    mpsc, schema, AgentId, BusCommand as C, BusEvent, BusState, Method, Provider, ResponseResult,
-    RoomId, Worker,
+    mpsc, schema, AgentId, Author, BusCommand as C, BusEvent, BusState, Method, Provider,
+    ResponseResult, RoomId, Worker,
 };
 use crate::messaging::storage::state_store::JournalOp;
 
@@ -12,7 +12,6 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let mut state = self.state.clone();
-        let queued = matches!(command, C::SubmitQueued(..));
         let result = match command {
             C::CreateRoom(name) => return self.persist_new_room(state, &name, events),
             C::RenameRoom(id, name) => state.rename_room(id, &name),
@@ -75,7 +74,7 @@ impl Worker {
             }
             C::RemoveFile(room, path) => state.remove_file(room, &path),
             C::Submit(room, draft) | C::SubmitQueued(room, draft) => {
-                return self.persist_draft_submission(room, draft, queued);
+                return self.persist_draft_submission(room, draft);
             }
             C::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
             C::CompleteHookSetup(id) => {
@@ -128,7 +127,6 @@ impl Worker {
         &mut self,
         room: RoomId,
         mut draft: crate::messaging::model::Draft,
-        queued: bool,
     ) -> Result<(), String> {
         for recipient in &draft.recipient_ids {
             if let Some(error) = self.check_launch_directory(*recipient)? {
@@ -149,15 +147,26 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
         let mut state = self.state.clone();
+        // The room composer is always the developer. Developer messages always
+        // interrupt the recipient's running turn and run as the next turn, so
+        // the Enter/Option+Enter choice cannot weaken delivery. The journal
+        // records the queued form so a replay keeps that own-turn boundary.
         let requests = state
-            .submit_draft_exact(room, draft.clone(), now, queued)
+            .submit_draft_exact(room, draft.clone(), now, true)
             .map_err(|e| e.to_string())?;
+        if let Some(recipients) = requests
+            .first()
+            .and_then(|id| state.request(*id))
+            .map(|request| request.prompt.recipient_ids.clone())
+        {
+            self.interrupt_queued_message(&mut state, room, &recipients, &Author::Developer, now);
+        }
         self.journal(
             state,
             JournalOp::SubmitDraft {
                 room,
                 draft,
-                queued,
+                queued: true,
                 now_ms: now,
             },
         )?;

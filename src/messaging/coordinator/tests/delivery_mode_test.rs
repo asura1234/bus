@@ -444,3 +444,114 @@ fn an_interrupt_send_stays_in_the_next_turn_after_a_restart() {
     fixture.deliver();
     assert_typed(&fixture, "change course now", false);
 }
+
+#[test]
+fn room_composer_developer_send_interrupts_the_running_turn() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "run the old plan", "1");
+    let draft = Draft {
+        text: "change course now".into(),
+        files: Vec::new(),
+        recipient_ids: [fixture.agent].into(),
+    };
+    let (events, _receiver) = std::sync::mpsc::channel();
+    fixture
+        .worker
+        .command(
+            crate::messaging::coordinator::BusCommand::Submit(fixture.room, draft),
+            &events,
+        )
+        .unwrap();
+    assert_eq!(
+        stop_keys(&fixture),
+        [vec!["esc".to_owned()]],
+        "a developer message from the room composer must press the stop key"
+    );
+    assert!(
+        fixture
+            .worker
+            .state
+            .agent(fixture.agent)
+            .unwrap()
+            .interrupt_pending
+    );
+    let message = *fixture
+        .worker
+        .state
+        .queued_requests(fixture.agent)
+        .last()
+        .unwrap();
+    assert!(fixture.request(message).queue_only);
+    assert_eq!(fixture.request(message).group, None);
+    let typed = fixture.typed().len();
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed().len(),
+        typed,
+        "the composer message must not be typed into the dying turn"
+    );
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    fixture.deliver();
+    assert_typed(&fixture, "change course now", false);
+}
+
+#[test]
+fn the_room_composer_interrupts_the_running_turn_for_either_key() {
+    // Enter and Option/Alt+Enter both send the developer's message; neither
+    // key can weaken it back to steer or queue.
+    for queued in [false, true] {
+        for provider in providers() {
+            let mut fixture = fixture_for(provider);
+            let lead = running(&mut fixture, "run the old plan", "1");
+            let draft = Draft {
+                text: "change course now".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent].into(),
+            };
+            let (events, _receiver) = std::sync::mpsc::channel();
+            let command = if queued {
+                BusCommand::SubmitQueued(fixture.room, draft)
+            } else {
+                BusCommand::Submit(fixture.room, draft)
+            };
+            fixture.worker.command(command, &events).unwrap();
+            assert_eq!(
+                stop_keys(&fixture),
+                [vec!["esc".to_owned()]],
+                "{provider:?}"
+            );
+            assert!(
+                fixture
+                    .worker
+                    .state
+                    .agent(fixture.agent)
+                    .unwrap()
+                    .interrupt_pending,
+                "{provider:?}"
+            );
+            let message = *fixture
+                .worker
+                .state
+                .queued_requests(fixture.agent)
+                .last()
+                .unwrap();
+            assert!(fixture.request(message).queue_only, "{provider:?}");
+            assert_eq!(fixture.request(message).group, None, "{provider:?}");
+            let typed = fixture.typed().len();
+            fixture.deliver();
+            assert_eq!(fixture.typed().len(), typed, "{provider:?}");
+            fixture.status(RuntimeStatus::Idle);
+            assert_eq!(
+                fixture.request(lead).failure_reason.as_deref(),
+                Some("interrupted"),
+                "{provider:?}"
+            );
+            fixture.deliver();
+            assert_typed(&fixture, "change course now", false);
+        }
+    }
+}

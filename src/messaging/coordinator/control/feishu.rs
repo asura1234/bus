@@ -45,11 +45,37 @@ impl Worker {
             }
         }
         let mut state = self.state.clone();
-        let outcome = state.ingest_feishu_reply(
-            input,
-            &settings.feishu_recipient,
-            crate::messaging::storage::io::now_ms(),
-        )?;
+        let known: std::collections::BTreeSet<_> =
+            self.state.requests().map(|request| request.id).collect();
+        let now = crate::messaging::storage::io::now_ms();
+        let outcome = state.ingest_feishu_reply(input, &settings.feishu_recipient, now)?;
+        // A Feishu reply is the developer's message. Every request this ingest
+        // created interrupts its recipient's running turn and runs next, like
+        // every other developer path. Alias and parked resolutions created by
+        // this ingest are included.
+        let created: Vec<_> = state
+            .requests()
+            .filter(|request| {
+                !known.contains(&request.id)
+                    && request.prompt.author == crate::messaging::model::Author::Developer
+            })
+            .map(|request| request.id)
+            .collect();
+        for id in created {
+            let Some((room, recipients)) = state
+                .request(id)
+                .map(|request| (request.room_id, request.prompt.recipient_ids.clone()))
+            else {
+                continue;
+            };
+            self.interrupt_queued_message(
+                &mut state,
+                room,
+                &recipients,
+                &crate::messaging::model::Author::Developer,
+                now,
+            );
+        }
         self.save(state)?;
         serde_json::to_value(outcome).map_err(|error| error.to_string())
     }

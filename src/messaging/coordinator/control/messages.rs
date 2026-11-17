@@ -224,33 +224,11 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         if delivery == SendDelivery::Interrupt {
             // The message is queued as its own next turn, so closing the turn
-            // it interrupts cannot reach it. `interrupt_agent` is the same
-            // path `agent interrupt` uses: a working agent gets one stop key
+            // it interrupts cannot reach it. `interrupt_queued_message` is
+            // the same path `agent interrupt` uses: one stop key per turn,
             // and the turn closes when the provider next reports idle.
             let interrupter = author.map_or(Author::Developer, Author::Agent);
-            for recipient in &recipients {
-                // One press per turn: a second Esc opens Claude's rewind and
-                // a second Ctrl+C can quit Cursor or Grok.
-                if state
-                    .agent(*recipient)
-                    .is_some_and(|agent| agent.interrupt_pending)
-                {
-                    continue;
-                }
-                if let Err(error) =
-                    self.interrupt_agent(&mut state, *recipient, room, &interrupter, now, false)
-                {
-                    // The message is already accepted; a failed stop key must
-                    // not lose it or fail the receipt.
-                    tracing::warn!(
-                        event = "bus.send.interrupt_failed",
-                        agent_id = recipient.0,
-                        room_id = room.0,
-                        error,
-                        "Interrupt-mode delivery could not stop the running turn"
-                    );
-                }
-            }
+            self.interrupt_queued_message(&mut state, room, &recipients, &interrupter, now);
         }
         let message = state
             .request(ids[0])

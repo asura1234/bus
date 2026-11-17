@@ -1,8 +1,8 @@
 //! Agents development commands on the single coordinator.
 use super::{
-    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId, Author,
-    BusCommand, BusEvent, Draft, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
-    MASTER_AGENT_NEEDS_ROOM,
+    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId,
+    AgentRecipients, Author, BusCommand, BusEvent, Draft, Method, Provider, ResponseResult, RoomId,
+    RuntimeStatus, Worker, MASTER_AGENT_NEEDS_ROOM,
 };
 use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 use serde_json::{json, Value};
@@ -490,6 +490,41 @@ impl Worker {
             }
         }
         Ok(row)
+    }
+
+    /// End each recipient's running turn for a message that is already
+    /// queued as its own next turn. The developer's sends always use this;
+    /// an orchestrator's explicit interrupt does too. Best-effort: a failed
+    /// stop key never loses the accepted message or fails the receipt.
+    pub(in crate::messaging::coordinator) fn interrupt_queued_message(
+        &mut self,
+        state: &mut crate::messaging::model::BusState,
+        room: RoomId,
+        recipients: &AgentRecipients,
+        interrupter: &crate::messaging::model::Author,
+        now: u64,
+    ) {
+        for recipient in recipients.iter() {
+            // One press per turn: a second Esc opens Claude's rewind and a
+            // second Ctrl+C can quit Cursor or Grok.
+            if state
+                .agent(*recipient)
+                .is_some_and(|agent| agent.interrupt_pending)
+            {
+                continue;
+            }
+            if let Err(error) =
+                self.interrupt_agent(state, *recipient, room, interrupter, now, false)
+            {
+                tracing::warn!(
+                    event = "bus.send.interrupt_failed",
+                    agent_id = recipient.0,
+                    room_id = room.0,
+                    error,
+                    "Interrupt-mode delivery could not stop the running turn"
+                );
+            }
+        }
     }
 
     /// `agent interrupt` posts "Interrupted AGENT." so waiters learn who

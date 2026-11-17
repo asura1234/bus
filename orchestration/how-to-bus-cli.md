@@ -56,13 +56,14 @@ orchestrators, including worker reports, wait for independent turns without stee
 Messages to busy Grok agents also wait for the turn to end; these waits are intended.
 Same-room messages to working workers of every provider except Grok can steer into the running
 turn's group (the default); `--queue` waits for an independent idle turn and never joins.
-Cross-room messages wait for a new turn. `--mode interrupt|steer|queue` chooses delivery per
-message: interrupt ends the recipient's running turn now with the provider's stop key and runs
-the message next; steer joins the running turn; queue waits for the next turn. The developer's
-messages always interrupt and cannot be weakened with `--queue` or `--mode steer`. Orchestrator
-messages default to steer-or-queue and may pass `--mode`; other agent messages keep that default
-and cannot interrupt. Interrupt stops in-flight builds, Git operations and device runs; use it
-only to change course, never just to close a request.
+Cross-room messages wait for a new turn. `--mode interrupt|steer|queue` chooses
+delivery per message: interrupt ends the running turn now with the provider's
+stop key and runs the message next; steer joins it; queue waits for the next
+turn. Every developer path (send, the room composer and Feishu replies)
+interrupts and cannot be weakened with `--queue` or `--mode steer`. Orchestrator
+messages default to steer-or-queue and may pass `--mode`; other agent messages
+keep that default and cannot interrupt. Interrupt stops in-flight builds, Git
+operations and device runs; use it only to change course.
 See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
 Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests without capturing its final text as a reply.
 
@@ -205,8 +206,9 @@ a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in 
 tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable
 file rows. Clicking an image opens file detail.
 
-Enter steers; Option/Alt+Enter queues. Ctrl+J or supported Shift+Enter adds a
-newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
+Enter and Option/Alt+Enter send; every developer message interrupts the
+recipient's turn and runs next (agent messages still steer or queue). Ctrl+J or
+supported Shift+Enter adds a newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
 visibility and color-blind mode; `bus settings --help` explains shared defaults.
 Room sound rings for agent finals/posts, never developer sends. MASTER defaults
 on, work rooms off; startup/resume has a two-second grace and bursts ring once.
