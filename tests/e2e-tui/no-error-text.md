@@ -29,7 +29,7 @@ Preconditions/setup: Create a scratch room `busy-errors` and fake Codex worker
 the recipient picker. Setup may use the driver bus command; sends use the composer.
 
 1. Type `fake:work 20 busy-first` in the composer and press Enter. Wait until the worker is Working. Capture a full frame and state; no Bus error text is visible.
-2. While it is Working, type `busy-followup` and press Enter. Capture full frames and the message status. The followup is queued or joins the running turn; there is no refusal, recovery, toast, composer or footer error text. Require both requests to complete as `ended` with `reply:null` and no failure reason; verify their matching native output, then capture the final frame, screenshot and effects.
+2. While it is Working, type `busy-followup` and press Enter. Capture full frames and the message status. The developer's follow-up interrupts the running turn and runs next; there is no refusal, recovery, toast, composer or footer error text. Require the first request to end as `abandoned` with reason `interrupted` and the follow-up to complete as `ended` with `reply:null` and no failure reason; verify their matching native output, then capture the final frame, screenshot and effects.
 
 ### ERR-02 — Failed launch
 
