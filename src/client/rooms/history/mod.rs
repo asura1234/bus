@@ -333,13 +333,7 @@ mod tests {
             .unwrap();
         let other = state.create_room("other").unwrap();
         let outsider = state
-            .create_agent(
-                other,
-                "outsider",
-                Provider::Codex,
-                "/project".into(),
-                None,
-            )
+            .create_agent(other, "outsider", Provider::Codex, "/project".into(), None)
             .unwrap();
         let request = state
             .submit_message_from(
