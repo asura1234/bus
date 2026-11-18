@@ -375,6 +375,37 @@ fn agy_completion_handles_torn_multibyte_utf8_tails_wakeups_and_large_transcript
             prompts: vec!["B".into(), "C".into()],
         })
     );
+
+    // > 8 MiB transcript exercises both the rewind fallback (turn 0 before filler)
+    // and the 8 MiB tail fast-path (turn 2 after filler).
+    let large_path = temp.path().join("large.jsonl");
+    let filler = "x".repeat(9 * 1024 * 1024);
+    let large_body = format!(
+        concat!(
+            "{{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"<USER_REQUEST>\\nearly\\n</USER_REQUEST>\"}}\n",
+            "{{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"{filler}\"}}\n",
+            "{{\"step_index\":2,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"<USER_REQUEST>\\nlate\\n</USER_REQUEST>\"}}\n",
+            "{{\"step_index\":3,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"tail ok\"}}\n",
+        ),
+        filler = filler
+    );
+    std::fs::write(&large_path, large_body).unwrap();
+    assert_eq!(
+        read_turn_completion(&large_path, "0"),
+        Ok(TurnResolution::Final {
+            turn_id: "0".into(),
+            text: filler,
+            prompts: vec!["early".into()],
+        })
+    );
+    assert_eq!(
+        read_turn_completion(&large_path, "2"),
+        Ok(TurnResolution::Final {
+            turn_id: "2".into(),
+            text: "tail ok".into(),
+            prompts: vec!["late".into()],
+        })
+    );
 }
 
 #[test]
@@ -557,4 +588,60 @@ fn agy_hooks_ignore_child_subagents_and_system_wakeup_continuations() {
             prompt: "hi".into(),
         })
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn agy_project_hooks_exclude_generated_artifacts_below_and_outside_home() {
+    struct RestoreHome(Option<std::ffi::OsString>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _restore = RestoreHome(std::env::var_os("HOME"));
+
+    let temp = TestTemp::new("agy-home-exclude");
+    let fake_home = temp.path().join("home");
+    std::fs::create_dir_all(fake_home.join(".gemini/antigravity-cli")).unwrap();
+    std::env::set_var("HOME", &fake_home);
+
+    for rel in ["home/work/project", "outside/work/project"] {
+        let repo = temp.path().join(rel);
+        std::fs::create_dir_all(&repo).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&repo)
+            .status()
+            .unwrap();
+        assert!(init.success());
+
+        project_hooks::install(&repo, std::path::Path::new("/opt/bus/bin/bus")).unwrap();
+        std::fs::write(repo.join(".agents/user-settings.json"), "{}\n").unwrap();
+
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["status", "--short", "--untracked-files=all"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let status = String::from_utf8(out.stdout).unwrap();
+        assert!(
+            status.contains(".agents/user-settings.json"),
+            "user file should remain untracked in {rel}: {status}"
+        );
+        assert!(
+            !status.contains(".agents/hooks.json"),
+            "generated hooks.json was not excluded in {rel}: {status}"
+        );
+        assert!(
+            !status.contains(".agents/.bus-hooks.lock"),
+            "generated .bus-hooks.lock was not excluded in {rel}: {status}"
+        );
+    }
 }

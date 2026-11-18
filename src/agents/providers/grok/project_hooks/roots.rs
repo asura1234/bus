@@ -173,7 +173,7 @@ pub(super) fn verify_exclude(
     for source in sources {
         if let Some(directory) = existing_directory(&source)? {
             if target.within(&directory)? {
-                return Err("Git exclude overlaps global Grok configuration".into());
+                return Err("Git exclude overlaps global provider configuration".into());
             }
             // Resolve even without an opened leaf. A dangling global alias
             // must fail closed before creating the exclude it could target.

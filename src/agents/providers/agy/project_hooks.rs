@@ -158,7 +158,8 @@ fn ensure_git_exclude(project_root: &Path, created_hooks_file: bool) {
     } else {
         &["/.agents/.bus-hooks.lock"]
     };
-    if let Err(error) = ensure_shared_exclude(project_root, &home, entries) {
+    let agy_home = home.canonicalize().unwrap_or(home).join(".gemini");
+    if let Err(error) = ensure_shared_exclude(project_root, &agy_home, entries) {
         tracing::warn!(
             root = %project_root.display(),
             %error,
