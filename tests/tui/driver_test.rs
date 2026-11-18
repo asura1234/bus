@@ -949,6 +949,17 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
             screen.contains(&format!("fake reply: {text}")),
             "the fake {provider} should answer {text:?}: {screen}"
         );
+        // A developer send interrupts the turn the coordinator still observes,
+        // and an idle Ctrl+C quits Cursor. The request settles on the Stop hook
+        // while the status poll can still report Working, so wait for idle
+        // before the next prompt: it must start a fresh turn, not race this one.
+        session.ok(&[
+            "wait",
+            "--state",
+            "agents.*.status == idle",
+            "--timeout",
+            "20s",
+        ]);
     }
 
     // A developer message sent while the fake works interrupts that turn and
