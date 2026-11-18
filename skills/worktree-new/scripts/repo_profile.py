@@ -68,6 +68,9 @@ SKIP = {
     "temp",
     "Pods",
     ".gradle",
+    # plugins/ ships independent crates a consumer builds on its own; they are
+    # not part of the root product and must not join worktree provisioning.
+    "plugins",
 }
 
 
