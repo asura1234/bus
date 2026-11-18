@@ -13,10 +13,10 @@ fn history(f: &mut Fixture) -> Value {
     response.result
 }
 
-/// The turn's final text is not a reply, and the message queued behind it
-/// is delivered once that turn ends.
+/// The turn's captured final becomes the request's reply, and the message
+/// queued behind it is delivered once that turn ends.
 #[test]
-fn a_turn_final_settles_without_a_reply_and_delivers_the_queued_message() {
+fn a_turn_final_settles_without_an_explicit_reply_and_delivers_the_queued_message() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "do the work", "turn-1");
     let queued = fixture.send("next task", true);
@@ -34,7 +34,13 @@ fn a_turn_final_settles_without_a_reply_and_delivers_the_queued_message() {
         "phase={:?}",
         fixture.request(lead).phase
     );
-    assert!(fixture.reply(lead).is_none(), "{:?}", fixture.reply(lead));
+    assert!(
+        fixture
+            .reply(lead)
+            .is_some_and(|reply| !reply.trim().is_empty()),
+        "{:?}",
+        fixture.reply(lead)
+    );
     assert!(fixture
         .worker
         .state
@@ -209,11 +215,11 @@ fn a_coalesced_group_settles_when_the_turn_ends_and_the_queue_advances() {
     fixture.status(RuntimeStatus::Idle);
     assert!(fixture.request(first).settled());
     assert!(fixture.request(second).settled());
-    assert!(fixture.reply(first).is_none(), "{:?}", fixture.reply(first));
-    assert!(
-        fixture.reply(second).is_none(),
-        "{:?}",
-        fixture.reply(second)
+    assert_eq!(fixture.reply(first).as_deref(), Some("both done"));
+    assert_eq!(
+        fixture.reply(second).as_deref(),
+        Some("both done"),
+        "a coalesced member shares the turn's answer"
     );
     assert_ne!(
         fixture.request(first).failure_reason.as_deref(),

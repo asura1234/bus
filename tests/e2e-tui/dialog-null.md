@@ -34,6 +34,6 @@ agent reads and observe/press are the allowed corroborating CLI surfaces.
    using the observed terminal ID. Require `selected` and no pending selection.
    Wait for the synchronized redraw to finish and observe the ordinary composer.
    The worker becomes idle; its native pane contains `fake reply: fake:dialog-null`.
-   Its request is complete with `stage:ended`, `reply:null` and no failure reason;
-   history retains the original prompt without a stored reply.
+   Its request is complete with `stage:replied`, `fake reply: fake:dialog-null`
+   and no failure reason; history retains the original prompt without a reply row.
    Stop the session. The selection receipt alone does not prove this result.

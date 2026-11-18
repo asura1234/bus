@@ -65,7 +65,7 @@ messages default to steer-or-queue and may pass `--mode`; other agent messages
 keep that default and cannot interrupt. Interrupt stops in-flight builds, Git
 operations and device runs; use it only to change course.
 See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
-Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests without capturing its final text as a reply.
+Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests and stores its captured final as each request's reply (never as a new message, and never over an explicit `--reply-to` answer).
 
 A reply lands in the message's room, equally for developer and agent senders. A turn no message started
 posts in the orchestrator's work room. A captured Stop answer ends matching requests immediately,
@@ -126,7 +126,7 @@ If the requester must act, deliver the result with a fresh normal
 
 ### Async waits and settlement
 
-`send --async` sends and follows without a deadline, waiting through dialogs. `wait --async` follows an existing ID but stops for a dialog. A turn that ends settles its request, so both waits finish at `complete: true` without a reply. An abandoned `reply_not_captured` (steering the turn never claimed) fails a bounded wait and is accepted by an async wait. Interrupt and provider-error abandonment fail both.
+`send --async` sends and follows without a deadline, waiting through dialogs. `wait --async` follows an existing ID but stops for a dialog. A turn that ends settles its request at once, so both waits finish at `complete: true` with the captured final stored as the reply. An abandoned `reply_not_captured` (steering the turn never claimed) fails a bounded wait and is accepted by an async wait. Interrupt and provider-error abandonment fail both.
 Read `bus wait --help` and `bus message status --help` for polling, stages,
 outcome windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain

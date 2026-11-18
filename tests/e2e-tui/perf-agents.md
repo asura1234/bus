@@ -40,7 +40,7 @@
 4. Wait for beta's turn to finish while alpha is still working → scratch state
    reports beta idle and alpha working, and `count-a` returns to `Agents 1/3`.
 5. Wait for alpha's turn to finish → all three workers are idle, `count-a` returns
-   to `Agents 0/3`, and both requests are complete with `stage:ended`, `reply:null` and no failure reason in scratch history. Capture an
+   to `Agents 0/3`, and scratch history rows for both requests stay `reply:null` with no failure reason. Capture an
    inspected screenshot showing the finished count.
 
 **Pass criteria:** ACTIVE counts Working and Blocked agents and follows 0 → 1 → 2 → 1 → 0;
@@ -57,7 +57,7 @@ Claude orchestrator `master-alpha` in MASTER with `--orchestrates bus`; wait for
 2. Open MASTER, select only master-alpha, submit `fake:work 30 master-count`, and
    wait for working → MASTER changes to `Agents 1/1` and `bus` remains `0/0`.
 3. Wait for the turn to finish → MASTER returns to `Agents 0/1`; scratch history
-   records the completed `ended` request with `reply:null` and no failure reason. Capture state and the sidebar.
+   records the completed request with `reply:null` and no failure reason. Capture state and the sidebar.
 
 **Pass criteria:** MASTER renders the same count row as work rooms and its ACTIVE
 value follows its own orchestrator without changing another room.

@@ -405,8 +405,9 @@ Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
   files, waiting_on_dialog and per-agent requests with request_id, stage, reason,
   reply, turn_ended, settling and group. No overall deadline.
   It waits through dialogs, unlike wait --async; succeeds only at complete:true.
-  A recipient turn that ends settles the request with no reply. Abandonment for
-  interrupt, provider error, or startup failure still fails the wait. An abandoned
+  A recipient turn that ends settles the request; its captured final is stored
+  as the request's reply. Abandonment for interrupt, provider error, or startup
+  failure still fails the wait. An abandoned
   reply_not_captured (steering the turn never claimed) is also complete for --async.
   Errors: message_interrupted: inspect history; message_provider_error: repair/retry the
   provider; message_abandoned: fix startup/unavailability then explicitly resend
@@ -458,9 +459,10 @@ generation answering the group. Cross-room messages wait for a new turn.
 Blocked/launching recipients queue; accumulated ordinary messages form one
 ordered prompt/group with batch position/time headers.
 An explicit --reply-to settles that request while the turn stays open and does not
-release the queue. The turn's final text is not a reply and does not replace an
-earlier explicit reply. When the turn ends, every still-open request in it settles
-and the queue advances. Raw text/files remain queryable after restart.
+release the queue. When the turn ends, every still-open request in it settles at
+once and its captured final is stored as that request's reply; an earlier explicit
+reply keeps its wording. Nothing waits on a reply and no wake message is posted.
+Raw text/files remain queryable after restart.
 If you want an answer, say whom to reply to and in which room. If that agent no
 longer exists on Bus when you reply, ignore it; do not retry and do not treat it
 as an error. Bus does not forward a turn final as "Reply to message N".
@@ -501,14 +503,16 @@ Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],reque
   events retains exits and group summaries; event_acks lists acknowledgeable
   unseen own outcomes; reply_ack stays false because nothing waits on a reply wake.
 Stages: queued persisted; submitting native write; awaiting_start typed but no
-trusted turn; delivered trusted start; joined same turn; replied explicit
---reply-to; ended the turn finished with no reply; abandoned closed, will not
-run later. Queued untyped work may close abandoned after
+trusted turn; delivered trusted start; joined same turn; replied the request
+has an answer (an explicit --reply-to, or the final captured when its turn
+ended); ended the turn finished without a captured answer; abandoned closed,
+will not run later. Queued untyped work may close abandoned after
 2m not working (input_box_not_empty, agent_not_ready/blocked, session_hook_missing,
 prior_request_active, unavailable). Recovery deadlines stay internal and never
 change the reported stage. After 5m blocked the reason is blocked_unanswered.
-A turn that ends settles as ended, with no reply. The final text is not stored
-as a reply.
+A turn that ends settles at once; its captured final is stored as the reply.
+An explicit --reply-to answer is never replaced by a later turn final, and a
+textless turn close stores no reply.
 Transient native provider errors retain the delivery and show Working while Bus retries
 with backoff or waits for a quota reset; details and deadlines go to the client log.
 Permanent-error settlement without a final closes as provider_error: MESSAGE.

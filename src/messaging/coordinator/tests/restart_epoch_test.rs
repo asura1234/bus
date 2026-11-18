@@ -371,11 +371,11 @@ fn restart_epoch_c37_pre_stop_final_stays_identical() {
     f.stopped("turn-1", "exact pre-stop answer");
     f.consume();
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "exact pre-stop answer");
+    assert_eq!(f.reply(old).as_deref(), Some("exact pre-stop answer"));
     epoch_reopen(&mut f, true, 2);
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "exact pre-stop answer");
+    assert_eq!(f.reply(old).as_deref(), Some("exact pre-stop answer"));
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn restart_epoch_c38_consumed_codex_rollout_recovers_without_fresh_hook() {
     epoch_reopen(&mut f, true, 2);
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "committed final");
+    assert_eq!(f.reply(old).as_deref(), Some("committed final"));
 }
 
 #[cfg(unix)]
@@ -428,7 +428,7 @@ fn restart_epoch_c39_owned_kimi_wire_wins_before_interruption_fallback() {
     epoch_reopen(&mut f, true, 2);
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "Kimi final");
+    assert_eq!(f.reply(old).as_deref(), Some("Kimi final"));
 }
 
 #[test]
@@ -487,7 +487,7 @@ fn restart_epoch_c40_mixed_group_filters_each_delivery_generation() {
     f.stopped("turn-2", "new-generation answer");
     f.consume();
     assert_completed_without_reply(&f, newer);
-    assert_reply_text_absent(&f, "new-generation answer");
+    assert_eq!(f.reply(newer).as_deref(), Some("new-generation answer"));
     f.status(RuntimeStatus::Idle);
     f.deliver();
     let notice = f.typed().last().unwrap().0.clone();
@@ -584,8 +584,8 @@ fn restart_epoch_c52_distinct_member_final_recovers_without_any_stop_hook() {
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, lead);
     assert_completed_without_reply(&f, member);
-    assert_reply_text_absent(&f, "first final");
-    assert_reply_text_absent(&f, "second final");
+    assert_eq!(f.reply(lead).as_deref(), Some("first final"));
+    assert_eq!(f.reply(member).as_deref(), Some("second final"));
 }
 
 #[test]
@@ -646,7 +646,7 @@ fn restart_epoch_c51_other_agents_final_is_read_before_interruption_fallback() {
     assert_eq!(delivery_generation(&f, first), 2);
     assert!(f.request(first).failure_reason.is_none());
     assert_completed_without_reply(&f, completed);
-    assert_reply_text_absent(&f, "other final");
+    assert_eq!(f.reply(completed).as_deref(), Some("other final"));
 }
 
 #[test]
@@ -660,7 +660,7 @@ fn restart_epoch_c41_same_server_reload_keeps_live_turn() {
     f.stopped("turn-1", "completed after reload");
     f.consume();
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "completed after reload");
+    assert_eq!(f.reply(old).as_deref(), Some("completed after reload"));
 }
 
 #[test]
@@ -789,8 +789,8 @@ fn restart_epoch_c46_explicit_final_is_not_replayed_by_receipts() {
     let typed = f.typed().len();
     assert_eq!(phase, RequestPhase::Completed);
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "one answer only");
-    assert_eq!(copies_of(&f, "one answer only"), 0);
+    assert_eq!(f.reply(old).as_deref(), Some("one answer only"));
+    assert_eq!(copies_of(&f, "one answer only"), 1);
     let path = crate::utils::restart_record::outcome_path(&f.dir);
     restart_lifecycle_receipt(&f, "restarted");
     assert!(path.exists());
@@ -799,9 +799,9 @@ fn restart_epoch_c46_explicit_final_is_not_replayed_by_receipts() {
     assert_eq!(f.request(old).phase, phase);
     assert_eq!(f.request(old).delivery_epoch, epoch);
     assert_eq!(f.typed().len(), typed);
-    assert_eq!(copies_of(&f, "one answer only"), 0);
+    assert_eq!(copies_of(&f, "one answer only"), 1);
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "one answer only");
+    assert_eq!(f.reply(old).as_deref(), Some("one answer only"));
 }
 
 #[test]

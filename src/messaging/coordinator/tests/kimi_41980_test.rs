@@ -332,8 +332,12 @@ fn kimi_failed_lead_is_not_rebound_when_queued_input_starts_the_next_turn() {
             assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("0"));
             assert!(f.reply(lead).is_none());
             assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("1"));
-            assert!(f.reply(next).is_none());
-            assert_eq!(f.request(next).delivery_stage(), "ended");
+            assert!(
+                f.reply(next).is_some_and(|reply| !reply.trim().is_empty()),
+                "{:?}",
+                f.request(next)
+            );
+            assert_eq!(f.request(next).delivery_stage(), "replied");
             assert_eq!(f.typed().len(), 2, "neither input was replayed");
         }
     }
@@ -523,10 +527,17 @@ fn provider_flake_legacy_kimi_inputs_keep_their_turns_before_and_after_hold() {
         )
         .unwrap();
         f.consume();
-        assert!(f.reply(first).is_none());
-        assert_eq!(f.request(first).delivery_stage(), "ended");
-        assert!(f.reply(second).is_none());
-        assert_eq!(f.request(second).delivery_stage(), "ended");
+        assert!(
+            f.reply(first).is_some_and(|reply| !reply.trim().is_empty()),
+            "{:?}",
+            f.request(first)
+        );
+        assert_eq!(f.request(first).delivery_stage(), "replied");
+        assert_eq!(
+            f.reply(second).as_deref(),
+            Some("second independent answer")
+        );
+        assert_eq!(f.request(second).delivery_stage(), "replied");
         assert_eq!(f.request(first).provider_turn_id.as_deref(), Some("1"));
         assert_eq!(f.request(second).provider_turn_id.as_deref(), Some("2"));
         f.status(RuntimeStatus::Idle);
@@ -541,10 +552,12 @@ fn provider_flake_legacy_kimi_inputs_keep_their_turns_before_and_after_hold() {
             .retry_at_ms;
         assert!(f.worker.state.retry_provider_requests(due));
         assert_eq!(f.worker.state.queued_requests(f.agent), &[lead]);
-        assert!(f.reply(first).is_none());
-        assert_eq!(f.request(first).delivery_stage(), "ended");
-        assert!(f.reply(second).is_none());
-        assert_eq!(f.request(second).delivery_stage(), "ended");
+        assert!(f.reply(first).is_some_and(|reply| !reply.trim().is_empty()));
+        assert_eq!(f.request(first).delivery_stage(), "replied");
+        assert!(f
+            .reply(second)
+            .is_some_and(|reply| !reply.trim().is_empty()));
+        assert_eq!(f.request(second).delivery_stage(), "replied");
         assert_eq!(
             f.typed().len(),
             3,

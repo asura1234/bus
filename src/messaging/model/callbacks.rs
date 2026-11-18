@@ -492,8 +492,9 @@ impl BusState {
     }
 
     /// Settles the agent's current request, and every confirmed member of its
-    /// group, when the turn ends. The final text is not a reply. An explicit
-    /// `--reply-to` already stored on a request stays. Unconfirmed steering
+    /// group, when the turn ends. The captured final becomes each unsettled
+    /// request's reply (never a new message); an explicit `--reply-to` already
+    /// stored on a request keeps its wording. Unconfirmed steering
     /// needs turn proof, with the completed lead retained as an anchor while
     /// the provider can still claim those inputs.
     pub(super) fn complete_pending_final(
@@ -523,8 +524,24 @@ impl BusState {
                 .get(member)
                 .is_none_or(|m| !m.steered || m.trusted_start_bound || m.settled())
         });
-        // A turn final is not a reply. An explicit --reply-to already stored
-        // on the request stays; everyone else just becomes terminal.
+        // The captured final is this turn's answer. It settles the request at
+        // turn end (nothing waits on it) and stays readable as the reply, so a
+        // delivered message never reports "captured but not delivered". An
+        // explicit --reply-to already stored on the request keeps its wording;
+        // the final neither replaces it nor reports a second answer. A textless
+        // turn end (silent close) stores nothing.
+        let answer = (!pending.text.trim().is_empty()).then(|| pending.clone());
+        let reply_group = request
+            .completed_reply
+            .as_ref()
+            .filter(|reply| Some(&reply.content) == answer.as_ref())
+            .and_then(|reply| reply.group)
+            .or_else(|| {
+                std::iter::once(request_id)
+                    .chain(members.iter().copied())
+                    .find(|id| self.request(*id).is_some_and(|request| !request.settled()))
+            })
+            .unwrap_or(request_id);
         let turn_key = pending_turn_key(request, &pending);
         for member in &unresolved {
             if let Some(member) = self.requests.get_mut(member) {
@@ -539,6 +556,18 @@ impl BusState {
         for member in members {
             if let Some(member) = self.requests.get_mut(&member) {
                 if member.phase != RequestPhase::Abandoned {
+                    if member.completed_reply.is_none() {
+                        if let Some(answer) = &answer {
+                            member
+                                .latency
+                                .reply_captured_at_ms
+                                .get_or_insert(pending.received_at_ms);
+                            member.completed_reply = Some(super::types::CompletedReply {
+                                content: answer.clone(),
+                                group: Some(reply_group),
+                            });
+                        }
+                    }
                     member.completed_at_ms.get_or_insert(completed_at_ms);
                     member.phase = RequestPhase::Completed;
                 }
@@ -550,6 +579,18 @@ impl BusState {
             .get_mut(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
         if request.phase != RequestPhase::Abandoned {
+            if request.completed_reply.is_none() {
+                if let Some(answer) = &answer {
+                    request
+                        .latency
+                        .reply_captured_at_ms
+                        .get_or_insert(pending.received_at_ms);
+                    request.completed_reply = Some(super::types::CompletedReply {
+                        content: answer.clone(),
+                        group: Some(reply_group),
+                    });
+                }
+            }
             request.completed_at_ms.get_or_insert(completed_at_ms);
             request.phase = RequestPhase::Completed;
         }

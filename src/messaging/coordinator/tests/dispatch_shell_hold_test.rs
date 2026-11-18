@@ -44,11 +44,12 @@ fn master_reply(author_is_agent: bool, command: &str) {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert!(
-        f.reply(id).is_none(),
+    assert_eq!(
+        f.reply(id).as_deref(),
+        Some("Dispatched; available for your next message."),
         "agent sender={author_is_agent}, command={command}"
     );
-    assert_eq!(f.request(id).delivery_stage(), "ended");
+    assert_eq!(f.request(id).delivery_stage(), "replied");
     let response = f.worker.control_response_with_events(
         &crate::messaging::control::Request {
             id: "history-proof".into(),

@@ -322,6 +322,31 @@ fn restart_request_continues_bound_and_closes_unbound_requests_before_queued_wor
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+/// The captured final is the request's durable answer: a coordinator reopen
+/// keeps both the text and the delivery stamp.
+#[test]
+fn a_captured_turn_final_survives_restart_as_the_request_reply() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "answer the developer", "turn-1");
+    fixture.stopped("turn-1", "The answer.");
+    fixture.consume();
+    assert_eq!(fixture.reply(lead).as_deref(), Some("The answer."));
+    let delivered = fixture.request(lead).latency.reply_delivered_at_ms;
+    assert!(
+        delivered.is_some(),
+        "a captured reply is journaled as delivered: {:?}",
+        fixture.request(lead)
+    );
+    reload(&mut fixture);
+    let reopened = fixture.request(lead);
+    assert_eq!(
+        reopened.reply().map(|reply| reply.text.as_str()),
+        Some("The answer.")
+    );
+    assert_eq!(reopened.latency.reply_delivered_at_ms, delivered);
+    assert_eq!(reopened.delivery_stage(), "replied");
+}
+
 #[test]
 fn restart_request_plain_coordinator_reopen_keeps_a_live_turn() {
     let mut fixture = Fixture::new(Provider::Codex);
@@ -337,7 +362,10 @@ fn restart_request_plain_coordinator_reopen_keeps_a_live_turn() {
     fixture.stopped("turn-1", "completed after the coordinator reopened");
     fixture.consume();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "completed after the coordinator reopened");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("completed after the coordinator reopened")
+    );
 }
 
 #[cfg(unix)]
@@ -379,7 +407,10 @@ fn restart_request_continues_mid_steer_group_without_losing_an_already_spooled_f
         completed.status(RuntimeStatus::Idle);
         completed.worker.settle_requests().unwrap();
         assert_completed_without_reply(&completed, answered);
-        assert_reply_text_absent(&completed, "finished before the stop");
+        assert_eq!(
+            completed.reply(answered).as_deref(),
+            Some("finished before the stop")
+        );
         completed.deliver();
         assert_ne!(completed.request(next).phase, RequestPhase::Queued);
     }
@@ -407,7 +438,10 @@ fn restart_request_recovers_a_completed_codex_turn_from_its_rollout_before_relea
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "recovered after restart");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("recovered after restart")
+    );
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
@@ -440,7 +474,10 @@ fn restart_request_recovers_codex_final_from_the_rollout_learned_before_stop() {
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "committed before the stop");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("committed before the stop")
+    );
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
@@ -471,7 +508,10 @@ fn restart_request_recovers_a_completed_kimi_turn_from_its_wire_before_releasing
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "Kimi final recovered after restart");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Kimi final recovered after restart")
+    );
     fixture.deliver();
     assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
 }
@@ -743,7 +783,7 @@ fn a_final_arriving_during_the_idle_grace_period_still_completes() {
     fixture.stopped("turn-1", "implemented");
     fixture.consume();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "implemented");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("implemented"));
 }
 
 #[test]
@@ -788,7 +828,7 @@ fn explicit_background_work_can_resume_after_the_callback_grace_period() {
         fixture.request(lead).provider_turn_id.as_deref(),
         Some("turn-2")
     );
-    assert_reply_text_absent(&fixture, "implemented");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("implemented"));
 }
 
 #[test]
@@ -801,7 +841,7 @@ fn a_final_spooled_at_the_deadline_is_read_before_the_request_closes() {
     fixture.stopped("turn-1", "Ready");
     fixture.consume();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "Ready");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Ready"));
 }
 
 #[test]
@@ -960,7 +1000,7 @@ fn a_claude_shell_left_running_before_the_request_does_not_hold_its_reply() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "Reviewed.");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Reviewed."));
 }
 
 /// After a Bus restart the shells running before the request are unknown, so
@@ -1132,7 +1172,7 @@ fn unavailable_unclaimed_steering_surfaces_uncertainty_without_borrowing_a_reply
     fixture.status(RuntimeStatus::Unavailable);
     fixture.consume();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "parser written");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("parser written"));
     assert!(fixture.reply(correction).is_none());
     assert_eq!(fixture.request(correction).phase, RequestPhase::Abandoned);
     assert_eq!(
@@ -1154,7 +1194,10 @@ fn answered_with_a_running_shell(fixture: &mut Fixture) -> RequestId {
         fixture.request(lead).provider_turn_id.as_deref(),
         Some("turn-1")
     );
-    assert_reply_text_absent(fixture, "Waiting on the build.");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
     lead
 }
 
@@ -1197,7 +1240,10 @@ fn a_claude_reply_is_not_held_by_the_agents_own_bus_waits() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "Review dispatched; I'll report when it lands.");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Review dispatched; I'll report when it lands.")
+    );
 }
 
 /// Live MASTER regression: five messages were answered by five distinct
@@ -1226,7 +1272,7 @@ fn five_shell_held_message_turns_keep_their_own_replies() {
     for (index, (id, answer)) in messages.iter().enumerate() {
         let turn = format!("turn-{}", index + 1);
         assert_completed_without_reply(&fixture, *id);
-        assert_reply_text_absent(&fixture, answer);
+        assert_eq!(fixture.reply(*id).as_deref(), Some(answer.as_str()));
         assert_eq!(fixture.request(*id).group, None);
         assert_eq!(
             fixture.request(*id).provider_turn_id.as_deref(),
@@ -1238,8 +1284,12 @@ fn five_shell_held_message_turns_keep_their_own_replies() {
             .worker
             .control_message_at(fixture.request(*id).prompt.id, fixture.now)
             .unwrap();
-        assert!(status["requests"][0]["reply"].is_null(), "{status}");
-        assert_eq!(status["requests"][0]["stage"], "ended");
+        assert_eq!(
+            status["requests"][0]["reply"]["text"],
+            answer.as_str(),
+            "{status}"
+        );
+        assert_eq!(status["requests"][0]["stage"], "replied");
     }
 }
 
@@ -1280,8 +1330,15 @@ fn a_message_answered_in_its_own_turn_keeps_its_reply_when_an_earlier_shell_wake
         Some("turn-2")
     );
     assert_eq!(fixture.request(question).group, None);
-    assert_reply_text_absent(&fixture, "Waiting on the build.");
-    assert_reply_text_absent(&fixture, "Yes, the docs pr merged.");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("Yes, the docs pr merged.")
+    );
+    // The wake turn's report is not either message's answer.
     assert_reply_text_absent(&fixture, "Build green; pr 1 is ready.");
 }
 
@@ -1319,8 +1376,14 @@ fn an_unclaimed_input_after_an_answered_turn_cannot_borrow_the_next_answer() {
         fixture.request(first).provider_turn_id.as_deref(),
         Some("turn-2")
     );
-    assert_reply_text_absent(&fixture, "Waiting on the build.");
-    assert_reply_text_absent(&fixture, "Docs pr and changelog are fine.");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(first).as_deref(),
+        Some("Docs pr and changelog are fine.")
+    );
     assert!(fixture.reply(folded).is_none());
     assert_eq!(fixture.request(folded).phase, RequestPhase::Abandoned);
     assert_eq!(
@@ -1370,8 +1433,15 @@ fn an_inherited_shell_wake_cannot_replace_the_current_requests_held_answer() {
         fixture.request(question).provider_turn_id.as_deref(),
         Some("turn-2")
     );
-    assert_reply_text_absent(&fixture, "Waiting on the build.");
-    assert_reply_text_absent(&fixture, "Docs reviewed; tests still run.");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("Docs reviewed; tests still run.")
+    );
+    // The shell wake's report is not an answer to either request.
     assert_reply_text_absent(&fixture, "Earlier build completed.");
 }
 
@@ -1406,8 +1476,14 @@ fn a_bus_message_matching_an_inherited_task_notification_keeps_its_reply() {
         Some("turn-2")
     );
     assert_eq!(fixture.request(question).group, None);
-    assert_reply_text_absent(&fixture, "Waiting on the build.");
-    assert_reply_text_absent(&fixture, "That is a task notification.");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("Waiting on the build.")
+    );
+    assert_eq!(
+        fixture.reply(question).as_deref(),
+        Some("That is a task notification.")
+    );
 }
 
 /// A rollout timestamp `offset_ms` after the fixture's clock.
@@ -1456,6 +1532,9 @@ fn end_without_stop(fixture: &mut Fixture) {
     fixture.consume();
 }
 
+/// The turn ended without an explicit `--reply-to` answer. A captured turn
+/// final is the request's reply (group records the turn it came from); an
+/// explicit answer would have group `None` and must never appear here.
 fn assert_completed_without_reply(fixture: &Fixture, id: RequestId) {
     let request = fixture.request(id);
     assert_eq!(request.phase, RequestPhase::Completed, "{id:?}");
@@ -1464,10 +1543,14 @@ fn assert_completed_without_reply(fixture: &Fixture, id: RequestId) {
         "{id:?} {:?}",
         request.failure_reason
     );
+    assert!(request.pending_final.is_none(), "{id:?}");
     assert!(
-        fixture.reply(id).is_none(),
-        "{id:?} {:?}",
-        fixture.reply(id)
+        request
+            .completed_reply
+            .as_ref()
+            .is_none_or(|reply| reply.group.is_some()),
+        "{id:?} stored an explicit reply: {:?}",
+        request.reply()
     );
 }
 
@@ -1496,7 +1579,7 @@ fn assert_reply_text_absent(fixture: &Fixture, text: &str) {
 /// Live (2026-10-20, Codex 0.163.0): a worker removed its own worktree, its
 /// cwd, during the turn. Codex then ran no `Stop` hook, though the turn
 /// finished and its rollout recorded the answer. That record settles the
-/// request without storing the answer.
+/// request and stores the answer as its reply.
 #[test]
 fn a_codex_turn_ending_without_stop_delivers_the_answer_its_rollout_recorded() {
     let mut fixture = Fixture::new(Provider::Codex);
@@ -1516,7 +1599,7 @@ fn a_codex_turn_ending_without_stop_delivers_the_answer_its_rollout_recorded() {
     );
     end_without_stop(&mut fixture);
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "Merged #1627.");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Merged #1627."));
     assert!(fixture.error().is_none());
     assert!(fixture
         .worker
@@ -1529,7 +1612,7 @@ fn a_codex_turn_ending_without_stop_delivers_the_answer_its_rollout_recorded() {
     fixture.stopped("turn-1", "Merged #1627.");
     fixture.consume();
     assert_completed_without_reply(&fixture, lead);
-    assert_reply_text_absent(&fixture, "Merged #1627.");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Merged #1627."));
     assert!(fixture
         .worker
         .state
@@ -1572,7 +1655,7 @@ fn an_unbound_codex_turn_delivers_the_answer_of_the_rollout_turn_that_ran_its_pr
         fixture.request(lead).provider_turn_id.is_none(),
         "the older turn's identity was borrowed"
     );
-    assert_reply_text_absent(&fixture, "Copied 374 files.");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Copied 374 files."));
     assert_reply_text_absent(&fixture, "old");
 }
 
@@ -1760,9 +1843,10 @@ fn unbound_codex_0164_final_is_captured_despite_a_missing_directory_warning() {
         end_without_stop(&mut fixture);
         assert_completed_without_reply(&fixture, lead);
         assert!(fixture.request(lead).provider_turn_id.is_none());
-        if !answer.is_empty() {
-            assert_reply_text_absent(&fixture, answer);
-        }
+        assert_eq!(
+            fixture.reply(lead).as_deref(),
+            (!answer.is_empty()).then_some(answer)
+        );
         assert!(fixture
             .worker
             .state
@@ -1794,7 +1878,7 @@ fn unbound_codex_0164_final_is_captured_despite_a_missing_directory_warning() {
                 .requests()
                 .filter(|request| request.reply().is_some())
                 .count(),
-            0
+            usize::from(!answer.is_empty())
         );
     }
 }
@@ -1955,12 +2039,11 @@ fn restart_published_recovers_distinct_committed_steering_final() {
         f.record(json!({"hook_event_name":"Stop","session_id":"session",
             "turn_id":"turn-1","last_assistant_message":"first committed answer","transcript_path":rollout}));
         f.consume();
-        assert!(f.reply(lead).is_none());
+        assert_eq!(f.reply(lead).as_deref(), Some("first committed answer"));
         assert!(
             f.request(lead).pending_final.is_some(),
             "the completed lead stays an anchor while the followup is unproven"
         );
-        assert_reply_text_absent(&f, "first committed answer");
         if restored {
             restart_lifecycle_reopen(&mut f, true);
             f.worker.tick().unwrap();
@@ -1981,13 +2064,19 @@ fn restart_published_recovers_distinct_committed_steering_final() {
         assert_eq!(
             outcomes,
             vec![
-                (RequestPhase::Completed, None, None),
-                (RequestPhase::Completed, None, None),
+                (
+                    RequestPhase::Completed,
+                    Some("first committed answer".to_owned()),
+                    None
+                ),
+                (
+                    RequestPhase::Completed,
+                    Some("second committed answer".to_owned()),
+                    None
+                ),
             ],
-            "restored={restored}: every committed turn settles without a stored reply"
+            "restored={restored}: every committed turn keeps its own answer"
         );
-        assert_reply_text_absent(&f, "first committed answer");
-        assert_reply_text_absent(&f, "second committed answer");
     }
 }
 
@@ -2004,7 +2093,7 @@ fn restart_published_continues_the_pre_stop_started_successor() {
     restart_lifecycle_reopen(&mut f, true);
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, lead);
-    assert_reply_text_absent(&f, "first task completed");
+    assert_eq!(f.reply(lead).as_deref(), Some("first task completed"));
     assert!(!f.request(member).settled());
     assert!(f.request(member).provider_turn_id.is_none());
     assert!(f.request(member).failure_reason.is_none());
@@ -2072,6 +2161,7 @@ fn restart_published_continues_independent_kimi_inputs_without_stranding_the_own
         f.consume();
         end_restarted_turn(&mut f, turn, "resumed input completed", Some(&wire));
         assert_completed_without_reply(&f, id);
+        assert_eq!(f.reply(id).as_deref(), Some("resumed input completed"));
         f.status(RuntimeStatus::Idle);
         f.deliver();
     }
@@ -2140,6 +2230,10 @@ fn restart_published_retained_receipt_after_saved_ack_preserves_successor() {
         f.stopped("turn-2", "continued original completed");
         f.consume();
         assert_completed_without_reply(&f, old);
+        assert_eq!(
+            f.reply(old).as_deref(),
+            Some("continued original completed")
+        );
         f.status(RuntimeStatus::Idle);
         f.deliver();
         assert_eq!(f.request(successor).phase, RequestPhase::Active);

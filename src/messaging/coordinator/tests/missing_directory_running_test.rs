@@ -164,7 +164,7 @@ fn removed_directory_no_reply_turn_settles_from_absolute_owned_rollout() {
     f.consume();
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
     assert!(f.request(lead).failure_reason.is_none());
-    assert!(f.reply(lead).is_none());
+    assert!(f.reply(lead).is_some_and(|reply| !reply.trim().is_empty()));
     assert!(f
         .worker
         .state

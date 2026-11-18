@@ -71,9 +71,9 @@ class GrokFakeSettlementTest(unittest.TestCase):
         run.cli = Mock(return_value=status)
         return run, status
 
-    def test_native_final_ends_without_an_implicit_reply(self):
-        run, status = self.run_status({"stage": "ended", "reply": None, "reason": None,
-                                       "start_bound": True, "turn_ended": True})
+    def test_native_final_settles_with_the_captured_reply(self):
+        run, status = self.run_status({"stage": "replied", "reply": {"text": "fake reply: done"},
+                                       "reason": None, "start_bound": True, "turn_ended": True})
         self.assertEqual(run.settle(1), status)
 
     def test_explicit_reply_fixture_requires_the_exact_stored_answer(self):
@@ -81,7 +81,7 @@ class GrokFakeSettlementTest(unittest.TestCase):
                    "start_bound": True, "turn_ended": False}
         run, status = self.run_status(request)
         self.assertEqual(run.settle(1, reply="TOKEN"), status)
-        for change in ({"reply": None}, {"reply": {"text": "wrong"}}, {"stage": "ended"},
+        for change in ({"reply": None}, {"reply": {"text": "wrong"}}, {"stage": "queued"},
                        {"uncertain_outcome": True}, {"reason": "failure"}):
             with self.subTest(change=change):
                 run, _ = self.run_status({**request, **change})
@@ -89,10 +89,11 @@ class GrokFakeSettlementTest(unittest.TestCase):
                     run.settle(1, reply="TOKEN")
 
     def test_native_completion_rejects_uncertain_failed_or_unended_requests(self):
-        request = {"stage": "ended", "reply": None, "reason": None,
+        request = {"stage": "replied", "reply": {"text": "fake reply: done"}, "reason": None,
                    "start_bound": True, "turn_ended": True}
-        for change in ({"reply": {"text": "invented"}}, {"uncertain_outcome": True},
-                       {"reason": "failure"}, {"turn_ended": False}, {"start_bound": False}):
+        for change in ({"reply": None}, {"reply": {"text": ""}}, {"stage": "delivered"},
+                       {"uncertain_outcome": True}, {"reason": "failure"},
+                       {"turn_ended": False}, {"start_bound": False}):
             with self.subTest(change=change):
                 run, _ = self.run_status({**request, **change})
                 with self.assertRaises(AssertionError):

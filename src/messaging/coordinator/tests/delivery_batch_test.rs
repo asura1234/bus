@@ -20,8 +20,11 @@ fn claude_messages_reach_an_unbound_busy_turn_without_waiting_for_idle() {
         fixture.stopped("own-turn", "correction applied");
         fixture.consume();
         fixture.status(RuntimeStatus::Idle);
-        assert!(fixture.reply(request).is_none());
-        assert_eq!(fixture.request(request).delivery_stage(), "ended");
+        assert_eq!(
+            fixture.reply(request).as_deref(),
+            Some("correction applied")
+        );
+        assert_eq!(fixture.request(request).delivery_stage(), "replied");
     }
 }
 
@@ -102,8 +105,11 @@ fn claude_coalesced_paste_with_adjacent_input_completes_every_joined_message() {
     for id in [first, second, third] {
         let message = fixture.request(id).prompt.id;
         let status = fixture.worker.control_message(message).unwrap();
-        assert_eq!(status["requests"][0]["stage"], "ended", "{status}");
-        assert!(status["requests"][0]["reply"].is_null(), "{status}");
+        assert_eq!(status["requests"][0]["stage"], "replied", "{status}");
+        assert_eq!(
+            status["requests"][0]["reply"]["text"], "all three answered",
+            "{status}"
+        );
     }
 }
 
@@ -183,9 +189,19 @@ fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     fixture.stopped("worker-turn", "dialog answered");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
-    for ((room, request), unread) in [(work, lead), (master, member)].into_iter().zip(unread) {
-        assert!(fixture.reply(request).is_none(), "{request:?}");
-        assert_eq!(fixture.request(request).delivery_stage(), "ended");
+    for ((room, request, answer), unread) in [
+        (work, lead, "dialog answered"),
+        (master, member, "follow-up answered"),
+    ]
+    .into_iter()
+    .zip(unread)
+    {
+        assert_eq!(
+            fixture.reply(request).as_deref(),
+            Some(answer),
+            "{request:?}"
+        );
+        assert_eq!(fixture.request(request).delivery_stage(), "replied");
         let room_state = fixture.worker.state.room(room).unwrap();
         assert!(
             !room_state.latest_replies.contains_key(&orchestrator),

@@ -529,7 +529,10 @@ fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whi
 
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("finished")
+    );
     assert!(settled.failure_reason.is_none());
     assert!(state.room(room).unwrap().latest_replies.is_empty());
     assert_eq!(state.next_queued_request(agent), Some(queued));
@@ -795,6 +798,9 @@ mod orchestrator_ordering_tests;
 
 #[path = "explicit_replies_test.rs"]
 mod explicit_replies_tests;
+
+#[path = "final_reply_test.rs"]
+mod final_reply_tests;
 
 #[path = "image_payload_test.rs"]
 mod image_payload_tests;

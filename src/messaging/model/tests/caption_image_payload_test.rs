@@ -123,7 +123,11 @@ fn caption_png_callback_binds_its_frozen_turn_and_releases_the_follower() {
         let settled = state.request(request).unwrap();
         assert!(settled.trusted_start_bound && state.turn_ended(settled));
         assert_eq!(settled.phase, RequestPhase::Completed);
-        assert!(settled.failure_reason.is_none() && settled.reply().is_none());
+        assert!(settled.failure_reason.is_none());
+        assert_eq!(
+            settled.reply().map(|reply| reply.text.as_str()),
+            Some("STASH_4136a0ecb1")
+        );
         assert_eq!(settled.provider_turn_id.as_deref(), Some("turn-1"));
         assert_eq!(settled.submitted_payload.as_deref(), Some(frozen.as_str()));
         assert_eq!(settled.prompt.text, body);

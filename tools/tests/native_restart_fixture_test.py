@@ -41,7 +41,7 @@ class NativeRestartFixtureTests(unittest.TestCase):
                     raise AgentSetupReached
                 return {"message_id": 1}
             self.assertEqual(args[0], "wait")
-            return {"requests": [{"reply": None, "stage": "ended"}]}
+            return {"requests": [{"reply": {"text": "mock reply"}, "stage": "replied"}]}
 
         bus.start.side_effect = start
         bus.cli.side_effect = cli

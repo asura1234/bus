@@ -377,7 +377,11 @@ fn same_turn_claude_input_is_progress_without_exposing_content() {
         consume(&mut worker, agent, &dir);
         let held = worker.state.request(request).unwrap();
         assert_eq!(held.phase, RequestPhase::Completed);
-        assert!(held.reply().is_none());
+        assert!(
+            held.reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "{held:?}"
+        );
         assert!(worker
             .state
             .agent(agent)
@@ -390,7 +394,12 @@ fn same_turn_claude_input_is_progress_without_exposing_content() {
             .unwrap();
         let settled = worker.state.request(request).unwrap();
         assert_eq!(settled.phase, RequestPhase::Completed);
-        assert!(settled.reply().is_none());
+        assert!(
+            settled
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "{settled:?}"
+        );
         assert!(settled.failure_reason.is_none());
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
         drop(worker);
@@ -428,7 +437,7 @@ fn claude_compaction_and_delayed_submit_preserve_request_binding() {
             worker.state.observe_status(agent, RuntimeStatus::Idle, io::now_ms()).unwrap();
             let settled = worker.state.request(request).unwrap();
             assert_eq!(settled.phase, RequestPhase::Completed);
-            assert!(settled.reply().is_none());
+            assert!(settled.reply().is_some_and(|reply| !reply.text.trim().is_empty()), "{settled:?}");
             assert!(settled.failure_reason.is_none());
             assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
             assert!(worker.state.agent(agent).unwrap().actionable_error.is_none());
@@ -625,7 +634,12 @@ fn completed_on_interim(
         .unwrap();
     let settled = worker.state.request(source).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     source
 }
@@ -689,7 +703,16 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
             }),
             "next_started={next_started}: captured late final was forwarded: {notices:?}"
         );
-        assert!(worker.state.request(source).unwrap().reply().is_none());
+        assert_eq!(
+            worker
+                .state
+                .request(source)
+                .unwrap()
+                .reply()
+                .map(|reply| reply.text.as_str()),
+            Some("Waiting for CI."),
+            "a changed late final does not replace the stored answer"
+        );
         // The newer request still binds and answers with its own turn.
         if !next_started {
             record(
@@ -716,13 +739,19 @@ fn late_changed_final_after_newer_typed_request_reaches_sender_without_touching_
             "next_started={next_started}"
         );
         assert!(
-            next_request.reply().is_none(),
+            next_request
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
             "next_started={next_started}"
         );
         assert!(next_request.failure_reason.is_none());
         let source_request = worker.state.request(source).unwrap();
         assert_eq!(source_request.phase, RequestPhase::Completed);
-        assert!(source_request.reply().is_none());
+        assert_eq!(
+            source_request.reply().map(|reply| reply.text.as_str()),
+            Some("Waiting for CI."),
+            "the source keeps the answer it already had"
+        );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }

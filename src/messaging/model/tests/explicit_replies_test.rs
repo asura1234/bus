@@ -24,22 +24,23 @@ fn finish_turn(state: &mut BusState, agent: AgentId, payload: &str, text: &str) 
     );
 }
 
-/// A turn final closes the request with no reply and frees the agent queue.
+/// A turn final closes the request as its answer and frees the agent queue.
 #[test]
-fn turn_final_settles_without_a_reply_and_releases_the_queue() {
+fn turn_final_settles_as_the_answer_and_releases_the_queue() {
     let (mut state, room, agent, request) = bound_turn("do the work");
     let queued = submit_text(&mut state, room, agent, "next task");
     let payload = state.request(request).unwrap().prompt.rendered_payload();
-    finish_turn(&mut state, agent, &payload, "FINAL_TEXT_SHOULD_NOT_LEAK");
+    finish_turn(&mut state, agent, &payload, "CAPTURED_FINAL");
 
     let settled = state.request(request).unwrap();
     assert!(
         settled.settled(),
         "the request stays open after the turn final"
     );
-    assert!(
-        settled.reply().is_none(),
-        "a turn final must not settle the request as a reply: {settled:?}"
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("CAPTURED_FINAL"),
+        "the captured final is the request's answer: {settled:?}"
     );
     assert!(
         state.room(room).unwrap().latest_replies.is_empty(),
@@ -53,10 +54,10 @@ fn turn_final_settles_without_a_reply_and_releases_the_queue() {
         .route_worker_replies(30_000, &Default::default())
         .unwrap();
     let leaked = forwarded.requests().any(|candidate| {
-        candidate.prompt.text.contains("FINAL_TEXT_SHOULD_NOT_LEAK")
+        candidate.prompt.text.contains("CAPTURED_FINAL")
             || candidate.prompt.text.contains("Reply to message")
     }) || forwarded.worker_events.values().any(|event| {
-        event.text.contains("FINAL_TEXT_SHOULD_NOT_LEAK")
+        event.text.contains("CAPTURED_FINAL")
             || event.text.contains("Reply to message")
             || event.text.contains("Turn final")
             || event.text.contains("Late reply")

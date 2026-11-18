@@ -9,8 +9,8 @@ or launch real providers. CLI fixtures may create rooms and fake agents and send
 messages as the developer or agents; search, navigation and help use real TUI keys.
 No skips or failed-step retries. Capture snapshots for each step and cells for
 highlights; open a cell screenshot to judge the bar's layout. Every ordinary
-fake recipient request must complete as `ended` with `reply:null` and no failure
-reason. Native output stays in the agent pane; counts below include authored
+fake recipient request must complete as `replied` with its fake reply text and
+no failure reason. Native output stays in the agent pane; counts below include authored
 prompts/posts only, never implicit reply rows.
 
 ### FIND-01 — Find an incoming message buried in peer traffic

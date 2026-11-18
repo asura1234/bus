@@ -5,8 +5,9 @@ providers. No desktop automation or real model use is needed. CLI commands below
 are agent-authored message fixtures and read-only evidence; room and agent setup
 also uses the scratch CLI. Record receipts, message status, history, terminal
 reads and screen text. No steps may be skipped. Ordinary fake native finals
-settle requests with `complete:true`, `stage:ended`, `reply:null` and no failure
-reason; their exact output is native evidence, never an invented chat reply.
+settle requests with `complete:true`, `stage:replied`, a non-empty reply and no
+failure reason; their exact output is native evidence, never an invented chat
+message.
 
 ## Cases (run order)
 
@@ -25,20 +26,20 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    work-room message addressed to the bound orchestrator, delivered into its
    session with the `qa-worker (room ROOM_ID):` attribution header,
    with matching `fake reply:` output in the native pane. Only the authored
-   message shows in work-room chat; its request meets the ended/null contract above. MASTER history remains empty.
+   message shows in work-room chat; its request meets the replied contract above. MASTER history remains empty.
 2. Fixture: send `WOC name ready` the same way, targeting `libtv-app master` by
    name, then send `WOC id question` targeting its numeric ID. Wait for both
    messages to settle → both use the same orchestrator agent/session and each
-   has its own ended request in `qa-work` history and matching native output, with no stored reply.
+   has its own replied request and matching native output, with its native text stored as the reply.
 3. Fixture: send `fake:work 8 WOC MASTER busy` as the developer in MASTER to
    the bound orchestrator. Wait until it is working, then send `WOC queued verify`
    from the worker in `qa-work` to `orchestrator`, without `--queue`. Inspect its
    status while busy, then wait for both to settle → the worker message stays
    queued until the MASTER turn ends and then gets its own attributed turn;
-   both requests settle ended/null. The two original prompts stay in their own
+   both requests settle replied with their native text. The two original prompts stay in their own
    conversations and each has matching native output, with no cross-attributed reply.
 4. Fixture: send from `qa-worker` to `other-orch` by name and ID in `qa-work` →
-   both reach that unrelated MASTER orchestrator, settle as distinct ended
+   both reach that unrelated MASTER orchestrator, settle as distinct replied
    requests in `qa-work`, and carry the worker's attribution. Send without `--as` to
    `orchestrator` in a newly created unbound room → clear missing-binding error,
    no history row. Add an agent named `duplicate` to MASTER (bound to a new `qa-duplicate` room)

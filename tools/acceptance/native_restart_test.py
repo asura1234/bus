@@ -186,8 +186,8 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
         evidence["bootstrap"] = first
         before = bus.cli("wait", "--message", str(first["message_id"]), "--timeout", "30")
         old = before["requests"][0]
-        assert old["reply"] is None, before
-        assert old["stage"] == "ended", before
+        assert old["reply"] and old["reply"]["text"].strip(), before
+        assert old["stage"] == "replied", before
         evidence["before"] = before
         agent = next(agent for agent in bus.cli("state")["agents"] if agent["name"] == "restart-agent")
         native_target = agent["runtime_identity"]["pane_id"]
@@ -270,8 +270,8 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
         after = bus.cli("wait", "--message", str(sent["message_id"]), "--timeout", "30")
         evidence["after"] = after
         new = after["requests"][0]
-        assert new["reply"] is None, after
-        assert new["stage"] == "ended", after
+        assert new["reply"] and new["reply"]["text"].strip(), after
+        assert new["stage"] == "replied", after
         assert new["session_id"] == old["session_id"], (before, after)
         assert new["turn_id"] != old["turn_id"], (before, after)
         ready = bus.wait_native_ready(native_target)

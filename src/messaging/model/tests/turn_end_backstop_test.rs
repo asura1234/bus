@@ -92,8 +92,11 @@ fn idle_backstop_reconciles_owned_provider_records_before_uncertain_release() {
             assert_eq!(request.phase, RequestPhase::Completed);
             assert!(!request.uncertain_outcome);
             assert!(request.failure_reason.is_none());
-            // Provider terminal text still is not an explicit Bus reply.
-            assert!(request.reply().is_none());
+            // A recorded answer is stored as the reply; a NoReply end is not.
+            assert_eq!(
+                request.reply().map(|reply| reply.text.as_str()),
+                final_answer.then_some("native result")
+            );
             assert_eq!(state.agent(agent).unwrap().current_request, None);
         }
     }

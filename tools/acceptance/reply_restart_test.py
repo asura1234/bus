@@ -123,8 +123,8 @@ def scenario(binary, root, provider, master, retain_failure=False):
                 return None
 
         status = until(delivered)
-        assert status["requests"][0]["reply"] is None, status
-        assert status["requests"][0]["stage"] == "ended", status
+        assert status["requests"][0]["reply"] and status["requests"][0]["reply"]["text"].strip(), status
+        assert status["requests"][0]["stage"] == "replied", status
         history = bus.cli("history", "--room", room)
         rows = [row for row in history["messages"] if str(row["prompt"]["id"]) == message]
         assert len(rows) == 1, history
@@ -132,8 +132,9 @@ def scenario(binary, root, provider, master, retain_failure=False):
         delivered_request = rows[0]["delivery"]["requests"][0]
         assert delivered_request["reply"] is None, history
         assert delivered_request["stage"] == "ended", history
-        # A turn that ends without --reply-to stores no reply, so the unviewed
-        # source room gains no unread mark. Repeated reads must not add one.
+        # A captured reply is stored on its request and publishes no wake
+        # message, so the unviewed source room gains no unread mark. Repeated
+        # reads must not add one.
         state = durable()
         assert state["visible_room"] != source, state["visible_room"]
         expected = dict(before)

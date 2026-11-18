@@ -8,13 +8,13 @@
 - **R(name), create a work room:** press Ctrl+Shift+R, type the name, press Enter, and verify `# name` opens.
 - **A(room, name), add a fake Claude worker:** click the room, press Ctrl+N, type the name, Tab to Agent, select Claude Code, replace PWD with the absolute scratch workspace and a trailing slash, leave additional args empty, and press Enter. Accept hook setup only for the isolated scratch project if asked. Wait for the fake terminal, then press F6.
 - **P(names), select recipients:** press Ctrl+P, make exactly the named workers checked, then Esc.
-- Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake native turns settle with `complete:true`, `stage:ended`, `reply:null` and no failure reason before judging history; no reply row is synthesized.
+- Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake native turns settle with `complete:true`, `stage:replied`, a non-empty reply and no failure reason before judging history; no reply row is synthesized.
 
 ## Cases
 
 ### FILTER-01 — Work-room filters, search, room state and restart
 
-**Preconditions/setup:** R(`filter-a`); A(`filter-a`, `alpha`) and A(`filter-a`, `beta`); P(`alpha`); send `Needle outgoing` as the developer and verify its ended/null completion and matching native output. Post `Needle direct` as alpha to you and `Needle peer` as alpha to beta. R(`filter-b`). Return to `filter-a`.
+**Preconditions/setup:** R(`filter-a`); A(`filter-a`, `alpha`) and A(`filter-a`, `beta`); P(`alpha`); send `Needle outgoing` as the developer and verify its replied completion and matching native output. Post `Needle direct` as alpha to you and `Needle peer` as alpha to beta. R(`filter-b`). Return to `filter-a`.
 
 1. Inspect the work-room header and unfiltered history → both checkboxes are unchecked, in the required order and right-aligned below `# filter-a`; outgoing, direct and peer messages are visible. Capture the **off** screenshot and named hits `filter-to-you` / `filter-from-you`.
 2. Press Alt+I → only `* → You` is checked. Only the direct message remains; the developer's outgoing prompt and ordinary peer traffic disappear. Capture the **incoming-on** screenshot.
@@ -28,7 +28,7 @@
 
 ### FILTER-02 — MASTER filters and text search
 
-**Preconditions/setup:** R(`master-target`). Click MASTER and use A to add `master-agent` (Claude Code), orchestrating `master-target`; return to MASTER with F6. P(`master-agent`); send `Master Needle outgoing` as the developer and verify its ended/null completion and matching native output. Post `Master Needle direct` as master-agent to you. Stay on MASTER.
+**Preconditions/setup:** R(`master-target`). Click MASTER and use A to add `master-agent` (Claude Code), orchestrating `master-target`; return to MASTER with F6. P(`master-agent`); send `Master Needle outgoing` as the developer and verify its replied completion and matching native output. Post `Master Needle direct` as master-agent to you. Stay on MASTER.
 
 1. Inspect MASTER at 80×24 → both filters are present, unchecked, correctly ordered and right-aligned directly below `# MASTER`; the outgoing prompt and direct post are visible, with no synthesized reply. Capture the **master-off** screenshot.
 2. Press Alt+O → only `You → *` is checked and only developer-authored history remains; the direct message disappears. Capture the **master-outgoing-on** screenshot.

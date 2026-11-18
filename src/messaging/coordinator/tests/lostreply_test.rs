@@ -55,8 +55,11 @@ fn master_developer_answer_posts_at_stop_with_five_shells_still_running() {
             .control_message_at(f.request(id).prompt.id, f.now)
             .unwrap();
         assert_eq!(status["complete"], true, "{status}");
-        assert_eq!(status["requests"][0]["stage"], "ended");
-        assert!(status["requests"][0]["reply"].is_null());
+        assert_eq!(status["requests"][0]["stage"], "replied");
+        assert_eq!(
+            status["requests"][0]["reply"]["text"], "Four workers have started.",
+            "{status}"
+        );
         assert_eq!(status["requests"][0]["turn_ended"], true);
         assert!(status["requests"][0]["reason"].is_null());
         super::assert_turn_final(&f, id);
@@ -298,7 +301,13 @@ fn recovering_a_correlation_anchor_preserves_its_completed_answer() {
     f.worker.save(state).unwrap();
     // Session invalidation closes the anchor. There is no captured answer to keep.
     assert_eq!(f.request(lead).phase, RequestPhase::Abandoned);
-    assert!(f.request(lead).reply().is_none());
+    assert!(
+        f.request(lead)
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{:?}",
+        f.request(lead)
+    );
     assert!(f.request(lead).failure_reason.is_none());
     assert_eq!(f.request(unknown).phase, RequestPhase::Abandoned);
 }
@@ -372,8 +381,8 @@ fn changed_same_turn_stop_during_steering_correlation_remains_a_visible_followup
             .notices(f.room)
             .filter(|n| n.text == followup)
             .count(),
-        0,
-        "a changed captured Stop is not published while the completed lead anchors steering"
+        1,
+        "changed captured Stop must remain visible while the completed lead anchors steering"
     );
     stop(&f, "turn-1", followup, &[("other", "opaque-wrapper")]);
     f.consume();
@@ -393,7 +402,7 @@ fn changed_same_turn_stop_during_steering_correlation_remains_a_visible_followup
             .notices(f.room)
             .filter(|n| n.text == followup)
             .count(),
-        0
+        1
     );
     super::assert_turn_final(&f, lead);
     super::assert_turn_final(&f, unknown);
@@ -631,6 +640,7 @@ fn a_changed_late_master_final_is_visible_while_new_work_awaits_its_answer() {
         stop(&f, "turn-1", "The background tests passed.", &[]);
         f.consume();
         super::assert_turn_final(&f, lead);
+        assert_eq!(f.reply(lead).as_deref(), Some("Workers started."));
         assert!(f.reply(next).is_none());
         assert_eq!(
             f.worker
@@ -638,8 +648,8 @@ fn a_changed_late_master_final_is_visible_while_new_work_awaits_its_answer() {
                 .notices(f.room)
                 .filter(|n| n.text == "The background tests passed.")
                 .count(),
-            0,
-            "a changed captured final is not published; next_is_bound={next_is_bound}"
+            1,
+            "new work must not hide the completed turn's changed result; next_is_bound={next_is_bound}"
         );
         if !next_is_bound {
             f.started("turn-2", "new question");

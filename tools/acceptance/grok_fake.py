@@ -145,8 +145,9 @@ class Run:
                 assert not request.get("uncertain_outcome") and request.get("reason") is None, status
                 assert request.get("start_bound"), status
                 if reply is None:
-                    assert request["stage"] == "ended" and request.get("turn_ended"), status
-                    assert request.get("reply") is None, status
+                    assert request["stage"] == "replied", status
+                    assert request.get("turn_ended"), status
+                    assert (request.get("reply") or {}).get("text", "").strip(), status
                 else:
                     assert request["stage"] == "replied", status
                     assert (request.get("reply") or {}).get("text") == reply, status

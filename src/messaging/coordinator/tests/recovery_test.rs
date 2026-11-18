@@ -429,7 +429,12 @@ fn initial_recovery_tick_keeps_detached_room_reply_unread_until_selected() {
     recovered.tick().unwrap();
     let settled = recovered.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(!recovered
         .state
@@ -437,7 +442,7 @@ fn initial_recovery_tick_keeps_detached_room_reply_unread_until_selected() {
         .unwrap()
         .latest_replies
         .contains_key(&agent));
-    // A captured final is not a reply, so a detached room does not gain unread.
+    // A captured final publishes no wake message, so a detached room gains no unread.
     assert_eq!(recovered.state.room(room_b).unwrap().unread_count, 0);
     let (events, _) = mpsc::channel();
     recovered

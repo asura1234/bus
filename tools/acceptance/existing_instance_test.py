@@ -34,7 +34,7 @@ def explicit_reply_instruction(token, *, every_message=False):
             f"`bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text {token}`. "
             "Replace MESSAGE_ID with this delivered Bus message ID and YOUR_AGENT_ID with your own agent ID. "
             + messages +
-            'Require ok:true and stage:"replied" from that command. A native final alone is not a reply. '
+            'Require ok:true and stage:"replied" from that command. A native final is stored as the request reply, but it does not send this token; only the explicit command does. '
             "Then end your turn without sending another copy.")
 
 

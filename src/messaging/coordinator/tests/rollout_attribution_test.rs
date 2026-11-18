@@ -1,8 +1,8 @@
 //! Adversarial attribution cases for the unbound rollout fallback, adopted
 //! from the bug-reply-not-captured verifier (2026-10-20, rounds 1 to 3):
-//! a proved rollout turn settles that request without storing its answer.
-//! An unattributed or ambiguous end still completes with no reply and no
-//! failure reason, and does not borrow another turn.
+//! a proved rollout turn settles that request and stores its answer as the
+//! reply. An unattributed or ambiguous end still completes with no reply and
+//! no failure reason, and does not borrow another turn.
 use super::*;
 use crate::agents::providers::codex::usage::{
     find_codex_prompt_turn, read_codex_turn_end, CodexTurnEnd,
@@ -77,7 +77,14 @@ fn settled_without_reply(f: &Fixture, id: RequestId) {
         "{id:?} {:?}",
         request.failure_reason
     );
-    assert!(f.reply(id).is_none(), "{id:?} {:?}", f.reply(id));
+    assert!(
+        request
+            .completed_reply
+            .as_ref()
+            .is_none_or(|reply| reply.group.is_some()),
+        "{id:?} {:?}",
+        f.reply(id)
+    );
     assert!(f
         .worker
         .state
@@ -129,8 +136,12 @@ fn send_boundary_is_inclusive_and_a_one_ms_older_turn_is_rejected() {
         let stamp = (since as i64 + offset) as u64;
         std::fs::write(&path, turn(&f, "candidate", stamp, "boundary", "RIGHT")).unwrap();
         idle_then_settle(&mut f, id);
-        settled_without_reply(&f, id);
-        reply_text_absent(&f, "RIGHT");
+        if offset < 0 {
+            settled_without_reply(&f, id);
+            reply_text_absent(&f, "RIGHT");
+        } else {
+            assert_eq!(f.reply(id).as_deref(), Some("RIGHT"), "offset {offset}");
+        }
         assert!(
             f.request(id).provider_turn_id.is_none(),
             "offset {offset} borrowed a rollout turn"
@@ -185,8 +196,7 @@ fn complete_final_json_without_a_trailing_newline_delivers_only_its_exact_text()
     )
     .unwrap();
     idle_then_settle(&mut f, id);
-    settled_without_reply(&f, id);
-    reply_text_absent(&f, "EXACT");
+    assert_eq!(f.reply(id).as_deref(), Some("EXACT"));
     assert!(f.request(id).provider_turn_id.is_none());
 }
 
@@ -303,8 +313,7 @@ fn an_unbound_long_turn_with_one_matching_prompt_still_delivers_its_own_final() 
     )
     .unwrap();
     idle_then_settle(&mut f, id);
-    settled_without_reply(&f, id);
-    reply_text_absent(&f, "EXACT LONG FINAL");
+    assert_eq!(f.reply(id).as_deref(), Some("EXACT LONG FINAL"));
     assert!(f.request(id).provider_turn_id.is_none());
 }
 

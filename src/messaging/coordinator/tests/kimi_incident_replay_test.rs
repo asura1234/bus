@@ -116,8 +116,8 @@ fn replay_prior_active(late_stop: bool) {
         stop(&f);
     }
     f.consume();
-    assert!(f.reply(lead).is_none());
-    assert_eq!(f.request(lead).delivery_stage(), "ended");
+    assert!(f.reply(lead).is_some_and(|reply| !reply.trim().is_empty()));
+    assert_eq!(f.request(lead).delivery_stage(), "replied");
     assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
     assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("2"));
     assert!(
@@ -142,10 +142,10 @@ fn replay_prior_active(late_stop: bool) {
     f.consume();
     f.status(RuntimeStatus::Idle);
     f.consume();
-    assert!(f.reply(lead).is_none());
-    assert_eq!(f.request(lead).delivery_stage(), "ended");
-    assert!(f.reply(next).is_none());
-    assert_eq!(f.request(next).delivery_stage(), "ended");
+    assert!(f.reply(lead).is_some_and(|reply| !reply.trim().is_empty()));
+    assert_eq!(f.request(lead).delivery_stage(), "replied");
+    assert!(f.reply(next).is_some_and(|reply| !reply.trim().is_empty()));
+    assert_eq!(f.request(next).delivery_stage(), "replied");
     assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
     assert_eq!(f.request(next).provider_turn_id.as_deref(), Some("2"));
     assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
@@ -225,17 +225,22 @@ fn kimi_incident_34948_and_36279_require_the_recorded_guidance_attestation() {
             f.status(RuntimeStatus::Idle);
             stop(&f);
             f.consume();
-            assert!(f.reply(lead).is_none());
-            assert_eq!(f.request(lead).delivery_stage(), "ended");
-            assert!(
-                f.reply(follow).is_none(),
-                "request {follow:?}, control {control}"
-            );
+            assert!(f.reply(lead).is_some_and(|reply| !reply.trim().is_empty()));
+            assert_eq!(f.request(lead).delivery_stage(), "replied");
             if control == "recorded" {
-                assert_eq!(f.request(follow).delivery_stage(), "ended");
+                assert!(
+                    f.reply(follow)
+                        .is_some_and(|reply| !reply.trim().is_empty()),
+                    "request {follow:?}, control {control}"
+                );
+                assert_eq!(f.request(follow).delivery_stage(), "replied");
                 assert_eq!(f.request(follow).provider_turn_id.as_deref(), Some("0"));
                 assert!(f.request(follow).trusted_start_bound);
             } else {
+                assert!(
+                    f.reply(follow).is_none(),
+                    "request {follow:?}, control {control}"
+                );
                 assert!(!f.request(follow).trusted_start_bound);
                 f.now = f
                     .request(lead)
@@ -331,8 +336,8 @@ fn kimi_incident_32629_unclaimed_uncertainty_keeps_native_detail_without_replay(
     let mut state = f.worker.state.clone();
     assert!(state.settle_unclaimed_steering(f.agent, f.now, |_| None));
     f.worker.save(state).unwrap();
-    assert!(f.reply(lead).is_none());
-    assert_eq!(f.request(lead).delivery_stage(), "ended");
+    assert!(f.reply(lead).is_some_and(|reply| !reply.trim().is_empty()));
+    assert_eq!(f.request(lead).delivery_stage(), "replied");
     assert!(f.reply(follow).is_none());
     assert!(
         !f.request(follow).settled(),

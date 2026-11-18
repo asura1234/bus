@@ -91,10 +91,15 @@ fn master_guard_worker_explicit_and_turn_final_replies_land_in_the_request_room(
             f.worker.settle_requests().unwrap();
             assert_eq!(f.request(request).phase, RequestPhase::Completed);
             assert!(f.request(request).failure_reason.is_none());
-            assert!(f.reply(request).is_none());
+            assert!(f
+                .reply(request)
+                .is_some_and(|reply| !reply.trim().is_empty()));
             let outcome = status(&mut f, request);
-            assert!(outcome["requests"][0]["reply"].is_null(), "{outcome}");
-            assert_eq!(outcome["requests"][0]["stage"], "ended");
+            assert_eq!(
+                outcome["requests"][0]["reply"]["text"], "worker answer",
+                "{outcome}"
+            );
+            assert_eq!(outcome["requests"][0]["stage"], "replied");
             assert!(f
                 .worker
                 .state
@@ -102,11 +107,11 @@ fn master_guard_worker_explicit_and_turn_final_replies_land_in_the_request_room(
                 .unwrap()
                 .latest_replies
                 .is_empty());
-            assert!(f.worker.state.requests().all(|candidate| {
-                candidate
-                    .reply()
-                    .is_none_or(|reply| reply.text != "worker answer")
-            }));
+            assert_eq!(
+                f.reply(request).as_deref(),
+                Some("worker answer"),
+                "the answer is stored on the request, not republished"
+            );
         }
         assert!(f
             .worker
@@ -156,17 +161,17 @@ fn reply_to_completes_the_lead_without_ending_its_turn_or_stopping_later_steerin
     let next_status = status(&mut f, next);
     assert_eq!(f.request(next).phase, RequestPhase::Completed);
     assert!(f.request(next).failure_reason.is_none());
-    assert!(
-        next_status["requests"][0]["reply"].is_null(),
+    assert_eq!(
+        next_status["requests"][0]["reply"]["text"], "outstanding work finished",
         "{next_status}"
     );
-    assert_eq!(next_status["requests"][0]["stage"], "ended");
+    assert_eq!(next_status["requests"][0]["stage"], "replied");
     assert_eq!(f.request(next).group, Some(lead));
-    assert!(f.worker.state.requests().all(|request| {
-        request
-            .reply()
-            .is_none_or(|reply| reply.text != "outstanding work finished")
-    }));
+    assert_eq!(
+        f.request(lead).reply().map(|reply| reply.text.as_str()),
+        Some("watcher ready"),
+        "the explicit answer stays the lead's answer"
+    );
     let published = &f.worker.state.room(f.room).unwrap().latest_replies[&agent];
     assert_eq!(published.text, "watcher ready");
     assert_eq!(f.worker.state.agent(agent).unwrap().current_request, None);

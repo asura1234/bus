@@ -299,9 +299,10 @@ fn claude_unquoted_image_callback_binds_and_ends_only_its_frozen_request() {
         );
         assert_eq!(settled.provider_turn_id.as_deref(), Some("turn-1"));
         assert!(settled.failure_reason.is_none());
-        assert!(
-            settled.reply().is_none(),
-            "a native final is not an explicit Bus reply"
+        assert_eq!(
+            settled.reply().map(|reply| reply.text.as_str()),
+            Some("IMAGE_CORRELATION_MARKER"),
+            "the captured native final answers the request"
         );
         assert_eq!(settled.submitted_payload.as_deref(), Some(frozen.as_str()));
         assert_eq!(settled.prompt.text, typed);
