@@ -133,13 +133,26 @@ impl BusUi {
                 && previous.is_none_or(|previous| previous.error != current.error)
             {
                 if let Some(error) = &current.error {
-                    tracing::warn!(
-                        event = "bus.agent.notice",
-                        agent_id = agent.id.0,
-                        agent = %agent.name,
-                        room_id = agent.room_id.0,
-                        %error,
-                    );
+                    // Launch readiness is progress, not a failure: it clears
+                    // once the provider terminal or hooks report in, so it
+                    // stays out of the error-pipe notice. Real agent errors
+                    // keep their WARN.
+                    if crate::messaging::model::is_launch_wait_error(error) {
+                        tracing::debug!(
+                            event = "bus.agent.launch_wait",
+                            agent_id = agent.id.0,
+                            agent = %agent.name,
+                            room_id = agent.room_id.0,
+                        );
+                    } else {
+                        tracing::warn!(
+                            event = "bus.agent.notice",
+                            agent_id = agent.id.0,
+                            agent = %agent.name,
+                            room_id = agent.room_id.0,
+                            %error,
+                        );
+                    }
                 }
             }
             if previous.is_none_or(|previous| previous.exit_error != current.exit_error) {

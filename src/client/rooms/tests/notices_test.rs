@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn launch_readiness_is_logged_at_debug_and_never_noticed() {
+    let (mut ui, _, agent) = fixture();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .set_agent_error(
+                agent,
+                Some(crate::messaging::model::AGENT_WAITING_FOR_HOOKS.into()),
+            )
+            .unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
+    let logs = capture.text();
+    assert!(
+        !logs.contains("bus.agent.notice"),
+        "launch readiness is progress, not a failure: {logs}"
+    );
+    assert!(logs.contains("DEBUG"), "{logs}");
+    assert!(logs.contains("bus.agent.launch_wait"), "{logs}");
+}
+
+#[test]
 fn agent_errors_are_logged_once_each_and_never_shown_as_room_notices() {
     let (mut ui, room, agent) = fixture();
     let capture = crate::utils::logging::test_capture::Capture::default();

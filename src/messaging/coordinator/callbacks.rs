@@ -356,7 +356,7 @@ impl Worker {
                     if agent.hook_setup_confirmed {
                         None
                     } else {
-                        Some("Not ready; waiting for the provider terminal.".into())
+                        Some(crate::messaging::model::AGENT_WAITING_FOR_TERMINAL.into())
                     },
                 )
                 .map_err(|e| e.to_string())?;
