@@ -9,6 +9,7 @@ use std::{
 use serde_json::{json, Value};
 
 use crate::agents::providers::{
+    agy::statusline as agy_statusline,
     claude_code::statusline as claude_statusline,
     usage::{Observation, UsageWindow, UsageWindows},
 };
@@ -58,10 +59,12 @@ impl CursorUsageSnapshot {
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
+    pub(crate) agy: Option<UsageSnapshot>,
     cursor: Option<CursorUsageSnapshot>,
     cursor_errors: BTreeMap<AgentId, CursorUsageSnapshot>,
     started_at_ms: u64,
     claude_reads: BTreeMap<AgentId, Instant>,
+    agy_reads: BTreeMap<AgentId, Instant>,
 }
 
 impl Default for Usage {
@@ -69,10 +72,12 @@ impl Default for Usage {
         Self {
             codex: None,
             claude: None,
+            agy: None,
             cursor: None,
             cursor_errors: BTreeMap::new(),
             started_at_ms: bus_io::now_ms(),
             claude_reads: BTreeMap::new(),
+            agy_reads: BTreeMap::new(),
         }
     }
 }
@@ -83,6 +88,7 @@ impl Usage {
         let snapshot = match agent.provider {
             Provider::Codex => self.codex.as_ref(),
             Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
+            Provider::Agy => self.agy.as_ref(),
             _ => None,
         }?;
         if snapshot.observed_by_agent != agent.id || !snapshot.fresh(now_ms) {
@@ -100,7 +106,11 @@ impl Usage {
 
     pub(crate) fn exhausted(&self, now_ms: u64) -> Vec<(String, AgentId, Option<bool>)> {
         let mut result = Vec::new();
-        for (provider, snapshot) in [("codex", &self.codex), ("claude", &self.claude)] {
+        for (provider, snapshot) in [
+            ("codex", &self.codex),
+            ("claude", &self.claude),
+            ("agy", &self.agy),
+        ] {
             let Some(snapshot) = snapshot else {
                 continue;
             };
@@ -151,7 +161,25 @@ impl Usage {
             "cursor": self.cursor_json(bus_io::now_ms()),
             "grok": unknown(crate::agents::providers::grok::usage::allowance_unavailable_reason()),
             "kimi": unknown("Kimi has no local allowance source"),
+            "agy": self.agy_json(bus_io::now_ms()),
         })
+    }
+
+    fn agy_json(&self, now_ms: u64) -> Value {
+        let Some(snapshot) = &self.agy else {
+            return unknown("No AGY status line has reported rate limits since Bus started");
+        };
+        if !snapshot.fresh(now_ms) {
+            return unknown("AGY allowance observation is stale");
+        }
+        let current = |w: &&UsageWindow| w.resets_at.is_none_or(|at| at > now_ms / 1000);
+        let five_hour = snapshot.windows.five_hour.as_ref().filter(current);
+        let weekly = snapshot.windows.weekly.as_ref().filter(current);
+        if five_hour.is_none() && weekly.is_none() {
+            return unknown("AGY allowance windows are missing or expired");
+        }
+        json!({"status":"observed", "five_hour":five_hour, "weekly":weekly,
+            "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
     }
 
     fn claude_json(&self, now_ms: u64) -> Value {
@@ -275,6 +303,46 @@ impl Usage {
             windows: record.windows,
             read_at_ms: record.read_at_ms,
             observed_by_agent,
+        });
+    }
+
+    pub(crate) fn refresh_agy(&mut self, agent: &RoomAgent, spool: &Path) {
+        if agent.provider != Provider::Agy || agent.session_binding_invalidated {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .agy_reads
+            .get(&agent.id)
+            .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.agy_reads.insert(agent.id, now);
+        let Ok(record) = agy_statusline::read_usage(spool) else {
+            return;
+        };
+        if record.manifest.agent_id != agent.id.0
+            || record.manifest.provider != Provider::Agy
+            || Some(record.manifest.launch_id.as_str())
+                != agent.runtime_identity.launch_id.as_deref()
+            || Some(record.session_id.as_str()) != agent.runtime_identity.session_id.as_deref()
+        {
+            return;
+        }
+        if record.read_at_ms < self.started_at_ms
+            || record.read_at_ms > bus_io::now_ms()
+            || self
+                .agy
+                .as_ref()
+                .is_some_and(|old| old.read_at_ms >= record.read_at_ms)
+        {
+            return;
+        }
+        self.agy = Some(UsageSnapshot {
+            windows: record.windows,
+            read_at_ms: record.read_at_ms,
+            observed_by_agent: agent.id,
         });
     }
 }

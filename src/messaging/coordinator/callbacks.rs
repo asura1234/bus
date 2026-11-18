@@ -128,6 +128,7 @@ impl Worker {
         }
         if let Some(agent) = self.state.agent(id) {
             self.usage.refresh_claude(agent, dir);
+            self.usage.refresh_agy(agent, dir);
         }
         Ok(())
     }
@@ -466,9 +467,9 @@ impl Worker {
         mut state: BusState,
     ) -> Result<CallbackFlow, String> {
         // Clear starts a fresh context; Cursor reports it on its first turn.
-        let source = if record.manifest.provider == Provider::Kimi {
-            // Kimi 2.4 reports /new as "startup". This path is entered only
-            // after Bus recorded a reset and the session actually changed.
+        let source = if matches!(record.manifest.provider, Provider::Kimi | Provider::Agy) {
+            // Kimi 2.4 and AGY report /new as "startup". This path is entered
+            // only after Bus recorded a reset and the session actually changed.
             Some("new".to_owned())
         } else {
             match parsed {

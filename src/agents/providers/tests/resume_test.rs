@@ -99,7 +99,8 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
     ] {
         let path = match provider {
             crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => {
+            | crate::agents::providers::ProviderKind::Kimi
+            | crate::agents::providers::ProviderKind::Agy => {
                 panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
@@ -120,7 +121,8 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
         .unwrap();
         let (actual_path, args, rebound) = match provider {
             crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => {
+            | crate::agents::providers::ProviderKind::Kimi
+            | crate::agents::providers::ProviderKind::Agy => {
                 panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
@@ -138,7 +140,8 @@ fn resume_provider_capture_keeps_paths_and_argv_for_each_harness() {
         assert!(!rebound);
         match provider {
             crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => {
+            | crate::agents::providers::ProviderKind::Kimi
+            | crate::agents::providers::ProviderKind::Agy => {
                 panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )

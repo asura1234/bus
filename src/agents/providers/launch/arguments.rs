@@ -96,6 +96,9 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
     if provider == ProviderKind::Kimi {
         return super::super::kimi::launch::resumable_options(args);
     }
+    if provider == ProviderKind::Agy {
+        return super::super::agy::launch::resumable_options(args);
+    }
     let mut options = Vec::new();
     let mut index = 0;
     let mut seen_positional = false;
@@ -130,6 +133,7 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
             ProviderKind::Cursor => matches!(name, "--resume" | "--continue"),
             ProviderKind::Grok => unreachable!("Grok filters its own resumable options"),
             ProviderKind::Kimi => unreachable!("Kimi filters its own resumable options"),
+            ProviderKind::Agy => unreachable!("AGY filters its own resumable options"),
             #[cfg(feature = "dev-tools")]
             ProviderKind::Fake => matches!(name, "--resume"),
         };
@@ -186,6 +190,7 @@ fn arity(provider: ProviderKind, name: &str) -> Option<usize> {
         ProviderKind::Cursor => cursor_arity(name),
         ProviderKind::Grok => super::super::grok::launch::option_arity(name),
         ProviderKind::Kimi => super::super::kimi::launch::option_arity(name),
+        ProviderKind::Agy => super::super::agy::launch::option_arity(name),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => match name {
             "--script" | "--resume" => Some(1),

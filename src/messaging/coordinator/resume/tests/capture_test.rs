@@ -354,7 +354,8 @@ impl Fixture {
     fn hook_path(&self) -> PathBuf {
         match self.provider {
             crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => panic!(
+            | crate::agents::providers::ProviderKind::Kimi
+            | crate::agents::providers::ProviderKind::Agy => panic!(
                 "This fixture covers the original providers; use dedicated Grok provider tests"
             ),
             Provider::ClaudeCode | Provider::ClaudeDs => self
@@ -370,7 +371,8 @@ impl Fixture {
     fn write_hooks(&self) {
         let (adapter, events): (&str, &[&str]) = match self.provider {
             crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => panic!(
+            | crate::agents::providers::ProviderKind::Kimi
+            | crate::agents::providers::ProviderKind::Agy => panic!(
                 "This fixture covers the original providers; use dedicated Grok provider tests"
             ),
             Provider::ClaudeCode | Provider::ClaudeDs => (
@@ -768,7 +770,8 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
             extras.args,
             match provider {
                 crate::agents::providers::ProviderKind::Grok
-                | crate::agents::providers::ProviderKind::Kimi => panic!(
+                | crate::agents::providers::ProviderKind::Kimi
+                | crate::agents::providers::ProviderKind::Agy => panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 ),
                 Provider::ClaudeCode | Provider::ClaudeDs => vec![
@@ -1259,7 +1262,7 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
         std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
         let mut expected = launch::parse_path_tokens(expected).unwrap();
         expected.extend(match provider {
-            Provider::Grok | Provider::Kimi => {
+            Provider::Grok | Provider::Kimi | Provider::Agy => {
                 panic!("This fixture covers the original providers; use dedicated provider tests")
             }
             Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),

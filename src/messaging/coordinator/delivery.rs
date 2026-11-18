@@ -148,10 +148,13 @@ impl Worker {
             {
                 continue;
             }
-            // Initial Cursor/Grok instructions stay on the readiness tick.
+            // Initial Cursor/Grok/AGY instructions stay on the readiness tick.
             // They must precede queued work and must not hold another recipient.
             if !launch_prompts
-                && matches!(agent.provider, Provider::Cursor | Provider::Grok)
+                && matches!(
+                    agent.provider,
+                    Provider::Cursor | Provider::Grok | Provider::Agy
+                )
                 && agent
                     .runtime_identity
                     .launch_id
@@ -380,8 +383,10 @@ impl Worker {
     }
 
     fn deliver_launch_prompt(&mut self, agent: &RoomAgent) -> Result<bool, String> {
-        if !matches!(agent.provider, Provider::Cursor | Provider::Grok)
-            || agent.current_request.is_some()
+        if !matches!(
+            agent.provider,
+            Provider::Cursor | Provider::Grok | Provider::Agy
+        ) || agent.current_request.is_some()
         {
             return Ok(false);
         }
@@ -393,10 +398,14 @@ impl Worker {
         ) else {
             return Ok(false);
         };
-        if identity.session_id.is_none() {
+        let spool = self.data_dir.join("callbacks").join(launch);
+        // Fresh AGY launches defer SessionStart until the first submitted prompt.
+        if identity.session_id.is_none()
+            && (agent.provider != Provider::Agy
+                || super::launch::reserved_session(&spool).is_some())
+        {
             return Ok(false);
         }
-        let spool = self.data_dir.join("callbacks").join(launch);
         let attempted = spool.join("launch-prompt-attempted");
         if attempted.exists() {
             return Ok(false);
@@ -633,7 +642,10 @@ impl Worker {
             return Ok(());
         };
         if identity.session_id.is_none()
-            && !matches!(agent.provider, Provider::Codex | Provider::Kimi)
+            && !matches!(
+                agent.provider,
+                Provider::Codex | Provider::Kimi | Provider::Agy
+            )
         {
             return Ok(());
         }

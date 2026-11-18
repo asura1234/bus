@@ -119,6 +119,7 @@ impl Worker {
             record.manifest.provider,
             crate::agents::providers::ProviderKind::Grok
                 | crate::agents::providers::ProviderKind::Kimi
+                | crate::agents::providers::ProviderKind::Agy
         ) || self
             .state
             .agent(id)

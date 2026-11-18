@@ -15,6 +15,10 @@ pub(crate) fn is_foreign_callback(adapter: ProviderKind, value: &Value) -> bool 
         ProviderKind::Grok => {
             value.get("hookEventName").is_none() && value.get("hook_event_name").is_some()
         }
+        // AGY natively sends camelCase `hookEventName` without `hook_event_name`.
+        ProviderKind::Agy => {
+            value.get("hookEventName").is_none() || value.get("hook_event_name").is_some()
+        }
         _ => value.get("hookEventName").is_some(),
     }
 }

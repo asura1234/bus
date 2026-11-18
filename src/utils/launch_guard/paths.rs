@@ -68,6 +68,7 @@ pub(crate) fn validate(home: &Path, data: Option<&Path>, protected: &Path) -> io
         ".cursor",
         ".grok",
         ".kimi-code",
+        ".gemini",
     ] {
         let root = protected.join(directory);
         roots.push(resolved(&root, &[], 0)?);
@@ -81,6 +82,7 @@ pub(crate) fn validate(home: &Path, data: Option<&Path>, protected: &Path) -> io
         ".cursor/skills",
         ".grok/skills",
         ".kimi-code/skills",
+        ".gemini/config/skills",
     ] {
         resolved(&home.join(directory), &roots, 0)?;
     }

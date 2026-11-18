@@ -124,6 +124,8 @@ pub(crate) fn load(
             identity::provider_kind(agent.provider),
             &args,
         );
+    } else if agent.provider == ProviderKind::Agy {
+        let _ = crate::agents::providers::agy::launch::extract_user_settings(&mut args);
     }
     crate::agents::providers::launch::apply_run_permissions(
         identity::provider_kind(agent.provider),
@@ -260,7 +262,7 @@ fn capture_args(
     hooks: &HookContext,
     project: &Path,
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
-    use crate::agents::providers::{claude_code, codex, cursor, grok, kimi};
+    use crate::agents::providers::{agy, claude_code, codex, cursor, grok, kimi};
     match identity::provider_kind(provider) {
         ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
             claude_code::resume::capture_args(hooks, project)
@@ -269,6 +271,7 @@ fn capture_args(
         ProviderKind::Cursor => cursor::resume::capture_args(hooks, project),
         ProviderKind::Grok => grok::resume::capture_args(hooks, project),
         ProviderKind::Kimi => kimi::resume::capture_args(hooks, project),
+        ProviderKind::Agy => agy::resume::capture_args(hooks, project),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => Ok((hooks.spool.clone(), Vec::new(), false)),
     }

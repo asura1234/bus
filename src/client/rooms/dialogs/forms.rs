@@ -91,6 +91,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi,
+            Provider::Agy,
         ]
     }
 }

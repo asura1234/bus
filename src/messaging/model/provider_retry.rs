@@ -535,7 +535,9 @@ fn transient(provider: Provider, error: &str) -> Option<bool> {
         {
             Some(quota)
         }
-        Provider::Grok | Provider::Kimi if quota || overload || connection => Some(quota),
+        Provider::Grok | Provider::Kimi | Provider::Agy if quota || overload || connection => {
+            Some(quota)
+        }
         _ => None,
     }
 }

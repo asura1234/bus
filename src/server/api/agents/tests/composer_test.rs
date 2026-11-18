@@ -2094,6 +2094,51 @@ fn claude_composer_keeps_literal_yes_no_hint_as_owned_input() {
 }
 
 #[test]
+fn agy_composer_observes_idle_working_and_paste_chips() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let rule = "─".repeat(40);
+    let idle = format!("Antigravity CLI 1.5.11\n\n{rule}\n\n>\n{rule}\n\n? for shortcuts\n");
+    assert_eq!(observe(AgentKind::Antigravity, &idle, "hello"), InputObservation::Empty);
+    assert!(observer(AgentKind::Antigravity, "hello".into()).submission_available(&idle));
+
+    let typed = format!("Antigravity CLI 1.5.11\n\n{rule}\n\n> hello world\n{rule}\n\n? for shortcuts\n");
+    assert_eq!(
+        observe(AgentKind::Antigravity, &typed, "hello world"),
+        InputObservation::Pending
+    );
+
+    let long_text = "x".repeat(1853);
+    let pasted = format!(
+        "Antigravity CLI 1.5.11\n\n{rule}\n\n> [Pasted text #1 1853 chars]\n{rule}\n\n? for shortcuts\n"
+    );
+    assert_eq!(
+        observe(AgentKind::Antigravity, &pasted, &long_text),
+        InputObservation::Pending
+    );
+
+    // Working screen with open composer (`esc to cancel` footer) supports mid-turn steering!
+    let working = format!(
+        "⠋  Generating...\n\n{rule}\n\n>\n{rule}\n\nesc to cancel\n"
+    );
+    assert_eq!(
+        observe(AgentKind::Antigravity, &working, "steer me"),
+        InputObservation::Empty
+    );
+    assert!(
+        observer(AgentKind::Antigravity, "steer me".into()).submission_available(&working),
+        "AGY working composer with `esc to cancel` footer must remain open for steering"
+    );
+
+    // Untrusted workspace dialog is Unavailable for prompt submission.
+    let untrusted = "Accessing workspace:\n/tmp/repo\nDo you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit\n  ↑/↓ Navigate · enter Confirm\n";
+    assert_eq!(
+        observe(AgentKind::Antigravity, untrusted, "hello"),
+        InputObservation::Unavailable
+    );
+    assert!(!observer(AgentKind::Antigravity, "hello".into()).submission_available(untrusted));
+}
+
+#[test]
 fn codex_composer_keeps_literal_yes_no_hint_as_owned_input() {
     use crate::terminal::runtime::SubmissionInspector;
     let text = "Please print [y/n]";

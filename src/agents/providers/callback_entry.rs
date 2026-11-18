@@ -35,6 +35,12 @@ pub(crate) fn dispatch(
         }
         return Some(Ok(()));
     }
+    if args.get(2).map(String::as_str) == Some("agy-statusline") {
+        if args.len() == 3 {
+            super::agy::statusline::run();
+        }
+        return Some(Ok(()));
+    }
     // Separate rotating-log writers from the spool writer. Diagnostic failure
     // must never prevent saving the callback, and must not create a log root.
     let _diagnostics_lease = diagnostics_dir
@@ -76,6 +82,7 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         "cursor-hook" => ProviderKind::Cursor,
         "grok-hook" => ProviderKind::Grok,
         "kimi-hook" => ProviderKind::Kimi,
+        "agy-hook" => ProviderKind::Agy,
         #[cfg(feature = "dev-tools")]
         "fake-hook"
             if std::env::var_os("BUS_TUI_FAKE_AGENT").is_some()

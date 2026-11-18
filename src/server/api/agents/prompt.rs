@@ -7,6 +7,7 @@ use crate::terminal::pty::actor::InputCompletion;
 use bytes::Bytes;
 use std::time::Duration;
 
+mod agy;
 mod composer;
 mod grok;
 mod kimi;
@@ -32,6 +33,7 @@ fn observes_composer(kind: crate::agents::AgentKind) -> bool {
             | AgentKind::Cursor
             | AgentKind::Grok
             | AgentKind::Kimi
+            | AgentKind::Antigravity
     )
 }
 
@@ -155,7 +157,7 @@ pub(super) fn check_unbound_prompt_identity_and_idle(
         .is_some_and(|generation| generation != agent.generation)
         || agent.terminal_id != params.expected_terminal_id
         || agent.pane_id != params.expected_pane_id
-        || !matches!(agent.agent.as_deref(), Some("codex" | "kimi"))
+        || !matches!(agent.agent.as_deref(), Some("codex" | "kimi" | "agy"))
         || agent.name.as_deref() != Some(params.expected_managed_name.as_str())
         || params.expected_managed_name.is_empty()
         || agent.agent_session.is_some()

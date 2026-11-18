@@ -305,6 +305,10 @@ impl Fixture {
             Provider::Cursor => {
                 json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":turn,"prompt":prompt})
             }
+            Provider::Agy => {
+                let step = turn.parse::<u64>().unwrap_or(0);
+                json!({"hookEventName":"PreInvocation","conversationId":"session","invocationNum":0,"initialNumSteps":step + 1,"lastUserInput":prompt})
+            }
             #[cfg(feature = "dev-tools")]
             Provider::Fake => {
                 json!({"event":"started","session":"session","turn":turn,"prompt":prompt})
@@ -316,6 +320,47 @@ impl Fixture {
     fn stopped(&self, turn: &str, text: &str) {
         match self.provider {
             crate::agents::providers::ProviderKind::Grok | crate::agents::providers::ProviderKind::Kimi => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+            Provider::Agy => {
+                let step = turn.parse::<u64>().unwrap_or(0);
+                let logs = self.dir.join("agy-brain/session/.system_generated/logs");
+                std::fs::create_dir_all(&logs).unwrap();
+                let transcript = logs.join("transcript_full.jsonl");
+                let mut rows = Vec::new();
+                let mut state_clone = self.worker.state.clone();
+                if let Some(lead) = state_clone.agent(self.agent).and_then(|a| a.current_request) {
+                    for (offset, id) in state_clone.group_members(lead).into_iter().enumerate() {
+                        if let Some(payload) = state_clone.render_request_payload(id) {
+                            rows.push(json!({
+                                "step_index": step + offset as u64,
+                                "source": "USER_EXPLICIT",
+                                "type": "USER_INPUT",
+                                "status": "DONE",
+                                "content": format!("<USER_REQUEST>\n{payload}\n</USER_REQUEST>"),
+                            }));
+                        }
+                    }
+                }
+                let reply_step = step + rows.len().max(1) as u64;
+                rows.push(json!({
+                    "step_index": reply_step,
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "content": text,
+                }));
+                std::fs::write(
+                    &transcript,
+                    rows.iter().map(|row| format!("{row}\n")).collect::<String>(),
+                )
+                .unwrap();
+                self.record(json!({
+                    "hookEventName": "Stop",
+                    "conversationId": "session",
+                    "terminationReason": "NO_TOOL_CALL",
+                    "fullyIdle": true,
+                    "transcriptPath": transcript,
+                }));
+            }
             Provider::ClaudeCode | Provider::ClaudeDs => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
             Provider::Codex => self.record(json!({"hook_event_name":"Stop","session_id":"session","turn_id":turn,"last_assistant_message":text,"transcript_path":"/tmp/rollout.jsonl"})),
             Provider::Cursor => {
@@ -330,6 +375,9 @@ impl Fixture {
     fn record(&self, mut value: Value) {
         if let Some(prompt) = value.get("prompt").and_then(Value::as_str) {
             value["prompt"] = json!(delivered_test_prompt(&self.worker.state, prompt));
+        }
+        if let Some(prompt) = value.get("lastUserInput").and_then(Value::as_str) {
+            value["lastUserInput"] = json!(delivered_test_prompt(&self.worker.state, prompt));
         }
         callbacks::append(
             &self.dir.join("callbacks/launch"),

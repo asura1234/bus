@@ -290,7 +290,8 @@ impl Worker {
         // the first prompt, which Bus types only into a bound session. The
         // session Bus itself launched with binds it, and every later callback
         // must still match it.
-        let session_id = adopted_session.filter(|_| provider == Provider::Cursor);
+        let session_id =
+            adopted_session.filter(|_| matches!(provider, Provider::Cursor | Provider::Agy));
         let identity = AgentRuntimeIdentity {
             launch_id: Some(launch_id),
             session_id,
@@ -312,9 +313,11 @@ impl Worker {
                 id,
                 Some(
                     match provider {
-                        Provider::Codex | Provider::Cursor | Provider::Grok | Provider::Kimi => {
-                            crate::messaging::model::AGENT_WAITING_FOR_TERMINAL
-                        }
+                        Provider::Codex
+                        | Provider::Cursor
+                        | Provider::Grok
+                        | Provider::Kimi
+                        | Provider::Agy => crate::messaging::model::AGENT_WAITING_FOR_TERMINAL,
                         Provider::ClaudeCode | Provider::ClaudeDs => {
                             crate::messaging::model::AGENT_WAITING_FOR_HOOKS
                         }
@@ -409,7 +412,10 @@ impl Worker {
                 &mut prepared.args,
                 args,
             ),
-            None if matches!(input.provider, Provider::Cursor | Provider::Grok) => {}
+            None if matches!(
+                input.provider,
+                Provider::Cursor | Provider::Grok | Provider::Agy
+            ) => {}
             None => {
                 let master = input.room;
                 state
@@ -437,6 +443,18 @@ impl Worker {
         orchestrator: Option<&OrchestratorSpec>,
     ) -> Result<std::path::PathBuf, String> {
         let orchestrates = orchestrator.map(|spec| spec.room);
+        if input.provider == Provider::Agy
+            && (orchestrates.is_some()
+                || self
+                    .state
+                    .room(input.room)
+                    .is_some_and(|room| room.kind == RoomKind::Master))
+        {
+            return Err(
+                "agy is supported as a work-room worker only; choose another provider for MASTER orchestrators"
+                    .into(),
+            );
+        }
         let cwd = launch::canonical_directory(&input.cwd)?;
         if input.provider == Provider::Codex {
             let project = launch::effective_project_directory(

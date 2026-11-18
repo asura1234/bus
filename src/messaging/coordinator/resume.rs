@@ -98,6 +98,7 @@ fn unstarted_provider_plan(
         "claude-ds" => ProviderKind::ClaudeDs,
         "cursor" => ProviderKind::Cursor,
         "grok" => ProviderKind::Grok,
+        "agy" => ProviderKind::Agy,
         _ => return None,
     };
     let executable = launch::executable(provider);
@@ -105,6 +106,8 @@ fn unstarted_provider_plan(
     if !args.is_empty() {
         if provider == ProviderKind::Grok {
             crate::agents::providers::grok::launch::validate_unstarted_argv(&args).ok()?;
+        } else if provider == ProviderKind::Agy {
+            crate::agents::providers::agy::launch::validate_unstarted_argv(&args).ok()?;
         } else {
             if std::path::Path::new(&args.remove(0))
                 .file_name()?
@@ -143,6 +146,7 @@ fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
             | super::Provider::Cursor
             | super::Provider::Grok
             | super::Provider::Kimi
+            | super::Provider::Agy
     ) && agent.runtime_identity.session_id.is_none()
         && agent.current_request.is_none()
         && !state.requests().any(|request| {

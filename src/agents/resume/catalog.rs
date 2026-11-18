@@ -176,7 +176,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
-        ("herdr:antigravity_cli", "agy", AgentSessionRefKind::Id) => {
+        ("herdr:antigravity_cli" | "herdr:agy", "agy", AgentSessionRefKind::Id) => {
             vec![
                 "agy".into(),
                 "--conversation".into(),
@@ -229,6 +229,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
                 | ("herdr:kilo", "kilo")
                 | ("herdr:cursor", "cursor")
                 | ("herdr:antigravity_cli", "agy")
+                | ("herdr:agy", "agy")
                 | ("herdr:grok", "grok")
         )
 }

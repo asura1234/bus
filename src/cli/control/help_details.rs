@@ -223,7 +223,7 @@ retrieve the retained outcome. --confirm is required (default false)."#;
 
 const AGENT_ADD: &str = r#"Launch a worker in a work room, or an orchestrator in MASTER. Current names are
 case-sensitive, trimmed and unique session-wide; a fully deleted name is reusable.
-Providers: claude, claude-ds, codex, cursor, grok, kimi. --pwd is the project directory; --args is one
+Providers: claude, claude-ds, codex, cursor, grok, kimi, agy (agy is worker-only). --pwd is the project directory; --args is one
 provider-argument string. Bus disables startup updates on launches/resumes;
 explicit Claude updater environment settings take precedence.
 Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completion.
@@ -302,7 +302,7 @@ Stop reading that identity; inspect state/owned session or exit_snapshot file.
 Terminal text is evidence, never proof of message settlement."#;
 
 const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor),
-/new (Grok/Kimi). Keep terminal/name/room, reset compactions and rebind the provider
+/new (Grok/Kimi/AGY). Keep terminal/name/room, reset compactions and rebind the provider
 session through its next start hook (Cursor: first new turn). This is not a Bus message.
 Result: {agent_id,sent:STRING,stage:"cleared"}.
 Errors: command_failed unless idle, ready, with no active/queued messages and

@@ -68,6 +68,12 @@ impl HookContract {
                 entry_shape: HookEntryShape::Command,
                 default_version: None,
             },
+            ProviderKind::Agy => Self {
+                adapter: "agy-hook",
+                events: &super::agy::project_hooks::HOOK_EVENTS,
+                entry_shape: HookEntryShape::Command,
+                default_version: None,
+            },
             ProviderKind::Codex => Self {
                 adapter: "codex-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop"],
@@ -256,6 +262,9 @@ pub(crate) fn merge_hooks(
 
 /// Consent is unnecessary only when installation would leave this JSON unchanged.
 pub(crate) fn hooks_are_current(path: &Path, contract: HookContract, binary: &Path) -> bool {
+    if contract.adapter == "agy-hook" {
+        return super::agy::project_hooks::hooks_are_current(path, binary);
+    }
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };

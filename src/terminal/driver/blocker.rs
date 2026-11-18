@@ -145,7 +145,18 @@ pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> 
         let Some(end) = chrome_after(start) else {
             return false;
         };
-        let framed = start > 0 && border(plain(&rows[start - 1])) && border(plain(&rows[end]));
+        let agy_padded_top = start >= 2
+            && plain(&rows[start - 1]).is_empty()
+            && border(plain(&rows[start - 2]))
+            && rows[end + 1..]
+                .iter()
+                .find(|row| !plain(row).is_empty())
+                .is_some_and(|row| {
+                    let lower = plain(row).to_ascii_lowercase();
+                    lower.starts_with("? for shortcuts") || lower.starts_with("esc to cancel")
+                });
+        let framed =
+            start > 0 && (border(plain(&rows[start - 1])) || agy_padded_top) && border(plain(&rows[end]));
         framed || footer(plain(&rows[end]))
     })?;
     let end = chrome_after(start)?;
@@ -154,6 +165,11 @@ pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> 
 
 fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
     if let Some(region) = editable_composer_region(&rows) {
+        let border = |row: &str| row.starts_with(['─', '╭', '╰', '┌', '└', '▀']);
+        let closing_border = region
+            .end
+            .checked_sub(1)
+            .is_some_and(|idx| border(plain(&rows[idx])));
         // Keep the prompt as a boundary against older transcript controls.
         if let Some((column, marker)) = rows[region.start]
             .char_indices()
@@ -166,6 +182,17 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         // for the control scan: a [y/n] hint can share that row.
         for row in &mut rows[region.start + 1..region.end.saturating_sub(1)] {
             row.clear();
+        }
+        // AGY keeps its framed composer open while working and renders bare
+        // `esc to cancel` directly beneath the bottom horizontal rule.
+        if closing_border {
+            if let Some(footer_idx) =
+                (region.end..rows.len()).find(|&idx| !plain(&rows[idx]).is_empty())
+            {
+                if plain(&rows[footer_idx]).eq_ignore_ascii_case("esc to cancel") {
+                    rows[footer_idx].clear();
+                }
+            }
         }
     }
     rows
