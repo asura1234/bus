@@ -27,7 +27,7 @@ reply, no failure reason and matching native output, so both provider conversati
 completed a turn before restart. Record IDs and select `dot-other` through the sidebar.
 
 1. Fixture: send `DOT peer` as dot-worker to dot-peer in the long-named
-   room and wait for its ended/null native completion. Assert its `unread_count` is
+   room and wait for its replied native completion. Assert its `unread_count` is
    positive but `unseen_to_developer` is false and no sidebar dot appears.
 2. Fixture: send `DOT decision` as dot-worker to `you` in the long-named room
    and `DOT MASTER decision` as dot-worker to `human` in MASTER. Assert both
@@ -59,7 +59,7 @@ completed a turn before restart. Record IDs and select `dot-other` through the s
    and MASTER markers/dots retained, and the default first work room (`bus`)
    visible after startup. Wait for both fake agents to be idle, then send a
    developer fixture `DOT after restart` to dot-peer in the long-named room
-   and verify its ended/null completion and matching native output. Assert no session invalidation and both unseen
+   and verify its replied completion and matching native output. Assert no session invalidation and both unseen
    markers retained. Capture/open
    a screenshot of the persisted dots.
 6. Click MASTER and assert its decision displays with a You recipient and its

@@ -11,7 +11,7 @@
 
 ### STICKY-01 — Filters survive arrivals, refresh, room changes and restart
 
-**Preconditions/setup:** In `sticky`, arrange `initial direct` from alpha to you, `initial peer` from alpha to beta, and `initial outgoing` from the developer to alpha. Require each recipient request to end with no stored reply. Open `sticky` at the tail.
+**Preconditions/setup:** In `sticky`, arrange `initial direct` from alpha to you, `initial peer` from alpha to beta, and `initial outgoing` from the developer to alpha. Require each recipient request to end as replied with its native reply text. Open `sticky` at the tail.
 
 1. Click `filter-to-you` → incoming checked, outgoing unchecked; `initial direct` visible, `initial peer` and the developer's `initial outgoing` body hidden. Capture **incoming-on**.
 2. Without touching the filter, send `new peer hidden` as alpha to beta and `new direct visible` as alpha to you → after native completions/refresh settle, incoming remains checked, the new direct post is visible, and the peer body is hidden. Capture **incoming-after-arrivals**.

@@ -14,7 +14,7 @@
 
 ### FILTER-01 — Work-room filters, search, room state and restart
 
-**Preconditions/setup:** R(`filter-a`); A(`filter-a`, `alpha`) and A(`filter-a`, `beta`); P(`alpha`); send `Needle outgoing` as the developer and verify its ended/null completion and matching native output. Post `Needle direct` as alpha to you and `Needle peer` as alpha to beta. R(`filter-b`). Return to `filter-a`.
+**Preconditions/setup:** R(`filter-a`); A(`filter-a`, `alpha`) and A(`filter-a`, `beta`); P(`alpha`); send `Needle outgoing` as the developer and verify its replied completion and matching native output. Post `Needle direct` as alpha to you and `Needle peer` as alpha to beta. R(`filter-b`). Return to `filter-a`.
 
 1. Inspect the work-room header and unfiltered history → both checkboxes are unchecked, in the required order and right-aligned below `# filter-a`; outgoing, direct and peer messages are visible. Capture the **off** screenshot and named hits `filter-to-you` / `filter-from-you`.
 2. Press Alt+I → only `* → You` is checked. Only the direct message remains; the developer's outgoing prompt and ordinary peer traffic disappear. Capture the **incoming-on** screenshot.
@@ -28,7 +28,7 @@
 
 ### FILTER-02 — MASTER filters and text search
 
-**Preconditions/setup:** R(`master-target`). Click MASTER and use A to add `master-agent` (Claude Code), orchestrating `master-target`; return to MASTER with F6. P(`master-agent`); send `Master Needle outgoing` as the developer and verify its ended/null completion and matching native output. Post `Master Needle direct` as master-agent to you. Stay on MASTER.
+**Preconditions/setup:** R(`master-target`). Click MASTER and use A to add `master-agent` (Claude Code), orchestrating `master-target`; return to MASTER with F6. P(`master-agent`); send `Master Needle outgoing` as the developer and verify its replied completion and matching native output. Post `Master Needle direct` as master-agent to you. Stay on MASTER.
 
 1. Inspect MASTER at 80×24 → both filters are present, unchecked, correctly ordered and right-aligned directly below `# MASTER`; the outgoing prompt and direct post are visible, with no synthesized reply. Capture the **master-off** screenshot.
 2. Press Alt+O → only `You → *` is checked and only developer-authored history remains; the direct message disappears. Capture the **master-outgoing-on** screenshot.

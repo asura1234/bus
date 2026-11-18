@@ -49,7 +49,7 @@ Enter, then draws a 350ms synchronized redraw. It executes nothing.
    Recheck after stable chat rows for 1500ms.
 3. Submit `fake:dialog-null` again. Wait for a second Blocked notice, observe
    and select the same label through `agent press`, bound to the fresh terminal
-   observation. Prove idle, the second matching native output and a second ended/null request. History has exactly two
+   observation. Prove idle, the second matching native output and a second replied request. History has exactly two
    Blocked and zero Resolved notices. Capture/open a screenshot; stop the session.
 
 ### DA-03 — Numbered Codex composer edits do not request help

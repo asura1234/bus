@@ -19,7 +19,7 @@ Run synthetic integration with an explicitly isolated dev-tools binary:
 
     nice -n 19 python3 -m tools.acceptance.grok_fake --binary ISOLATED_BINARY
 
-The runner checks native ended/null settlement and exact transcript output,
+The runner checks native replied settlement with the native text and exact transcript output,
 uses explicit reply fixtures while their turns are active, and sends separate
 worker-authored normal results for requester wake journeys. Missing or changed
 explicit answers fail. Reports bind synthetic results to the binary hash and
@@ -78,14 +78,14 @@ root, acceptance_existing_instance, or the real installed Grok alias.
 
 | Journey | Expected observation | Status |
 | --- | --- | --- |
-| Grok worker / Claude orchestrator | Native worker request ends without a stored reply; a separately authored normal result message reaches the original stable requester in the named conversation | Record in the hash-bound run report |
+| Grok worker / Claude orchestrator | Native worker request ends as replied with the native text; a separately authored normal result message reaches the original stable requester in the named conversation | Record in the hash-bound run report |
 | Grok orchestrator / Claude worker | Bootstrap, ordinary authored send (no --async), return idle; a fresh normal worker result message queues a Grok turn; an explicit --reply-to alone never does | Record in the hash-bound run report |
-| Three queued prompts | Ordered distinct requests/turns, each ended/null with matching native output; no loss | Record in the hash-bound run report |
-| Busy follow-up (steering case) | Grok keeps the new message queued while working; it runs in a distinct turn afterward. Both requests end/null with exact separate native outputs. Explicit reply fixtures must answer each message ID | Record in the hash-bound run report |
+| Three queued prompts | Ordered distinct requests/turns, each replied with matching native output; no loss | Record in the hash-bound run report |
+| Busy follow-up (steering case) | Grok keeps the new message queued while working; it runs in a distinct turn afterward. Both requests end replied with exact separate native outputs. Explicit reply fixtures must answer each message ID | Record in the hash-bound run report |
 | Dialog selection / free text | Observe the full card, then use press with its visible label, documented key or text+submit; bind terminal identity and inspect pending/uncertain results before continuing | Record in the hash-bound run report |
-| Gate / error / cancel / partial JSONL | Provisional/partial records do not settle early; errors/cancellation are not successful completions; no native text becomes a stored reply | Record in the hash-bound run report |
-| Long final | Preserve the exact 40,000-character native transcript evidence; the attributed request ends without a stored reply, and history must not invent or clip a reply payload | Record in the hash-bound run report |
-| MASTER follow-up while worker runs | Explicit MASTER replies supplied before turn end remain immutable after a separately authored worker result; ordinary native finals still leave ended/null requests | Record in the hash-bound run report |
+| Gate / error / cancel / partial JSONL | Provisional/partial records do not settle early; errors/cancellation are not successful completions; native text becomes the stored reply | Record in the hash-bound run report |
+| Long final | Preserve the exact 40,000-character native transcript evidence; the attributed request ends as replied with the exact native text, and history must not invent or clip a reply row | Record in the hash-bound run report |
+| MASTER follow-up while worker runs | Explicit MASTER replies supplied before turn end remain immutable after a separately authored worker result; ordinary native finals leave replied requests with their native text | Record in the hash-bound run report |
 | Work-room wake | One separately authored worker result reaches the orchestrator; an unprompted orchestrator status appears only in its work room, never as a correlated reply | Record in the hash-bound run report |
 | Restart before wake | Pending authored work survives; one wake/result, no duplication after repeated reads | Record in the hash-bound run report |
 | Adoption / cold resume | Same session, new terminal, owned hooks/capture rebound; missing capture fails | Record in the hash-bound run report |

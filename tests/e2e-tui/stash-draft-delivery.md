@@ -130,7 +130,7 @@ open and idle. Use `PROVIDER` in both fixtures to keep receipts distinct.
    Assert the original draft plus `-1-2-3` is restored, without Bus message text
    or an end marker. Type `-END` and press Enter; decode the native JSON reply
    and assert the exact payload is `fake:draft-bytes ACTIVE PROVIDER-1-2-3-END`.
-   There is one incoming message and one native completion, no stored reply and no resend.
+   There is one incoming message and one native completion, its native text stored as the reply, and no resend.
 
 ### STASH-06 — Claude keeps an existing native stash while another draft is visible
 

@@ -26,7 +26,7 @@ Step 1 opens an inert approval fixture on the worker's screen using the fake
 agent's `fake:dialog-settle redraw` command. This renders native menu controls and
 waits for input; the displayed shell command is never executed. The generic driver
 reports the controls as blocked. The fake orchestrator completes Bus's Blocked
-notice without a stored reply or an answer to the approval. Step 8's progress
+notice as replied with its native text, without an answer to the approval. Step 8's progress
 report is an agent-authored post through the scratch CLI, as the fixture rule
 allows: it is what `send --to human` does when an orchestrator follows its prompt.
 
@@ -68,7 +68,7 @@ allows: it is what `send --to human` does when an orchestrator follows its promp
 a cells screenshot of each room's history, `bus state` agent status, and
 `bus history --room master` and message status for step 6, and the step-8 send receipt.
 
-**Pass criteria:** message-owned native finals settle as ended without replies
-or synthesized posts; original messages remain in their conversations. The
+**Pass criteria:** message-owned native finals settle as replied with their
+native text and no synthesized posts; original messages remain in their conversations. The
 unprompted status shows only in the work room, and the explicit `send --to human`
 progress report shows only in MASTER.

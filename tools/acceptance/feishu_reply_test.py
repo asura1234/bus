@@ -253,7 +253,8 @@ class Run:
         request = status["requests"][0]
         assert request["agent_id"] == target and request["queue"] is True, request
         assert request["start_bound"] and request["latency"]["provider_started_at_ms"] is not None, request
-        assert request["stage"] == "ended" and request["turn_id"], request
+        assert request["stage"] == "replied" and request["turn_id"], request
+        assert (request.get("reply") or {}).get("text", "").strip(), request
         prompt = status["prompt"]
         assert prompt["author"] == "human" and prompt["text"] == event["text"], prompt
         provenance = prompt["in_reply_to"]

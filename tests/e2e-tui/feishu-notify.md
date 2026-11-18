@@ -78,8 +78,8 @@ match HEAD, private permissions, configured recipient/bridge and no legacy CLI k
    explicit instance receives it. Parent, unknown-parent/root fallback, unique
    code and accepted nested ancestry route exactly. Each original/alias gets its
    own developer prompt, unchanged text, structured source/raising-agent/target/
-   external-message provenance, one queue-only recipient, provider start timestamp
-   and ended independent turn ID, including while the orchestrator is busy.
+   external-message provenance, one queue-only recipient, provider start timestamp,
+   replied status and independent turn ID, including while the orchestrator is busy.
    Admit a late alias after the reply; require its cached original reply and a
    distinct completed provider turn before replay, with no new DM. Replay adds none.
 3. Unknown, conflicting ancestry or multiple codes park durably without requests.
