@@ -19,6 +19,9 @@ mod callback_spool;
 mod callback_wake;
 mod codex_settlement;
 mod command_queue;
+#[cfg(test)]
+#[path = "tests/command_queue_test.rs"]
+mod command_queue_tests;
 mod control_reads;
 use command_queue::{collect_delivery_commands, next_command};
 mod history;
