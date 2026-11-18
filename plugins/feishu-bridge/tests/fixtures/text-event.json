@@ -1,1 +1,0 @@
-{"type":"im.message.receive_v1","event_id":"ev_synthetic","message_id":"om_fixture","chat_id":"oc_allowed","chat_type":"p2p","sender_id":"ou_allowed","sender_type":"user","message_type":"text","content":"{\"text\":\"already decoded 雪\"}","create_time":"1794470000000","reply_to":"om_direct","root_id":"om_root","thread_id":"omt_thread"}
