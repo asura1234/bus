@@ -51,11 +51,7 @@ impl Worker {
                 .and_then(|request| state.request(request))
                 .is_some_and(|request| request.provider_turn_id.as_deref() != Some(&turn))
         {
-            if let Some(callback) =
-                self.committed_agy_completion_callback(id, state, record, &session)?
-            {
-                self.apply_request_callback(id, state, callback)?;
-            }
+            self.settle_prior_agy_turn_before_start(id, state, record, &session)?;
         }
         Ok(started)
     }

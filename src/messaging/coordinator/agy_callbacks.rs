@@ -15,8 +15,34 @@ const AGY_RETRY_EXT: &str = "agy-retry";
 const AGY_RETRY_ATTEMPTS: u8 = 16;
 const AGY_RETRY_DELAY_MS: u64 = 1000;
 
+pub(in crate::messaging::coordinator) enum AgyTranscriptOutcome {
+    Final(ProviderCallback),
+    Pending,
+    Rejected { turn: String, error: String },
+}
+
 fn agy_observation_paths(path: &Path) -> Vec<PathBuf> {
     observation_paths_with_ext(path, AGY_RETRY_EXT)
+}
+
+fn transcript_error_callback(
+    record: &callbacks::Record,
+    id: AgentId,
+    session: String,
+    turn: String,
+    error: String,
+) -> ProviderCallback {
+    callback(
+        record,
+        id,
+        session,
+        turn,
+        None,
+        CallbackEventKind::Error {
+            message: "AGY transcript could not be read; inspect its terminal.".into(),
+            provider_error: Some(error),
+        },
+    )
 }
 
 impl Worker {
@@ -44,9 +70,10 @@ impl Worker {
         state: &mut BusState,
         record: &callbacks::Record,
         session: &str,
-    ) -> Result<Option<ProviderCallback>, String> {
+        require_transcript_path: bool,
+    ) -> AgyTranscriptOutcome {
         let Some(turn) = Self::owned_agy_turn(state, id, record, session) else {
-            return Ok(None);
+            return AgyTranscriptOutcome::Pending;
         };
         let Some(raw_path) = record
             .value
@@ -54,6 +81,20 @@ impl Worker {
             .and_then(serde_json::Value::as_str)
             .filter(|s| !s.is_empty())
         else {
+            if require_transcript_path {
+                tracing::warn!(
+                    event = "bus.callback.rejected",
+                    reason = "agy_transcript_missing",
+                    agent_id = id.0,
+                    session_id = %session,
+                    turn_id = %turn,
+                    "AGY Stop callback lacks transcriptPath"
+                );
+                return AgyTranscriptOutcome::Rejected {
+                    turn,
+                    error: "AGY Stop callback lacks transcriptPath".into(),
+                };
+            }
             tracing::debug!(
                 event = "bus.callback.deferred",
                 reason = "agy_transcript_missing",
@@ -62,7 +103,7 @@ impl Worker {
                 turn_id = %turn,
                 "AGY callback lacks transcriptPath"
             );
-            return Ok(None);
+            return AgyTranscriptOutcome::Pending;
         };
         let transcript = match agy_completion::resolve_transcript_path(raw_path, session) {
             Ok(path) => path,
@@ -76,10 +117,7 @@ impl Worker {
                     %error,
                     "AGY transcriptPath validation failed"
                 );
-                state
-                    .set_agent_error(id, Some(error))
-                    .map_err(|e| e.to_string())?;
-                return Ok(None);
+                return AgyTranscriptOutcome::Rejected { turn, error };
             }
         };
         let resolution = match agy_completion::read_turn_completion(&transcript, &turn) {
@@ -94,10 +132,7 @@ impl Worker {
                     %error,
                     "Cannot read AGY transcript for owned turn"
                 );
-                state
-                    .set_agent_error(id, Some(error))
-                    .map_err(|e| e.to_string())?;
-                return Ok(None);
+                return AgyTranscriptOutcome::Rejected { turn, error };
             }
         };
         match resolution {
@@ -116,10 +151,32 @@ impl Worker {
                     CallbackEventKind::Final { text },
                 );
                 cb.callback_id = format!("{}:agy-transcript:{turn_id}", record.id);
-                Ok(Some(cb))
+                AgyTranscriptOutcome::Final(cb)
             }
-            TurnResolution::Pending => Ok(None),
+            TurnResolution::Pending => AgyTranscriptOutcome::Pending,
         }
+    }
+
+    pub(super) fn settle_prior_agy_turn_before_start(
+        &mut self,
+        id: AgentId,
+        state: &mut BusState,
+        record: &callbacks::Record,
+        session: &str,
+    ) -> Result<(), String> {
+        match self.committed_agy_completion_callback(id, state, record, session, false) {
+            AgyTranscriptOutcome::Final(cb) => {
+                self.apply_request_callback(id, state, cb)?;
+            }
+            AgyTranscriptOutcome::Rejected { turn, error } => {
+                let mut cb =
+                    transcript_error_callback(record, id, session.to_owned(), turn.clone(), error);
+                cb.callback_id = format!("{}:agy-transcript-error:{turn}", record.id);
+                self.apply_request_callback(id, state, cb)?;
+            }
+            AgyTranscriptOutcome::Pending => {}
+        }
+        Ok(())
     }
 
     pub(super) fn agy_completion_callback(
@@ -201,75 +258,73 @@ impl Worker {
                 )))
             }
             StopVerdict::Completed => {
-                if let Some(cb) =
-                    self.committed_agy_completion_callback(id, &mut state, record, &session)?
+                match self.committed_agy_completion_callback(id, &mut state, record, &session, true)
                 {
-                    return Ok(ControlFlow::Continue((
+                    AgyTranscriptOutcome::Final(cb) => Ok(ControlFlow::Continue((
                         state,
                         Some(cb),
                         agy_observation_paths(path),
-                    )));
-                }
-                if state
-                    .agent(id)
-                    .and_then(|a| a.actionable_error.as_ref())
-                    .is_some()
-                {
-                    return Ok(ControlFlow::Continue((
-                        state,
-                        None,
-                        agy_observation_paths(path),
-                    )));
-                }
-                let claim = claim_with_policy(
-                    path,
-                    crate::messaging::storage::io::now_ms(),
-                    AGY_RETRY_EXT,
-                    "AGY",
-                    AGY_RETRY_ATTEMPTS,
-                    AGY_RETRY_DELAY_MS,
-                )?;
-                match claim {
-                    Claim::Attempt(attempt) => {
-                        tracing::debug!(
-                            event = "bus.callback.deferred",
-                            reason = "agy_transcript_pending",
-                            agent_id = id.0,
-                            launch_id = %record.manifest.launch_id,
-                            session_id = %session,
-                            turn_id = %turn,
-                            attempt,
-                            "AGY Stop retained until transcript_full.jsonl flushes final reply"
-                        );
-                        Ok(ControlFlow::Break(()))
-                    }
-                    Claim::NotDue => {
-                        tracing::debug!(
-                            event = "bus.callback.deferred",
-                            reason = "agy_retry_not_due",
-                            agent_id = id.0,
-                            session_id = %session,
-                            turn_id = %turn,
-                            "AGY Stop retained until retry deadline"
-                        );
-                        Ok(ControlFlow::Break(()))
-                    }
-                    Claim::Exhausted => {
-                        tracing::warn!(
-                            event = "bus.callback.expired",
-                            reason = "agy_retry_budget_exhausted",
-                            agent_id = id.0,
-                            launch_id = %record.manifest.launch_id,
-                            session_id = %session,
-                            turn_id = %turn,
-                            attempts = AGY_RETRY_ATTEMPTS,
-                            "AGY Stop retired without committed transcript final"
-                        );
+                    ))),
+                    AgyTranscriptOutcome::Rejected { turn, error } => {
+                        let cb = transcript_error_callback(record, id, session, turn, error);
                         Ok(ControlFlow::Continue((
                             state,
-                            None,
+                            Some(cb),
                             agy_observation_paths(path),
                         )))
+                    }
+                    AgyTranscriptOutcome::Pending => {
+                        let claim = claim_with_policy(
+                            path,
+                            crate::messaging::storage::io::now_ms(),
+                            AGY_RETRY_EXT,
+                            "AGY",
+                            AGY_RETRY_ATTEMPTS,
+                            AGY_RETRY_DELAY_MS,
+                        )?;
+                        match claim {
+                            Claim::Attempt(attempt) => {
+                                tracing::debug!(
+                                    event = "bus.callback.deferred",
+                                    reason = "agy_transcript_pending",
+                                    agent_id = id.0,
+                                    launch_id = %record.manifest.launch_id,
+                                    session_id = %session,
+                                    turn_id = %turn,
+                                    attempt,
+                                    "AGY Stop retained until transcript_full.jsonl flushes final reply"
+                                );
+                                Ok(ControlFlow::Break(()))
+                            }
+                            Claim::NotDue => {
+                                tracing::debug!(
+                                    event = "bus.callback.deferred",
+                                    reason = "agy_retry_not_due",
+                                    agent_id = id.0,
+                                    session_id = %session,
+                                    turn_id = %turn,
+                                    "AGY Stop retained until retry deadline"
+                                );
+                                Ok(ControlFlow::Break(()))
+                            }
+                            Claim::Exhausted => {
+                                tracing::warn!(
+                                    event = "bus.callback.expired",
+                                    reason = "agy_retry_budget_exhausted",
+                                    agent_id = id.0,
+                                    launch_id = %record.manifest.launch_id,
+                                    session_id = %session,
+                                    turn_id = %turn,
+                                    attempts = AGY_RETRY_ATTEMPTS,
+                                    "AGY Stop retired without committed transcript final"
+                                );
+                                Ok(ControlFlow::Continue((
+                                    state,
+                                    None,
+                                    agy_observation_paths(path),
+                                )))
+                            }
+                        }
                     }
                 }
             }

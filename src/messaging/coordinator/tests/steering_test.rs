@@ -1571,3 +1571,99 @@ fn agy_unbound_onboarding_turn_stays_queued_while_bound_turn_steers() {
     assert_eq!(fixture.request(steered).group, Some(queued));
     assert_eq!(fixture.error(), None);
 }
+
+#[test]
+fn agy_corrupt_completed_transcript_fails_closed_and_preexisting_error_keeps_pending_retries() {
+    // Part 1: Corrupt completed UTF-8 record fails the turn closed and retains actionable_error.
+    let mut corrupt = Fixture::new(Provider::Agy);
+    let req = corrupt.send("trigger corrupt transcript", false);
+    corrupt.deliver();
+    corrupt.started("1", "trigger corrupt transcript");
+    corrupt.consume();
+    corrupt.status(RuntimeStatus::Working);
+
+    let logs = corrupt.dir.join("agy-brain/session/.system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let transcript = logs.join("transcript_full.jsonl");
+    let payload = corrupt.worker.state.render_request_payload(req).unwrap();
+    let mut raw = format!(
+        "{{\"step_index\":1,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":{}}}\n",
+        json!(format!("<USER_REQUEST>\n{payload}\n</USER_REQUEST>"))
+    )
+    .into_bytes();
+    raw.extend_from_slice(
+        b"{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"bad \xff\xfe\"}\n",
+    );
+    std::fs::write(&transcript, raw).unwrap();
+    corrupt.record(json!({
+        "hookEventName": "Stop",
+        "conversationId": "session",
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": true,
+        "transcriptPath": transcript,
+    }));
+    corrupt.status(RuntimeStatus::Idle);
+    corrupt.consume();
+    assert_eq!(corrupt.request(req).phase, RequestPhase::Abandoned);
+    assert!(corrupt.request(req).failure_reason.is_some());
+    assert!(
+        corrupt.error().is_some(),
+        "corrupt AGY transcript must retain actionable_error after idle settlement"
+    );
+
+    // Part 2: A pre-existing actionable_error must not abort Pending Stop retries.
+    let mut pending = Fixture::new(Provider::Agy);
+    let lead = pending.send("lead prompt", false);
+    pending.deliver();
+    pending.started("1", "lead prompt");
+    pending.consume();
+    pending.status(RuntimeStatus::Working);
+
+    let steered = pending.send("steered prompt", false);
+    pending.deliver();
+
+    let logs2 = pending.dir.join("agy-brain/session/.system_generated/logs");
+    std::fs::create_dir_all(&logs2).unwrap();
+    let transcript2 = logs2.join("transcript_full.jsonl");
+    let p1 = pending.worker.state.render_request_payload(lead).unwrap();
+    let p2 = pending
+        .worker
+        .state
+        .render_request_payload(steered)
+        .unwrap();
+    let partial_rows = format!(
+        "{}\n{}\n",
+        json!({"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":format!("<USER_REQUEST>\n{p1}\n</USER_REQUEST>")}),
+        json!({"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":format!("<USER_REQUEST>\n{p2}\n</USER_REQUEST>")}),
+    );
+    std::fs::write(&transcript2, &partial_rows).unwrap();
+
+    // Inject a pre-existing actionable_error before Stop arrives while transcript is still Pending.
+    let mut st = pending.worker.state.clone();
+    st.set_agent_error(pending.agent, Some("prior non-fatal hook warning".into()))
+        .unwrap();
+    pending.worker.save(st).unwrap();
+
+    pending.record(json!({
+        "hookEventName": "Stop",
+        "conversationId": "session",
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": true,
+        "transcriptPath": transcript2,
+    }));
+    pending.consume();
+    // Stop must still be retained in the spool (not dropped on attempt 0!).
+    assert_eq!(pending.request(lead).phase, RequestPhase::Active);
+
+    // Now flush the terminal response and advance past the 1s retry delay.
+    let full_rows = format!(
+        "{partial_rows}{}\n",
+        json!({"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"settled after retry"})
+    );
+    std::fs::write(&transcript2, full_rows).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    pending.consume();
+    assert_eq!(pending.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(pending.request(steered).phase, RequestPhase::Completed);
+    assert!(pending.request(steered).trusted_start_bound);
+}
