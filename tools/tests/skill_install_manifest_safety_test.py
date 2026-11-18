@@ -12,7 +12,7 @@ from tools import install_skills
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools" / "install_skills.py"
-PROVIDERS = ("claude", "codex", "cursor", "grok", "kimi")
+PROVIDERS = ("claude", "codex", "cursor", "grok", "kimi", "agy")
 
 
 def run_tool(home, command):

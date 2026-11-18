@@ -23,6 +23,7 @@ PROVIDERS = (
     ("cursor", ".cursor"),
     ("grok", ".grok"),
     ("kimi", ".kimi-code"),
+    ("agy", ".gemini/config"),
 )
 IGNORED = {".DS_Store", "Thumbs.db", "__pycache__"}
 SCHEMA = 1
@@ -53,6 +54,10 @@ def skills_source() -> Path:
 
 def provider_dirs() -> tuple[str, ...]:
     return tuple(directory for _, directory in PROVIDERS)
+
+
+def provider_top_dirs() -> set[str]:
+    return {directory.split("/", 1)[0] for _, directory in PROVIDERS}
 
 
 def ignored(name: str) -> bool:
@@ -140,7 +145,7 @@ def linked_ancestor(path: Path) -> Path | None:
             meta = None
         if meta is not None and stat.S_ISLNK(meta.st_mode):
             return ancestor
-        if ancestor.name in provider_dirs():
+        if ancestor.name in provider_top_dirs():
             break
     return None
 
@@ -424,7 +429,11 @@ def prune_created_dirs(home: Path, provider: str, manifest: dict) -> None:
     """Only prune known provider paths with explicit directory ownership."""
     directory = dict(PROVIDERS)[provider]
     created = manifest.get("created_dirs", [])
-    for relative in (f"{directory}/skills", directory):
+    candidates = [
+        item.relative_to(home).as_posix()
+        for item in reversed(components_under(home / directory / "skills", home))
+    ]
+    for relative in candidates:
         if relative not in created:
             continue
         path = home / relative
@@ -585,7 +594,7 @@ def confirm(mode: str, yes: bool, skills: list[dict]) -> bool:
             print(f"  {name}", file=sys.stderr)
         print(
             "Copies go to ~/.claude/skills, ~/.agents/skills, ~/.cursor/skills, "
-            "~/.grok/skills, and ~/.kimi-code/skills; user skills are preserved.",
+            "~/.grok/skills, ~/.kimi-code/skills, and ~/.gemini/config/skills; user skills are preserved.",
             file=sys.stderr,
         )
         print("Install? [y/N]", file=sys.stderr)
