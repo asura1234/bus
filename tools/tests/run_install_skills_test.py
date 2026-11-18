@@ -1,5 +1,6 @@
 """The run wrapper installs and removes this checkout's skills without Bus."""
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -133,3 +134,23 @@ def test_remove_leaves_an_edited_owned_skill(tmp_path):
     assert removed.returncode == 0, removed.stderr
     assert edited.read_text() == "my edited copy\n"
     assert not (home / ".agents/skills/review-pr").exists()
+
+
+def test_nested_gemini_config_preserves_sibling_cli_settings_and_user_skill(tmp_path):
+    home = tmp_path / "home"
+    cli = home / ".gemini" / "antigravity-cli"
+    cli.mkdir(parents=True)
+    (cli / "settings.json").write_text("{}")
+    user_skill = home / ".gemini" / "config" / "skills" / "pr"
+    user_skill.mkdir(parents=True)
+    (user_skill / "SKILL.md").write_text("mine")
+
+    assert run_tool(home, "install-skills", "--yes").returncode == 0
+    manifest = json.loads((home / ".config/bus-skills/manifest.json").read_text())
+    assert ".gemini" not in manifest["created_dirs"]
+    assert (user_skill / "SKILL.md").read_text() == "mine"
+
+    assert run_tool(home, "remove-skills", "--yes").returncode == 0
+    assert (cli / "settings.json").read_text() == "{}"
+    assert (user_skill / "SKILL.md").read_text() == "mine"
+
