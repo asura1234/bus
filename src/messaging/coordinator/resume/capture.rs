@@ -124,8 +124,11 @@ pub(crate) fn load(
             identity::provider_kind(agent.provider),
             &args,
         );
-    } else if agent.provider == ProviderKind::Agy {
-        let _ = crate::agents::providers::agy::launch::extract_user_settings(&mut args);
+    } else {
+        args = crate::agents::providers::launch::unstarted_options(
+            identity::provider_kind(agent.provider),
+            &args,
+        );
     }
     crate::agents::providers::launch::apply_run_permissions(
         identity::provider_kind(agent.provider),

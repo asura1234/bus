@@ -9,9 +9,10 @@ use std::{
     process::Command,
 };
 
-const ENTRIES: [&str; 2] = ["/.grok/hooks/bus.json", "/.grok/hooks/.bus-hooks.lock"];
+pub(super) const GROK_ENTRIES: [&str; 2] =
+    ["/.grok/hooks/bus.json", "/.grok/hooks/.bus-hooks.lock"];
 
-pub(super) fn ensure(root: &Path, home: &Path) -> Result<(), String> {
+pub(super) fn ensure(root: &Path, home: &Path, entries: &[&str]) -> Result<(), String> {
     let output = Command::new("git")
         .current_dir(root)
         .env_remove("GIT_DIR")
@@ -72,8 +73,9 @@ pub(super) fn ensure(root: &Path, home: &Path) -> Result<(), String> {
     let mut existing = String::new();
     file.read_to_string(&mut existing)
         .map_err(|e| e.to_string())?;
-    let missing: Vec<_> = ENTRIES
-        .into_iter()
+    let missing: Vec<_> = entries
+        .iter()
+        .copied()
         .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
         .collect();
     if missing.is_empty() {

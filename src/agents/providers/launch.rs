@@ -58,7 +58,7 @@ pub(crate) fn hook_notice_message(callback: &str) -> String {
 mod tokens;
 pub(crate) use tokens::{parse_path_tokens, PathParseError};
 mod arguments;
-pub(crate) use arguments::{argument_positions, resumable_options};
+pub(crate) use arguments::{argument_positions, resumable_options, unstarted_options};
 
 pub(crate) const fn provider_kind(provider: ProviderKind) -> &'static str {
     provider.label()

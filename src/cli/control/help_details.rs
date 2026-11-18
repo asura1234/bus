@@ -246,18 +246,19 @@ workflow-create.md, templates and shipped workflows; see the named-workflows rul
 Bus saves system-prompt.md in the launch's callback folder and passes the prompt
 again on resume. --args combines with Bus-owned prompt arguments.
 Claude gets --append-system-prompt-file; saved Codex gets a developer_instructions
-pointer via -c; Cursor and Grok receive a first message. Kimi uses an agent
+pointer via -c; Cursor, Grok and AGY receive a first message. Kimi uses an agent
 file for new sessions and retains it on exact --session resume. Its hooks and
 session files live in an owner-only per-agent home. New PWD trust prompts require
 an explicit answer; Bus does not pre-trust folders.
 
-Adopt an existing session with --args '--resume UUID' (Claude/Cursor) or
---args 'resume UUID' (Codex workers). Quit it elsewhere first, use its original
-PWD, and supply exactly one UUID, never a picker/--continue/--last/--fork-session.
-A session bound to another Bus agent is refused. Find IDs with provider /status
-or cursor-agent ls. Hooks bind the adopted session; Cursor binds from launch
-args because resume has no start hook. Claude resumed orchestrators also get
---system-prompt-snapshot off so the new orchestrator prompt applies."#;
+Adopt an existing session with --args '--resume UUID' (Claude/Cursor),
+--args 'resume UUID' (Codex workers) or --args '--conversation UUID' (AGY workers).
+Quit it elsewhere first, use its original PWD, and supply exactly one UUID,
+never a picker/--continue/--last/--fork-session. A session bound to another Bus
+agent is refused. Find IDs with provider /status or cursor-agent ls. Hooks bind
+the adopted session; Cursor and AGY bind from launch args because resume has no
+start hook. Claude resumed orchestrators also get --system-prompt-snapshot off
+so the new orchestrator prompt applies."#;
 
 const AGENT_LIST: &str = r#"Map current names to stable IDs and home rooms; optionally filter one room.
 Result: {agents:[{name:STRING,id:NUMBER,room:NUMBER},...]} (empty array is valid).
@@ -309,7 +310,7 @@ Errors: command_failed unless idle, ready, with no active/queued messages and
 valid runtime identity. Settle work first; inspect an uncertain reset before retry.
 Never send reset slash commands through send: they cannot produce a normal reply."#;
 
-const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi, Ctrl+C for Cursor and Grok. Wait
+const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi/AGY, Ctrl+C for Cursor and Grok. Wait
 up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
 Running and settling requests close as interrupted; no later replay of that turn.

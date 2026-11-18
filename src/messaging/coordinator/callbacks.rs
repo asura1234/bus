@@ -19,6 +19,8 @@ enum CallbackFlow {
     Stop,
 }
 
+#[path = "agy_callbacks.rs"]
+mod agy_callbacks;
 #[path = "callback_binding.rs"]
 mod binding;
 #[path = "callback_completion.rs"]
@@ -572,12 +574,29 @@ impl Worker {
                     .rebind_callback_session(id, session, parsed, record, pane, path, dir, state)
                     .map(ControlFlow::Break);
             }
-            if agent
+            if let Some(known) = agent
                 .runtime_identity
                 .session_id
                 .as_ref()
-                .is_some_and(|known| known != session)
+                .filter(|known| *known != session)
             {
+                if record.manifest.provider == ProviderKind::Agy
+                    && crate::agents::providers::agy::hooks::is_descendant_subagent(
+                        known,
+                        session,
+                        &record.value,
+                    )
+                {
+                    tracing::debug!(
+                        event = "bus.callback.ignored",
+                        reason = "agy_subagent_callback",
+                        parent_session_id = %known,
+                        subagent_session_id = %session,
+                        "Ignoring AGY child subagent callback"
+                    );
+                    self.acknowledge_spool(dir, vec![path.to_path_buf()])?;
+                    return Ok(ControlFlow::Break(CallbackFlow::Next));
+                }
                 tracing::warn!(
                     event = "bus.callback.rejected",
                     reason = "session_mismatch",

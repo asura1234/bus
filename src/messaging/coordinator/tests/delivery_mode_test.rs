@@ -101,37 +101,6 @@ fn providers() -> Vec<Provider> {
     providers
 }
 
-#[test]
-fn agy_is_rejected_as_master_orchestrator_in_control_and_commands() {
-    let mut fixture = Fixture::new(Provider::ClaudeCode);
-    let master = fixture.worker.state.master_room().unwrap().id;
-    let response = fixture.worker.control_response_with_events(
-        &crate::messaging::control::Request {
-            id: "agy-master-reject".into(),
-            method: "agent.add".into(),
-            params: json!({
-                "room": master.0.to_string(),
-                "name": "agy-lead",
-                "provider": "agy",
-                "cwd": fixture.dir.to_string_lossy(),
-                "orchestrates": fixture.room.0.to_string(),
-                "consent_project_hooks": true,
-            }),
-        },
-        None,
-    );
-    assert!(!response.ok, "{response:?}");
-    let message = response
-        .error
-        .as_ref()
-        .map(|err| err.message.as_str())
-        .unwrap_or_default();
-    assert!(
-        message.contains("work-room worker only"),
-        "expected worker-only error, got: {message}"
-    );
-}
-
 fn fixture_for(provider: Provider) -> Fixture {
     let fixture = Fixture::new(provider);
     #[cfg(unix)]

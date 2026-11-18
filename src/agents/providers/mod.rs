@@ -14,6 +14,7 @@ pub(crate) mod hook_json;
 pub(crate) mod kimi;
 pub(crate) mod launch;
 pub(crate) mod spool;
+pub(crate) mod statusline_tap;
 pub(crate) mod suggest;
 pub(crate) mod usage;
 

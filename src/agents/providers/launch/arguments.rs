@@ -86,6 +86,13 @@ pub(crate) fn argument_positions(provider: ProviderKind, args: &[String]) -> Vec
     positions
 }
 
+pub(crate) fn unstarted_options(provider: ProviderKind, args: &[String]) -> Vec<String> {
+    if provider == ProviderKind::Agy {
+        return super::super::agy::launch::unstarted_options(args);
+    }
+    args.to_vec()
+}
+
 /// A bound conversation already consumed its startup prompt/selector. Keep
 /// option spans, including options after a prompt, in their original order.
 /// Unknown arity preserves the entire remaining input rather than guessing.

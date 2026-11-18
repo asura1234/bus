@@ -191,12 +191,6 @@ impl Worker {
                 let master = self.state.master_room().is_some_and(|m| m.id == room);
                 let orchestrates = optional_text(p, "orchestrates")?;
                 let system_prompt = optional_text(p, "system_prompt")?;
-                if provider == Provider::Agy && (master || orchestrates.is_some()) {
-                    return Err(
-                        "agy is supported as a work-room worker only; choose another provider for MASTER orchestrators"
-                            .into(),
-                    );
-                }
                 if !master && system_prompt.is_some() {
                     return Err("--system-prompt applies only to MASTER orchestrators".into());
                 }

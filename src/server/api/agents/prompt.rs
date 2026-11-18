@@ -52,6 +52,37 @@ struct StyledChar {
     background: bool,
 }
 
+fn matches_rows(rows: &[String], expected: &str) -> bool {
+    let Some(first) = rows.first() else {
+        return false;
+    };
+    let Some(rest) = expected.strip_prefix(first) else {
+        return false;
+    };
+    let mut positions = vec![expected.len() - rest.len()];
+    for row in &rows[1..] {
+        let mut next = Vec::new();
+        for position in positions {
+            let rest = &expected[position..];
+            for separator in ["\n", " ", ""] {
+                if let Some(after) = rest
+                    .strip_prefix(separator)
+                    .and_then(|tail| tail.strip_prefix(row))
+                {
+                    next.push(expected.len() - after.len());
+                }
+            }
+        }
+        next.sort_unstable();
+        next.dedup();
+        if next.is_empty() {
+            return false;
+        }
+        positions = next;
+    }
+    positions.contains(&expected.len())
+}
+
 /// Retain the styles that distinguish suggestions and composer chrome.
 fn styled_chars(line: &str) -> Vec<StyledChar> {
     let mut out = Vec::new();

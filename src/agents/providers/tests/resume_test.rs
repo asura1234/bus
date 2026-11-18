@@ -34,6 +34,9 @@ impl Fixture {
             // though merge/rebind owns only exact Bus entry shapes.
             let entry = match contract.entry_shape {
                 HookEntryShape::Command => json!({"command":command,"user":true}),
+                HookEntryShape::TimedCommand => {
+                    json!({"type":"command","command":command,"timeout":19,"user":true})
+                }
                 HookEntryShape::NestedCommands => json!({"user":true,"hooks":[
                     {"type":"command","command":"user hook"},
                     {"type":"command","command":command,"timeout":19}
@@ -41,7 +44,10 @@ impl Fixture {
             };
             hooks.insert((*event).into(), json!([entry]));
         }
-        json!({"hooks":hooks,"user_setting":"keep"})
+        let mut root = serde_json::Map::new();
+        root.insert(contract.container_key.into(), Value::Object(hooks));
+        root.insert("user_setting".into(), json!("keep"));
+        Value::Object(root)
     }
 }
 

@@ -1,5 +1,6 @@
 //! Conservative observation of Antigravity CLI (`agy`) framed composer.
-use super::styled_chars;
+use super::{composer::collapsed_paste, matches_rows, styled_chars};
+use crate::agents::AgentKind;
 use crate::terminal::runtime::InputObservation;
 
 pub(super) fn observe(
@@ -14,7 +15,7 @@ pub(super) fn observe(
         .collect();
     let plain = plain_lines.join("\n");
     let detection = crate::agents::manifest::detect_with_osc(
-        crate::agents::AgentKind::Antigravity,
+        AgentKind::Antigravity,
         crate::agents::manifest::DetectionInput {
             screen: &plain,
             osc_title: "",
@@ -37,7 +38,7 @@ pub(super) fn observe(
     let body = rows.join("\n");
     let trimmed = body.trim();
     let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
-    if collapsed_paste(trimmed, &expected) {
+    if collapsed_paste(AgentKind::Antigravity, trimmed, &expected) {
         return InputObservation::Pending;
     }
     if trimmed.contains("[Pasted text #") || trimmed.contains("[Image #") {
@@ -58,7 +59,7 @@ pub(super) fn input(screen: &str, cursor: Option<(u16, u16)>) -> Option<String> 
         .collect();
     let plain = plain_lines.join("\n");
     let detection = crate::agents::manifest::detect_with_osc(
-        crate::agents::AgentKind::Antigravity,
+        AgentKind::Antigravity,
         crate::agents::manifest::DetectionInput {
             screen: &plain,
             osc_title: "",
@@ -103,7 +104,9 @@ fn rows_from_styled(
     cursor: Option<(u16, u16)>,
 ) -> Option<Vec<String>> {
     let bottom = plain_lines.iter().rposition(|line| is_rule(line))?;
-    let top = (0..bottom).rev().find(|&index| is_rule(&plain_lines[index]))?;
+    let top = (0..bottom)
+        .rev()
+        .find(|&index| is_rule(&plain_lines[index]))?;
     if bottom <= top + 1 || bottom - top > 64 {
         return None;
     }
@@ -149,74 +152,22 @@ fn rows_from_styled(
         rows.pop();
     }
 
-    // AGY paints its execution-mode placeholder starting at column 2 while the
-    // composer is empty (cursor parked at column 2 on the prompt row).
+    // Non-faint execution-mode placeholder text is cleared only when the cursor
+    // is confirmed parked at the start of the prompt row (`col <= 2`); a real
+    // user draft starting with e.g. `Plan mode:` moves the cursor past column 2.
     if rows.len() == 1 {
         let cursor_at_prompt_start =
             cursor.is_some_and(|(col, row)| col <= 2 && usize::from(row) == prompt_idx);
-        if is_mode_placeholder(&first) || (cursor_at_prompt_start && is_mode_placeholder(plain_lines[prompt_idx].trim_start().trim_start_matches('>').trim_start())) {
+        let plain_prompt_body = plain_lines[prompt_idx]
+            .trim_start()
+            .trim_start_matches('>')
+            .trim_start();
+        if cursor_at_prompt_start
+            && (is_mode_placeholder(&first) || is_mode_placeholder(plain_prompt_body))
+        {
             first.clear();
             rows[0] = first;
         }
     }
     Some(rows)
-}
-
-fn collapsed_paste(body: &str, expected: &str) -> bool {
-    let Some(label) = body
-        .strip_prefix("[Pasted text #")
-        .and_then(|rest| rest.strip_suffix(']'))
-    else {
-        return false;
-    };
-    if let Some((id, chars_part)) = label.split_once(' ') {
-        if id.parse::<usize>().ok().is_none_or(|n| n == 0) {
-            return false;
-        }
-        if let Some(count_str) = chars_part.strip_suffix(" chars") {
-            return count_str.parse::<usize>().ok() == Some(expected.chars().count());
-        }
-        if let Some(lines_str) = chars_part
-            .strip_prefix('+')
-            .and_then(|rest| rest.strip_suffix(" lines"))
-        {
-            let Ok(lines_count) = lines_str.parse::<usize>() else {
-                return false;
-            };
-            let newlines = expected.matches('\n').count();
-            return lines_count == newlines || lines_count == newlines + 1;
-        }
-    }
-    false
-}
-
-fn matches_rows(rows: &[String], expected: &str) -> bool {
-    let Some(first) = rows.first() else {
-        return false;
-    };
-    let Some(rest) = expected.strip_prefix(first) else {
-        return false;
-    };
-    let mut positions = vec![expected.len() - rest.len()];
-    for row in &rows[1..] {
-        let mut next = Vec::new();
-        for position in positions {
-            let rest = &expected[position..];
-            for separator in ["\n", " ", ""] {
-                if let Some(after) = rest
-                    .strip_prefix(separator)
-                    .and_then(|tail| tail.strip_prefix(row))
-                {
-                    next.push(expected.len() - after.len());
-                }
-            }
-        }
-        next.sort_unstable();
-        next.dedup();
-        if next.is_empty() {
-            return false;
-        }
-        positions = next;
-    }
-    positions.contains(&expected.len())
 }

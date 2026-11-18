@@ -15,45 +15,63 @@ struct Retry {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Claim {
+pub(in crate::messaging::coordinator) enum Claim {
     Attempt(u8),
     NotDue,
     Exhausted,
 }
 
-pub(super) fn observation_paths(path: &Path) -> Vec<std::path::PathBuf> {
+pub(in crate::messaging::coordinator) fn observation_paths_with_ext(
+    path: &Path,
+    ext: &str,
+) -> Vec<std::path::PathBuf> {
     let mut paths = vec![path.to_path_buf()];
-    let marker = path.with_extension("grok-retry");
+    let marker = path.with_extension(ext);
     if marker.exists() {
         paths.push(marker);
     }
     paths
 }
 
-fn claim(path: &Path, now: u64) -> Result<Claim, String> {
-    let marker = path.with_extension("grok-retry");
+pub(super) fn observation_paths(path: &Path) -> Vec<std::path::PathBuf> {
+    observation_paths_with_ext(path, "grok-retry")
+}
+
+pub(in crate::messaging::coordinator) fn claim_with_policy(
+    path: &Path,
+    now: u64,
+    ext: &str,
+    label: &str,
+    max_attempts: u8,
+    delay_ms: u64,
+) -> Result<Claim, String> {
+    let marker = path.with_extension(ext);
     let mut retry: Retry = match std::fs::read(&marker) {
         Ok(bytes) if bytes.len() <= 1024 => {
             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?
         }
-        Ok(_) => return Err("Grok retry metadata is oversized".into()),
+        Ok(_) => return Err(format!("{label} retry metadata is oversized")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Retry::default(),
         Err(error) => return Err(error.to_string()),
     };
-    if retry.attempts >= 8 {
+    if retry.attempts >= max_attempts {
         return Ok(Claim::Exhausted);
     }
     if retry.next_at > now {
         return Ok(Claim::NotDue);
     }
     retry.attempts += 1;
-    retry.next_at = now.saturating_add(2000);
+    retry.next_at = now.saturating_add(delay_ms);
     crate::agents::providers::hook_json::atomic_write(
         &marker,
         &serde_json::to_vec(&retry).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     Ok(Claim::Attempt(retry.attempts))
+}
+
+fn claim(path: &Path, now: u64) -> Result<Claim, String> {
+    claim_with_policy(path, now, "grok-retry", "Grok", 8, 2000)
 }
 
 fn claim_idle_observation(state: &BusState, id: AgentId, path: &Path) -> Result<Claim, String> {
@@ -133,7 +151,12 @@ impl Worker {
             reason = "superseded_session",
             "Retiring observation from the accepted reset's previous session"
         );
-        self.acknowledge_spool(dir, observation_paths(path))?;
+        let paths = if record.manifest.provider == crate::agents::providers::ProviderKind::Agy {
+            observation_paths_with_ext(path, "agy-retry")
+        } else {
+            observation_paths(path)
+        };
+        self.acknowledge_spool(dir, paths)?;
         Ok(true)
     }
 

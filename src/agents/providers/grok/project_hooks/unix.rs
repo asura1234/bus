@@ -10,7 +10,15 @@ mod exclude;
 mod roots;
 
 pub(super) fn ensure_exclude(root: &Path, home: &Path) -> Result<(), String> {
-    exclude::ensure(root, home)
+    exclude::ensure(root, home, &exclude::GROK_ENTRIES)
+}
+
+pub(super) fn ensure_exclude_entries(
+    root: &Path,
+    home: &Path,
+    entries: &[&str],
+) -> Result<(), String> {
+    exclude::ensure(root, home, entries)
 }
 
 #[derive(Clone, Copy, PartialEq)]

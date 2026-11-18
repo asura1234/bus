@@ -145,9 +145,7 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
         })
         .collect();
     if selectors.len() > 1 {
-        return Err(
-            "Supply at most one --conversation UUID when adopting an AGY session".into(),
-        );
+        return Err("Supply at most one --conversation UUID when adopting an AGY session".into());
     }
     let Some(&index) = selectors.first() else {
         return Ok(None);
@@ -163,16 +161,15 @@ pub(crate) fn take_adopted_session(args: &mut Vec<String>) -> Result<Option<Stri
     };
     if !common::is_session_uuid(&value) {
         return Err(
-            "AGY session adoption requires an exact conversation UUID with --conversation"
-                .into(),
+            "AGY session adoption requires an exact conversation UUID with --conversation".into(),
         );
     }
     args.drain(index..index + count);
     Ok(Some(value))
 }
 
-/// Strip one-time conversation selectors while retaining user options (including
-/// user `--settings`, which `capture_args` merges into `<spool>/agy-settings.json`).
+/// Strip one-time conversation selectors and user `--settings` (which `install`
+/// already merged into `<spool>/agy-settings.json`, reused by `resume::capture_args`).
 pub(crate) fn resumable_options(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut index = 0;
@@ -187,18 +184,10 @@ pub(crate) fn resumable_options(args: &[String]) -> Vec<String> {
         let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
         if matches!(
             name,
-            "--conversation"
-                | "-c"
-                | "--continue"
-                | "-i"
-                | "--prompt-interactive"
-                | "--settings"
+            "--conversation" | "-c" | "--continue" | "-i" | "--prompt-interactive" | "--settings"
         ) {
             index += 1;
-            if !arg.contains('=')
-                && option_arity(name) == Some(1)
-                && index < args.len()
-            {
+            if !arg.contains('=') && option_arity(name) == Some(1) && index < args.len() {
                 index += 1;
             }
             continue;
@@ -227,9 +216,17 @@ pub(crate) fn resumable_options(args: &[String]) -> Vec<String> {
     out
 }
 
+/// Remove `--settings` spans from saved options for an unstarted AGY launch,
+/// because `resume::capture_args` supplies the already-merged `<spool>/agy-settings.json`.
+pub(crate) fn unstarted_options(args: &[String]) -> Vec<String> {
+    let mut out = args.to_vec();
+    let _ = extract_user_settings(&mut out);
+    out
+}
+
 /// Extract `--settings` values from `args`, removing those spans from effective argv
 /// so Bus can pass a single merged `<spool>/agy-settings.json`.
-pub(crate) fn extract_user_settings(args: &mut Vec<String>) -> (Vec<String>, bool) {
+fn extract_user_settings(args: &mut Vec<String>) -> (Vec<String>, bool) {
     let mut values = Vec::new();
     let mut explicit_sandbox = false;
     let mut kept = Vec::new();
@@ -281,9 +278,7 @@ pub(crate) fn validate_unstarted_argv(argv: &[String]) -> Result<(), String> {
     validate_args(tail)?;
     if common::argument_positions(ProviderKind::Agy, tail)
         .into_iter()
-        .any(|idx| {
-            tail[idx] == "--conversation" || tail[idx].starts_with("--conversation=")
-        })
+        .any(|idx| tail[idx] == "--conversation" || tail[idx].starts_with("--conversation="))
     {
         return Err("Adopted AGY session cannot be restored as an unstarted launch".into());
     }
@@ -332,6 +327,7 @@ pub(crate) fn prepare(
     let (user_settings, explicit_sandbox) = extract_user_settings(&mut args);
     let settings = statusline::install(
         &spec.hooks.spool,
+        &cwd,
         &spec.hooks.binary,
         &user_settings,
         explicit_sandbox,

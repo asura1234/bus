@@ -2098,10 +2098,14 @@ fn agy_composer_observes_idle_working_and_paste_chips() {
     use crate::terminal::runtime::SubmissionInspector;
     let rule = "─".repeat(40);
     let idle = format!("Antigravity CLI 1.5.11\n\n{rule}\n\n>\n{rule}\n\n? for shortcuts\n");
-    assert_eq!(observe(AgentKind::Antigravity, &idle, "hello"), InputObservation::Empty);
+    assert_eq!(
+        observe(AgentKind::Antigravity, &idle, "hello"),
+        InputObservation::Empty
+    );
     assert!(observer(AgentKind::Antigravity, "hello".into()).submission_available(&idle));
 
-    let typed = format!("Antigravity CLI 1.5.11\n\n{rule}\n\n> hello world\n{rule}\n\n? for shortcuts\n");
+    let typed =
+        format!("Antigravity CLI 1.5.11\n\n{rule}\n\n> hello world\n{rule}\n\n? for shortcuts\n");
     assert_eq!(
         observe(AgentKind::Antigravity, &typed, "hello world"),
         InputObservation::Pending
@@ -2117,9 +2121,7 @@ fn agy_composer_observes_idle_working_and_paste_chips() {
     );
 
     // Working screen with open composer (`esc to cancel` footer) supports mid-turn steering!
-    let working = format!(
-        "⠋  Generating...\n\n{rule}\n\n>\n{rule}\n\nesc to cancel\n"
-    );
+    let working = format!("⠋  Generating...\n\n{rule}\n\n>\n{rule}\n\nesc to cancel\n");
     assert_eq!(
         observe(AgentKind::Antigravity, &working, "steer me"),
         InputObservation::Empty
@@ -2146,6 +2148,26 @@ fn agy_composer_observes_idle_working_and_paste_chips() {
         InputObservation::Empty
     );
     assert!(observer(AgentKind::Antigravity, "hello".into()).submission_available(&post_trust));
+
+    // A non-faint user draft starting with "Plan mode:" and cursor at end stays Other (not Empty).
+    let plan_draft = format!(
+        "Antigravity CLI 1.5.11\n\n{rule}\n> Plan mode: review this PR\n{rule}\n? for shortcuts          plan · Claude Opus 5.5 · high\n"
+    );
+    assert_eq!(
+        observe_with_cursor(AgentKind::Antigravity, &plan_draft, "hello", Some((27, 3))),
+        InputObservation::Other
+    );
+
+    // Working screen with right-aligned model status on the `esc to cancel` row remains steerable.
+    let working_with_status = format!(
+        "⣻  Investigating...\n{rule}\n>\n{rule}\nesc to cancel           auto · Claude Opus 5.5 · high\n"
+    );
+    assert_eq!(
+        observe(AgentKind::Antigravity, &working_with_status, "steer me"),
+        InputObservation::Empty
+    );
+    assert!(observer(AgentKind::Antigravity, "steer me".into())
+        .submission_available(&working_with_status));
 }
 
 #[test]

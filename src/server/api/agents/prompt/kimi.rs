@@ -1,5 +1,5 @@
 //! Conservative observation of Kimi Code's current framed composer.
-use super::styled_chars;
+use super::{matches_rows, styled_chars};
 use crate::terminal::runtime::InputObservation;
 
 pub(super) fn working(screen: &str) -> bool {
@@ -37,37 +37,6 @@ pub(super) fn observe(screen: &str, expected: &str) -> InputObservation {
 
 pub(super) fn input(screen: &str) -> Option<String> {
     Some(rows(screen)?.0.join("\n"))
-}
-
-fn matches_rows(rows: &[String], expected: &str) -> bool {
-    let Some(first) = rows.first() else {
-        return false;
-    };
-    let Some(rest) = expected.strip_prefix(first) else {
-        return false;
-    };
-    let mut positions = vec![expected.len() - rest.len()];
-    for row in &rows[1..] {
-        let mut next = Vec::new();
-        for position in positions {
-            let rest = &expected[position..];
-            for separator in ["\n", " ", ""] {
-                if let Some(after) = rest
-                    .strip_prefix(separator)
-                    .and_then(|tail| tail.strip_prefix(row))
-                {
-                    next.push(expected.len() - after.len());
-                }
-            }
-        }
-        next.sort_unstable();
-        next.dedup();
-        if next.is_empty() {
-            return false;
-        }
-        positions = next;
-    }
-    positions.contains(&expected.len())
 }
 
 fn frame(screen: &str) -> Option<(Vec<String>, usize, usize)> {

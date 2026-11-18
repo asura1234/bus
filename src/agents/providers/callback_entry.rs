@@ -145,11 +145,12 @@ fn observe_payload(
 ) {
     let hook_event = match value
         .get("hook_event_name")
+        .or_else(|| value.get("hookEventName"))
         .and_then(serde_json::Value::as_str)
     {
         Some(
-            event @ ("SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure" | "sessionStart"
-            | "beforeSubmitPrompt" | "afterAgentResponse" | "stop"),
+            event @ ("SessionStart" | "UserPromptSubmit" | "PreInvocation" | "Stop" | "StopFailure"
+            | "sessionStart" | "beforeSubmitPrompt" | "afterAgentResponse" | "stop"),
         ) => event,
         Some(_) => "other",
         None => "missing_or_invalid",
@@ -166,7 +167,9 @@ fn observe_payload(
                         .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
             })
     };
-    let session_id = token("session_id").or_else(|| token("conversation_id"));
+    let session_id = token("session_id")
+        .or_else(|| token("conversation_id"))
+        .or_else(|| token("conversationId"));
     let turn_id = token("turn_id")
         .or_else(|| token("prompt_id"))
         .or_else(|| token("generation_id"));
@@ -187,6 +190,7 @@ fn observe_payload(
         .map(str::len);
     let transcript_present = value
         .get("transcript_path")
+        .or_else(|| value.get("transcriptPath"))
         .and_then(serde_json::Value::as_str)
         .is_some_and(|path| !path.is_empty());
     let parse_outcome = match parsed {

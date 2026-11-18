@@ -2,7 +2,7 @@
 pub(crate) mod completion;
 pub(crate) mod hooks;
 pub(crate) mod launch;
-mod project_hooks;
+pub(super) mod project_hooks;
 pub(crate) mod resume;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod synthetic;
@@ -19,6 +19,8 @@ pub(crate) const HOOK_CONTRACT: HookContract = HookContract {
         "StopCancelled",
         "Notification",
     ],
+    container_key: "hooks",
     entry_shape: HookEntryShape::NestedCommands,
     default_version: None,
+    reject_disabled_container: false,
 };

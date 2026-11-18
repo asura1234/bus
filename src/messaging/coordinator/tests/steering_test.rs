@@ -1529,3 +1529,45 @@ fn codex_idle_background_steering_preserves_expected_turn_identity() {
         Some(fixture.worker.serving_generation)
     );
 }
+
+#[test]
+fn agy_unbound_onboarding_turn_stays_queued_while_bound_turn_steers() {
+    let mut fixture = Fixture::new(Provider::Agy);
+    fixture.status(RuntimeStatus::Working);
+
+    let queued = fixture.send("wait until onboarding turn finishes", false);
+    fixture.deliver();
+    assert!(
+        fixture.typed().is_empty(),
+        "AGY unbound onboarding turn must not receive steered room input before a bound turn exists"
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    let typed = fixture.typed();
+    assert_eq!(typed.len(), 1);
+    assert!(
+        !typed[0].1,
+        "first post-onboarding turn is normal idle delivery"
+    );
+    fixture.started("1", "wait until onboarding turn finishes");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+
+    let steered = fixture.send("join the bound AGY turn", false);
+    fixture.deliver();
+    let typed = fixture.typed();
+    assert_eq!(typed.len(), 2);
+    assert!(typed[1].1, "bound AGY turn supports mid-turn steering");
+    fixture.stopped("1", "completed both");
+    fixture.consume();
+    for id in [queued, steered] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert!(fixture.request(id).trusted_start_bound);
+        assert_eq!(fixture.request(id).provider_turn_id.as_deref(), Some("1"));
+        assert!(fixture.request(id).failure_reason.is_none());
+    }
+    assert_eq!(fixture.request(steered).group, Some(queued));
+    assert_eq!(fixture.error(), None);
+}

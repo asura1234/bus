@@ -155,8 +155,9 @@ pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> 
                     let lower = plain(row).to_ascii_lowercase();
                     lower.starts_with("? for shortcuts") || lower.starts_with("esc to cancel")
                 });
-        let framed =
-            start > 0 && (border(plain(&rows[start - 1])) || agy_padded_top) && border(plain(&rows[end]));
+        let framed = start > 0
+            && (border(plain(&rows[start - 1])) || agy_padded_top)
+            && border(plain(&rows[end]));
         framed || footer(plain(&rows[end]))
     })?;
     let end = chrome_after(start)?;
@@ -183,14 +184,25 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         for row in &mut rows[region.start + 1..region.end.saturating_sub(1)] {
             row.clear();
         }
-        // AGY keeps its framed composer open while working and renders bare
-        // `esc to cancel` directly beneath the bottom horizontal rule.
+        // AGY keeps its framed composer open while working and renders its
+        // non-interactive `esc to cancel` status bar (alone or paired with its
+        // right-aligned mode/model summary) on the first non-empty row beneath
+        // the closing horizontal rule.
         if closing_border {
             if let Some(footer_idx) =
                 (region.end..rows.len()).find(|&idx| !plain(&rows[idx]).is_empty())
             {
-                if plain(&rows[footer_idx]).eq_ignore_ascii_case("esc to cancel") {
-                    rows[footer_idx].clear();
+                let lower = plain(&rows[footer_idx]).to_ascii_lowercase();
+                if let Some(rest) = lower.strip_prefix("esc to cancel") {
+                    let status_only = rest.is_empty()
+                        || (rest.starts_with("  ")
+                            && !rest.contains("enter")
+                            && !rest.contains('↵')
+                            && !rest.contains('⏎')
+                            && !rest.contains("[y/n]"));
+                    if status_only {
+                        rows[footer_idx].clear();
+                    }
                 }
             }
         }

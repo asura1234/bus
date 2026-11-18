@@ -286,10 +286,10 @@ impl Worker {
         launch_id: String,
         adopted_session: Option<String>,
     ) -> Result<AgentRuntimeIdentity, String> {
-        // cursor-agent --resume fires no sessionStart; its first hook comes with
-        // the first prompt, which Bus types only into a bound session. The
-        // session Bus itself launched with binds it, and every later callback
-        // must still match it.
+        // cursor-agent --resume and agy --conversation fire no startup hook on
+        // resume; their first callback arrives with the first prompt, which Bus
+        // types only into a bound session. The session Bus itself launched with
+        // binds it, and every later callback must still match it.
         let session_id =
             adopted_session.filter(|_| matches!(provider, Provider::Cursor | Provider::Agy));
         let identity = AgentRuntimeIdentity {

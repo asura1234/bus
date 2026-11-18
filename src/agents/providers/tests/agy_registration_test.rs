@@ -271,6 +271,7 @@ fn agy_launch_options_adoption_validation_settings_and_yolo() {
     let temp = TestTemp::new("agy-settings");
     let settings_path = statusline::install(
         temp.path(),
+        temp.path(),
         std::path::Path::new("/opt/bus/bin/bus"),
         &[r#"{"agentMode":"accept-edits"}"#.to_owned()],
         false,
@@ -280,7 +281,6 @@ fn agy_launch_options_adoption_validation_settings_and_yolo() {
         serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
     assert_eq!(written["queuedMessages"], "send-immediately");
     assert_eq!(written["allowNonWorkspaceAccess"], true);
-    assert_eq!(written["enableTerminalSandbox"], false);
     assert_eq!(written["agentMode"], "accept-edits");
     assert_eq!(written["statusLine"]["enabled"], true);
 
@@ -318,5 +318,243 @@ fn agy_launch_options_adoption_validation_settings_and_yolo() {
     assert_eq!(
         yolo_args,
         vec!["--dangerously-skip-permissions", "--effort", "high"]
+    );
+}
+
+#[test]
+fn agy_completion_handles_torn_multibyte_utf8_tails_wakeups_and_large_transcripts() {
+    let temp = TestTemp::new("agy-torn-utf8");
+    let user = "{\"step_index\":4,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"<USER_REQUEST>\\ntask\\n</USER_REQUEST>\"}\n";
+
+    let ascii_path = temp.path().join("ascii.jsonl");
+    let mut ascii = user.as_bytes().to_vec();
+    ascii.extend_from_slice(b"{\"step_index\":5,\"source\":\"MODEL\",\"type\":\"PLANNER_RES");
+    std::fs::write(&ascii_path, &ascii).unwrap();
+    assert_eq!(
+        read_turn_completion(&ascii_path, "4"),
+        Ok(TurnResolution::Pending)
+    );
+
+    let utf8_path = temp.path().join("utf8.jsonl");
+    let full = "{\"step_index\":5,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"Done \u{2014} all green\"}\n";
+    let cut = full.find('\u{2014}').unwrap() + 2;
+    let mut torn = user.as_bytes().to_vec();
+    torn.extend_from_slice(&full.as_bytes()[..cut]);
+    std::fs::write(&utf8_path, &torn).unwrap();
+    assert_eq!(
+        read_turn_completion(&utf8_path, "4"),
+        Ok(TurnResolution::Pending)
+    );
+
+    let wake_rows = [
+        r#"{"step_index":82,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nA\n</USER_REQUEST>\n<ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"}"#,
+        r#"{"step_index":83,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"invoke_subagent"}]}"#,
+        r#"{"step_index":84,"source":"MODEL","type":"GENERIC","status":"DONE","content":"ok"}"#,
+        r#"{"step_index":85,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"waiting"}"#,
+        r#"{"step_index":86,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"wake"}"#,
+        r#"{"step_index":87,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"final A"}"#,
+        r#"{"step_index":88,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nB\n</USER_REQUEST>"}"#,
+        r#"{"step_index":89,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nC\n</USER_REQUEST>"}"#,
+        r#"{"step_index":90,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"final BC"}"#,
+    ];
+    let wake_path = temp.path().join("wake.jsonl");
+    std::fs::write(&wake_path, format!("{}\n", wake_rows.join("\n"))).unwrap();
+    assert_eq!(
+        read_turn_completion(&wake_path, "82"),
+        Ok(TurnResolution::Final {
+            turn_id: "82".into(),
+            text: "final A".into(),
+            prompts: vec!["A".into()],
+        })
+    );
+    assert_eq!(
+        read_turn_completion(&wake_path, "88"),
+        Ok(TurnResolution::Final {
+            turn_id: "88".into(),
+            text: "final BC".into(),
+            prompts: vec!["B".into(), "C".into()],
+        })
+    );
+}
+
+#[test]
+fn agy_statusline_selects_3p_quota_resolves_relative_settings_and_respects_global_sandbox() {
+    let payload_3p = json!({
+        "session_id": "s",
+        "model": {"id": "claude-opus-5-5-high", "display_name": "Claude Opus 5.5"},
+        "quota": {
+            "gemini-5h": {"remaining_fraction": 1.0, "reset_in_seconds": 3600},
+            "gemini-weekly": {"remaining_fraction": 1.0, "reset_in_seconds": 86400},
+            "3p-5h": {"remaining_fraction": 0.0, "reset_in_seconds": 1800},
+            "3p-weekly": {"remaining_fraction": 0.5, "reset_in_seconds": 86400}
+        }
+    });
+    let windows_3p = statusline::windows(&payload_3p, 1_700_000_000_000);
+    assert!((windows_3p.five_hour.unwrap().used_percent - 100.0).abs() < 1e-6);
+    assert!((windows_3p.weekly.unwrap().used_percent - 50.0).abs() < 1e-6);
+
+    let payload_gemini = json!({
+        "session_id": "s",
+        "model": {"id": "gemini-4-carbon-high"},
+        "quota": {
+            "gemini-5h": {"remaining_fraction": 0.75, "reset_in_seconds": 3600},
+            "3p-5h": {"remaining_fraction": 0.0, "reset_in_seconds": 1800}
+        }
+    });
+    let windows_gemini = statusline::windows(&payload_gemini, 1_700_000_000_000);
+    assert!((windows_gemini.five_hour.unwrap().used_percent - 25.0).abs() < 1e-6);
+
+    let temp = TestTemp::new("agy-rel-settings");
+    let launch_cwd = temp.path().join("launch-cwd");
+    let spool = temp.path().join("spool");
+    std::fs::create_dir_all(&launch_cwd).unwrap();
+    std::fs::create_dir_all(&spool).unwrap();
+    std::fs::write(
+        launch_cwd.join("user-agy-settings.json"),
+        br#"{"agentMode":"accept-edits"}"#,
+    )
+    .unwrap();
+    let installed = statusline::install(
+        &spool,
+        &launch_cwd,
+        std::path::Path::new("/opt/bus/bin/bus"),
+        &["user-agy-settings.json".to_owned()],
+        false,
+    )
+    .unwrap();
+    let merged: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&installed).unwrap()).unwrap();
+    assert_eq!(merged["agentMode"], "accept-edits");
+
+    struct RestoreHome(Option<std::ffi::OsString>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _restore = RestoreHome(std::env::var_os("HOME"));
+    let home = temp.path().join("fake-home");
+    let global_dir = home.join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(
+        global_dir.join("settings.json"),
+        br#"{"enableTerminalSandbox":true}"#,
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+    let spool_global = temp.path().join("spool-global");
+    std::fs::create_dir_all(&spool_global).unwrap();
+    let path_global = statusline::install(
+        &spool_global,
+        &launch_cwd,
+        std::path::Path::new("/opt/bus/bin/bus"),
+        &[],
+        false,
+    )
+    .unwrap();
+    let written_global: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path_global).unwrap()).unwrap();
+    assert_ne!(written_global["enableTerminalSandbox"], false);
+
+    // Corrupt settings file preserves underlying cause during cold resume.
+    std::fs::write(spool.join("agy-settings.json"), b"{not-json").unwrap();
+    let err = statusline::rebind(&spool, std::path::Path::new("/opt/bus/bin/bus")).unwrap_err();
+    assert!(err.contains("cannot be read"), "{err}");
+}
+
+#[test]
+fn agy_hooks_ignore_child_subagents_and_system_wakeup_continuations() {
+    let temp = TestTemp::new("agy-subagent-hooks");
+    let brain = temp.path().join("brain");
+    let parent_id = "parent-conv";
+    let child_id = "child-subagent";
+    let parent_subagents = brain.join(parent_id).join(".system_generated/subagents");
+    let parent_logs = brain.join(parent_id).join(".system_generated/logs");
+    let child_logs = brain.join(child_id).join(".system_generated/logs");
+    std::fs::create_dir_all(&parent_subagents).unwrap();
+    std::fs::create_dir_all(&parent_logs).unwrap();
+    std::fs::create_dir_all(&child_logs).unwrap();
+    std::fs::write(
+        parent_subagents.join(format!("{child_id}.json")),
+        r#"{"conversationId":"child-subagent"}"#,
+    )
+    .unwrap();
+
+    let parent_transcript = parent_logs.join("transcript_full.jsonl");
+    std::fs::write(
+        &parent_transcript,
+        concat!(
+            "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"<USER_REQUEST>\\nhi\\n</USER_REQUEST>\"}\n",
+            "{\"step_index\":1,\"source\":\"SYSTEM\",\"type\":\"SYSTEM_MESSAGE\",\"status\":\"DONE\",\"content\":\"subagent done\"}\n",
+        ),
+    )
+    .unwrap();
+    let child_transcript = child_logs.join("transcript_full.jsonl");
+    std::fs::write(
+        &child_transcript,
+        "{\"step_index\":0,\"source\":\"SYSTEM\",\"type\":\"SYSTEM_MESSAGE\",\"status\":\"DONE\",\"content\":\"task\"}\n",
+    )
+    .unwrap();
+
+    let subagent_start = json!({
+        "hookEventName": "SessionStart",
+        "conversationId": child_id,
+        "artifactDirectoryPath": brain.join(child_id),
+        "transcriptPath": child_transcript,
+        "lastUserInput": "",
+    });
+    assert_eq!(
+        parse(ProviderKind::Agy, &subagent_start),
+        Ok(Parsed::Ignore)
+    );
+    assert!(
+        crate::agents::providers::agy::hooks::is_descendant_subagent(
+            parent_id,
+            child_id,
+            &subagent_start
+        )
+    );
+
+    let subagent_stop = json!({
+        "hookEventName": "Stop",
+        "conversationId": child_id,
+        "artifactDirectoryPath": brain.join(child_id),
+        "transcriptPath": child_transcript,
+        "lastUserInput": "",
+        "fullyIdle": true,
+    });
+    assert_eq!(parse(ProviderKind::Agy, &subagent_stop), Ok(Parsed::Ignore));
+
+    // Parent wakeup on SYSTEM_MESSAGE at step_index 1 (initialNumSteps == 2) is ignored!
+    let parent_wakeup = json!({
+        "hookEventName": "PreInvocation",
+        "conversationId": parent_id,
+        "invocationNum": 0,
+        "initialNumSteps": 2,
+        "lastUserInput": "hi",
+        "transcriptPath": parent_transcript,
+    });
+    assert_eq!(parse(ProviderKind::Agy, &parent_wakeup), Ok(Parsed::Ignore));
+
+    // Parent user prompt at step_index 0 (initialNumSteps == 1) emits Started!
+    let parent_user = json!({
+        "hookEventName": "PreInvocation",
+        "conversationId": parent_id,
+        "invocationNum": 0,
+        "initialNumSteps": 1,
+        "lastUserInput": "hi",
+        "transcriptPath": parent_transcript,
+    });
+    assert_eq!(
+        parse(ProviderKind::Agy, &parent_user),
+        Ok(Parsed::Started {
+            session: parent_id.into(),
+            turn: "0".into(),
+            prompt: "hi".into(),
+        })
     );
 }

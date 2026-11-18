@@ -1,10 +1,11 @@
 //! AGY status-line tap and session-only `--settings` file management.
 //!
-//! AGY pipes live `session_id` and `quota` (`gemini-5h`, `gemini-weekly`,
+//! AGY pipes live `session_id`, `model`, and `quota` (`gemini-5h`, `gemini-weekly`,
 //! `3p-5h`, `3p-weekly`) JSON to its configured `statusLine` command. Bus
 //! installs this tap only inside `<spool>/agy-settings.json` passed via
-//! `--settings`, leaving `~/.gemini/antigravity-cli/settings.json` untouched.
+//! `--settings`, leaving `~/.gemini/antigravity-cli/settings.json` unmodified.
 use crate::agents::providers::{
+    statusline_tap::{self, atomic_write, read_json, USAGE_FILE},
     usage::{
         Observation, ObservationManifest, UsageWindow, UsageWindows, FIVE_HOUR_MINUTES,
         WEEKLY_MINUTES,
@@ -14,76 +15,49 @@ use crate::agents::providers::{
 use crate::utils::time as bus_time;
 use serde_json::{json, Map, Value};
 use std::{
-    io::{self, Read, Write},
+    io,
     path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const MAX_BYTES: u64 = 2 * 1024 * 1024;
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
-pub(crate) const SETTINGS_FILE: &str = "agy-settings.json";
+const SETTINGS_FILE: &str = "agy-settings.json";
 const ORIGINAL_FILE: &str = "agy-statusline.json";
-const USAGE_FILE: &str = "usage.json";
-const RECURSION_GUARD: &str = "BUS_STATUSLINE_ACTIVE";
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if path.exists() && std::fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::other("Bus refuses to replace a symlink"));
+fn callback_command(binary: &Path) -> String {
+    statusline_tap::callback_command(binary, "agy-statusline", false)
+}
+
+fn global_settings() -> Option<Value> {
+    let home = std::env::home_dir()?;
+    read_json(&home.join(".gemini/antigravity-cli/settings.json")).ok()
+}
+
+fn resolve_settings_path(trimmed: &str, launch_cwd: &Path) -> PathBuf {
+    if trimmed == "~" || trimmed.starts_with("~/") {
+        if let Some(home) = std::env::home_dir() {
+            return if trimmed == "~" {
+                home
+            } else {
+                home.join(&trimmed[2..])
+            };
+        }
     }
-    crate::platform::atomic_write(path, bytes)
-}
-
-fn read_json(path: &Path) -> io::Result<Value> {
-    if !path.metadata()?.is_file() {
-        return Err(io::Error::other("AGY settings/statusline data is not a regular file"));
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        launch_cwd.join(path)
     }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(io::Error::other("AGY settings/statusline data is too large"));
-    }
-    let trimmed = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-    Ok(serde_json::from_slice(trimmed)?)
 }
 
-pub(crate) fn read_usage(spool: &Path) -> io::Result<Observation> {
-    Ok(serde_json::from_value(read_json(&spool.join(USAGE_FILE))?)?)
-}
-
-pub(crate) fn callback_command(binary: &Path) -> String {
-    let program = binary.to_string_lossy();
-    #[cfg(windows)]
-    let program = program.replace('\\', "/");
-    format!(
-        "'{}' --bus-callback agy-statusline",
-        program.replace('\'', "'\\''")
-    )
-}
-
-fn global_original_statusline() -> Value {
-    let Some(home) = std::env::home_dir() else {
-        return json!({});
-    };
-    let path = home.join(".gemini/antigravity-cli/settings.json");
-    read_json(&path)
-        .ok()
-        .and_then(|doc| doc.get("statusLine").cloned())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}))
-}
-
-fn parse_user_settings_value(raw: &str) -> Result<Map<String, Value>, String> {
+fn parse_user_settings_value(raw: &str, launch_cwd: &Path) -> Result<Map<String, Value>, String> {
     let trimmed = raw.trim();
     let value: Value = if trimmed.starts_with('{') {
         serde_json::from_str(trimmed)
             .map_err(|e| format!("Invalid inline AGY --settings JSON: {e}"))?
     } else {
-        read_json(Path::new(trimmed))
+        let resolved = resolve_settings_path(trimmed, launch_cwd);
+        read_json(&resolved)
             .map_err(|e| format!("Cannot read AGY --settings file {trimmed:?}: {e}"))?
     };
     value
@@ -93,9 +67,11 @@ fn parse_user_settings_value(raw: &str) -> Result<Map<String, Value>, String> {
 }
 
 /// Build `<spool>/agy-settings.json` merging Bus worker defaults, any user
-/// `--settings` values, and the Bus statusline tap. Never touches `~/.gemini/`.
+/// `--settings` values, and the Bus statusline tap. Reads
+/// `~/.gemini/antigravity-cli/settings.json` read-only and never writes to `~/.gemini/`.
 pub(crate) fn install(
     spool: &Path,
+    launch_cwd: &Path,
     binary: &Path,
     user_settings_values: &[String],
     explicit_sandbox: bool,
@@ -106,18 +82,33 @@ pub(crate) fn install(
 
     let mut user_statusline: Option<Value> = None;
     for raw in user_settings_values {
-        let map = parse_user_settings_value(raw)?;
+        let map = parse_user_settings_value(raw, launch_cwd)?;
         if let Some(status) = map.get("statusLine").filter(|v| v.is_object()) {
             user_statusline = Some(status.clone());
         }
         merged.extend(map);
     }
 
-    if !explicit_sandbox && !merged.contains_key("enableTerminalSandbox") {
+    let global = global_settings();
+    let global_sandbox_configured = global
+        .as_ref()
+        .and_then(|doc| doc.get("enableTerminalSandbox"))
+        .and_then(Value::as_bool)
+        .is_some();
+
+    if !explicit_sandbox
+        && !merged.contains_key("enableTerminalSandbox")
+        && !global_sandbox_configured
+    {
         merged.insert("enableTerminalSandbox".into(), json!(false));
     }
 
-    let original = user_statusline.unwrap_or_else(global_original_statusline);
+    let original = user_statusline.unwrap_or_else(|| {
+        global
+            .and_then(|doc| doc.get("statusLine").cloned())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}))
+    });
     atomic_write(
         &spool.join(ORIGINAL_FILE),
         &serde_json::to_vec(&original).map_err(|e| e.to_string())?,
@@ -142,8 +133,23 @@ pub(crate) fn install(
 /// Rebind `<spool>/agy-settings.json` to `binary` during cold resume.
 pub(crate) fn rebind(spool: &Path, binary: &Path) -> Result<(PathBuf, bool), String> {
     let path = spool.join(SETTINGS_FILE);
-    let mut settings = read_json(&path)
-        .map_err(|_| "Bus AGY resume settings are missing; relaunch required".to_owned())?;
+    let mut settings = match read_json(&path) {
+        Ok(settings) => settings,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err("Bus AGY resume settings are missing; relaunch required".into());
+        }
+        Err(e) => {
+            tracing::warn!(
+                event = "bus.resume.settings_invalid",
+                provider = "agy",
+                error_kind = ?e.kind(),
+                "Cannot read AGY resume settings file"
+            );
+            return Err(format!(
+                "Bus AGY resume settings cannot be read ({e}); relaunch required"
+            ));
+        }
+    };
     let command = callback_command(binary);
     let Some(status) = settings
         .get_mut("statusLine")
@@ -192,13 +198,59 @@ fn parse_window(bucket: &Value, window_minutes: u64, now_ms: u64) -> Option<Usag
     })
 }
 
-pub(crate) fn windows(value: &Value, now_ms: u64) -> UsageWindows {
+fn active_model_hint(value: &Value) -> Option<&str> {
+    let model = value.get("model")?;
+    if let Some(s) = model.as_str() {
+        return Some(s).filter(|s| !s.trim().is_empty());
+    }
+    model
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            model
+                .get("display_name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+        })
+}
+
+fn pick_higher(a: Option<UsageWindow>, b: Option<UsageWindow>) -> Option<UsageWindow> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            if b.used_percent > a.used_percent {
+                Some(b)
+            } else {
+                Some(a)
+            }
+        }
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+pub(in crate::agents::providers) fn windows(value: &Value, now_ms: u64) -> UsageWindows {
     let quota = &value["quota"];
-    let five_hour = parse_window(&quota["gemini-5h"], FIVE_HOUR_MINUTES, now_ms)
-        .or_else(|| parse_window(&quota["3p-5h"], FIVE_HOUR_MINUTES, now_ms));
-    let weekly = parse_window(&quota["gemini-weekly"], WEEKLY_MINUTES, now_ms)
-        .or_else(|| parse_window(&quota["3p-weekly"], WEEKLY_MINUTES, now_ms));
-    UsageWindows { five_hour, weekly }
+    let gemini_5h = parse_window(&quota["gemini-5h"], FIVE_HOUR_MINUTES, now_ms);
+    let gemini_wk = parse_window(&quota["gemini-weekly"], WEEKLY_MINUTES, now_ms);
+    let third_5h = parse_window(&quota["3p-5h"], FIVE_HOUR_MINUTES, now_ms);
+    let third_wk = parse_window(&quota["3p-weekly"], WEEKLY_MINUTES, now_ms);
+
+    match active_model_hint(value) {
+        Some(model) if model.trim().to_ascii_lowercase().starts_with("gemini") => UsageWindows {
+            five_hour: gemini_5h.or(third_5h),
+            weekly: gemini_wk.or(third_wk),
+        },
+        Some(_) => UsageWindows {
+            five_hour: third_5h.or(gemini_5h),
+            weekly: third_wk.or(gemini_wk),
+        },
+        None => UsageWindows {
+            five_hour: pick_higher(gemini_5h, third_5h),
+            weekly: pick_higher(gemini_wk, third_wk),
+        },
+    }
 }
 
 fn capture(spool: &Path, launch: &str, input: &[u8]) -> io::Result<()> {
@@ -225,127 +277,5 @@ fn capture(spool: &Path, launch: &str, input: &[u8]) -> io::Result<()> {
 }
 
 pub(crate) fn run() {
-    if std::env::var_os(RECURSION_GUARD).is_some() {
-        return;
-    }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    let reader = std::thread::Builder::new().spawn(move || {
-        let mut bytes = Vec::new();
-        let result = io::stdin()
-            .lock()
-            .take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes);
-        let _ = tx.send(
-            result
-                .ok()
-                .filter(|_| bytes.len() as u64 <= MAX_BYTES)
-                .map(|_| bytes),
-        );
-    });
-    if reader.is_err() {
-        return;
-    }
-    let Ok(Some(input)) = rx.recv_timeout(Duration::from_secs(1)) else {
-        return;
-    };
-    let spool = std::env::var_os("BUS_CALLBACK_DIR").map(PathBuf::from);
-    let launch = std::env::var("BUS_LAUNCH_ID").unwrap_or_default();
-    let output = render(spool.as_deref(), &launch, &input, COMMAND_TIMEOUT);
-    let _ = io::stdout().lock().write_all(&output);
-}
-
-fn render(spool: Option<&Path>, launch: &str, input: &[u8], timeout: Duration) -> Vec<u8> {
-    let original = spool.and_then(|p| read_json(&p.join(ORIGINAL_FILE)).ok());
-    if let Some(spool) = spool {
-        let _ = capture(spool, launch, input);
-    }
-    let Some(original) = original else {
-        return Vec::new();
-    };
-    let enabled = original
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    if !enabled {
-        return Vec::new();
-    }
-    let command = original
-        .get("command")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty());
-    match command {
-        Some(command) => passthrough(command, input, timeout).unwrap_or_default(),
-        None => Vec::new(),
-    }
-}
-
-fn passthrough(command: &str, input: &[u8], timeout: Duration) -> io::Result<Vec<u8>> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async {
-        let mut process = tokio::process::Command::new(if cfg!(windows) {
-            "cmd.exe"
-        } else {
-            "/bin/sh"
-        });
-        if cfg!(windows) {
-            process.args(["/d", "/s", "/c", command]);
-        } else {
-            process.args(["-c", command]);
-        }
-        process
-            .env(RECURSION_GUARD, "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        process.process_group(0);
-        let mut child = process.spawn()?;
-        #[cfg(unix)]
-        let group = child.id();
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("Missing piped stdin"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("Missing piped stdout"))?;
-        let mut output = Vec::new();
-        let finished = tokio::time::timeout(timeout, async {
-            tokio::try_join!(
-                async {
-                    let _ = stdin.write_all(input).await;
-                    drop(stdin);
-                    Ok::<(), io::Error>(())
-                },
-                async {
-                    stdout.take(MAX_BYTES + 1).read_to_end(&mut output).await?;
-                    if output.len() as u64 > MAX_BYTES {
-                        return Err(io::Error::other("Status line output is too large"));
-                    }
-                    Ok(())
-                },
-                child.wait(),
-            )
-        })
-        .await;
-        if !matches!(finished, Ok(Ok(_))) {
-            #[cfg(unix)]
-            if let Some(group) = group {
-                // SAFETY: fresh child's private process group.
-                unsafe {
-                    libc::kill(-(group as i32), libc::SIGKILL);
-                }
-            }
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_millis(100), child.wait()).await;
-        }
-        if output.len() as u64 > MAX_BYTES {
-            output.clear();
-        }
-        Ok(output)
-    })
+    statusline_tap::run_tap(ORIGINAL_FILE, b"", true, capture);
 }

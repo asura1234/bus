@@ -306,7 +306,7 @@ impl TerminalState {
                 | ("herdr:grok", "grok", Some("new" | "load"))
                 // Bus reports Kimi's and AGY's verified /new reset as "new".
                 | ("herdr:kimi", "kimi", Some("new"))
-                | ("herdr:agy", "agy", Some("new" | "resume"))
+                | ("herdr:agy", "agy", Some("new"))
                 | ("herdr:antigravity_cli", "agy", None)
         )
     }
