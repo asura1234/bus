@@ -2136,6 +2136,16 @@ fn agy_composer_observes_idle_working_and_paste_chips() {
         InputObservation::Unavailable
     );
     assert!(!observer(AgentKind::Antigravity, "hello".into()).submission_available(untrusted));
+
+    // Historical trust dialog in scrollback above the live composer + mode placeholder is Empty & Idle!
+    let post_trust = format!(
+        "{untrusted}\n\nAntigravity CLI 1.5.11\n ┃ Introducing Gemini 4 Hydrogen\n ┃ esc to dismiss\n{rule}\n> Auto mode: edits & safe commands auto-approved (...\n{rule}\n? for shortcuts          auto · Claude Opus 5.5 · high\n"
+    );
+    assert_eq!(
+        observe_with_cursor(AgentKind::Antigravity, &post_trust, "hello", Some((2, 12))),
+        InputObservation::Empty
+    );
+    assert!(observer(AgentKind::Antigravity, "hello".into()).submission_available(&post_trust));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 id = "agy"
-version = "2026.11.18.1"
+version = "2026.11.18.2"
 min_engine_version = 2
 updated_at = "2026-11-18T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
@@ -8,7 +8,7 @@ aliases = ["antigravity", "antigravity-cli"]
 id = "workspace_trust_or_permission_blocked"
 state = "blocked"
 priority = 1050
-region = "whole_recent"
+region = "bottom_non_empty_lines(12)"
 visible_blocker = true
 any = [
   { contains = ["do you trust the contents of this project?"] },
@@ -16,12 +16,15 @@ any = [
   { contains = ["↑/↓ navigate · enter confirm"] },
   { contains = ["↑/↓ navigate · enter select"] },
 ]
+not = [
+  { contains = ["? for shortcuts"] },
+]
 
 [[rules]]
 id = "interactive_overlay_menu"
 state = "unknown"
 priority = 1000
-region = "whole_recent"
+region = "bottom_non_empty_lines(12)"
 skip_state_update = true
 any = [
   { contains = ["select model", "esc to close"] },

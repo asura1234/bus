@@ -136,7 +136,7 @@ pub(super) fn observe_since_launch(
         return super::kimi::observe(screen, expected);
     }
     if kind == AgentKind::Antigravity {
-        return super::agy::observe(screen, expected);
+        return super::agy::observe(screen, expected, cursor);
     }
     let plain = super::plain_screen(screen);
     let detection = crate::agents::manifest::detect_with_osc(
@@ -340,7 +340,7 @@ fn input_since_launch(
         return super::kimi::input(screen);
     }
     if kind == AgentKind::Antigravity {
-        return super::agy::input(screen);
+        return super::agy::input(screen, cursor);
     }
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled
