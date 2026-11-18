@@ -388,8 +388,10 @@ fn binary_key(row: &str) -> Option<(usize, char)> {
         return None;
     }
     let prefix = &row[..row.len() - 1];
-    (prefix.len() - prefix.trim_end().len() >= 2 && !prefix.trim().is_empty())
-        .then_some((prefix.chars().count(), key))
+    // Match selection's shortcut gap: only ASCII spaces contribute columns.
+    let label = prefix.trim_end_matches(' ');
+    let gap = prefix.len() - label.len();
+    (gap >= 2 && !label.trim().is_empty()).then_some((prefix.chars().count(), key))
 }
 
 fn starts_with_key(row: &str) -> bool {
