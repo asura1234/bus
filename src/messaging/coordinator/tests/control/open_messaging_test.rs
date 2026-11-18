@@ -86,17 +86,17 @@ fn open_messaging_unique_names_route_globally_and_exact_ids_win_over_numeric_nam
 }
 
 #[test]
-fn open_messaging_all_agent_payloads_name_the_sender_and_its_home_room() {
+fn open_messaging_all_agent_payloads_name_the_sender() {
     let (mut w, room, author, dir) = fixture();
     let peer = add(&mut w, room, &dir, "peer");
     let other = w.state.create_room("other").unwrap();
     // The conversation's room need not be the sender's home room.
     assert!(send(&mut w, other, author, &peer.0.to_string(), "hello").ok);
     let id = w.state.requests().last().unwrap().id;
-    let expected = format!("codex1 (room {}):\nhello", room.0);
+    let expected = "codex1:\nhello";
     assert_eq!(
         test_request_payload(&mut w.state, id).as_deref(),
-        Some(expected.as_str())
+        Some(expected)
     );
     assert_eq!(w.state.request(id).unwrap().prompt.text, "hello");
     let mut restored: BusState =
@@ -104,7 +104,7 @@ fn open_messaging_all_agent_payloads_name_the_sender_and_its_home_room() {
     restored.rename_agent(author, "renamed").unwrap();
     assert_eq!(
         test_request_payload(&mut restored, id).as_deref(),
-        Some(expected.as_str())
+        Some(expected)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
@@ -133,7 +133,7 @@ fn open_messaging_does_not_duplicate_an_existing_sender_identity() {
         let id = w.state.requests().last().unwrap().id;
         assert_eq!(
             test_request_payload(&mut w.state, id).as_deref(),
-            Some(format!("codex1 (room {}):\nready for verification", room.0).as_str())
+            Some("codex1:\nready for verification")
         );
         drop(w);
         std::fs::remove_dir_all(dir).unwrap();
@@ -208,7 +208,7 @@ fn open_messaging_unique_names_are_global_but_alias_uses_home_binding() {
 
 #[test]
 fn open_messaging_queued_attribution_survives_sender_rename_and_deletion() {
-    let (mut w, home, author, dir) = fixture();
+    let (mut w, _home, author, dir) = fixture();
     let other = w.state.create_room("other").unwrap();
     let peer = add(&mut w, other, &dir, "peer");
     assert!(
@@ -229,10 +229,7 @@ fn open_messaging_queued_attribution_survives_sender_rename_and_deletion() {
     assert_eq!(
         test_request_payload(&mut restored, id).unwrap(),
         // A historical sender keeps its old name and stable ID after deletion.
-        format!(
-            "codex1 (agent {}) (room {}):\nqueued question",
-            author.0, home.0
-        )
+        format!("codex1 (agent {}):\nqueued question", author.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();

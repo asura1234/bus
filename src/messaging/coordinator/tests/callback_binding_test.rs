@@ -595,10 +595,7 @@ fn route_at(worker: &mut Worker, at_ms: u64) {
 // real provider does; the late-final assertions below remain unchanged.
 fn authored_start(worker: &Worker, author: AgentId, turn: &str, text: &str) -> serde_json::Value {
     let sender = worker.state.agent(author).unwrap();
-    claude_start(
-        turn,
-        &format!("{} (room {}):\n{text}", sender.name, sender.room_id.0),
-    )
+    claude_start(turn, &format!("{}:\n{text}", sender.name))
 }
 
 /// The request completes on an interim Stop (a Codex-style Stop without a

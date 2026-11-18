@@ -137,7 +137,7 @@ orchestrator.
 
 A reply is just another message: Bus never posts it on your behalf. When the recipient's turn ends, that request settles at once and the next queued message can be delivered. The final text the turn recorded is stored as the request's reply, so the sender can read it with `bus message status`; nothing waits on it. An explicit `bus send --reply-to MESSAGE_ID` answers earlier, while the turn is still open, and a later final never replaces that wording. Either way the request is terminal by the end of the turn.
 
-If you receive a message, reply in the room it arrived in. `bus send --reply-to` infers that room, so the answer stays in the conversation the sender is watching. The sender header names the sender's home room, which can differ from that conversation. When you send a message into another room, expect the reply in that conversation, not in the recipient's home room.
+If you receive a message, reply in the room it arrived in. `bus send --reply-to` infers that room, so the answer stays in the conversation the sender is watching. The delivered `[Bus message N from NAME (room R)]` prefix names the sender's home room, which can differ from that conversation. When you send a message into another room, expect the reply in that conversation, not in the recipient's home room.
 
 If you want an answer, say in the message whom to reply to and in which room. For example: report to @orchestrator in #build when complete. The agent you named sends a normal message to that agent in that room.
 

@@ -774,7 +774,7 @@ impl Delivery {
         self.tick();
     }
     pub(crate) fn spool_start(&mut self, agent: AgentId, turn: &str, text: &str) {
-        // Agent-authored payloads keep their `name (room N):` header line;
+        // Agent-authored payloads keep their bare `name:` sender header;
         // match those by the message tail like a developer payload exactly.
         let text = self
             .typed(agent)

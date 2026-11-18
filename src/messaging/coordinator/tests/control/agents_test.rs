@@ -990,7 +990,7 @@ fn workers_launch_with_messaging_and_no_signature_instructions_for_every_provide
             "{prompt}"
         );
         assert!(
-            prompt.contains("Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER"),
+            prompt.contains("Bus adds one sender header: 'name:'; IDs appear only for numeric or historical names"),
             "{prompt}"
         );
         assert!(

@@ -1,7 +1,6 @@
-//! A same-room message keeps a bare sender line in the chat, while its
-//! `[Bus message N from …]` prefix still names the sender's room. A cross-room
-//! or MASTER message names the room in both. A sender with no room keeps the
-//! bare label; nothing invents one.
+//! The chat attribution stays a bare sender line — same room, cross-room or
+//! MASTER — while its `[Bus message N from …]` prefix names the sender's room.
+//! A sender with no room keeps the bare label; nothing invents one.
 use std::path::PathBuf;
 
 use super::*;
@@ -58,7 +57,7 @@ fn expect_message(message: u64, header: &str, prefix_from: &str, body: &str, pay
     assert_eq!(
         payload,
         format!("{header}:\n[Bus message {message} from {prefix_from}]\n{body}"),
-        "sender line or delivered prefix does not match the restored format"
+        "sender line or delivered prefix does not match the chat attribution format"
     );
 }
 
@@ -76,7 +75,7 @@ fn same_room_attribution_stays_bare_while_the_prefix_names_the_room() {
 }
 
 #[test]
-fn cross_room_delivery_names_the_senders_home_room_on_both_lines() {
+fn cross_room_attribution_stays_bare_while_the_prefix_names_the_home_room() {
     let (mut state, home, author, _) = pair("home");
     let other = state.create_room("other").unwrap();
     let peer = state
@@ -85,7 +84,7 @@ fn cross_room_delivery_names_the_senders_home_room_on_both_lines() {
     let (message, payload) = delivered(&mut state, other, author, peer, "hello");
     expect_message(
         message,
-        &format!("builder (room {})", home.0),
+        "builder",
         &format!("builder (room {})", home.0),
         "hello",
         &payload,
@@ -93,7 +92,7 @@ fn cross_room_delivery_names_the_senders_home_room_on_both_lines() {
 }
 
 #[test]
-fn master_delivery_names_the_master_room_on_both_lines() {
+fn master_attribution_stays_bare_while_the_prefix_names_the_master_room() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();
@@ -118,7 +117,7 @@ fn master_delivery_names_the_master_room_on_both_lines() {
     let (message, payload) = delivered(&mut state, work, orch, worker, "status");
     expect_message(
         message,
-        &format!("orch (room {})", master.0),
+        "orch",
         &format!("orch (room {})", master.0),
         "status",
         &payload,
@@ -136,7 +135,7 @@ fn master_delivery_names_the_master_room_on_both_lines() {
     let (message, payload) = delivered(&mut state, master, orch, peer, "in master");
     expect_message(
         message,
-        &format!("orch (room {})", master.0),
+        "orch",
         &format!("orch (room {})", master.0),
         "in master",
         &payload,
