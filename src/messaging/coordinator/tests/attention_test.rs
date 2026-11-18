@@ -173,7 +173,8 @@ fn feishu_toggle_off_suppresses_sends_until_turned_back_on() {
     let mut f = Fixture::new();
     f.settings(|s| s.feishu_notifications = false);
     assert!(!f.worker.attention.status.enabled);
-    assert!(!f.worker.attention.status.available);
+    // Availability is the executable's, independent of the toggle.
+    assert!(f.worker.attention.status.available);
     f.post("[waiting-on-you] Choose while off");
     assert!(f.calls().is_empty());
     assert!(f.worker.state.feishu.outbox.is_empty());
@@ -183,6 +184,58 @@ fn feishu_toggle_off_suppresses_sends_until_turned_back_on() {
     f.flush();
     assert_eq!(f.calls().len(), 1);
     assert_eq!(f.worker.state.feishu.outbox.len(), 1);
+}
+
+#[test]
+fn feishu_off_drops_queued_alerts_so_a_later_on_sends_only_new_ones() {
+    let mut f = Fixture::new();
+    std::fs::write(f.root.join("mode"), "hang").unwrap();
+    f.post("[waiting-on-you] In flight");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        f.pump();
+        if !f.calls().is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "first send did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    f.post("[waiting-on-you] Queued before off");
+    assert_eq!(f.worker.state.feishu.outbox.len(), 2);
+    assert_eq!(
+        f.worker
+            .state
+            .feishu
+            .outbox
+            .values()
+            .filter(|record| !record.attempted)
+            .count(),
+        1
+    );
+    f.settings(|s| s.feishu_notifications = false);
+    assert_eq!(
+        f.worker.state.feishu.outbox.len(),
+        1,
+        "an alert that never started sending is dropped when Feishu is turned off"
+    );
+    assert!(f
+        .worker
+        .state
+        .feishu
+        .outbox
+        .values()
+        .all(|record| record.attempted));
+    std::fs::remove_file(f.root.join("mode")).unwrap();
+    f.settings(|s| s.feishu_notifications = true);
+    f.flush();
+    assert_eq!(
+        f.calls().len(),
+        1,
+        "the off-period alert must not be replayed after --on"
+    );
+    f.post("[waiting-on-you] Raised while on again");
+    f.flush();
+    assert_eq!(f.calls().len(), 2);
 }
 
 #[test]

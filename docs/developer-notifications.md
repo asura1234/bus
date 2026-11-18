@@ -56,10 +56,11 @@ stored as `feishu_waiting_notifications`; `bus state` and `bus settings` expose
 saved toggle and `available` reports whether the bridge executable resolves now.
 
 Turning Feishu off stops DMs in both directions: new developer alerts are not
-queued for the bridge, and inbound bridge input is refused. TUI developer alerts
-(the unread dot and the You sound) and room sounds are unaffected. A send that
-the bridge accepted while the toggle was on still records its mapping; attempts
-already marked uncertain are never replayed.
+queued for the bridge, alerts queued but not yet attempted are discarded, and
+inbound bridge input is refused. TUI developer alerts (the unread dot and the
+You sound) and room sounds are unaffected. A send that the bridge accepted while
+the toggle was on still records its mapping; attempts already marked uncertain
+are never replayed.
 
 Only literal `[waiting-on-you]` or `[waiting_on_you]` tags reach Feishu. Untagged
 posts, `@you` mentions and the legacy phrase stay in the TUI. Requests get separate

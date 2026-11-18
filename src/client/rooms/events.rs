@@ -33,6 +33,22 @@ impl BusUi {
         self.settings = settings;
     }
 
+    /// The coordinator re-reads the shared settings each tick, so its Feishu
+    /// status carries a change made by another Bus session. Mirror the live
+    /// toggle unless this client's own toggle is still awaiting its result.
+    pub(in crate::client::rooms) fn receive_feishu_status(
+        &mut self,
+        status: crate::messaging::coordinator::attention::Status,
+    ) {
+        let pending = self.pending.iter().any(|p| {
+            p.result.is_none() && matches!(p.command, BusCommand::SetFeishuNotifications(_))
+        });
+        if !pending {
+            self.settings.feishu_notifications = status.enabled;
+        }
+        self.feishu_status = status;
+    }
+
     pub(in crate::client::rooms) fn receive_dev_focus(
         &mut self,
         room: RoomId,

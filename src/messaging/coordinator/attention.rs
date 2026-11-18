@@ -125,22 +125,23 @@ impl Runtime {
         saved: Option<&settings::BusSettings>,
     ) -> Option<std::path::PathBuf> {
         let enabled = saved.is_some_and(|s| s.feishu_notifications);
-        let program = saved
-            .filter(|s| s.feishu_notifications)
-            .and_then(|s| self.client.program(s.feishu_bridge_path.as_deref()));
+        // Availability describes the executable alone; delivery also needs the
+        // toggle on.
+        let program = saved.and_then(|s| self.client.program(s.feishu_bridge_path.as_deref()));
+        let available = program.is_some();
         // Disabling cancels an in-flight send and starts none; re-enabling
         // starts with new alerts only.
         if !enabled {
             self.stop();
         }
         self.status.enabled = enabled;
-        self.status.available = program.is_some();
-        if enabled && program.is_none() {
+        self.status.available = available;
+        if enabled && !available {
             self.status.error = Some(FEISHU_UNAVAILABLE.into());
-        } else if program.is_some() && self.status.error.as_deref() == Some(FEISHU_UNAVAILABLE) {
+        } else if available && self.status.error.as_deref() == Some(FEISHU_UNAVAILABLE) {
             self.status.error = None;
         }
-        program
+        enabled.then_some(program).flatten()
     }
 
     fn pump(
@@ -180,9 +181,15 @@ impl Runtime {
                 return Ok(());
             }
         };
+        // Turning the toggle off drops alerts that never started sending, so a
+        // later --on sends only alerts raised while it is on. An ordinary
+        // restart with the toggle still on keeps its unattempted backlog.
+        if saved.as_ref().is_some_and(|s| !s.feishu_notifications) {
+            worker.suppress_unsent_feishu_alerts()?;
+        }
         let program = self.resolve_program(saved.as_ref());
         if let Some((revision, previous)) = self.previous.as_ref() {
-            if *revision != worker.revision && self.status.available {
+            if *revision != worker.revision && self.status.enabled && self.status.available {
                 if let Some(settings) = &saved {
                     let mut next = worker.state.clone();
                     next.prepare_feishu_alerts(
@@ -278,6 +285,24 @@ impl Worker {
             let _log_only = crate::utils::error_pipe::suppress(true);
             tracing::warn!(event = "bus.feishu.shutdown_commit_failed", %error, "Feishu completion could not be committed before shutdown");
         }
+    }
+
+    /// Explicitly turning Feishu off discards alerts that never started
+    /// sending. Attempted sends keep their durable (possibly uncertain)
+    /// mappings for inbound reply routing.
+    fn suppress_unsent_feishu_alerts(&mut self) -> Result<(), String> {
+        if self
+            .state
+            .feishu
+            .outbox
+            .values()
+            .all(|record| record.attempted)
+        {
+            return Ok(());
+        }
+        let mut state = self.state.clone();
+        state.feishu.outbox.retain(|_, record| record.attempted);
+        self.save(state)
     }
 
     pub(super) fn set_feishu_notifications(

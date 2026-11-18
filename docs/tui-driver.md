@@ -157,7 +157,7 @@ notify from every room and sender. Explicit `@you` mentions also qualify. Bare w
 qualify only in developer conversations, not peer traffic. Feishu uses the optional local
 `feishu-bridge` plugin and sends only literal waiting-tagged requests. Same-agent,
 same-ask repeats within thirty minutes share one DM with durable source aliases.
-The recipient and optional bridge path are shared settings. Without the plugin, Feishu is off.
+The recipient, optional bridge path and explicit on/off toggle are shared settings. Without a resolvable plugin no DM is sent and the Settings row shows the setup error.
 Use a closed PATH recording bridge to assert argv and persisted outbox admission. Developer sends emit no alerts,
 and these alerts emit no terminal OSC. See [developer notifications](developer-notifications.md).
 Freezes are recorded only in diagnostics and emit no terminal notification.

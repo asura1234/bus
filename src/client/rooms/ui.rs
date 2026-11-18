@@ -396,7 +396,7 @@ impl BusUi {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
             BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
-            BusEvent::FeishuStatusChanged(status) => self.feishu_status = status,
+            BusEvent::FeishuStatusChanged(status) => self.receive_feishu_status(status),
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
             BusEvent::DevFocusRequested {
                 room,

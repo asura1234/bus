@@ -1169,6 +1169,47 @@ fn developer_sound_choice_survives_color_blind_save_before_coordinator_echo() {
 }
 
 #[test]
+fn feishu_row_follows_a_shared_toggle_change_from_the_coordinator() {
+    use crate::messaging::coordinator::attention::Status;
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.action(render::Action::Settings);
+    assert!(ui.settings.feishu_notifications);
+    // Another session saved the shared setting off; the coordinator's live
+    // status is authoritative even though this client's copy is stale.
+    ui.receive_event(BusEvent::FeishuStatusChanged(Status {
+        enabled: false,
+        available: true,
+        ..Default::default()
+    }));
+    assert!(!ui.settings.feishu_notifications);
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[ ] Feishu notifications (off)")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("feishu-bridge is not installed")),
+        "{rows:#?}"
+    );
+    // A local toggle awaiting its result keeps the optimistic value.
+    ui.settings_field = ui.feishu_field();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.settings.feishu_notifications);
+    ui.receive_event(BusEvent::FeishuStatusChanged(Status {
+        enabled: false,
+        available: true,
+        ..Default::default()
+    }));
+    assert!(
+        ui.settings.feishu_notifications,
+        "a pending toggle keeps the optimistic value"
+    );
+}
+
+#[test]
 fn feishu_toggle_keeps_the_draft_and_does_not_touch_sound() {
     let (mut ui, master, _) = sound_fixture(0);
     ui.open_room(master);
