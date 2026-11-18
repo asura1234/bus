@@ -26,6 +26,21 @@ class RealWorldShapeTests(Fixture):
         self.assertEqual(recipe["target_paths"], ["native/rust/target"])
         self.assertEqual(recipe["disk_estimate_gib"], 19)
 
+    def test_plugins_directory_crates_are_not_worktree_cargo_roots(self):
+        self.rust()
+        self.write(
+            "plugins/feishu-bridge/Cargo.toml",
+            '[package]\nname="feishu-bridge"\nversion="0.1.0"\nedition="2021"\n',
+        )
+        self.write("plugins/feishu-bridge/Cargo.lock", "version = 4\n")
+        self.commit()
+        recipe = self.profile.scan(self.repo, use_cache=False)["recipe"]
+        self.assertEqual(recipe["target_paths"], ["target"])
+        self.assertEqual(recipe["disk_estimate_gib"], 15)
+        self.assertNotIn(
+            "plugins/feishu-bridge", [item["cwd"] for item in recipe["smoke"]]
+        )
+
     def test_run_wrapper_with_nested_node_product_is_not_ready_from_cargo_alone(self):
         self.write("run", '#!/bin/sh\nexec node scripts/run.js "$@"\n')
         self.write(
