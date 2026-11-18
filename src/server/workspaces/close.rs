@@ -1,6 +1,6 @@
 use crate::server::{app_settings::Mode, app_state::AppState};
 use crate::utils::ids::PaneId;
-use tracing::warn;
+use tracing::debug;
 
 impl AppState {
     pub(crate) fn terminal_ids_for_workspace(
@@ -166,7 +166,11 @@ impl AppState {
             .position(|ws| ws.find_tab_index_for_pane(pane_id).is_some());
 
         let Some(ws_idx) = ws_idx else {
-            warn!(target: "bus::server::terminals::events", pane = pane_id.raw(), "PaneDied for unknown pane");
+            // A pane closed through the API leaves its workspace before the
+            // runtime reports the death, so this is the normal close race and
+            // nothing remains to clean up. Debug keeps it out of the error
+            // pipe, whose WARN capture would surface it as a Bus error.
+            debug!(target: "bus::server::terminals::events", pane = pane_id.raw(), "PaneDied for unknown pane");
             return;
         };
 
