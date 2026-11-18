@@ -12,6 +12,16 @@ use {
 /// Why a request closed when its agent was deleted before it settled.
 pub(crate) const AGENT_DELETED: &str = "agent_deleted";
 
+/// Launch progress shown as the agent's error until its provider terminal or
+/// Claude hooks report ready. It clears without developer action, so it is not
+/// an actionable error and must never raise an error notice.
+pub(crate) const AGENT_WAITING_FOR_TERMINAL: &str = "Not ready; waiting for the provider terminal.";
+pub(crate) const AGENT_WAITING_FOR_HOOKS: &str = "Not ready; waiting for provider hook readiness.";
+
+pub(crate) fn is_launch_wait_error(error: &str) -> bool {
+    error == AGENT_WAITING_FOR_TERMINAL || error == AGENT_WAITING_FOR_HOOKS
+}
+
 impl BusState {
     pub(crate) fn create_agent(
         &mut self,

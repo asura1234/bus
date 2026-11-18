@@ -1190,6 +1190,27 @@ fn final_session_save_joins_background_writer_before_returning() {
     assert!(app.session_save_thread.is_none());
 }
 
+#[test]
+fn a_death_event_for_an_already_closed_pane_is_not_a_warning() {
+    let _guard = config::test_config_env_lock().lock().unwrap();
+    let _bus = config::test_without_bus_env(&_guard);
+    let mut app = test_app();
+
+    // The API close removes a pane before its runtime reports the death, so
+    // the same pane arrives with nothing left to clean up.
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        app.state
+            .handle_pane_died(crate::utils::ids::PaneId::alloc());
+    });
+    let logs = capture.text();
+    assert!(logs.contains("PaneDied for unknown pane"), "{logs}");
+    assert!(
+        !logs.contains("WARN") && !logs.contains("ERROR"),
+        "an expected close race must stay out of the error pipe: {logs}"
+    );
+}
+
 #[tokio::test]
 async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown() {
     let _guard = config::test_config_env_lock().lock().unwrap();

@@ -45,6 +45,9 @@ mod worker_result_scope;
 #[cfg(test)]
 use requests::rejection_reason;
 
+pub(crate) use agents::{
+    is_launch_wait_error, AGENT_WAITING_FOR_HOOKS, AGENT_WAITING_FOR_TERMINAL,
+};
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};
 pub(crate) use developer_notifications::{developer_alerts, new_developer_notifications};
 pub(crate) use error::{

@@ -313,13 +313,13 @@ impl Worker {
                 Some(
                     match provider {
                         Provider::Codex | Provider::Cursor | Provider::Grok | Provider::Kimi => {
-                            "Not ready; waiting for the provider terminal."
+                            crate::messaging::model::AGENT_WAITING_FOR_TERMINAL
                         }
                         Provider::ClaudeCode | Provider::ClaudeDs => {
-                            "Not ready; waiting for provider hook readiness."
+                            crate::messaging::model::AGENT_WAITING_FOR_HOOKS
                         }
                         #[cfg(feature = "dev-tools")]
-                        Provider::Fake => "Not ready; waiting for provider hook readiness.",
+                        Provider::Fake => crate::messaging::model::AGENT_WAITING_FOR_HOOKS,
                     }
                     .into(),
                 ),
