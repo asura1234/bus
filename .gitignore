@@ -2,6 +2,7 @@
 node_modules/
 /vendor/libghostty-vt/zig-pkg/
 __pycache__/
+*.profraw
 *.pyc
 *.swp
 *.swo
