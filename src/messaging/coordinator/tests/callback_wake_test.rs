@@ -525,8 +525,8 @@ fn callback_wake_cursor_response_waits_for_its_matching_stop() {
             .request(request)
             .unwrap()
             .completed_reply
-            .is_none(),
-        "turn finals must not publish replies"
+            .is_some(),
+        "the captured final is stored on the request"
     );
     assert!(callbacks::records(&dir.join("callbacks/launch"))
         .unwrap()

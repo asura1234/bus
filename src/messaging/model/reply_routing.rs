@@ -1,5 +1,6 @@
-//! Persisted reply-route records. A turn final is not forwarded as a reply,
-//! and nothing waits on a reply wake.
+//! Persisted reply-route records. A turn final is stored on its own request
+//! by settlement and is never forwarded as a new message; nothing waits on a
+//! reply wake.
 use super::{AgentId, Author, BusState, ModelError, Request, RequestId};
 use std::collections::BTreeSet;
 

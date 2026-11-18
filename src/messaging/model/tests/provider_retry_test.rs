@@ -279,7 +279,10 @@ fn provider_flake_retries_the_original_request_only_after_backoff_and_rejects_th
     );
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("completed once")
+    );
     assert!(settled.failure_reason.is_none());
 }
 
@@ -596,7 +599,10 @@ fn provider_flake_native_new_turn_can_claim_unbound_steering_without_replaying_i
     );
     let settled = state.request(member).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("second task done")
+    );
     assert!(settled.failure_reason.is_none());
     assert!(!state.request(lead).unwrap().settled());
     assert!(state.retry_provider_requests(1_000_001));
@@ -773,7 +779,10 @@ fn provider_flake_review_interrupt_closes_the_independent_hold_before_and_after_
         if finished {
             let settled = state.request(member).unwrap();
             assert_eq!(settled.phase, RequestPhase::Completed);
-            assert!(settled.reply().is_none());
+            assert_eq!(
+                settled.reply().map(|reply| reply.text.as_str()),
+                Some("second done")
+            );
             assert!(settled.failure_reason.is_none());
         } else {
             assert_eq!(
@@ -824,7 +833,10 @@ fn provider_flake_review_native_member_background_continuation_keeps_its_own_rep
     );
     let settled = state.request(member).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("second done")
+    );
     assert!(settled.failure_reason.is_none());
     assert!(!state.request(lead).unwrap().settled());
     assert!(state.retry_provider_requests(1_000_000));

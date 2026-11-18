@@ -166,6 +166,35 @@ fn a_developer_send_interrupts_the_running_turn_and_runs_as_the_next_turn() {
     }
 }
 
+/// An interrupting message starts its own turn. The stopped execution's Stop
+/// cannot become that message's answer; its own final does.
+#[test]
+fn an_interrupting_message_gets_its_own_answer_not_the_stopped_turns_final() {
+    let mut fixture = fixture_for(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "run the old plan", "1");
+    let params = send_params(&fixture, "change course now");
+    let response = send(&mut fixture, params);
+    let message = sent_request(&response);
+    // The stopped execution still emits its Stop after the interrupt.
+    fixture.stopped("1", "old plan stopped");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    let notice = fixture.typed().last().unwrap().0.clone();
+    assert!(notice.contains("change course now"), "{notice}");
+    fixture.started("2", &notice);
+    fixture.consume();
+    fixture.stopped("2", "new plan done");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.reply(message).as_deref(), Some("new plan done"));
+    assert_ne!(
+        fixture.reply(lead).as_deref(),
+        Some("new plan done"),
+        "the interrupting message's answer stays on the new request"
+    );
+}
+
 #[test]
 fn a_second_developer_send_while_the_stop_is_in_flight_does_not_press_again() {
     // A second Esc opens Claude's rewind and a second Ctrl+C quits Cursor.

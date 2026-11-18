@@ -323,8 +323,13 @@ fn cleared_codex_answers_a_message_sent_into_its_fresh_session() {
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
-    assert_eq!(settled.delivery_stage(), "ended");
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
+    assert_eq!(settled.delivery_stage(), "replied");
     assert!(!worker
         .state
         .room(room)

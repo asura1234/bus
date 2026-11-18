@@ -16,7 +16,7 @@ fn kimi_delayed_follow_up_keeps_nested_guidance_and_its_own_final() {
         f.status(RuntimeStatus::Idle);
         f.consume();
         super::settled_without_reply(&f, lead);
-        super::final_text_absent(&f, "lead final");
+        assert_eq!(f.reply(lead).as_deref(), Some("lead final"));
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         assert!(
             !f.request(follow).settled(),
@@ -51,12 +51,12 @@ fn kimi_delayed_follow_up_keeps_nested_guidance_and_its_own_final() {
         f.status(RuntimeStatus::Idle);
         stop(&f);
         f.consume();
-        super::final_text_absent(&f, "follow final");
-        super::final_text_absent(&f, "lead final");
         for id in [follow, nested] {
             super::settled_without_reply(&f, id);
+            assert_eq!(f.reply(id).as_deref(), Some("follow final"));
             assert_eq!(f.request(id).provider_turn_id.as_deref(), Some("2"));
         }
+        assert_eq!(f.reply(lead).as_deref(), Some("lead final"));
         assert_eq!(f.request(nested).group, Some(follow));
         super::settled_without_reply(&f, lead);
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
@@ -97,10 +97,11 @@ fn kimi_silent_synchronous_turn_and_guidance_do_not_strand_the_inbox() {
         stop(&f);
         f.consume();
         super::settled_without_reply(&f, lead);
-        super::final_text_absent(&f, "STEER");
+        assert_eq!(f.reply(lead).as_deref(), guidance.then_some("STEER"));
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         if let Some(id) = steer {
             super::settled_without_reply(&f, id);
+            assert_eq!(f.reply(id).as_deref(), Some("STEER"));
             assert_eq!(f.request(id).provider_turn_id.as_deref(), Some("1"));
             assert_eq!(f.request(id).group, Some(lead));
         }
@@ -168,7 +169,10 @@ fn kimi_missing_stop_poll_retains_a_follow_up_after_answered_or_silent_completio
         f.status(RuntimeStatus::Idle);
         f.consume(); // no Stop: only the periodic wire read sees completion
         super::settled_without_reply(&f, lead);
-        super::final_text_absent(&f, answer);
+        assert_eq!(
+            f.reply(lead).as_deref(),
+            (!answer.is_empty()).then_some(answer)
+        );
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
         assert!(
             !f.request(follow).settled(),
@@ -183,8 +187,11 @@ fn kimi_missing_stop_poll_retains_a_follow_up_after_answered_or_silent_completio
         f.consume();
         f.worker.settle_requests().unwrap();
         super::settled_without_reply(&f, follow);
-        super::final_text_absent(&f, "later final");
-        super::final_text_absent(&f, answer);
+        assert_eq!(f.reply(follow).as_deref(), Some("later final"));
+        assert_eq!(
+            f.reply(lead).as_deref(),
+            (!answer.is_empty()).then_some(answer)
+        );
         assert_eq!(f.request(follow).provider_turn_id.as_deref(), Some("2"));
         super::settled_without_reply(&f, lead);
         assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
@@ -204,7 +211,7 @@ fn kimi_unclaimed_input_expires_without_replay_after_its_retention_window() {
     f.consume();
     assert!(!f.request(follow).settled());
     super::settled_without_reply(&f, lead);
-    super::final_text_absent(&f, "old final");
+    assert_eq!(f.reply(lead).as_deref(), Some("old final"));
     assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("1"));
     f.now = f
         .request(lead)

@@ -534,7 +534,7 @@ fn delivery_logs_correlate_submission_callback_and_persisted_reply() {
         worker.save(state).unwrap();
         let settled = worker.state.request(request).unwrap();
         assert_eq!(settled.phase, RequestPhase::Completed);
-        assert!(settled.reply().is_none());
+        assert!(settled.reply().is_some_and(|reply| !reply.text.trim().is_empty()), "{settled:?}");
         let logs = capture.text();
         for event in ["bus.delivery.start", "bus.delivery.result", "bus.callback.observed", "bus.callback.correlated"] {
             assert!(logs.contains(event), "missing {event}: {logs}");
@@ -768,7 +768,12 @@ fn deferred_codex_start_and_final_survive_background_sessions_without_rebinding(
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
     assert_eq!(
@@ -1168,7 +1173,12 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
     worker
@@ -1201,8 +1211,8 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();
     assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
-    // A second request may complete on the same final text. Capture still does
-    // not store either answer or add unread.
+    // A second request may complete on the same final text; each request
+    // stores its own captured answer and neither adds unread.
     let next = queue(&mut worker, room, agent, "same");
     worker.submit_ready().unwrap();
     std::fs::write(
@@ -1229,7 +1239,12 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         let original = worker.state.request(id).unwrap();
         assert_eq!(original.phase, RequestPhase::Completed);
         assert_eq!(original.provider_turn_id.as_deref(), Some(turn));
-        assert!(original.reply().is_none());
+        assert!(
+            original
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "{original:?}"
+        );
         assert!(original.failure_reason.is_none());
     }
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
@@ -1312,7 +1327,12 @@ fn claude_background_pending_reply_stays_active_until_its_trusted_continuation_s
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
     assert_eq!(settled.provider_turn_id.as_deref(), Some("prompt-2"));
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
     let reloaded = JsonStore::new(dir.join("state.json"))
@@ -1368,7 +1388,12 @@ fn claude_task_notification_after_a_stop_with_a_running_shell_keeps_the_bus_repl
         let settled = worker.state.request(request).unwrap();
         assert_eq!(settled.phase, RequestPhase::Completed, "split={split}");
         assert_eq!(settled.provider_turn_id.as_deref(), Some("prompt-1"));
-        assert!(settled.reply().is_none(), "split={split}");
+        assert!(
+            settled
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "split={split} {settled:?}"
+        );
         assert!(settled.failure_reason.is_none(), "split={split}");
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
         assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
@@ -1441,7 +1466,12 @@ fn claude_unrelated_turns_never_error_or_block_the_next_request() {
             .unwrap();
         let second_settled = worker.state.request(second).unwrap();
         assert_eq!(second_settled.phase, RequestPhase::Completed);
-        assert!(second_settled.reply().is_none());
+        assert!(
+            second_settled
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "{second_settled:?}"
+        );
         assert!(second_settled.failure_reason.is_none());
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
 
@@ -1458,7 +1488,16 @@ fn claude_unrelated_turns_never_error_or_block_the_next_request() {
         );
         worker.consume_callbacks(agent, &spool).unwrap();
         assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
-        assert!(worker.state.request(second).unwrap().reply().is_none());
+        assert_eq!(
+            worker
+                .state
+                .request(second)
+                .unwrap()
+                .reply()
+                .map(|reply| reply.text.as_str()),
+            Some("Second done"),
+            "an unrelated typed turn cannot replace the stored answer"
+        );
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
         assert!(callbacks::records(&spool).unwrap().is_empty());
         drop(worker);
@@ -1531,7 +1570,12 @@ fn codex_native_question_answer_keeps_the_active_request_until_its_final() {
             .unwrap();
         let settled = worker.state.request(request).unwrap();
         assert_eq!(settled.phase, RequestPhase::Completed);
-        assert!(settled.reply().is_none());
+        assert!(
+            settled
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "{settled:?}"
+        );
         assert!(settled.failure_reason.is_none());
         assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
         assert!(callbacks::records(&spool).unwrap().is_empty());
@@ -1592,7 +1636,12 @@ fn saved_state_without_unrelated_turns_keeps_pending_reply_and_tracks_new_activi
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
     assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
@@ -1650,7 +1699,12 @@ fn text_typed_into_a_turn_the_agent_began_itself_binds_to_that_turn() {
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
     std::fs::remove_dir_all(dir).unwrap();
@@ -1713,9 +1767,22 @@ fn cursor_steered_generation_stop_settles_the_group_from_hook_text_when_idle() {
     );
     let follow_settled = worker.state.request(follow).unwrap();
     assert_eq!(follow_settled.phase, RequestPhase::Completed);
-    assert!(follow_settled.reply().is_none());
+    assert!(
+        follow_settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{follow_settled:?}"
+    );
     assert!(follow_settled.failure_reason.is_none());
-    assert!(worker.state.request(first).unwrap().reply().is_none());
+    assert!(
+        worker
+            .state
+            .request(first)
+            .unwrap()
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "the lead keeps its own answer"
+    );
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
     assert!(!hook.is_empty());
     drop(worker);
@@ -1875,8 +1942,14 @@ fn unconfirmed_submission_with_spooled_final_is_completed_before_expiry() {
         std::fs::remove_dir_all(dir).unwrap();
         assert_eq!(phase, RequestPhase::Completed,
             "matching hooks already in the spool must win over expiry; consume_before_tick={consume_before_tick}");
-        assert!(!stored_reply, "consume_before_tick={consume_before_tick}");
-        assert!(!room_reply, "consume_before_tick={consume_before_tick}");
+        assert!(
+            stored_reply,
+            "the captured final is stored: consume_before_tick={consume_before_tick}"
+        );
+        assert!(
+            !room_reply,
+            "replies never publish wake messages: consume_before_tick={consume_before_tick}"
+        );
     }
 }
 
@@ -2240,7 +2313,12 @@ fn grok_1070_native_final_settles_the_exact_bus_request() {
     consume(&mut worker, agent, &dir);
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

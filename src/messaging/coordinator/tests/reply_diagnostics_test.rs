@@ -184,12 +184,16 @@ fn reply_diagnostics_joined_request_answered_by_group_final_reports_captured_sou
     assert_eq!(f.request(next).group, Some(lead));
     assert_eq!(f.request(next).phase, RequestPhase::Completed);
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
-    assert!(f.request(lead).reply().is_none());
-    assert!(f.worker.state.requests().all(|request| {
-        request
-            .reply()
-            .is_none_or(|reply| reply.text != "group final")
-    }));
+    assert_eq!(
+        f.request(lead).reply().map(|reply| reply.text.as_str()),
+        Some("group final"),
+        "the group final answers the unanswered lead"
+    );
+    assert_eq!(
+        f.request(next).reply().map(|reply| reply.text.as_str()),
+        Some("corrected member answer"),
+        "the explicit answer is not replaced by the group final"
+    );
     let before = f.worker.state.clone();
     let response = reply(&mut f, message, agent, "late corrected answer");
     assert_eq!(response.error.unwrap().code, "request_already_replied");

@@ -547,7 +547,11 @@ fn reply_routing_consumes_a_final_spooled_while_bus_was_down() {
         state.request(source).unwrap().phase,
         RequestPhase::Completed
     );
-    assert!(state.request(source).unwrap().reply().is_none());
+    assert!(state
+        .request(source)
+        .unwrap()
+        .reply()
+        .is_some_and(|reply| !reply.text.trim().is_empty()));
     assert!(state.request(source).unwrap().failure_reason.is_none());
     state
         .route_worker_replies(io::now_ms() + 6_000, &BTreeSet::new())
@@ -1422,8 +1426,17 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             RequestPhase::Completed
         );
         assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Completed);
-        assert!(state.request(member).unwrap().reply().is_none());
-        assert!(state.request(lead).unwrap().reply().is_none());
+        for id in [lead, member] {
+            assert_eq!(
+                state
+                    .request(id)
+                    .unwrap()
+                    .reply()
+                    .map(|reply| reply.text.as_str()),
+                Some("Shared work still running."),
+                "the group shares one captured answer: {id:?}"
+            );
+        }
         assert!(state.request(member).unwrap().failure_reason.is_none());
         assert!(state.request(lead).unwrap().failure_reason.is_none());
         for (index, mut invalid) in [
@@ -1474,8 +1487,17 @@ fn late_final_reaches_orchestrator_member_of_a_developer_led_background_group() 
             },
             None,
         ));
-        assert!(state.request(member).unwrap().reply().is_none());
-        assert!(state.request(lead).unwrap().reply().is_none());
+        for id in [lead, member] {
+            assert_eq!(
+                state
+                    .request(id)
+                    .unwrap()
+                    .reply()
+                    .map(|reply| reply.text.as_str()),
+                Some("Shared work still running."),
+                "late changed finals do not replace the stored answer: {id:?}"
+            );
+        }
         assert_eq!(
             state.request(member).unwrap().phase,
             RequestPhase::Completed

@@ -246,8 +246,11 @@ fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
         &typed,
         "Review is done; merging next.",
     );
-    // The turn final settles the MASTER request and is not published again.
-    assert_eq!(bus.reply(), None);
+    // The turn final is the MASTER request's answer and is not published again.
+    assert_eq!(
+        bus.reply(),
+        Some((master, "Review is done; merging next.".to_owned()))
+    );
     let answered = bus
         .worker
         .state
@@ -277,8 +280,11 @@ fn a_turn_that_answers_a_worker_keeps_its_reply_and_reports_in_master() {
         &typed,
         "builder finished; tests pass.",
     );
-    // An accepted turn final is not stored and is not copied into MASTER.
-    assert_eq!(bus.reply(), None);
+    // An accepted turn final is the request's answer and is not copied into MASTER.
+    assert_eq!(
+        bus.reply(),
+        Some((room, "builder finished; tests pass.".to_owned()))
+    );
     let answered = bus
         .worker
         .state
@@ -310,7 +316,13 @@ fn a_worker_blocked_on_a_dialog_wakes_a_turn_that_reports_its_decision_in_master
         &typed,
         "I approved formatting one test file. Nothing is waiting on you.",
     );
-    assert_eq!(bus.reply(), None);
+    assert_eq!(
+        bus.reply(),
+        Some((
+            room,
+            "I approved formatting one test file. Nothing is waiting on you.".to_owned()
+        ))
+    );
     let answered = bus
         .worker
         .state

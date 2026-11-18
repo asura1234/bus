@@ -49,7 +49,8 @@ impl BusState {
             .then_some(orchestrator.id)
     }
 
-    /// Turn finals are not replies and are not posted onward.
+    /// A turn final is stored as its request's reply by settlement; it is not
+    /// posted onward as a new message.
     pub(super) fn record_worker_final(
         &mut self,
         _callback: &ProviderCallback,

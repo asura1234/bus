@@ -45,8 +45,11 @@ fn assert_turn_final(f: &Fixture, id: RequestId) {
         "{id:?} did not settle: {request:?}"
     );
     assert!(
-        request.reply().is_none(),
-        "{id:?} stored a turn final as a reply: {:?}",
+        request
+            .completed_reply
+            .as_ref()
+            .is_none_or(|reply| reply.group.is_some()),
+        "{id:?} stored an explicit reply: {:?}",
         request.reply()
     );
     assert!(
@@ -265,11 +268,21 @@ fn a_folded_task_notification_preserves_an_already_captured_final() {
     stop(&f, "turn-1", "The build passed.", &[]);
     f.consume();
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
-    assert!(f.request(lead).reply().is_none());
+    assert!(
+        f.request(lead)
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{:?}",
+        f.request(lead)
+    );
 
     f.started("turn-1", &notification("older-dispatch"));
     f.consume();
-    assert!(f.request(lead).reply().is_none());
+    assert_eq!(
+        f.request(lead).reply().map(|reply| reply.text.as_str()),
+        Some("The build passed."),
+        "a folded notification cannot change the captured answer"
+    );
     assert_eq!(f.error(), None);
     f.status(RuntimeStatus::Idle);
     f.consume();

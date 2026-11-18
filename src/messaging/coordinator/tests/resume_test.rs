@@ -733,7 +733,12 @@ fn cold_resume_preserves_uncertain_request_and_settles_its_original_reply_once()
         .unwrap();
     let settled = worker.state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert!(
+        settled
+            .reply()
+            .is_some_and(|reply| !reply.text.trim().is_empty()),
+        "{settled:?}"
+    );
     assert!(settled.failure_reason.is_none());
     assert!(!worker
         .state
@@ -804,7 +809,12 @@ fn interactive_ready_releases_setup_gate_but_pending_deletion_stays_closed() {
             );
             let settled = worker.state.request(request).unwrap();
             assert_eq!(settled.phase, RequestPhase::Completed);
-            assert!(settled.reply().is_none());
+            assert!(
+                settled
+                    .reply()
+                    .is_some_and(|reply| !reply.text.trim().is_empty()),
+                "{settled:?}"
+            );
             assert!(settled.failure_reason.is_none());
             assert!(!worker
                 .state

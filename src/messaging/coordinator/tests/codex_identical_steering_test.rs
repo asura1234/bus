@@ -27,7 +27,7 @@ fn identical_steered_input_in_a_later_turn_does_not_take_the_lead_turn_answer() 
         fixture.status(RuntimeStatus::Idle);
         fixture.consume();
         super::settled_without_reply(&fixture, lead);
-        super::final_text_absent(&fixture, "FIRST STATUS");
+        assert_eq!(fixture.reply(lead).as_deref(), Some("FIRST STATUS"));
         super::final_text_absent(&fixture, "SECOND STATUS");
         assert_eq!(
             fixture.request(lead).provider_turn_id.as_deref(),
@@ -75,9 +75,13 @@ fn identical_steered_input_recorded_twice_in_the_lead_turn_shares_its_answer() {
     fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    super::final_text_absent(&fixture, "STATUS");
     for id in [lead, follow] {
         super::settled_without_reply(&fixture, id);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("STATUS"),
+            "the shared turn answer"
+        );
         assert_eq!(
             fixture.request(id).provider_turn_id.as_deref(),
             Some("turn-1")

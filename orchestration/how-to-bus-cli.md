@@ -65,7 +65,7 @@ messages default to steer-or-queue and may pass `--mode`; other agent messages
 keep that default and cannot interrupt. Interrupt stops in-flight builds, Git
 operations and device runs; use it only to change course.
 See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
-Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests without capturing its final text as a reply.
+Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests and stores its captured final as each request's reply (never as a new message, and never over an explicit `--reply-to` answer).
 
 A reply lands in the message's room, equally for developer and agent senders. A turn no message started
 posts in the orchestrator's work room. A captured Stop answer ends matching requests immediately,

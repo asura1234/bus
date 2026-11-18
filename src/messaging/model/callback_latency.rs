@@ -14,7 +14,12 @@ impl BusState {
             .map(|request| (activity_key(request), request.bound_turn_activity.clone()));
         let final_event =
             matches!(callback.kind, CallbackEventKind::Final { .. }).then(|| callback.clone());
-        let reply_event = final_event.is_some();
+        // Only a final that can become an answer is a captured reply; a
+        // textless close records no reply to deliver.
+        let reply_event = matches!(
+            &callback.kind,
+            CallbackEventKind::Final { text } if !text.trim().is_empty()
+        );
         let started_event = matches!(callback.kind, CallbackEventKind::PromptStarted);
         let disposition = self.accept_callback_unrecorded(callback);
         // Retry acceptance rebinds current_request onto the steered member.

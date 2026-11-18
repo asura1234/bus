@@ -278,7 +278,12 @@ mod orchestrator_turn_routing {
             crate::messaging::model::RequestPhase::Completed,
             "{request:?}"
         );
-        assert!(request.reply().is_none(), "{request:?}");
+        assert!(
+            request
+                .reply()
+                .is_some_and(|reply| !reply.text.trim().is_empty()),
+            "{request:?}"
+        );
         assert!(request.failure_reason.is_none(), "{request:?}");
     }
 }

@@ -50,7 +50,11 @@ fn settled_without_reply(fixture: &Fixture, id: RequestId) {
         fixture.request(id).failure_reason
     );
     assert!(
-        fixture.reply(id).is_none(),
+        fixture
+            .request(id)
+            .completed_reply
+            .as_ref()
+            .is_none_or(|reply| reply.group.is_some()),
         "{id:?} {:?}",
         fixture.reply(id)
     );
@@ -103,7 +107,7 @@ fn a_late_stop_for_a_recovered_unbound_turn_is_not_the_next_request_reply() {
     );
     idle_past_settle(&mut fixture);
     settled_without_reply(&fixture, first);
-    final_text_absent(&fixture, "Copied 374 files.");
+    assert_eq!(fixture.reply(first).as_deref(), Some("Copied 374 files."));
 
     let next = fixture.send("now summarize", false);
     fixture.deliver();
@@ -117,7 +121,7 @@ fn a_late_stop_for_a_recovered_unbound_turn_is_not_the_next_request_reply() {
         "the recovered turn's late Stop completed the next request"
     );
     assert!(fixture.reply(next).is_none());
-    final_text_absent(&fixture, "Copied 374 files.");
+    assert_eq!(fixture.reply(first).as_deref(), Some("Copied 374 files."));
     settled_without_reply(&fixture, first);
 }
 
@@ -155,7 +159,7 @@ fn steered_input_run_as_its_own_turn_does_not_take_the_lead_turn_recorded_answer
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     settled_without_reply(&fixture, lead);
-    final_text_absent(&fixture, "Merged.");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Merged."));
     final_text_absent(&fixture, "Closed the worktree.");
     assert_eq!(
         fixture.request(lead).provider_turn_id.as_deref(),
@@ -212,9 +216,9 @@ fn steered_input_recorded_in_the_lead_turn_shares_its_recorded_answer() {
     fixture.now += 5_000;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
-    final_text_absent(&fixture, "Merged and closed.");
     for id in [lead, follow] {
         settled_without_reply(&fixture, id);
+        assert_eq!(fixture.reply(id).as_deref(), Some("Merged and closed."));
         assert_eq!(
             fixture.request(id).provider_turn_id.as_deref(),
             Some("turn-1")
@@ -268,7 +272,7 @@ fn assert_follower_recovery_names_the_lead(
     fixture: &Fixture,
 ) {
     settled_without_reply(fixture, lead);
-    final_text_absent(fixture, "Merged.");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Merged."));
     final_text_absent(fixture, "Closed the worktree.");
     assert!(fixture.reply(follow).is_none());
     assert_eq!(fixture.request(follow).group, None);

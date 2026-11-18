@@ -62,31 +62,14 @@ fn settled_without_reply(fixture: &Fixture, id: RequestId) {
         "{id:?} {:?}",
         fixture.request(id).failure_reason
     );
-    assert!(fixture.reply(id).is_none(), "{id:?}");
-}
-
-fn final_text_absent(fixture: &Fixture, text: &str) {
-    if text.is_empty() {
-        return;
-    }
     assert!(
         fixture
-            .worker
-            .state
-            .requests()
-            .all(|request| { request.reply().is_none_or(|reply| reply.text != text) }),
-        "{text} stored on a request"
-    );
-    assert!(
-        fixture
-            .worker
-            .state
-            .room(fixture.room)
-            .unwrap()
-            .latest_replies
-            .values()
-            .all(|reply| reply.text != text),
-        "{text} published"
+            .request(id)
+            .completed_reply
+            .as_ref()
+            .is_none_or(|reply| reply.group.is_some()),
+        "{id:?} {:?}",
+        fixture.reply(id)
     );
 }
 
@@ -139,14 +122,25 @@ fn kimi_batched_guidance_requires_attested_part_and_prompt_boundaries() {
         stop(&fixture);
         fixture.consume();
         settled_without_reply(&fixture, lead);
-        final_text_absent(&fixture, "batched guidance answer");
+        assert_eq!(
+            fixture.reply(lead).as_deref(),
+            Some("batched guidance answer")
+        );
         assert_eq!(
             fixture.request(lead).provider_turn_id.as_deref(),
             Some("1"),
             "case {case}: lead"
         );
         for id in [first, second] {
-            assert!(fixture.reply(id).is_none(), "case {case}: request {id:?}");
+            if owned {
+                assert_eq!(
+                    fixture.reply(id).as_deref(),
+                    Some("batched guidance answer"),
+                    "case {case}: request {id:?}"
+                );
+            } else {
+                assert!(fixture.reply(id).is_none(), "case {case}: request {id:?}");
+            }
             if owned {
                 settled_without_reply(&fixture, id);
                 assert_eq!(fixture.request(id).group, Some(lead));
@@ -255,9 +249,12 @@ fn guidance_case(restart: bool, uncertain: bool) {
     fixture.status(RuntimeStatus::Idle);
     stop(&fixture);
     fixture.consume();
-    final_text_absent(&fixture, "ordered guidance answer");
     for id in [lead, first, second] {
         settled_without_reply(&fixture, id);
+        assert_eq!(
+            fixture.reply(id).as_deref(),
+            Some("ordered guidance answer")
+        );
         assert_eq!(fixture.request(id).provider_turn_id.as_deref(), Some("1"));
         assert!(fixture.worker.state.turn_ended(fixture.request(id)));
     }
@@ -318,8 +315,8 @@ fn queued_native_turn(stop_before_start: bool) {
     fixture.consume();
     settled_without_reply(&fixture, lead);
     settled_without_reply(&fixture, next);
-    final_text_absent(&fixture, "old final");
-    final_text_absent(&fixture, "next final");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("old final"));
+    assert_eq!(fixture.reply(next).as_deref(), Some("next final"));
     assert_eq!(fixture.request(lead).provider_turn_id.as_deref(), Some("1"));
     assert_eq!(fixture.request(next).provider_turn_id.as_deref(), Some("2"));
     assert_eq!(fixture.request(next).group, None);
@@ -353,7 +350,7 @@ fn kimi_queue_only_messages_keep_independent_order_after_a_busy_turn() {
     fixture.consume();
     settled_without_reply(&fixture, lead);
     assert_eq!(fixture.request(lead).provider_turn_id.as_deref(), Some("1"));
-    final_text_absent(&fixture, "lead final");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("lead final"));
     for (turn, request, task) in [(2, first, "first queued"), (3, second, "second queued")] {
         fixture.deliver();
         assert_eq!(
@@ -414,8 +411,15 @@ fn kimi_mixed_guidance_and_queued_turn_keep_their_own_committed_replies() {
     settled_without_reply(&fixture, lead);
     settled_without_reply(&fixture, guidance);
     settled_without_reply(&fixture, next);
-    final_text_absent(&fixture, "old final with guidance");
-    final_text_absent(&fixture, "next final");
+    assert_eq!(
+        fixture.reply(lead).as_deref(),
+        Some("old final with guidance")
+    );
+    assert_eq!(
+        fixture.reply(guidance).as_deref(),
+        Some("old final with guidance")
+    );
+    assert_eq!(fixture.reply(next).as_deref(), Some("next final"));
     assert_eq!(fixture.request(lead).provider_turn_id.as_deref(), Some("1"));
     assert_eq!(
         fixture.request(guidance).provider_turn_id.as_deref(),
@@ -441,7 +445,7 @@ fn kimi_queued_native_turn_can_start_after_an_old_final_poll() {
     fixture.consume();
     settled_without_reply(&fixture, lead);
     assert_eq!(fixture.request(lead).provider_turn_id.as_deref(), Some("1"));
-    final_text_absent(&fixture, "old final");
+    assert_eq!(fixture.reply(lead).as_deref(), Some("old final"));
     assert!(!fixture.request(next).settled());
     std::fs::write(
         &wire,
@@ -452,7 +456,7 @@ fn kimi_queued_native_turn_can_start_after_an_old_final_poll() {
     stop(&fixture);
     fixture.consume();
     settled_without_reply(&fixture, next);
-    final_text_absent(&fixture, "next final");
+    assert_eq!(fixture.reply(next).as_deref(), Some("next final"));
     assert_eq!(
         fixture.request(next).provider_turn_id.as_deref(),
         Some("2"),
@@ -511,8 +515,8 @@ fn orchestrator_independent_kimi_requests_wait_for_separate_committed_turns() {
         f.status(RuntimeStatus::Idle);
         stop(&f);
         f.consume();
-        assert!(f.reply(lead).is_none());
-        assert_eq!(f.request(lead).delivery_stage(), "ended");
+        assert_eq!(f.reply(lead).as_deref(), Some("old answer"));
+        assert_eq!(f.request(lead).delivery_stage(), "replied");
         assert_eq!(f.reply(queued), None);
         assert_eq!(f.request(queued).group, None);
         f.deliver();
@@ -529,10 +533,10 @@ fn orchestrator_independent_kimi_requests_wait_for_separate_committed_turns() {
         stop(&f);
         f.status(RuntimeStatus::Idle);
         f.consume();
-        assert!(f.reply(queued).is_none());
-        assert_eq!(f.request(queued).delivery_stage(), "ended");
-        assert!(f.reply(lead).is_none());
-        assert_eq!(f.request(lead).delivery_stage(), "ended");
+        assert_eq!(f.reply(queued).as_deref(), Some("worker answer"));
+        assert_eq!(f.request(queued).delivery_stage(), "replied");
+        assert_eq!(f.reply(lead).as_deref(), Some("old answer"));
+        assert_eq!(f.request(lead).delivery_stage(), "replied");
         assert_eq!(f.request(queued).provider_turn_id.as_deref(), Some("2"));
     }
 }

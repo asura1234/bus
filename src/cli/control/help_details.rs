@@ -405,8 +405,9 @@ Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
   files, waiting_on_dialog and per-agent requests with request_id, stage, reason,
   reply, turn_ended, settling and group. No overall deadline.
   It waits through dialogs, unlike wait --async; succeeds only at complete:true.
-  A recipient turn that ends settles the request with no reply. Abandonment for
-  interrupt, provider error, or startup failure still fails the wait. An abandoned
+  A recipient turn that ends settles the request; its captured final is stored
+  as the request's reply. Abandonment for interrupt, provider error, or startup
+  failure still fails the wait. An abandoned
   reply_not_captured (steering the turn never claimed) is also complete for --async.
   Errors: message_interrupted: inspect history; message_provider_error: repair/retry the
   provider; message_abandoned: fix startup/unavailability then explicitly resend
@@ -501,14 +502,16 @@ Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],reque
   events retains exits and group summaries; event_acks lists acknowledgeable
   unseen own outcomes; reply_ack stays false because nothing waits on a reply wake.
 Stages: queued persisted; submitting native write; awaiting_start typed but no
-trusted turn; delivered trusted start; joined same turn; replied explicit
---reply-to; ended the turn finished with no reply; abandoned closed, will not
-run later. Queued untyped work may close abandoned after
+trusted turn; delivered trusted start; joined same turn; replied the request
+has an answer (an explicit --reply-to, or the final captured when its turn
+ended); ended the turn finished without a captured answer; abandoned closed,
+will not run later. Queued untyped work may close abandoned after
 2m not working (input_box_not_empty, agent_not_ready/blocked, session_hook_missing,
 prior_request_active, unavailable). Recovery deadlines stay internal and never
 change the reported stage. After 5m blocked the reason is blocked_unanswered.
-A turn that ends settles as ended, with no reply. The final text is not stored
-as a reply.
+A turn that ends settles at once; its captured final is stored as the reply.
+An explicit --reply-to answer is never replaced by a later turn final, and a
+textless turn close stores no reply.
 Transient native provider errors retain the delivery and show Working while Bus retries
 with backoff or waits for a quota reset; details and deadlines go to the client log.
 Permanent-error settlement without a final closes as provider_error: MESSAGE.

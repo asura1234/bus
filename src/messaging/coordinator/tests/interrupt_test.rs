@@ -230,12 +230,7 @@ fn a_reply_captured_before_the_stop_took_effect_completes_normally() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert!(fixture.request(lead).failure_reason.is_none());
-    assert!(fixture.reply(lead).is_none());
-    assert!(fixture.worker.state.requests().all(|request| {
-        request
-            .reply()
-            .is_none_or(|reply| reply.text != "Parser written.")
-    }));
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Parser written."));
     assert!(
         !fixture
             .worker
@@ -414,12 +409,7 @@ fn a_reply_captured_after_the_key_but_before_idle_completes_normally() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
     assert!(fixture.request(lead).failure_reason.is_none());
-    assert!(fixture.reply(lead).is_none());
-    assert!(fixture.worker.state.requests().all(|request| {
-        request
-            .reply()
-            .is_none_or(|reply| reply.text != "Parser written.")
-    }));
+    assert_eq!(fixture.reply(lead).as_deref(), Some("Parser written."));
     assert!(
         !fixture
             .worker
@@ -693,7 +683,7 @@ fn native_interrupt_completion_settles_a_final_without_creating_a_reply() {
     native_receipt(&mut f, "terminal", "session");
     let response = interrupt(&mut f, json!({"agent":"builder"}));
     assert_eq!(response.result["agents"][0]["outcome"], "stopped");
-    assert!(f.reply(lead).is_none());
+    assert!(f.reply(lead).is_some_and(|reply| !reply.trim().is_empty()));
     assert_eq!(f.request(lead).phase, RequestPhase::Completed);
     assert_eq!(f.request(lead).failure_reason, None);
     assert_eq!(

@@ -66,11 +66,22 @@ fn same_turn_pending(restart: bool, stop_spooled: bool) {
     save_hypothesis(&f, &format!("{label}-after"));
     for id in [lead, member] {
         assert_eq!(f.request(id).phase, RequestPhase::Completed, "{label}");
-        assert!(f.reply(id).is_none(), "{label}");
+        assert!(
+            f.request(id)
+                .completed_reply
+                .as_ref()
+                .is_none_or(|reply| reply.group.is_some()),
+            "{label} {:?}",
+            f.reply(id)
+        );
         assert!(f.request(id).failure_reason.is_none(), "{label}");
         assert!(!f.request(id).uncertain_outcome, "{label}");
     }
-    assert_reply_text_absent(&f, "shared attributable final");
+    assert_eq!(f.reply(lead).as_deref(), Some("shared attributable final"));
+    assert_eq!(
+        f.reply(member).as_deref(),
+        Some("shared attributable final")
+    );
     if previous_reply.is_some() {
         assert_eq!(f.request(lead).completed_reply, previous_reply);
     }
@@ -178,7 +189,7 @@ fn restart_hypothesis_legacy_same_generation_reload_control() {
     f.consume();
     f.worker.tick().unwrap();
     assert_completed_without_reply(&f, old);
-    assert_reply_text_absent(&f, "live legacy final");
+    assert_eq!(f.reply(old).as_deref(), Some("live legacy final"));
     assert_eq!(f.request(queued).phase, RequestPhase::Active);
 }
 

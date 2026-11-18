@@ -69,7 +69,10 @@ fn deleted_worker_keeps_the_orchestrators_master_decision() {
     finish_decision(&mut state, orch, request);
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some(DECISION)
+    );
     assert!(settled.failure_reason.is_none());
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
@@ -123,9 +126,10 @@ fn an_explicit_master_post_is_not_repeated_by_the_captured_final() {
     finish_decision(&mut state, orch, request);
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(
-        settled.reply().is_none(),
-        "an explicit master post is not stored as the turn reply"
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some(DECISION),
+        "the final answers the request once; the explicit post stays a message"
     );
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
@@ -288,10 +292,16 @@ fn worker_woken_decision_with_unclaimed_notification_is_published_after_turn_pro
     }));
     let lead_settled = state.request(lead).unwrap();
     assert_eq!(lead_settled.phase, RequestPhase::Completed);
-    assert!(lead_settled.reply().is_none());
+    assert_eq!(
+        lead_settled.reply().map(|reply| reply.text.as_str()),
+        Some(DECISION)
+    );
     let worker_settled = state.request(worker_request).unwrap();
     assert_eq!(worker_settled.phase, RequestPhase::Completed);
-    assert!(worker_settled.reply().is_none());
+    assert_eq!(
+        worker_settled.reply().map(|reply| reply.text.as_str()),
+        Some(DECISION)
+    );
     assert!(worker_settled.failure_reason.is_none());
     assert_eq!(
         state.notices(master).filter(|p| p.text == DECISION).count(),
@@ -387,10 +397,13 @@ fn independently_submitted_worker_turns_keep_decisions(first_reply: &str, explic
         )),
         CallbackDisposition::AcceptedCompleted
     );
-    for id in [first, second] {
+    for (id, answer) in [(first, first_reply), (second, DECISION)] {
         let settled = state.request(id).unwrap();
         assert_eq!(settled.phase, RequestPhase::Completed);
-        assert!(settled.reply().is_none());
+        assert_eq!(
+            settled.reply().map(|reply| reply.text.as_str()),
+            (!answer.trim().is_empty()).then_some(answer)
+        );
         assert!(settled.failure_reason.is_none());
     }
     let published = state.notices(master).filter(|p| p.text == DECISION).count();

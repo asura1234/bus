@@ -381,8 +381,8 @@ impl BusState {
 
     /// Run after callback consumption, so a final spooled at the deadline wins.
     /// `recorded_end` reads how the provider's own record says the turn ended.
-    /// A recorded final settles the request without storing that text as a
-    /// reply. A provider error abandons it as `provider_error: ...`. An
+    /// A recorded final settles the request and is stored as its reply. A
+    /// provider error abandons it as `provider_error: ...`. An
     /// unavailable agent closes as `agent_unavailable`. Anything else closes
     /// as completed with no reply, so the queue can advance. An unavailable
     /// agent gets the window again from when it went unavailable, so one that

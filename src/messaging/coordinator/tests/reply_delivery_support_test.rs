@@ -924,14 +924,20 @@ impl Delivery {
         self.tick();
     }
     /// Unread counts explicit replies, agent/bus sends, and notices. A captured
-    /// turn final is not a reply and does not add a publication.
+    /// turn final is stored on its request but publishes no wake, so it adds
+    /// no unread publication.
     pub(crate) fn assert_publications(&self) {
         use std::collections::BTreeSet;
         for room in self.state().rooms() {
             let replies: BTreeSet<_> = self
                 .state()
                 .requests()
-                .filter(|r| r.room_id == room.id && r.reply().is_some())
+                .filter(|r| {
+                    r.room_id == room.id
+                        && r.completed_reply
+                            .as_ref()
+                            .is_some_and(|reply| reply.group.is_none())
+                })
                 .filter_map(|r| r.reply().map(|p| p.callback_id.clone()))
                 .collect();
             let sends: BTreeSet<_> = self
@@ -955,8 +961,9 @@ impl Delivery {
             );
         }
     }
-    /// A settled turn final has no stored reply. An explicit `--reply-to`
-    /// still stores `text` and is not overwritten by a later final.
+    /// The request settled with `text` as its answer: the captured turn
+    /// final or an explicit `--reply-to`. A captured final is stored on the
+    /// request only; it never publishes a wake message or a notice.
     pub(crate) fn assert_reply(&mut self, request: RequestId, text: &str) {
         let r = self.state().request(request).unwrap().clone();
         assert_eq!(
@@ -965,13 +972,22 @@ impl Delivery {
             "request {request:?}: {r:?}"
         );
         assert!(r.failure_reason.is_none(), "request {request:?}: {r:?}");
-        if let Some(reply) = r.reply() {
-            assert_eq!(reply.text, text, "explicit reply {request:?}");
-            assert!(
-                r.completed_reply
-                    .as_ref()
-                    .is_some_and(|stored| stored.group.is_none()),
-                "explicit --reply-to is not a captured group reply"
+        let reply = r
+            .reply()
+            .unwrap_or_else(|| panic!("no answer stored for request {request:?}: {r:?}"));
+        assert_eq!(reply.text, text, "request {request:?}");
+        let explicit = r
+            .completed_reply
+            .as_ref()
+            .is_some_and(|stored| stored.group.is_none());
+        if explicit {
+            assert_eq!(
+                self.state()
+                    .room(r.room_id)
+                    .and_then(|room| room.latest_replies.get(&r.agent_id))
+                    .map(|reply| reply.text.as_str()),
+                Some(text),
+                "an explicit --reply-to publishes its answer once"
             );
         } else {
             assert!(
@@ -979,7 +995,7 @@ impl Delivery {
                     .room(r.room_id)
                     .and_then(|room| room.latest_replies.get(&r.agent_id))
                     .is_none_or(|reply| reply.text != text),
-                "captured final was stored as a reply"
+                "a captured final publishes no wake reply"
             );
             for room in self.state().rooms() {
                 assert_eq!(

@@ -168,7 +168,11 @@ fn callback_prompt_matching_normalizes_terminal_line_endings_and_releases_queue(
 
     let settled = state.request(request).expect("request");
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("finished"),
+        "the captured turn final is the request's answer"
+    );
     assert!(settled.failure_reason.is_none());
     assert_eq!(state.next_queued_request(agent), Some(queued));
     assert!(state.room(room).expect("room").latest_replies.is_empty());
@@ -396,7 +400,10 @@ fn final_is_joined_with_settled_status_and_routes_by_stable_ids_not_visible_room
 
     let settled = state.request(request).expect("request");
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("finished")
+    );
     assert!(settled.failure_reason.is_none());
     assert_eq!(settled.room_id, room);
     assert_eq!(settled.agent_id, agent);
@@ -461,7 +468,10 @@ fn previous_reply_remains_until_correlated_final_and_visible_room_does_not_accru
 
     let old_settled = state.request(old).expect("old");
     assert_eq!(old_settled.phase, RequestPhase::Completed);
-    assert!(old_settled.reply().is_none());
+    assert_eq!(
+        old_settled.reply().map(|reply| reply.text.as_str()),
+        Some("old reply")
+    );
     assert!(state.room(room).expect("room").latest_replies.is_empty());
     assert_eq!(state.room(room).expect("room").unread_count, 0);
 
@@ -480,7 +490,10 @@ fn previous_reply_remains_until_correlated_final_and_visible_room_does_not_accru
         .expect("settled");
     let new_settled = state.request(new_request).expect("new");
     assert_eq!(new_settled.phase, RequestPhase::Completed);
-    assert!(new_settled.reply().is_none());
+    assert_eq!(
+        new_settled.reply().map(|reply| reply.text.as_str()),
+        Some("new reply")
+    );
     assert!(new_settled.failure_reason.is_none());
     assert_eq!(
         state.request(old).expect("old").phase,
@@ -772,7 +785,10 @@ fn background_progress_and_same_session_continuation_wait_for_the_later_final() 
     );
     let settled = state.request(request).unwrap();
     assert_eq!(settled.phase, RequestPhase::Completed);
-    assert!(settled.reply().is_none());
+    assert_eq!(
+        settled.reply().map(|reply| reply.text.as_str()),
+        Some("Ready")
+    );
     assert!(settled.failure_reason.is_none());
     assert!(state.room(room).unwrap().latest_replies.is_empty());
 }
@@ -881,7 +897,7 @@ fn developer_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
             CallbackDisposition::AcceptedBinding,
             CallbackDisposition::AcceptedCompleted,
             RequestPhase::Completed,
-            None,
+            Some("explained"),
             None,
         )
     );

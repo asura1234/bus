@@ -115,12 +115,23 @@ fn running(f: &mut Fixture, author: Author) -> RequestId {
     id
 }
 
+/// The request settled without an explicit `--reply-to` answer. A captured
+/// turn final is stored as its reply; an explicit answer is never accepted.
 fn assert_completed_without_reply(f: &Fixture, id: RequestId) {
     let request = f.worker.state.request(id).unwrap();
     assert_eq!(request.phase, RequestPhase::Completed, "{request:?}");
-    assert!(request.reply().is_none(), "{request:?}");
+    assert!(
+        request
+            .completed_reply
+            .as_ref()
+            .is_none_or(|reply| reply.group.is_some()),
+        "{request:?}"
+    );
     assert!(request.failure_reason.is_none(), "{request:?}");
-    assert_eq!(request.delivery_stage(), "ended");
+    assert!(
+        matches!(request.delivery_stage(), "ended" | "replied"),
+        "{request:?}"
+    );
 }
 
 fn assert_no_captured_forwarding(f: &Fixture, texts: &[&str]) {
