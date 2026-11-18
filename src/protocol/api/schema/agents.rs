@@ -188,7 +188,8 @@ pub struct AgentPromptIfIdleParams {
     pub expected_session_id: String,
     /// Also type into a working agent, as a person types while it works, so
     /// the provider takes the text into its running turn. A blocked agent is
-    /// still refused.
+    /// still refused. A Grok composer that is idle on screen is accepted even
+    /// when the published status is Blocked or Working and no dialog is showing.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub steer: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

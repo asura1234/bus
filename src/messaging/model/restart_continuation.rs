@@ -120,6 +120,7 @@ impl BusState {
         let sender = match &request.prompt.author {
             Author::Developer => "you".to_owned(),
             Author::Bus => "bus".to_owned(),
+            Author::ExternalAgent { machine, name, .. } => format!("{name}@{machine}"),
             Author::Agent(agent) => request
                 .sender_identity
                 .as_ref()

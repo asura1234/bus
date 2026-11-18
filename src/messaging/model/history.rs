@@ -32,7 +32,7 @@ pub(crate) enum Archived {
     #[serde(rename = "room_deleted")]
     Room { id: RoomId, name: String },
     #[serde(rename = "notice")]
-    Notice { room: RoomId, prompt: Prompt },
+    Notice { room: RoomId, prompt: Box<Prompt> },
 }
 
 fn settled_at_ms(request: &Request) -> u64 {
@@ -42,6 +42,66 @@ fn settled_at_ms(request: &Request) -> u64 {
 }
 
 impl History {
+    /// A bounded recent history projection for a remote room viewer. Full
+    /// history remains on its owning machine and is available through the
+    /// paginated room.history endpoint; an archive cannot crowd out rooms.
+    pub(crate) fn client_window(&self, per_room: usize, max_bytes: usize) -> Vec<Archived> {
+        fn add(
+            room: RoomId,
+            item: Archived,
+            counts: &mut BTreeMap<RoomId, usize>,
+            remaining: &mut usize,
+            result: &mut Vec<Archived>,
+            per_room: usize,
+        ) {
+            let count = counts.entry(room).or_default();
+            if *count >= per_room {
+                return;
+            }
+            *count += 1;
+            let Ok(bytes) = serde_json::to_vec(&item) else {
+                return;
+            };
+            if bytes.len() > *remaining {
+                return;
+            }
+            *remaining -= bytes.len();
+            result.push(item);
+        }
+        let mut room_counts = BTreeMap::<RoomId, usize>::new();
+        let mut remaining = max_bytes;
+        let mut result = Vec::new();
+        for request in self.requests.values().rev() {
+            if room_counts.get(&request.room_id).copied().unwrap_or(0) >= per_room {
+                continue;
+            }
+            add(
+                request.room_id,
+                Archived::Request(Box::new(Request::clone(request))),
+                &mut room_counts,
+                &mut remaining,
+                &mut result,
+                per_room,
+            );
+        }
+        for (room, notices) in &self.notices {
+            for prompt in notices.values().rev().take(per_room) {
+                add(
+                    *room,
+                    Archived::Notice {
+                        room: *room,
+                        prompt: Box::new(Prompt::clone(prompt)),
+                    },
+                    &mut room_counts,
+                    &mut remaining,
+                    &mut result,
+                    per_room,
+                );
+            }
+        }
+        result
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.requests.len()
             + self.notices.values().map(BTreeMap::len).sum::<usize>()
@@ -56,7 +116,7 @@ impl History {
             .chain(self.notices.iter().flat_map(|(room, notices)| {
                 notices.values().map(|prompt| Archived::Notice {
                     room: *room,
-                    prompt: Prompt::clone(prompt),
+                    prompt: Box::new(Prompt::clone(prompt)),
                 })
             }))
             .chain(self.rooms.iter().map(|(id, name)| Archived::Room {
@@ -85,7 +145,7 @@ impl History {
                     })
                     .map(move |(_, prompt)| Archived::Notice {
                         room: *room,
-                        prompt: Prompt::clone(prompt),
+                        prompt: Box::new(Prompt::clone(prompt)),
                     })
             }))
             .chain(
@@ -135,7 +195,7 @@ impl History {
                 self.notices
                     .entry(room)
                     .or_default()
-                    .insert(prompt.id, Arc::new(prompt));
+                    .insert(prompt.id, Arc::from(prompt));
             }
         }
     }
@@ -348,7 +408,10 @@ impl super::BusState {
         for (room, old) in notices {
             if let Some(live) = self.rooms.get_mut(&room) {
                 for prompt in live.notices.drain(..old) {
-                    history.insert(Archived::Notice { room, prompt });
+                    history.insert(Archived::Notice {
+                        room,
+                        prompt: Box::new(prompt),
+                    });
                 }
             }
         }
@@ -360,7 +423,10 @@ impl super::BusState {
         if let Some(live) = self.rooms.get_mut(&room) {
             let history = Arc::make_mut(&mut self.history);
             for prompt in live.notices.drain(..) {
-                history.insert(Archived::Notice { room, prompt });
+                history.insert(Archived::Notice {
+                    room,
+                    prompt: Box::new(prompt),
+                });
             }
         }
     }

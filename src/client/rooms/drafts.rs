@@ -126,6 +126,14 @@ impl BusUi {
     }
 
     fn request_send_with(&mut self, room: RoomId, queued: bool) {
+        if !self.machine_available {
+            self.error = Some(format!(
+                "{} is Unavailable; message was not sent",
+                self.machine_label
+            ));
+            tracing::warn!(event = "bus.remote.send_failed", machine = %self.machine_label, "Machine is unavailable; draft retained");
+            return;
+        }
         if let Some(local) = self
             .locals
             .get_mut(&room)
@@ -219,6 +227,12 @@ impl BusUi {
             submitted_at_ms,
             status: LocalSendStatus::Pending,
         });
+        if let Some(local) = self.client_state.as_mut() {
+            local.files.remove(&room);
+        }
+        if let Err(error) = self.save_client_state() {
+            tracing::warn!(event = "bus.client_state.save_failed", %error);
+        }
         self.history_follow_tail = true;
     }
 
@@ -232,6 +246,9 @@ impl BusUi {
     }
 
     pub(super) fn current_draft_files(&self, room: RoomId) -> Vec<std::path::PathBuf> {
+        if let Some(local) = &self.client_state {
+            return local.files.get(&room).cloned().unwrap_or_default();
+        }
         let sending = self
             .submissions
             .iter()
@@ -306,6 +323,14 @@ impl BusUi {
         submission.status = LocalSendStatus::Failed;
         let room = submission.room;
         let sent = submission.draft.text.clone();
+        if let Some(local) = self.client_state.as_mut() {
+            let files = local.files.entry(room).or_default();
+            for path in &submission.draft.files {
+                if !files.contains(path) {
+                    files.push(path.clone());
+                }
+            }
+        }
         if let Some(local) = self.locals.get_mut(&room) {
             let text = if sent.is_empty() {
                 local.text.text.clone()

@@ -7,6 +7,7 @@ use super::{
 use crate::messaging::model::DispatchMark;
 use crate::messaging::native::TransportError;
 
+mod grok;
 pub(super) mod submission;
 use submission::submission_method;
 
@@ -16,6 +17,13 @@ use submission::submission_method;
 /// remain queued, but pause retries until fresh status, a new session or a
 /// change to the queue.
 pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How long a refused paste into a Grok orchestrator waits before the next try.
+///
+/// The published status can stay Blocked or Working after the composer is free.
+/// A live turn still refuses the paste. Retrying that refusal every tick would
+/// surface a delivery error, so the next look is this far apart.
+pub(super) const GROK_ORCHESTRATOR_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
 enum DeliveryRoute {
     Steer(RequestId, RequestId),
@@ -224,7 +232,13 @@ impl Worker {
             .get(&agent.id)
             .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
         let steer = self.steer_into_unbound_turn(agent, own_turn);
-        if ((agent.status != RuntimeStatus::Idle || own_turn) && !steer)
+        // A developer message to a Grok orchestrator has to start a turn once
+        // no Bus turn and no dialog own the composer. False Blocked, and a
+        // stale Action Required title that publishes Working, never become
+        // Idle, so the ordinary hold would leave that message queued.
+        let deliver_despite_status =
+            !steer && self.developer_message_to_grok_orchestrator(agent, own_turn);
+        if ((agent.status != RuntimeStatus::Idle || own_turn) && !steer && !deliver_despite_status)
             || agent.dialog
             || !agent.hook_setup_confirmed
             || agent.session_binding_invalidated

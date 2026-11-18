@@ -8,7 +8,7 @@ pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
     let hidden = path == "ui"
         || METHODS
             .iter()
-            .any(|spec| spec.command == path && spec.tier == Tier::Dev);
+            .any(|spec| spec.command == Some(path) && spec.tier == Tier::Dev);
     let (about, example) = description(path);
     let command = command
         .hide(hidden && !dev)

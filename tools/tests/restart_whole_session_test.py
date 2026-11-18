@@ -113,6 +113,7 @@ def run_restart(root, source, variant, host):
                        f"echo '{{\"sha\":\"{new_sha}\",\"providers\":[\"claude\"]}}'\n"
                        "else exit 42; fi\n")
     env = {"HOME": str(home), "USERPROFILE": str(home), "BUS_DATA_DIR": str(data),
+           "BUS_CLIENT_ID": "whole-session-restart",
            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TERM": "xterm-256color",
            "TERM_PROGRAM": host, "SHELL": "/bin/sh"}
     if profile := os.environ.get("LLVM_PROFILE_FILE"):
@@ -182,7 +183,10 @@ def run_restart(root, source, variant, host):
         for key in ("dev", "yolo", "session_id", "explicit_data_dir"):
             assert replacement[key] == initial[key]
         assert (data / "control.sock").exists(), detail()
-        assert draft in (data / "state.json").read_text(), "normal quit must persist the unsent draft"
+        saved = wait_for(lambda: next((path for path in (data / "clients").glob("*/*.json")
+                                       if draft in path.read_text()), None), detail)
+        assert draft in saved.read_text(), "normal quit must persist this client's unsent draft"
+        assert draft not in (data / "state.json").read_text(), "a private draft must not enter shared state"
     finally:
         done.set()
         # Only this private PTY's group and the recorded scratch server are owned.

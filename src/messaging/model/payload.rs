@@ -140,6 +140,28 @@ impl BusState {
                 } else {
                     format!("{header}\n{marker}\n{text}")
                 };
+            } else if let Author::ExternalAgent {
+                machine,
+                name,
+                room_id,
+                room_name,
+                ..
+            } = &request.prompt.author
+            {
+                let from = format!("{name}@{machine}");
+                let origin = room_id
+                    .map(|id| {
+                        format!(
+                            " (room {id}{})",
+                            room_name
+                                .as_ref()
+                                .map_or(String::new(), |name| format!(": {name}"))
+                        )
+                    })
+                    .unwrap_or_default();
+                text = format!(
+                    "{from}{origin}:\n[Bus message {message_id} from {from}{recipients}]\n{text}"
+                );
             } else {
                 let marker = format!("[Bus message {message_id} from you{recipients}]");
                 text = if text.is_empty() {

@@ -64,6 +64,7 @@ Ctrl+Enter     Confirm form
 Esc            Cancel
 
 Quit
-Ctrl+Q         Save, stop the agents and the server, quit
+Ctrl+Q         Save and detach; agents keep running
+bus stop       Stop the local Bus and its agents
                After an unsaved warning: press again within 5s to force quit
                and risk losing edits; wait 5s, then Ctrl+Q retries saving";

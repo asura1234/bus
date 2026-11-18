@@ -6,7 +6,7 @@ use super::{
 use crate::messaging::identity;
 
 /// Room-level launch request; provider preparation receives only LaunchSpec.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AddAgent {
     pub(crate) room: RoomId,
     pub(crate) name: String,

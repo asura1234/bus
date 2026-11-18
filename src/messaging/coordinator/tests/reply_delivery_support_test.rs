@@ -680,6 +680,13 @@ impl Delivery {
             crate::messaging::model::Author::Developer => {
                 with_body(format!("[Bus message {id} from you]"))
             }
+            crate::messaging::model::Author::ExternalAgent { machine, name, .. } => {
+                let from = format!("{name}@{machine}");
+                format!(
+                    "{from}:\n{}",
+                    with_body(format!("[Bus message {id} from {from}]"))
+                )
+            }
             crate::messaging::model::Author::Agent(sender) => {
                 let name = state.agent_message_label(sender);
                 format!(

@@ -932,9 +932,21 @@ fn live_sound_reload_updates_bus_room_playback() {
     std::fs::write(&new_path, b"sound fixture").unwrap();
     let mut config = Config::default();
     config.ui.sound.done_path = Some(old_path);
+    // The native server owns room coordination. The viewer attaches to that
+    // service even when this fixture does not need a real native pane API.
+    let _service = crate::messaging::service::Service::start(
+        root.clone(),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
     let mut shell = ClientShellState::new(ClientShellConfig::from_config(&config));
     shell.start_bus(&config.ui.sound).unwrap();
+    assert!(!shell.bus.as_ref().unwrap().owns_coordinator());
     shell.bus.as_mut().unwrap().handle.take();
+    // Detaching the only viewer leaves the coordinator available to another.
+    let viewer = crate::messaging::coordinator::BusHandle::connect_existing(root.clone()).unwrap();
+    assert!(viewer.is_connected());
+    drop(viewer);
 
     let mut state = ClientState {
         output: crate::client::host_terminal::output::TerminalOutput::start().unwrap(),

@@ -17,8 +17,10 @@ pub fn run_server(
 ) -> io::Result<()> {
     // Consume the private launch hint before spawning any pane processes. An
     // explicit `bus server` launched inside a pane must remain headless.
-    let stop_without_clients =
-        std::env::var_os(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR).is_some();
+    let stop_without_clients = stop_after_last_viewer(
+        std::env::var_os(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR).is_some(),
+        crate::utils::env::bus_data_dir().is_some(),
+    );
     std::env::remove_var(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR);
     let logging_options = init_logging(&logging_options);
     // Dropped on return, which drains the queued perf records.
@@ -92,7 +94,7 @@ pub fn run_server(
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(_api_server),
-            should_quit,
+            should_quit.clone(),
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -115,6 +117,10 @@ pub fn run_server(
         server.stop_without_clients = stop_without_clients;
         print_ready_message(&crate::protocol::api::socket_path(), &client_socket_path());
 
+        let _coordination = crate::utils::env::bus_data_dir()
+            .map(|root| crate::server::terminals::RoomService::start(root, should_quit.clone()))
+            .transpose()
+            .map_err(startup_failed)?;
         crate::utils::logging::startup("server", &logging_options);
         server.run().await
     });
@@ -122,6 +128,18 @@ pub fn run_server(
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::utils::logging::shutdown("server");
     result
+}
+
+fn stop_after_last_viewer(client_launched: bool, bus_session: bool) -> bool {
+    client_launched && !bus_session
+}
+
+#[cfg(test)]
+#[test]
+fn multi_machine_normal_bus_keeps_agents_when_last_viewer_leaves() {
+    assert!(!stop_after_last_viewer(true, true));
+    assert!(!stop_after_last_viewer(false, true));
+    assert!(stop_after_last_viewer(true, false));
 }
 
 /// A detached server's stderr is /dev/null: record why it could not start in

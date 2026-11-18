@@ -19,7 +19,7 @@ impl endpoint::EndpointTransport for RecordingTransport {
     }
 }
 
-fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
+pub(super) fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
     let mut rooms = BusState::default();
     rooms.create_room("width").unwrap();
     let mut shell = shell::ClientShellState::new(shell::ClientShellConfig::from_config(
@@ -56,6 +56,7 @@ fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
     };
     (
         ClientLoopDriver {
+            machines: machines::MachineClients::default(),
             write_stream: endpoint::ServerConnection::new(RecordingTransport(sent.clone())),
             endpoint_commands: endpoint_commands::EndpointCommands::default(),
             host_sgr_pixels_active: Arc::default(),

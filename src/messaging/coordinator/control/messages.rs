@@ -123,7 +123,15 @@ impl Worker {
             return self.control_reply(p);
         }
         let room = self.control_room(required(p, "room")?)?;
-        let author = self.send_author(room, p)?;
+        let external = external_author(p)?;
+        if let Some(error) = self.external_master_send_refusal(room, p) {
+            return Err(error);
+        }
+        let author = if p.get("external_author").is_some() {
+            None
+        } else {
+            self.send_author(room, p)?
+        };
         if let Some(error) = self.master_send_refusal(room, author) {
             return Err(error);
         }
@@ -140,6 +148,23 @@ impl Worker {
             .iter()
             .any(|s| crate::messaging::model::is_developer_recipient(s));
         if to_developer {
+            if let Some(external) = external {
+                if selectors.len() != 1 {
+                    return Err("--to you cannot be combined with agent recipients".into());
+                }
+                let mut state = self.state.clone();
+                let message = state
+                    .post_external_to_developer(
+                        room,
+                        external,
+                        optional_text(p, "text")?.unwrap_or_default().into(),
+                        files,
+                        crate::messaging::storage::io::now_ms(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                self.save(state)?;
+                return Ok(json!({"message_id":message,"request_ids":[],"stage":"posted"}));
+            }
             return self.control_send_to_developer(p, room, author, selectors.len(), files);
         }
         let recipients: AgentRecipients = if selectors == ["all"] {
@@ -185,7 +210,7 @@ impl Worker {
                     files,
                     recipient_ids: recipients,
                 },
-                author.map_or(Author::Developer, Author::Agent),
+                external.unwrap_or_else(|| author.map_or(Author::Developer, Author::Agent)),
                 crate::messaging::storage::io::now_ms(),
                 p.get("queue").and_then(Value::as_bool).unwrap_or(false),
             )
@@ -232,6 +257,20 @@ impl Worker {
         Some(format!(
             "MASTER (room {}) is reserved for orchestrators and the developer. Send from your own room instead: --room {} ({}).",
             master.id.0, agent.room_id.0, home_name,
+        ))
+    }
+
+    /// The existing MASTER posting rule follows the conversation room. A
+    /// worker may still address every agent, including a MASTER agent, from
+    /// a work room. This does not narrow cross-machine recipient resolution.
+    fn external_master_send_refusal(&self, room: RoomId, p: &Value) -> Option<String> {
+        let author = p.get("external_author").filter(|value| !value.is_null())?;
+        let master = self.state.master_room()?;
+        if room != master.id || author["home_is_master"].as_bool() == Some(true) {
+            return None;
+        }
+        Some(format!(
+            "MASTER (room {}) is reserved for orchestrators and the developer. Send from a work room on the receiving machine instead.", master.id.0,
         ))
     }
 
@@ -301,6 +340,9 @@ impl Worker {
         let room = self
             .control_room(required(&command.params, "room").ok()?)
             .ok()?;
+        if let Some(error) = self.external_master_send_refusal(room, &command.params) {
+            return Some(Response::failure(&command.id, "master_reserved", error));
+        }
         let author = self.send_author(room, &command.params).ok().flatten()?;
         self.master_send_refusal(room, Some(author))
             .map(|error| Response::failure(&command.id, "master_reserved", error))
@@ -580,4 +622,39 @@ fn attachment_files(p: &Value) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(files)
+}
+
+/// SSH already authenticates the user. This is provenance, not an agent role
+/// capability: every agent may use the same cross-machine path.
+fn external_author(p: &Value) -> Result<Option<Author>, String> {
+    let Some(value) = p.get("external_author") else {
+        return Ok(None);
+    };
+    if p.get("as").is_some() || p.get("caller").is_some() {
+        return Err("External author cannot be combined with a local author".into());
+    }
+    if value.is_null() {
+        return Ok(None);
+    }
+    let machine = required(value, "machine")?;
+    let name = required(value, "name")?;
+    let agent_id = value["agent_id"]
+        .as_u64()
+        .ok_or("Invalid external agent ID")?;
+    if machine.len() > 255
+        || name.len() > 255
+        || machine.chars().chain(name.chars()).any(char::is_control)
+    {
+        return Err("Invalid external author identity".into());
+    }
+    Ok(Some(Author::ExternalAgent {
+        machine: machine.into(),
+        machine_id: value["machine_id"].as_str().unwrap_or_default().into(),
+        name: name.into(),
+        agent_id,
+        room_id: value["room_id"]
+            .as_u64()
+            .or_else(|| value["home_room"].as_u64()),
+        room_name: value["room_name"].as_str().map(str::to_owned),
+    }))
 }

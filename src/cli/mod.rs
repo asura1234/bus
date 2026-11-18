@@ -8,6 +8,7 @@ mod dashboard_tests;
 mod feishu_ingest;
 pub(crate) mod help;
 pub(crate) mod launch;
+mod machines;
 mod perf;
 pub(crate) mod restart;
 mod session_pick;
@@ -96,6 +97,9 @@ fn apply_run_environment(dev: bool, yolo: bool) {
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
+    if let Some(result) = machines::dispatch(args) {
+        return result;
+    }
     if let Some(text) = help::subcommand_help(args) {
         help::write_stdout_line(format_args!("{text}"));
         return Ok(());

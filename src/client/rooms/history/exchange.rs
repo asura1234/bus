@@ -367,6 +367,7 @@ fn participant_label(state: &BusState, participant: &Author) -> String {
         Author::Developer => "You".into(),
         Author::Bus => crate::messaging::model::BUS_SENDER.into(),
         Author::Agent(id) => state.agent_label(*id),
+        Author::ExternalAgent { machine, name, .. } => format!("{name}@{machine}"),
     }
 }
 
@@ -381,7 +382,7 @@ fn link_scope(state: &BusState, author: &Author) -> LinkScope {
                     .and_then(|agent| agent.cwd.as_deref())
             })
             .map(Arc::from),
-        Author::Developer | Author::Bus => None,
+        Author::Developer | Author::Bus | Author::ExternalAgent { .. } => None,
     };
     LinkScope {
         cwd,
@@ -394,6 +395,7 @@ fn participant_tone(participant: &Author) -> Tone {
         Author::Agent(id) => Tone::Agent(*id),
         Author::Developer => Tone::You,
         Author::Bus => Tone::Bus,
+        Author::ExternalAgent { .. } => Tone::Text,
     }
 }
 

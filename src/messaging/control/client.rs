@@ -48,10 +48,11 @@ pub(crate) fn request_with_timeout(
     ipc::validate_private_socket_directory(data_dir).map_err(|e| {
         format!("control_unavailable: connect to a private existing Bus data directory: {e}")
     })?;
-    let prepared = (request.method == "message.send"
+    let prepared = (matches!(request.method.as_str(), "message.send" | "message.sender")
         && request.params.is_object()
         && request.params.get("as").is_none()
-        && request.params.get("caller").is_none())
+        && request.params.get("caller").is_none()
+        && request.params.get("external_author").is_none())
     .then(|| {
         let mut prepared = request.clone();
         prepared.params["caller"] = serde_json::json!(super::caller::capture());

@@ -345,6 +345,34 @@ async fn driver_native_composer_mode_and_newline_keys_are_not_blocking_controls(
 }
 
 #[test]
+fn driver_cancel_shortcut_yields_to_work_but_a_menu_does_not() {
+    let shortcut = "⠹ Thinking…\nEsc:cancel │ Ctrl+.:shortcuts";
+    assert!(has_input_controls(shortcut));
+    assert!(blocker(&menu(shortcut), false).is_some());
+    assert!(blocker(&menu(shortcut), true).is_none());
+
+    let question = "Choose an option\n❯ Yes, proceed\n  No, reject\nEsc:cancel";
+    assert!(has_input_controls(question));
+    assert!(blocker(&menu(question), false).is_some());
+    assert!(blocker(&menu(question), true).is_some());
+}
+
+#[test]
+fn driver_live_cancel_after_previous_menu_is_not_foreground() {
+    let screen = "Earlier choice\n❯ Yes, proceed\n  No, reject\nEsc:cancel\n\n⠹ Thinking…\n╭────────────────────╮\n│ ❯                  │\n╰────────────────────╯\nEsc:cancel │ Ctrl+.:shortcuts";
+    assert!(has_input_controls(screen));
+    assert!(blocker(&menu(screen), false).is_some());
+    assert!(blocker(&menu(screen), true).is_none());
+}
+
+#[test]
+fn driver_cancel_shortcut_keeps_current_checkbox_form_foreground() {
+    let screen = "Choose permissions\n[ ] Read files\n[ ] Run commands\nEsc:cancel";
+    assert!(has_input_controls(screen));
+    assert!(blocker(&menu(screen), true).is_some());
+}
+
+#[test]
 fn driver_keyboard_hints_require_input_actions_beyond_tab_or_space_keys() {
     for footer in ["Space:select", "Tab:next", "Space:toggle │ Tab:next option"] {
         let screen = format!("Choose fields\n❯ [ ] Alpha\n  [ ] Beta\n{footer}");

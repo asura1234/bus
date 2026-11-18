@@ -298,6 +298,7 @@ impl Client {
         next_id: &mut u64,
         poll_budget: Option<&Arc<()>>,
     ) -> bool {
+        crate::messaging::machine_routes::expire();
         if Instant::now() >= self.deadline {
             return self.expire(poll_budget);
         }
@@ -477,9 +478,29 @@ impl Client {
                 "id and method must be nonempty",
             ));
         }
+        if request.method == "machine.forward" && poll_budget.is_none() {
+            return match crate::messaging::machine_routes::forward(&request) {
+                Ok(reply) => {
+                    let started = Instant::now();
+                    self.request = Some((request.id.clone(), "machine.forward"));
+                    self.state = State::Waiting {
+                        id: request.id,
+                        method: "machine.forward",
+                        started,
+                        reply,
+                    };
+                    self.deadline = started + Duration::from_secs(95);
+                    true
+                }
+                Err(response) => self.respond(response),
+            };
+        }
         // Legacy or raw clients must not turn an unidentifiable caller into
         // the developer. In-process TUI submissions have their own domain path.
-        if request.method == "message.send" && request.params.get("as").is_none() {
+        if matches!(request.method.as_str(), "message.send" | "message.sender")
+            && request.params.get("as").is_none()
+            && request.params.get("external_author").is_none()
+        {
             if let Some(params) = request.params.as_object_mut() {
                 params.entry("caller").or_insert(serde_json::Value::Null);
             }

@@ -9,6 +9,28 @@ use serde_json::Value;
 const UNKNOWN_CALLER: &str = "Cannot determine the send caller; pass --as <your name or id>";
 
 impl Worker {
+    /// Resolve the source before an SSH send. Remote room IDs have no meaning
+    /// on this machine and are deliberately not accepted here.
+    pub(super) fn control_sender(&mut self, p: &Value) -> Result<Value, String> {
+        let room = self.state.master_room().map_or(RoomId(0), |room| room.id);
+        let author = self.send_author(room, p)?;
+        let machine_id = crate::messaging::machine_routes::machine_identity(&self.data_dir)?;
+        Ok(
+            serde_json::json!({"external_author": author.and_then(|id| self.state.agent(id)).map(|agent| {
+                serde_json::json!({
+                    "machine":crate::platform::hostname().unwrap_or_else(|| "local".into()),
+                    "machine_id":machine_id,
+                    "name":agent.name,
+                    "agent_id":agent.id.0,
+                "home_room":agent.room_id.0,
+                    "room_id":agent.room_id.0,
+                    "room_name":self.state.room(agent.room_id).map(|room| room.name.clone()),
+                "home_is_master":self.state.master_room().is_some_and(|room| room.id == agent.room_id),
+                })
+            })}),
+        )
+    }
+
     pub(super) fn send_author(
         &mut self,
         room: RoomId,

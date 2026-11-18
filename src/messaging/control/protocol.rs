@@ -20,7 +20,9 @@ pub(super) const WORKER_TIMEOUT: Duration = Duration::from_secs(15);
 /// Leave the existing worker allowance for setup, scheduling and the error reply.
 pub(super) fn worker_timeout(method: &str) -> Duration {
     match method {
-        "agent.add" | "agent.resume" => crate::protocol::api::AGENT_START_TIMEOUT + WORKER_TIMEOUT,
+        "agent.add" | "agent.resume" | "client.command" | "machine.forward" => {
+            crate::protocol::api::AGENT_START_TIMEOUT + WORKER_TIMEOUT
+        }
         _ => WORKER_TIMEOUT,
     }
 }

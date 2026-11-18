@@ -741,6 +741,7 @@ impl BusState {
         match author {
             Author::Developer => "the developer".into(),
             Author::Bus => BUS_SENDER.into(),
+            Author::ExternalAgent { machine, name, .. } => format!("{name}@{machine}"),
             Author::Agent(id) => self
                 .agents
                 .get(id)

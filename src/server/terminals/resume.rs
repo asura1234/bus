@@ -5,6 +5,22 @@ use ratatui::layout::Rect;
 use crate::messaging::coordinator::resume::{LaunchExtras, NativeResumeContext, NativeResumeFacts};
 use crate::server::app::App;
 
+/// Native lifetime guard for the messaging coordinator. Domain logic stays in
+/// messaging; this is the existing native-to-messaging integration boundary.
+pub(crate) struct RoomService {
+    _service: crate::messaging::service::Service,
+}
+
+impl RoomService {
+    pub(crate) fn start(
+        root: std::path::PathBuf,
+        stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::io::Result<Self> {
+        crate::messaging::service::Service::start(root, stopped)
+            .map(|service| Self { _service: service })
+    }
+}
+
 type ResumeInputs = (Vec<String>, Vec<(String, String)>);
 
 fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeResumeFacts {

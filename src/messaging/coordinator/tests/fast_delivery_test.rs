@@ -871,3 +871,194 @@ fn a_fast_callback_checkpoint_failure_prevents_native_input() {
     );
     assert_eq!(durable, RequestPhase::Queued);
 }
+
+fn grok_orchestrator(
+    worker: &mut Worker,
+    dir: &std::path::Path,
+    work: RoomId,
+    status: RuntimeStatus,
+) -> (AgentId, RoomId) {
+    let mut state = worker.state.clone();
+    let master = state.ensure_master_room();
+    let orch = state
+        .create_agent(
+            master,
+            "bus-master-grok",
+            Provider::Grok,
+            dir.to_path_buf(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orch, work).unwrap();
+    state
+        .set_agent_runtime_identity(
+            orch,
+            crate::messaging::model::AgentRuntimeIdentity {
+                launch_id: Some("launch-orch".into()),
+                terminal_id: Some("terminal-orch".into()),
+                pane_id: Some("pane-orch".into()),
+                session_id: Some("session-orch".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(orch).unwrap();
+    state.observe_status(orch, status, io::now_ms()).unwrap();
+    worker.save(state).unwrap();
+    crate::agents::providers::spool::initialize(
+        &dir.join("callbacks/launch-orch"),
+        &crate::agents::providers::spool::Manifest {
+            routing_key: crate::agents::providers::spool::RoutingKey(orch.0),
+            provider: Provider::Grok,
+            launch_id: "launch-orch".into(),
+        },
+    )
+    .unwrap();
+    (orch, master)
+}
+
+fn submitted_steer(native: &DeferredNative) -> Option<bool> {
+    let calls = native.0.lock().unwrap();
+    let method = calls.last()?;
+    match &method.0 {
+        Method::AgentPromptIfIdleAtGeneration(params) => Some(params.steer),
+        other => panic!("unexpected admission {other:?}"),
+    }
+}
+
+#[test]
+fn a_developer_message_starts_a_turn_for_a_grok_orchestrator_without_one() {
+    for status in [RuntimeStatus::Blocked, RuntimeStatus::Working] {
+        let (mut worker, _worker_agent, room, dir, _) = fixture(Provider::Grok, vec![]);
+        let (orch, master) = grok_orchestrator(&mut worker, &dir, room, status);
+        let request = queue(&mut worker, master, orch, "deliver this turn");
+        let native = DeferredNative(Default::default());
+        worker.transport = Box::new(native.clone());
+        worker.submit_ready().unwrap();
+        assert_eq!(
+            submitted_steer(&native),
+            Some(false),
+            "{status:?} must submit a new turn, not steer into one"
+        );
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Submitting
+        );
+        drop(worker);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn a_grok_orchestrator_keeps_work_queued_while_a_turn_or_dialog_owns_it() {
+    let (mut worker, _author, room, dir, _) = fixture(Provider::Grok, vec![]);
+    let (orch, master) = grok_orchestrator(&mut worker, &dir, room, RuntimeStatus::Idle);
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    let first = queue(&mut worker, master, orch, "owned turn");
+    worker.submit_ready().unwrap();
+    native.0.lock().unwrap()[0].1.send(confirmed()).unwrap();
+    worker.finish_native_submissions(false);
+    assert_eq!(
+        worker.state.agent(orch).unwrap().current_request,
+        Some(first)
+    );
+    worker
+        .state
+        .observe_status(orch, RuntimeStatus::Working, io::now_ms())
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    queue(&mut worker, master, orch, "follow up during the turn");
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        native.0.lock().unwrap().len(),
+        1,
+        "a live Bus turn still holds the Grok queue"
+    );
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    let (mut worker, _author, room, dir, _) = fixture(Provider::Grok, vec![]);
+    let (orch, master) = grok_orchestrator(&mut worker, &dir, room, RuntimeStatus::Blocked);
+    let mut state = worker.state.clone();
+    state.observe_dialog(orch, true, io::now_ms()).unwrap();
+    worker.save(state).unwrap();
+    queue(&mut worker, master, orch, "dialog owns the composer");
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    assert!(
+        native.0.lock().unwrap().is_empty(),
+        "a dialog still holds the queue"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    let (mut worker, author, room, dir, _) = fixture(Provider::Grok, vec![]);
+    let (orch, master) = grok_orchestrator(&mut worker, &dir, room, RuntimeStatus::Blocked);
+    let mut state = worker.state.clone();
+    state
+        .submit_message_from(
+            master,
+            crate::messaging::model::Draft {
+                text: "from a worker".into(),
+                files: vec![],
+                recipient_ids: [orch].into(),
+            },
+            crate::messaging::model::Author::Agent(author),
+            io::now_ms(),
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    assert!(
+        native.0.lock().unwrap().is_empty(),
+        "an agent request does not use the developer wake"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    let (mut worker, author, room, dir, _) = fixture(Provider::Grok, vec![]);
+    worker
+        .state
+        .observe_status(author, RuntimeStatus::Blocked, io::now_ms())
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    queue(&mut worker, room, author, "worker stays queued");
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    assert!(
+        native.0.lock().unwrap().is_empty(),
+        "a Grok worker that is not the orchestrator keeps the busy hold"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    let (mut worker, _author, room, dir, _) = fixture(Provider::Grok, vec![]);
+    let (orch, master) = grok_orchestrator(&mut worker, &dir, room, RuntimeStatus::Blocked);
+    queue(&mut worker, master, orch, "quiet retry");
+    worker
+        .grok_orchestrator_retry_at
+        .insert(orch, std::time::Instant::now());
+    let native = DeferredNative(Default::default());
+    worker.transport = Box::new(native.clone());
+    worker.submit_ready().unwrap();
+    assert!(
+        native.0.lock().unwrap().is_empty(),
+        "a fresh refusal waits out the quiet retry"
+    );
+    for at in worker.grok_orchestrator_retry_at.values_mut() {
+        *at -= crate::messaging::coordinator::delivery::GROK_ORCHESTRATOR_RETRY;
+    }
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        submitted_steer(&native),
+        Some(false),
+        "the same developer message submits once the quiet retry ends"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

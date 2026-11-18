@@ -1147,7 +1147,7 @@
               ]
             },
             "steer": {
-              "description": "Also type into a working agent, as a person types while it works, so\nthe provider takes the text into its running turn. A blocked agent is\nstill refused.",
+              "description": "Also type into a working agent, as a person types while it works, so\nthe provider takes the text into its running turn. A blocked agent is\nstill refused. A Grok composer that is idle on screen is accepted even\nwhen the published status is Blocked or Working and no dialog is showing.",
               "type": "boolean"
             },
             "target": {

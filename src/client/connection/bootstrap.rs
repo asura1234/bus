@@ -32,6 +32,14 @@ pub(crate) struct ServerConnection {
 }
 
 impl ServerConnection {
+    /// A remembered machine can be shown before its SSH link is available.
+    pub(crate) fn disconnected() -> Self {
+        Self {
+            transport: None,
+            failure: None,
+        }
+    }
+
     pub(crate) fn new(transport: impl EndpointTransport + 'static) -> Self {
         Self {
             transport: Some(Box::new(transport)),

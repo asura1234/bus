@@ -5,11 +5,14 @@ pub(crate) mod coordinator;
 pub(crate) mod dashboard;
 pub(crate) mod diagnostics;
 pub(crate) mod feishu;
+pub(crate) mod machine_routes;
+pub(crate) mod machines;
 pub(crate) mod model;
 pub(crate) mod native;
 pub(crate) mod orchestration;
 pub(crate) mod perf;
 pub(crate) mod prefs;
+pub(crate) mod service;
 
 pub(crate) mod storage;
 

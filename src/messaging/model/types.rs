@@ -36,6 +36,18 @@ pub(crate) enum Author {
     #[serde(rename = "human")]
     Developer,
     Agent(AgentId),
+    /// Identity on another machine; never resolved against this Bus's IDs.
+    ExternalAgent {
+        machine: String,
+        #[serde(default)]
+        machine_id: String,
+        name: String,
+        agent_id: u64,
+        #[serde(default)]
+        room_id: Option<u64>,
+        #[serde(default)]
+        room_name: Option<String>,
+    },
     /// Bus itself, shown as the grey sender "bus": every notice Bus generates
     /// (a blocked dialog, a compaction limit, a deleted agent's
     /// open terminal) is signed this way, never with an agent's name.

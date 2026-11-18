@@ -288,16 +288,31 @@ fn agent_json(
     value
 }
 
-/// The coordinator/UI and native server are different processes after a restart.
+/// Room coordination now lives in the native server; its executable cannot be
+/// evidence for the independently attached TUI's build.
 fn build_json(root: &std::path::Path) -> Value {
     json!({
-        "client": {
+        "client": client_build_json(root),
+        "server": server_build_json(root),
+    })
+}
+
+fn client_build_json(root: &std::path::Path) -> Value {
+    if let Some(stamp) = crate::utils::restart_record::read_tui_build(root).filter(|stamp| {
+        crate::platform::process_still_live(stamp.process.pid, stamp.process.birth)
+            && crate::utils::restart_record::valid_build_sha(&stamp.sha)
+    }) {
+        return json!({"binary":stamp.binary,"sha":stamp.sha,"pid":stamp.process.pid});
+    }
+    if crate::messaging::service::is_running() {
+        Value::Null
+    } else {
+        json!({
             "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
             "binary": crate::platform::fs::running_executable().ok(),
             "sha": env!("BUS_BUILD_SHA"),
-        },
-        "server": server_build_json(root),
-    })
+        })
+    }
 }
 
 fn server_build_json(root: &std::path::Path) -> Value {

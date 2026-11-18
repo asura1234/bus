@@ -21,6 +21,13 @@ would leave the receiver doing exactly what it was already doing, don't send it.
 
 ## Where to send
 
+Cross-machine messages are for orchestrators only.
+
+Each machine has its own MASTER room. An orchestrator speaks in its own
+machine's MASTER; opening another machine's MASTER opens that machine's room.
+Use `bus --machine LABEL send ...` to address a saved SSH target. Attachment
+paths must already exist on the machine that owns the receiving room.
+
 **MASTER belongs to the developer and the orchestrators.** Workers never send
 in MASTER, not even to their own orchestrator: send from your own work room
 (`bus send --room <your room> --to orchestrator ...`). Peers in other rooms are

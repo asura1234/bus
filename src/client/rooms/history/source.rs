@@ -22,8 +22,10 @@ impl Direction {
         Self {
             to_you: prompt.author != Author::Developer
                 && (prompt.recipient_ids.is_empty()
-                    || matches!(prompt.author, Author::Agent(_))
-                        && explicitly_to_you(&prompt.text)),
+                    || matches!(
+                        prompt.author,
+                        Author::Agent(_) | Author::ExternalAgent { .. }
+                    ) && explicitly_to_you(&prompt.text)),
             from_you: prompt.author == Author::Developer,
         }
     }

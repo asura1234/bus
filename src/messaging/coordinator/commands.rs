@@ -127,8 +127,27 @@ impl Worker {
     fn persist_draft_submission(
         &mut self,
         room: RoomId,
+        draft: crate::messaging::model::Draft,
+        queued: bool,
+    ) -> Result<(), String> {
+        self.persist_submission(room, draft, queued, false)
+    }
+
+    pub(super) fn persist_client_draft_submission(
+        &mut self,
+        room: RoomId,
+        draft: crate::messaging::model::Draft,
+        queued: bool,
+    ) -> Result<(), String> {
+        self.persist_submission(room, draft, queued, true)
+    }
+
+    fn persist_submission(
+        &mut self,
+        room: RoomId,
         mut draft: crate::messaging::model::Draft,
         queued: bool,
+        client: bool,
     ) -> Result<(), String> {
         for recipient in &draft.recipient_ids {
             if let Some(error) = self.check_launch_directory(*recipient)? {
@@ -149,18 +168,34 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
         let mut state = self.state.clone();
-        let requests = state
-            .submit_draft_exact(room, draft.clone(), now, queued)
-            .map_err(|e| e.to_string())?;
-        self.journal(
-            state,
+        let requests = if client {
+            state.submit_message_with(
+                room,
+                draft.clone(),
+                crate::messaging::model::Author::Developer,
+                now,
+                queued,
+            )
+        } else {
+            state.submit_draft_exact(room, draft.clone(), now, queued)
+        }
+        .map_err(|e| e.to_string())?;
+        let operation = if client {
+            JournalOp::SubmitClientDraft {
+                room,
+                draft,
+                queued,
+                now_ms: now,
+            }
+        } else {
             JournalOp::SubmitDraft {
                 room,
                 draft,
                 queued,
                 now_ms: now,
-            },
-        )?;
+            }
+        };
+        self.journal(state, operation)?;
         self.note_requests_queued(&requests);
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");

@@ -706,6 +706,8 @@ pub(super) fn scratch_env(
     let xdg = paths.xdg_dir();
     env.extend([
         ("BUS_DATA_DIR".into(), paths.data_dir().into()),
+        // A driver restart allocates another PTY for the same logical client.
+        ("BUS_CLIENT_ID".into(), paths.dir.clone().into()),
         ("HOME".into(), paths.home_dir().into()),
         ("TERM".into(), "xterm-256color".into()),
         ("COLORTERM".into(), "truecolor".into()),

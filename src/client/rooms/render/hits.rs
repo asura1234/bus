@@ -64,6 +64,7 @@ impl BusUi {
             Action::CancelDelete => "cancel-delete".into(),
             Action::ConfirmDelete => "confirm-delete".into(),
             Action::Room(id) => format!("room:{}", self.room_name(*id)),
+            Action::MachineRoom(machine, id) => format!("machine-room:{machine}:{}", id.0),
             Action::Agent(id) => format!("agent:{}", self.agent_name(*id)),
             Action::NewRoom => "new-room".into(),
             Action::NewAgent => "new-agent".into(),

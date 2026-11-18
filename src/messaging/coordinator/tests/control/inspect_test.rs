@@ -54,7 +54,9 @@ fn the_tier_table_names_each_method_and_command_once() {
     let mut commands = BTreeSet::new();
     for spec in METHODS {
         assert!(methods.insert(spec.method), "{} twice", spec.method);
-        assert!(commands.insert(spec.command), "{} twice", spec.command);
+        if let Some(command) = spec.command {
+            assert!(commands.insert(command), "{command} twice");
+        }
     }
     for dev in [
         "room.focus",

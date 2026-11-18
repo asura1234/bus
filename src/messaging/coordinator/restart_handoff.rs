@@ -15,6 +15,21 @@ pub(crate) fn take_restart_plan() -> Option<HandoffPlan> {
         .take()
 }
 
+/// Receives the immutable plan already authorized by the machine's coordinator.
+/// Only the exact original TUI process can retain and execute it after detach.
+pub(crate) fn accept_restart_plan(plan: HandoffPlan) -> Result<(), String> {
+    if plan.tui.pid != std::process::id()
+        || !crate::platform::process_still_live(plan.tui.pid, plan.tui.birth)
+        || crate::utils::env::bus_data_dir().as_ref() != Some(&plan.root)
+    {
+        return Err("Restart plan belongs to another client".into());
+    }
+    *RESTART_PLAN
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(plan);
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn test_restart_plan(plan: HandoffPlan) {
     *RESTART_PLAN
@@ -84,7 +99,7 @@ impl Worker {
             .ok_or("restart handoff is missing")?;
         if plan != pending
             || plan.root != self.data_dir
-            || plan.tui.pid != std::process::id()
+            || plan.tui.pid != std::process::id() && !crate::messaging::service::is_running()
             || !crate::platform::process_still_live(plan.tui.pid, plan.tui.birth)
             || helper.pid != quit.helper_pid
             || !crate::platform::process_still_live(helper.pid, helper.birth)
@@ -97,12 +112,19 @@ impl Worker {
             self.clear_dashboard_for_restart()?;
         }
         let events = events.ok_or("Bus UI event channel unavailable")?;
-        *RESTART_PLAN
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(plan);
-        if events.send(BusEvent::DevQuitRequested).is_err() {
-            let _ = take_restart_plan();
-            return Err("Bus UI event channel disconnected".into());
+        if crate::messaging::service::is_running() {
+            events
+                .send(BusEvent::DevRestartRequested(plan))
+                .map_err(|_| "Bus UI event channel disconnected".to_owned())?;
+        } else {
+            // Compatibility for an in-process coordinator, including focused fixtures.
+            *RESTART_PLAN
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(plan);
+            if events.send(BusEvent::DevQuitRequested).is_err() {
+                let _ = take_restart_plan();
+                return Err("Bus UI event channel disconnected".into());
+            }
         }
         Ok(())
     }

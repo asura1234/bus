@@ -558,6 +558,9 @@ impl BusUi {
             Action::ConfirmDelete => self.confirm_delete(),
             Action::ScrollFiles(forward) => self.scroll_files(forward),
             Action::Room(room) => self.open_room(room),
+            Action::MachineRoom(machine, room) => {
+                self.machine_switch = Some((machine, room));
+            }
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
             Action::NewAgent => self.open_agent_form(),

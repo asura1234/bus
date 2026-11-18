@@ -306,10 +306,15 @@ fn controls(rows: &[String]) -> Option<Controls> {
             {
                 break;
             }
-            let Some(kind) = input_hint(rows, start..finish + 1) else {
+            let hint = start..finish + 1;
+            // An older menu above the current composer cannot turn that
+            // composer's cancel shortcut into a foreground input request.
+            let has_menu = menu
+                .as_ref()
+                .is_some_and(|menu| tail_clear(rows, menu.end, end, None, &hint));
+            let Some(kind) = input_hint(rows, hint.clone(), has_menu) else {
                 continue;
             };
-            let hint = start..finish + 1;
             if kind == ControlKind::Pending {
                 let question = rows[..start].iter().rev().take(2).any(|row| {
                     plain(row)
@@ -437,16 +442,16 @@ fn key_list(keys: &str) -> bool {
 }
 
 fn keyboard_hint(row: &str) -> Option<ControlKind> {
-    keyboard_hint_with_form(row, false)
+    keyboard_hint_with_form(row, false, false)
 }
 
-fn input_hint(rows: &[String], hint: Range<usize>) -> Option<ControlKind> {
+fn input_hint(rows: &[String], hint: Range<usize>, has_menu: bool) -> Option<ControlKind> {
     let text = rows[hint.clone()]
         .iter()
         .map(|row| plain(row))
         .collect::<Vec<_>>()
         .join(" ");
-    keyboard_hint_with_form(&text, checkbox_form(&rows[..hint.start]))
+    keyboard_hint_with_form(&text, checkbox_form(&rows[..hint.start]), has_menu)
 }
 
 fn checkbox_form(rows: &[String]) -> bool {
@@ -472,7 +477,7 @@ fn checkbox_form(rows: &[String]) -> bool {
     false
 }
 
-fn keyboard_hint_with_form(row: &str, checkbox_form: bool) -> Option<ControlKind> {
+fn keyboard_hint_with_form(row: &str, checkbox_form: bool, has_menu: bool) -> Option<ControlKind> {
     let row = plain(row).to_lowercase();
     if ["[y/n]", "[n/y]", "(y/n)", "(n/y)", "[yes/no]"]
         .iter()
@@ -514,8 +519,17 @@ fn keyboard_hint_with_form(row: &str, checkbox_form: bool) -> Option<ControlKind
     let alternate = ["esc", "skip", "cancel", "navigate", "↑", "↓"]
         .iter()
         .any(|key| row.contains(key));
-    (enter && action(&row) && (alternate || row.starts_with("press "))
+    if enter && action(&row) && (alternate || row.starts_with("press "))
         || (row.contains('↑') || row.contains('↓')) && action(&row)
-        || row.starts_with("esc") && row.contains("cancel"))
-    .then_some(ControlKind::Foreground)
+    {
+        return Some(ControlKind::Foreground);
+    }
+    // A live turn can expose Esc:cancel without asking for input. Keep a
+    // visible menu authoritative; only the standalone shortcut may coexist
+    // with working evidence, just like a pending answer shortcut.
+    (row.starts_with("esc") && row.contains("cancel")).then_some(if has_menu || checkbox_form {
+        ControlKind::Foreground
+    } else {
+        ControlKind::Pending
+    })
 }

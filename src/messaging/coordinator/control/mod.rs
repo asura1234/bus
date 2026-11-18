@@ -1,5 +1,6 @@
 //! Control receipts, tiers, validation and routing on the existing single-writer coordinator.
 mod agents;
+mod clients;
 mod driver;
 mod feishu;
 mod inspect;
@@ -58,7 +59,11 @@ impl Worker {
             );
         }
         if self.control_receipts.contains_key(&request.id) {
-            return self.replay_control_receipt(request);
+            let mut response = self.replay_control_receipt(request);
+            if request.method == "client.command" && response.ok {
+                self.append_client_snapshot(&mut response.result);
+            }
+            return response;
         }
         // Only a published, process-bound restart may request normal quit in
         // a non-dev session. Ordinary `quit` retains its dev-tier contract.
@@ -76,6 +81,7 @@ impl Worker {
             return Response::failure(&request.id, "unknown_method", "Unknown Bus control method");
         };
         if tier == Tier::Dev && !self.dev_enabled {
+            let command = command.unwrap_or(request.method.as_str());
             return Response::failure(
                 &request.id,
                 "dev_tools_disabled",
@@ -150,11 +156,21 @@ impl Worker {
             self.control_receipt_bytes = self.control_receipt_bytes.saturating_add(reserve);
             self.control_receipt_order.push_back(request.id.clone());
             let inferred_sender = self.receipt_sender(request, &response);
+            let mut retained_response = response.clone();
+            if request.method == "client.command" {
+                // Keep only this command's exact outcome. Retaining a full
+                // room/history projection per click would multiply archive
+                // memory by the receipt window.
+                if let Some(result) = retained_response.result.as_object_mut() {
+                    result.remove("snapshot");
+                    result.remove("history");
+                }
+            }
             self.control_receipts.insert(
                 request.id.clone(),
                 ControlReceipt {
                     request: request.clone(),
-                    response: response.clone(),
+                    response: retained_response,
                     inferred_sender,
                     at: std::time::Instant::now(),
                     bytes: reserve,
@@ -249,6 +265,8 @@ impl Worker {
         events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
+            "client.snapshot" | "client.command" => self.execute_client(method, p),
+            "message.sender" => self.control_sender(p),
             "feishu.ingest" => self.control_feishu_ingest(p),
             "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.seen"
             | "room.sound" | "room.delete" | "room.history" => {
@@ -351,11 +369,11 @@ pub(crate) enum Tier {
     Dev,
 }
 
-/// One control method: its CLI command words, allowed parameters, whether a
-/// retry replays a receipt, and its tier.
+/// One control method: optional public CLI command words, allowed parameters,
+/// whether a retry replays a receipt, and its tier. Internal RPCs have no CLI.
 pub(crate) struct MethodSpec {
     pub(crate) method: &'static str,
-    pub(crate) command: &'static str,
+    pub(crate) command: Option<&'static str>,
     pub(crate) fields: &'static [&'static str],
     pub(crate) mutation: bool,
     pub(crate) tier: Tier,
@@ -370,7 +388,22 @@ const fn spec(
 ) -> MethodSpec {
     MethodSpec {
         method,
-        command,
+        command: Some(command),
+        fields,
+        mutation,
+        tier,
+    }
+}
+
+const fn internal_spec(
+    method: &'static str,
+    fields: &'static [&'static str],
+    mutation: bool,
+    tier: Tier,
+) -> MethodSpec {
+    MethodSpec {
+        method,
+        command: None,
         fields,
         mutation,
         tier,
@@ -381,6 +414,38 @@ const fn spec(
 /// one cannot ship without a tier. Dev-tier methods from `src/devtools` (the
 /// TUI driver's `ui hits` / `ui screen`) are registered in this table too.
 pub(crate) const METHODS: &[MethodSpec] = &[
+    internal_spec(
+        "client.snapshot",
+        &[
+            "client_id",
+            "local_client",
+            "viewer_id",
+            "routes",
+            "completions",
+            "ui_state",
+        ],
+        false,
+        Tier::Agent,
+    ),
+    internal_spec(
+        "client.command",
+        &[
+            "client_id",
+            "command_id",
+            "command",
+            "local_client",
+            "ui_state",
+        ],
+        true,
+        Tier::Agent,
+    ),
+    internal_spec(
+        "machine.forward",
+        &["machine", "request"],
+        false,
+        Tier::Agent,
+    ),
+    internal_spec("message.sender", &["as", "caller"], false, Tier::Agent),
     spec(
         "feishu.ingest",
         "feishu ingest",
@@ -513,7 +578,15 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         "message.send",
         "send",
         &[
-            "room", "to", "text", "files", "as", "queue", "reply_to", "caller",
+            "room",
+            "to",
+            "text",
+            "files",
+            "as",
+            "queue",
+            "reply_to",
+            "caller",
+            "external_author",
         ],
         true,
         Tier::Agent,
@@ -604,11 +677,12 @@ pub(crate) fn dev_tier_mentions(text: &str) -> Vec<String> {
     METHODS
         .iter()
         .filter(|spec| spec.tier == Tier::Dev)
-        .flat_map(|spec| {
+        .filter_map(|spec| spec.command)
+        .flat_map(|command| {
             [
-                format!("bus {}", spec.command),
-                format!("`{}`", spec.command),
-                format!("\n  {}", spec.command),
+                format!("bus {command}"),
+                format!("`{command}`"),
+                format!("\n  {command}"),
             ]
         })
         .filter(|pattern| text.contains(pattern.as_str()))

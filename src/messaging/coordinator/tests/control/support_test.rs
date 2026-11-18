@@ -14,6 +14,8 @@ mod identity_tests;
 mod inspect_tests;
 #[path = "large_history_test.rs"]
 mod large_history_tests;
+#[path = "machine_clients_test.rs"]
+mod machine_clients_tests;
 #[path = "master_guard_test.rs"]
 mod master_guard_tests;
 #[path = "messages_test.rs"]

@@ -231,7 +231,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
     ui.receive_snapshot(Arc::new(snapshot));
     ui.open_room(pr);
     let rows = sidebar_rows(&mut ui);
-    assert_eq!(rows[0], "", "{rows:?}");
+    assert_eq!(rows[0], "[local]", "{rows:?}");
     assert_eq!(rows[1], "# MASTER", "{rows:?}");
     assert_eq!(rows[2], "", "{rows:?}");
     assert!(

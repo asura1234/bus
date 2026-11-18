@@ -5,6 +5,16 @@ use crate::messaging::{
 };
 
 impl BusUi {
+    pub(in crate::client::rooms) fn receive_restart_plan(
+        &mut self,
+        plan: crate::utils::restart_record::HandoffPlan,
+    ) {
+        match crate::messaging::coordinator::accept_restart_plan(plan) {
+            Ok(()) => self.request_quit(),
+            Err(error) => tracing::warn!(%error, "Ignored restart plan for another client"),
+        }
+    }
+
     /// The coordinator echoes the saved settings for every stepper press
     /// before that press's command is finished, so a quick second press
     /// would be undone by the first press's echo. A stepper value whose

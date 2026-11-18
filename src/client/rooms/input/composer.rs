@@ -363,6 +363,9 @@ impl BusUi {
     }
 
     pub(super) fn paste_image(&mut self) {
+        if self.remote_machine {
+            return;
+        }
         let Some(image) =
             (self.clipboard_image_reader)(crate::protocol::wire::MAX_CLIPBOARD_IMAGE_PAYLOAD)
         else {
@@ -383,6 +386,9 @@ impl BusUi {
         bytes: &[u8],
         extension: &str,
     ) {
+        if self.remote_machine {
+            return;
+        }
         let Some(room) = self.room else {
             return;
         };
@@ -421,6 +427,10 @@ impl BusUi {
     /// each refusal is recorded in the client log instead.
     pub(in crate::client::rooms) fn attach_paths(&mut self, room: RoomId, paths: Vec<String>) {
         for path in paths {
+            if self.remote_machine {
+                self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
+                continue;
+            }
             let file = crate::utils::home_path::expand_tilde_path(&path);
             if let Some(error) = super::super::thumbnails::image_file_error(&file) {
                 tracing::warn!(

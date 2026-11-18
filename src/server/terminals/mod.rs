@@ -9,7 +9,7 @@ pub(crate) mod scrollback_read;
 mod theme_sync;
 mod titles;
 
-pub(crate) use resume::{api_session_kind, unstarted_restore_plan};
+pub(crate) use resume::{api_session_kind, unstarted_restore_plan, RoomService};
 
 #[cfg(all(test, unix))]
 #[path = "tests/codex_native_launch_test.rs"]

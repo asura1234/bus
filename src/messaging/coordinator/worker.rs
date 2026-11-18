@@ -90,6 +90,9 @@ pub(super) struct Worker {
     pub(super) withdrawn_at: BTreeMap<AgentId, std::time::Instant>,
     /// When each agent last began a turn of its own that has not settled.
     pub(super) own_turns: BTreeMap<AgentId, std::time::Instant>,
+    /// Last refusal of a developer paste into a Grok orchestrator whose
+    /// published status was Blocked or Working. See `GROK_ORCHESTRATOR_RETRY`.
+    pub(super) grok_orchestrator_retry_at: BTreeMap<AgentId, std::time::Instant>,
     pub(super) dev_enabled: bool,
     pub(super) error_pipe: crate::utils::error_pipe::Runtime,
     /// Mutation receipts by request ID, so a retried request replays its
@@ -213,6 +216,7 @@ impl Worker {
             reply_delivery_retries: BTreeMap::new(),
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
+            grok_orchestrator_retry_at: BTreeMap::new(),
             dev_enabled: false,
             error_pipe: Default::default(),
             control_receipts: BTreeMap::new(),

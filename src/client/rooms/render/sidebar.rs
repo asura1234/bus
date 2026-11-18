@@ -316,7 +316,11 @@ impl BusUi {
         let sidebar = view.sidebar;
         let sw = sidebar.width.saturating_sub(3);
         let rooms: Vec<_> = self.snapshot.state.rooms().collect();
-        let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
+        let agents = if self.machine_available {
+            Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw)
+        } else {
+            Vec::new()
+        };
         let work_rooms = rooms
             .iter()
             .filter(|room| room.kind == RoomKind::Work)
@@ -327,7 +331,13 @@ impl BusUi {
             usize::from(self.snapshot.state.master_room().is_some()) * MASTER_SECTION_ROWS;
         // Leading gap, ROOMS header, gap, divider, `# room` agents header,
         // gap: six fixed rows around the room and agent entries.
+        let foreign_height = if self.other_machine_rooms.is_empty() {
+            0
+        } else {
+            1 + self.other_machine_rooms.len() * 3
+        };
         let content_height = 6
+            + foreign_height
             + master_rows
             + work_room_rows
             + agents.iter().map(|entry| entry.height).sum::<usize>();
@@ -351,9 +361,18 @@ impl BusUi {
             visible_end,
         };
         let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
-        let divider_row = rooms_header + 2 + work_room_rows;
+        let foreign_start = rooms_header + 2 + work_room_rows;
+        let divider_row = foreign_start + foreign_height;
         let agents_header = divider_row + 1;
+        view.row(
+            viewport.at(1, 0, sw),
+            format!("[{}]", self.machine_label),
+            None,
+            false,
+            true,
+        );
         self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
+        self.sidebar_other_machine_rows(view, viewport, foreign_start);
         view.sidebar_divider = viewport.at(1, divider_row, sw);
         self.sidebar_agent_rows(view, viewport, agents, agents_header);
         self.sidebar_footer(view, rows);
@@ -422,19 +441,26 @@ impl BusUi {
             };
             // A work room's status sits left of its delete button, as on agent
             // rows; MASTER shows just its name.
-            let right = match room.kind {
-                RoomKind::Work => status(self.snapshot.state.room_status(room.id)),
-                RoomKind::Master => "",
+            let right = if !self.machine_available {
+                "Unavailable"
+            } else {
+                match room.kind {
+                    RoomKind::Work => status(self.snapshot.state.room_status(room.id)),
+                    RoomKind::Master => "",
+                }
             };
+            let unread = self.room_unread(room.id);
             let name_width = if right.is_empty() {
                 sw.saturating_sub(2)
             } else {
                 sw.saturating_sub(right.len() as u16 + 3)
             };
-            let name_width = name_width.max(u16::from(room.unseen_to_developer)).min(sw);
+            let name_width = name_width.max(u16::from(unread)).min(sw);
             let rect = viewport.at(1, row, name_width);
             if rect.height > 0 {
-                let label = sidebar_room_label(room, name_width);
+                let mut presented = (**room).clone();
+                presented.unseen_to_developer = unread;
+                let label = sidebar_room_label(&presented, name_width);
                 if let Some(rename) = self
                     .rename
                     .as_ref()
@@ -449,20 +475,16 @@ impl BusUi {
                         Some(room.id) == self.room && self.terminal.is_none(),
                         false,
                     );
-                    if room.unseen_to_developer && !label.is_empty() {
+                    if unread && !label.is_empty() {
                         let dot = Rect::new(rect.x + cells(&label) as u16 - 1, rect.y, 1, 1);
                         view.row(dot, "●", Some(Action::Room(room.id)), false, false);
                         view.color_last_row(dot, ACCENT);
                     }
                 }
                 if !right.is_empty() {
-                    let status_start = status_end.saturating_sub(right.len() as u16).max(
-                        if room.unseen_to_developer {
-                            1 + name_width
-                        } else {
-                            0
-                        },
-                    );
+                    let status_start = status_end
+                        .saturating_sub(right.len() as u16)
+                        .max(if unread { 1 + name_width } else { 0 });
                     let status_rect =
                         viewport.at(status_start, row, status_end.saturating_sub(status_start));
                     view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
@@ -482,10 +504,14 @@ impl BusUi {
                     );
                 }
             }
-            if room.kind == RoomKind::Master {
+            if room.kind == RoomKind::Master && self.machine_available {
                 continue;
             }
-            let (active, total) = sidebar_agent_counts(&self.snapshot.state, room.id);
+            let (active, total) = if self.machine_available {
+                sidebar_agent_counts(&self.snapshot.state, room.id)
+            } else {
+                (0, 0)
+            };
             let count = format!("{active}/{total}");
             let count_width = count.len() as u16;
             view.row(
@@ -499,6 +525,49 @@ impl BusUi {
                 viewport.at(1 + sw.saturating_sub(count_width), row + 1, count_width),
                 count,
                 Some(Action::Room(room.id)),
+                false,
+                true,
+            );
+        }
+    }
+
+    fn sidebar_other_machine_rows(&self, view: &mut View, viewport: SidebarViewport, start: usize) {
+        if self.other_machine_rooms.is_empty() {
+            return;
+        }
+        let sw = viewport.sidebar.width.saturating_sub(3);
+        view.row(
+            viewport.at(1, start, sw),
+            "OTHER MACHINES",
+            None,
+            false,
+            true,
+        );
+        for (index, room) in self.other_machine_rooms.iter().enumerate() {
+            let y = start + 1 + index * 3;
+            let action = Action::MachineRoom(room.machine.clone(), room.room);
+            let label = format!(
+                "[{}] # {}{}",
+                room.machine,
+                room.name,
+                if room.unread { " ●" } else { "" }
+            );
+            view.row(
+                viewport.at(1, y, sw),
+                label,
+                Some(action.clone()),
+                false,
+                false,
+            );
+            view.row(
+                viewport.at(1, y + 1, sw),
+                format!(
+                    "{}  Agents {}/{}",
+                    status(room.status),
+                    room.active_agents,
+                    room.total_agents
+                ),
+                Some(action),
                 false,
                 true,
             );
@@ -553,7 +622,11 @@ impl BusUi {
             y += 1;
             view.row(
                 viewport.at(1, y, sw.saturating_sub(2)),
-                provider(agent.provider),
+                if self.remote_machine {
+                    format!("{} · {}", provider(agent.provider), self.machine_label)
+                } else {
+                    provider(agent.provider).into()
+                },
                 Some(Action::Agent(agent.id)),
                 false,
                 true,

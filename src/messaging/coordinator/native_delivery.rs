@@ -138,7 +138,30 @@ impl Worker {
             state.record_submission(request, outcome.clone())
         }
         .map_err(|error| error.to_string())?;
+        let status_refusal = !steered
+            && agent.provider == super::Provider::Grok
+            && agent.orchestrates.is_some()
+            && matches!(
+                agent.status,
+                super::RuntimeStatus::Blocked | super::RuntimeStatus::Working
+            )
+            && matches!(
+                &outcome,
+                super::SubmissionOutcome::DefinitelyRejected { message }
+                    if message.contains("not idle") || message.contains("blocked")
+            );
+        if let super::SubmissionOutcome::DefinitelyRejected { message } = &outcome {
+            if status_refusal {
+                state.suppress_status_refusal(agent.id, message);
+            }
+        }
         self.save(state)?;
+        if status_refusal {
+            self.grok_orchestrator_retry_at
+                .insert(agent.id, Instant::now());
+        } else if matches!(outcome, super::SubmissionOutcome::Confirmed { .. }) {
+            self.grok_orchestrator_retry_at.remove(&agent.id);
+        }
         self.note_withdrawn(agent, request, &outcome);
         Ok(())
     }

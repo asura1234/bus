@@ -561,3 +561,149 @@ async fn guarded_cursor_background_multiline_quote_is_submitted_as_the_complete_
         "the prompt must be pasted only once"
     );
 }
+
+const GROK_EMPTY: &str =
+    include_str!("../../../../../tests/fixtures/grok-composer/native-1.0.70-empty.txt");
+
+fn paint_grok_screen(app: &App, screen: &str, title: &str, progress: &str) {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let bytes = format!(
+        "\x1b[2J\x1b[H\x1b]2;{title}\x1b\\\x1b]9;{progress}\x1b\\{}",
+        screen.replace('\n', "\r\n")
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(bytes.as_bytes());
+}
+
+fn submission_clock(app: &App) -> crate::terminal::runtime::SubmissionClock {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_submission_clock()
+        .unwrap()
+}
+
+fn set_grok_status(app: &mut App, state: AgentState) {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Grok), state);
+}
+
+/// A developer paste reaches a Grok composer that is idle on screen while the
+/// published status is still Blocked or Working. A live progress signal, an
+/// approval card, and a plain prompt stay refused.
+#[tokio::test]
+async fn an_idle_grok_composer_accepts_if_idle_while_status_is_blocked_or_working() {
+    use crate::protocol::api::schema::{AgentPromptParams, Method};
+
+    for state in [AgentState::Blocked, AgentState::Working] {
+        let (mut app, method, mut writes) =
+            submission_tests::provider_fixture(AgentKind::Grok, true, "");
+        set_grok_status(&mut app, state);
+        paint_grok_screen(&app, GROK_EMPTY, "⚠ Action Required - grok", "4;0;0");
+        let Method::AgentPromptIfIdle(params) = method.clone() else {
+            unreachable!()
+        };
+        let expiry = {
+            use crate::protocol::api::submission::{method_budget, withdrawal_budget};
+            method_budget(&method).unwrap() - withdrawal_budget(params.text.as_bytes())
+                + Duration::from_millis(100)
+        };
+        let response = submission_tests::start(&mut app, method);
+        assert!(
+            response.try_recv().is_err(),
+            "{state:?} rejected the idle composer before pasting"
+        );
+        assert_eq!(
+            submission_tests::next_write(&mut writes).await,
+            Bytes::from_static(b"\x1b[200~from bus\x1b[201~"),
+            "{state:?} must paste into the idle composer"
+        );
+        paint_grok_screen(
+            &app,
+            &GROK_EMPTY.replacen("│ ❯ ", "│ ❯ from bus", 1),
+            "grok",
+            "4;0;0",
+        );
+        assert_eq!(
+            submission_tests::next_write(&mut writes).await,
+            Bytes::from_static(b"\r"),
+            "{state:?} must press Enter once the draft is visible"
+        );
+        submission_clock(&app).wait_for_enters(1);
+        paint_grok_screen(&app, GROK_EMPTY, "grok", "4;0;0");
+        submission_clock(&app).advance(expiry);
+        let reply = response.recv_timeout(submission_tests::WAIT).unwrap();
+        assert!(
+            reply.contains("agent_prompted"),
+            "{state:?} idle composer: {reply}"
+        );
+        assert!(writes.try_recv().is_err(), "{state:?} wrote again");
+    }
+
+    let (mut app, method, mut writes) =
+        submission_tests::provider_fixture(AgentKind::Grok, true, "");
+    set_grok_status(&mut app, AgentState::Working);
+    paint_grok_screen(&app, GROK_EMPTY, "grok", "4;1;-1");
+    let rejected = submission_tests::start(&mut app, method)
+        .recv_timeout(submission_tests::WAIT)
+        .unwrap();
+    assert!(
+        rejected.contains("agent_not_idle"),
+        "busy progress stays refused: {rejected}"
+    );
+    assert!(writes.try_recv().is_err(), "busy progress wrote input");
+
+    let (mut app, method, mut writes) =
+        submission_tests::provider_fixture(AgentKind::Grok, true, "");
+    set_grok_status(&mut app, AgentState::Blocked);
+    paint_grok_screen(
+        &app,
+        include_str!(
+            "../../../../../tests/fixtures/grok-dialog/native-1.0.70-command-approval.txt"
+        ),
+        "⚠ Action Required - grok",
+        "",
+    );
+    let rejected = submission_tests::start(&mut app, method)
+        .recv_timeout(submission_tests::WAIT)
+        .unwrap();
+    assert!(
+        rejected.contains("agent_not_idle") || rejected.contains("agent_blocked"),
+        "an approval card stays refused: {rejected}"
+    );
+    assert!(writes.try_recv().is_err(), "an approval card wrote input");
+
+    let (mut app, _method, mut writes) =
+        submission_tests::provider_fixture(AgentKind::Grok, true, "");
+    set_grok_status(&mut app, AgentState::Blocked);
+    paint_grok_screen(&app, GROK_EMPTY, "⚠ Action Required - grok", "4;0;0");
+    let info = app
+        .agent_info(0, app.state.workspaces[0].tabs[0].root_pane)
+        .unwrap();
+    let rejected = submission_tests::start(
+        &mut app,
+        Method::AgentPrompt(AgentPromptParams {
+            target: info.pane_id,
+            text: "from bus".into(),
+            wait: None,
+        }),
+    )
+    .recv_timeout(submission_tests::WAIT)
+    .unwrap();
+    assert!(
+        rejected.contains("agent_blocked"),
+        "a plain prompt still refuses a blocked agent: {rejected}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "a plain prompt wrote into the blocked agent"
+    );
+}

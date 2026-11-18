@@ -40,6 +40,12 @@ pub(crate) enum JournalOp {
         queued: bool,
         now_ms: u64,
     },
+    SubmitClientDraft {
+        room: RoomId,
+        draft: Draft,
+        queued: bool,
+        now_ms: u64,
+    },
     DeliveryTimestamps {
         room: RoomId,
         request_id: RequestId,
@@ -84,6 +90,7 @@ impl JournalOp {
             Self::DraftText { room, .. }
             | Self::Submit { room, .. }
             | Self::SubmitDraft { room, .. }
+            | Self::SubmitClientDraft { room, .. }
             | Self::DeliveryTimestamps { room, .. }
             | Self::DeliveryTimestampCompletion { room, .. } => *room,
         }
@@ -109,6 +116,20 @@ impl JournalOp {
                 now_ms,
             } => state
                 .submit_draft_exact(*room, draft.clone(), *now_ms, *queued)
+                .map(drop),
+            Self::SubmitClientDraft {
+                room,
+                draft,
+                queued,
+                now_ms,
+            } => state
+                .submit_message_with(
+                    *room,
+                    draft.clone(),
+                    crate::messaging::model::Author::Developer,
+                    *now_ms,
+                    *queued,
+                )
                 .map(drop),
             Self::DeliveryTimestampCompletion {
                 request_id,

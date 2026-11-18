@@ -1,4 +1,6 @@
 //! Input, resize, timer, and connection event coordination.
+#[path = "machines.rs"]
+mod machines;
 #[cfg(test)]
 #[path = "tests/event_loop_test.rs"]
 mod tests;
@@ -151,6 +153,7 @@ struct InitialClientGeometry {
 }
 
 struct ClientLoopDriver {
+    machines: machines::MachineClients,
     // Disconnect before releasing the shell, as the original loop locals did.
     write_stream: endpoint::ServerConnection,
     endpoint_commands: endpoint_commands::EndpointCommands,
@@ -216,7 +219,8 @@ fn start_client_loop(
     if state.shell.is_some() {
         crate::client::restart::record_ready(handshake.server.as_ref());
     }
-    Ok(ClientLoopDriver {
+    let mut driver = ClientLoopDriver {
+        machines: machines::MachineClients::default(),
         state,
         write_stream,
         endpoint_commands,
@@ -227,7 +231,9 @@ fn start_client_loop(
         #[cfg(unix)]
         will_query_host_cell_size: cell_size_query,
         connection_id: 0,
-    })
+    };
+    driver.initialize_machines(event_tx);
+    Ok(driver)
 }
 
 fn initial_client_state(
@@ -403,13 +409,14 @@ impl ClientLoopDriver {
                 payload_bytes,
             } => {
                 if connection_id != self.connection_id {
+                    self.handle_background_message(connection_id, message);
                     return Ok(false);
                 }
                 let (variant, phase) = perf::message_tag(&message);
                 let _message =
                     crate::utils::perf::operation::message_enter(variant, phase, payload_bytes);
                 if self.write_stream.is_connected() {
-                    return server_messages::handle_server_message(
+                    let result = server_messages::handle_server_message(
                         message,
                         &mut self.state,
                         &mut self.write_stream,
@@ -417,6 +424,10 @@ impl ClientLoopDriver {
                         &self.host_mouse_capture_active,
                         &self.host_sgr_pixels_active,
                     );
+                    return match result {
+                        Ok(value) => Ok(value),
+                        Err(error) => self.remote_failure(error),
+                    };
                 }
             }
             ClientLoopEvent::ServerDisconnected { connection_id } => {
@@ -425,6 +436,8 @@ impl ClientLoopDriver {
                         io::ErrorKind::UnexpectedEof,
                         "connection was lost",
                     ));
+                } else {
+                    self.background_disconnected(connection_id);
                 }
             }
             ClientLoopEvent::Timer => {
@@ -458,13 +471,17 @@ impl ClientLoopDriver {
                 shell.compose(self.state.reported_size.0, self.state.reported_size.1)
             })
             .flatten();
-        finish_client_shell_input(
+        let result = finish_client_shell_input(
             &mut self.state,
             outcome,
             frame,
             &mut self.write_stream,
             &mut self.endpoint_commands,
-        )
+        );
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => self.remote_failure(error),
+        }
     }
 
     fn resize(
@@ -475,6 +492,7 @@ impl ClientLoopDriver {
         cell_height_px: u32,
         pixel_geometry_exact: bool,
     ) -> Result<(), ClientError> {
+        let remote = self.is_remote();
         let state = &mut self.state;
         let host_sgr_pixels_active = &self.host_sgr_pixels_active;
         let write_stream = &mut self.write_stream;
@@ -514,7 +532,12 @@ impl ClientLoopDriver {
             }
         };
         if let Err(e) = write_to_server(write_stream, &msg) {
-            return Err(ClientError::ConnectionLost(e));
+            if !remote {
+                return Err(ClientError::ConnectionLost(e));
+            }
+            return self
+                .remote_failure(ClientError::ConnectionLost(e))
+                .map(|_| ());
         }
         // The Bus view draws locally, so show it at the new size now
         // instead of keeping the old width until the next event.
@@ -530,6 +553,7 @@ impl ClientLoopDriver {
     }
 
     fn tick(&mut self, now: std::time::Instant) -> Result<bool, ClientError> {
+        let machines_changed = self.tick_machines(now);
         let state = &mut self.state;
         let write_stream = &mut self.write_stream;
         state
@@ -537,7 +561,7 @@ impl ClientLoopDriver {
             .retain_mut(|child| child.try_wait().ok().flatten().is_none());
         if let Some(error) = write_stream.take_failure() {
             warn!(error = %error, "server connection failed");
-            return Err(ClientError::ConnectionLost(error));
+            return self.remote_failure(ClientError::ConnectionLost(error));
         }
 
         if self.state.shell.is_none() {
@@ -546,6 +570,7 @@ impl ClientLoopDriver {
         let expired = self.endpoint_commands.expire(now);
         self.apply_shell_input(|shell| {
             let mut outcome = shell.tick_selection_autoscroll(now);
+            outcome.repaint |= machines_changed;
             outcome.repaint |= shell.compose_deferred;
             if shell.editor_pending && !crate::client::host_terminal::output::busy() {
                 shell.editor_pending = false;

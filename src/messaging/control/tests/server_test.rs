@@ -80,6 +80,45 @@ fn every_session_listens_on_control_sock() {
     assert!(!dir.0.join("dev-control.sock").exists());
 }
 
+#[test]
+fn machine_sender_provenance_survives_the_real_control_socket() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(2);
+    let server = start(&dir.0, tx).unwrap();
+    let worker = thread::spawn(move || {
+        for _ in 0..2 {
+            let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected control request")
+            };
+            assert!(call.request.params.get("caller").is_none());
+            assert!(call.request.params.get("external_author").is_some());
+            call.reply
+                .send(Response::success(&call.request.id, call.request.params))
+                .unwrap();
+        }
+    });
+    for author in [
+        json!({"machine":"remote","name":"worker","agent_id":3,"home_is_master":false}),
+        Value::Null,
+    ] {
+        let response = request(
+            &dir.0,
+            &Request {
+                id: format!("external-{}", author.is_null()),
+                method: "message.send".into(),
+                params: json!({"room":"1","to":["2"],"text":"hello","external_author":author}),
+            },
+        )
+        .unwrap();
+        assert!(response.ok);
+        assert!(response.result.get("caller").is_none());
+        assert_eq!(response.result["external_author"], author);
+    }
+    worker.join().unwrap();
+    drop(server);
+}
+
 #[cfg(unix)]
 #[test]
 fn client_reaches_a_bus_still_on_the_legacy_socket_name() {

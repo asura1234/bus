@@ -394,6 +394,20 @@ impl BusState {
         self.record_developer_notice(room, Author::Agent(author), text, files, now_ms)
     }
 
+    pub(crate) fn post_external_to_developer(
+        &mut self,
+        room: RoomId,
+        author: Author,
+        text: String,
+        files: Vec<PathBuf>,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
+        if text.trim().is_empty() && files.is_empty() {
+            return Err(ModelError::EmptyPrompt);
+        }
+        self.record_developer_notice(room, author, text, files, now_ms)
+    }
+
     /// The room's orchestrator when it can take a Bus notice: not being
     /// deleted, and not the agent the notice is about.
     pub(crate) fn notice_orchestrator(

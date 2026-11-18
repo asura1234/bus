@@ -5,6 +5,7 @@ Run explicitly, or through the dev-tools integration target; never at import tim
 """
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,17 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.acceptance.harness_test import Bus  # noqa: E402
+
+
+def private_client_state(data, identity):
+    """Read this fixture client's local room view, never shared room state."""
+    client = hashlib.sha256(f"BUS_CLIENT_ID:{identity}".encode()).hexdigest()
+    machine = hashlib.sha256(b"local").hexdigest()
+    path = data / "clients" / client / f"{machine}.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 @contextmanager
@@ -163,6 +175,7 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
     for name in ("claude", "open", "osascript", "terminal-notifier", "afplay"):
         (fake_bin / name).symlink_to(binary)
     env = {"PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home),
+           "BUS_CLIENT_ID": "native-restart",
            "BUS_DATA_DIR": str(root / "data"), "BUS_TUI_FAKE_AGENT": "1",
            "TERM": "xterm-256color", "SHELL": "/bin/bash",
            "XDG_CONFIG_HOME": str(root / "xdg"), "BUS_LOG": "bus=debug",
@@ -176,8 +189,7 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
         if whole_session:
             os.write(bus.master, b"restart-provider-draft")
             deadline = time.monotonic() + 30
-            while not any(path.exists() and "restart-provider-draft" in path.read_text()
-                          for path in (bus.data / "state.json", bus.data / "state.journal.json")):
+            while "restart-provider-draft" not in json.dumps(private_client_state(bus.data, "native-restart")):
                 assert time.monotonic() < deadline, "scratch draft did not reach storage"
                 time.sleep(0.05)
         bus.cli("agent", "add", "--room", "bus", "--name", "restart-agent",
@@ -222,7 +234,8 @@ def scenario(binary, root, whole_session=False, unhealthy=False, replacement_bin
             assert outcome["outcome"] == ("rolled_back" if unhealthy else "restarted"), outcome
             tui = json.loads((bus.data / "restarts/tui.json").read_text())
             assert tui["process"]["pid"] != old_pid
-            assert "restart-provider-draft" in (bus.data / "state.json").read_text()
+            assert "restart-provider-draft" in json.dumps(private_client_state(bus.data, "native-restart"))
+            assert "restart-provider-draft" not in (bus.data / "state.json").read_text()
             evidence.update(outcome=outcome, replacement_tui=tui)
         else:
             bus.stop()

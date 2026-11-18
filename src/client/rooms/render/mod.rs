@@ -39,6 +39,7 @@ pub(super) enum Action {
     CancelDelete,
     ConfirmDelete,
     Room(crate::messaging::model::RoomId),
+    MachineRoom(String, crate::messaging::model::RoomId),
     Agent(crate::messaging::model::AgentId),
     NewRoom,
     NewAgent,

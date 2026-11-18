@@ -7,6 +7,8 @@ pub(crate) use help::{command_tree, help_for, overview};
 mod help_tests;
 mod interrupt;
 mod parse;
+mod remote;
+pub(super) use remote::{run_remote, run_remote_forwarded};
 mod wait;
 #[cfg(test)]
 use super::help::{agent_help, DEV_HELP};

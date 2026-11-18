@@ -19,6 +19,7 @@ mod idle_agents;
 mod interrupts;
 mod latency;
 mod launch_attempts;
+mod machine_view;
 mod payload;
 mod provider_failure;
 mod provider_retry;
@@ -42,7 +43,6 @@ mod types;
 mod worker_events;
 mod worker_notifications;
 mod worker_result_scope;
-#[cfg(test)]
 use requests::rejection_reason;
 
 pub(crate) use attention::{AttentionDelivery, AttentionOrigin};

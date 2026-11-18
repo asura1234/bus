@@ -15,6 +15,7 @@ mod exit_snapshot;
 mod expiry;
 mod first_message;
 mod launch_metrics;
+mod machine_client;
 mod native_delivery;
 #[cfg(test)]
 #[path = "tests/operational_notice_retirement_test.rs"]
@@ -38,9 +39,9 @@ mod retired_github_watch_tests;
 mod retired_room_digest_tests;
 mod startup;
 mod startup_diagnostics;
-pub(crate) use restart_handoff::take_restart_plan;
 #[cfg(test)]
 pub(crate) use restart_handoff::test_restart_plan;
+pub(crate) use restart_handoff::{accept_restart_plan, take_restart_plan};
 mod startup_recovery;
 mod startup_retry;
 mod storage;
@@ -87,7 +88,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum BusCommand {
     CreateRoom(String),
     RenameRoom(RoomId, String),
@@ -138,13 +139,15 @@ pub(crate) enum BusCommand {
         input: String,
         directories_only: bool,
     },
+    #[serde(skip)]
     Control(control::ControlCall),
     /// A durable spool hint, never provider event data or ownership proof.
+    #[serde(skip)]
     CallbackReady(String),
     Shutdown,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum BusEvent {
     /// Explicit dev navigation request; enqueueing does not prove it is visible yet.
     DevFocusRequested {
@@ -154,6 +157,7 @@ pub(crate) enum BusEvent {
     },
     /// Dev `quit`: run the UI's own save-and-quit, as Ctrl+Q does.
     DevQuitRequested,
+    DevRestartRequested(crate::utils::restart_record::HandoffPlan),
     /// The coordinator saved these global settings; the UI applies them.
     SettingsChanged(settings::BusSettings),
     FeishuStatusChanged(attention::Status),
@@ -189,7 +193,7 @@ pub(crate) enum BusEvent {
 }
 
 /// The native terminal a deleted agent was last bound to, left untouched.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LeftOpenTerminal {
     pub(crate) agent_id: AgentId,
     pub(crate) agent_name: String,
@@ -202,7 +206,7 @@ pub(crate) struct LeftOpenTerminal {
 }
 
 /// Why a deletion left an agent's terminal open.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeftOpenReason {
     /// The provider exited and the server refused to close its terminal.
@@ -238,7 +242,7 @@ impl LeftOpenTerminal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BusSnapshot {
     pub(crate) state: BusState,
     pub(crate) revision: u64,
@@ -257,6 +261,8 @@ pub(crate) struct TestSaveObservation {
 
 pub(crate) struct BusHandle {
     _control: Option<control::Server>,
+    connected: Option<Arc<std::sync::atomic::AtomicBool>>,
+    proxy_events: Option<mpsc::Sender<BusEvent>>,
     commands: mpsc::SyncSender<(u64, BusCommand)>,
     snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     events: mpsc::Receiver<BusEvent>,
@@ -281,6 +287,8 @@ impl BusHandle {
         (
             Self {
                 _control: None,
+                connected: None,
+                proxy_events: None,
                 commands,
                 snapshots: Arc::new(Mutex::new(snapshot)),
                 events,
@@ -336,6 +344,8 @@ impl BusHandle {
         (
             Self {
                 _control: None,
+                connected: None,
+                proxy_events: None,
                 commands: commands.clone(),
                 snapshots,
                 events,
@@ -367,6 +377,8 @@ impl BusHandle {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             _control: Some(control),
+            connected: None,
+            proxy_events: None,
             commands,
             snapshots,
             events,
@@ -374,6 +386,13 @@ impl BusHandle {
     }
 
     pub(crate) fn try_send(&self, command_id: u64, command: BusCommand) -> Result<(), String> {
+        if !self.is_connected() && !matches!(command, BusCommand::Shutdown) {
+            if let Some(events) = &self.proxy_events {
+                machine_client::finish_disconnected(&self.snapshots, events, command_id);
+                return Ok(());
+            }
+            return Err("Machine is unavailable; command was not sent".into());
+        }
         self.commands
             .try_send((command_id, command))
             .map_err(|e| e.to_string())

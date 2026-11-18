@@ -548,6 +548,19 @@ impl BusState {
         Ok(())
     }
 
+    /// A refused paste into a falsely busy Grok orchestrator is a wait, not an error.
+    pub(crate) fn suppress_status_refusal(&mut self, agent: AgentId, message: &str) {
+        let Some(agent) = self.agents.get_mut(&agent) else {
+            return;
+        };
+        if agent.actionable_error.as_deref() == Some(message) {
+            agent.actionable_error = None;
+        }
+        if agent.delivery_rejection.as_deref() == Some(super::rejection_reason(message)) {
+            agent.delivery_rejection = None;
+        }
+    }
+
     /// Closing a visible dialog starts a fresh idle interval at this observation.
     pub(crate) fn observe_dialog(
         &mut self,

@@ -65,6 +65,14 @@ pub(super) struct Pending {
 
 pub(in crate::client) struct BusUi {
     pub handle: Option<BusHandle>,
+    pub(in crate::client) machine_label: String,
+    pub(in crate::client) remote_machine: bool,
+    pub(in crate::client) machine_available: bool,
+    pub(super) owns_coordinator: bool,
+    pub(super) other_machine_rooms: Vec<super::machines::MachineRoomRow>,
+    pub(super) machine_switch: Option<(String, RoomId)>,
+    pub(super) client_state: Option<super::local_state::ClientState>,
+    pub(super) locally_completed: BTreeSet<u64>,
     /// Identity read after the attached server's validated welcome.
     pub(super) server_build_sha: Option<String>,
     pub snapshot: Arc<BusSnapshot>,
@@ -148,7 +156,7 @@ pub(in crate::client) struct BusUi {
     pub(super) dev_settings: bool,
     pub(super) dashboard_pending: Option<std::path::PathBuf>,
     pub(super) dashboard_root: Option<std::path::PathBuf>,
-    /// Set only by the coordinator-owning client; `None` never plays a sound.
+    /// Each client owns its playback configuration; `None` never plays a sound.
     pub(super) sound_config: Option<crate::utils::config::SoundConfig>,
     /// System sound names, read from the OS when Settings first opens.
     pub(super) system_sounds: Option<Vec<String>>,
@@ -190,6 +198,14 @@ impl BusUi {
         let observed_request_notices = super::notices::RequestNotices::seed(&snapshot.state);
         let mut ui = Self {
             handle: None,
+            machine_label: "local".into(),
+            remote_machine: false,
+            machine_available: true,
+            owns_coordinator: true,
+            other_machine_rooms: Vec::new(),
+            machine_switch: None,
+            client_state: None,
+            locally_completed: BTreeSet::new(),
             server_build_sha: None,
             clipboard_image_reader,
             snapshot,
@@ -335,6 +351,9 @@ impl BusUi {
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
+        if self.handle_client_command(id, &command, &effect) {
+            return id;
+        }
         if let BusCommand::Submit(room, _) | BusCommand::SubmitQueued(room, _) = &command {
             tracing::info!(
                 event = "bus.message.submit",
@@ -393,6 +412,7 @@ impl BusUi {
         };
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
+            BusEvent::DevRestartRequested(plan) => self.receive_restart_plan(plan),
             BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
             BusEvent::FeishuStatusChanged(status) => self.feishu_status = status,
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
@@ -535,11 +555,7 @@ impl BusUi {
             &snapshot.state,
             "bus.reply.received",
         );
-        for room in snapshot.state.rooms() {
-            self.locals
-                .entry(room.id)
-                .or_insert_with(|| LocalRoom::from(room));
-        }
+        self.restore_client_rooms(&snapshot.state);
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         let filters_changed = self.room.is_some_and(|room| {
             previous.state.room(room).map(|room| room.history_filters)
@@ -576,6 +592,7 @@ impl BusUi {
                 crate::platform::sound::play_named(name, config);
             }
         }
+        self.update_client_seen();
         self.reconcile_deleted_targets(&previous.state);
         self.sync_agent_notices();
         self.sync_request_notices();
@@ -583,14 +600,14 @@ impl BusUi {
 
     pub fn settle(&mut self) {
         self.sync_snapshot_error();
-        while self
-            .pending
-            .front()
-            .is_some_and(|p| p.result.is_some() && self.snapshot.last_command_id >= p.id)
-        {
+        while self.pending.front().is_some_and(|p| {
+            p.result.is_some()
+                && (self.snapshot.last_command_id >= p.id || self.locally_completed.contains(&p.id))
+        }) {
             let Some(pending) = self.pending.pop_front() else {
                 break;
             };
+            self.locally_completed.remove(&pending.id);
             match pending.result.as_ref() {
                 Some(Err(error)) => {
                     self.settle_deletion(pending.id);
@@ -670,7 +687,7 @@ impl BusUi {
 
     /// Called only from client update handling. IO lives in the coordinator worker.
     pub fn tick(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.poll_machine_availability();
         #[cfg(feature = "dev-tools")]
         for event in crate::messaging::coordinator::ui_hits::released_acks() {
             self.receive_event(event);

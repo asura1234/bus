@@ -659,6 +659,158 @@ mod tests {
         }
     }
 
+    fn grok_composer(activity: &str, footer: &str) -> String {
+        // Reduced Grok 4.7 layout from the reported incident, not a native capture.
+        format!(
+            "{activity}\n\n  ╭────────────────────────────────────────────────╮\n  │ ❯                                              │\n  ╰───────────── Grok 4.7 (high) · always-approve ─╯\n  {footer}\n"
+        )
+    }
+
+    const GROK_THINKING_FOOTER: &str =
+        "Ctrl+e:expand thinking | Space:prompt | Ctrl+l:add to chat | Ctrl+.:shortcuts";
+
+    #[test]
+    fn grok_live_chrome_outranks_action_required_title() {
+        for activity in [
+            "   ◆ Run focused tests… 12s [stop]",
+            "   ⠹ Waiting for response… 0.6s ⇣48.6k [stop]",
+            "   ◎ 1 command still running · send a message to interrupt",
+            "   ▾ Queued 1",
+            "   Queued 2",
+        ] {
+            let screen = grok_composer(activity, GROK_THINKING_FOOTER);
+            for title in ["grok", "⚠ Action Required - grok"] {
+                let result = published(AgentKind::Grok, &screen, title);
+                assert_eq!(result.state, AgentState::Working, "{activity}: {result:?}");
+                assert!(result.visible_working, "{activity}: {result:?}");
+                assert!(!result.visible_blocker, "{activity}: {result:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn grok_live_progress_at_the_composer_stays_working() {
+        for activity in [
+            "   ◆ Thought for 0.4s",
+            "   ◆ Explored 3 files, 1 search",
+            "   ◆ Edited src/example.rs +2 -1",
+        ] {
+            let screen = grok_composer(activity, GROK_THINKING_FOOTER);
+            for title in ["grok", "⚠ Action Required - grok"] {
+                let result = published(AgentKind::Grok, &screen, title);
+                assert_eq!(result.state, AgentState::Working, "{activity}: {result:?}");
+                assert!(result.visible_working);
+                assert!(!result.visible_blocker);
+            }
+        }
+    }
+
+    #[test]
+    fn grok_progress_in_finished_transcript_or_draft_is_not_live_chrome() {
+        for activity in [
+            "   ◆ Thought for 0.4s\n\nThe change is complete.",
+            "The transcript said ◆ Explored 3 files, 1 search",
+            "   ◈ Edited src/example.rs +2 -1",
+        ] {
+            let screen = grok_composer(activity, GROK_THINKING_FOOTER);
+            let result = published(AgentKind::Grok, &screen, "grok");
+            assert_eq!(result.state, AgentState::Idle, "{activity}: {result:?}");
+        }
+        let screen =
+            grok_composer("", GROK_THINKING_FOOTER).replace("│ ❯ ", "│ ❯ ◆ Thought for 0.4s ");
+        assert_eq!(
+            published(AgentKind::Grok, &screen, "grok").state,
+            AgentState::Idle
+        );
+    }
+
+    #[test]
+    fn grok_previous_progress_composer_does_not_hold_a_finished_turn_working() {
+        let history = grok_composer("   ◆ Thought for 0.4s", GROK_THINKING_FOOTER);
+        for footer in [GROK_THINKING_FOOTER, "Shift+Tab:mode │ Ctrl+.:shortcuts"] {
+            // A full prior frame in the transcript is not the current composer.
+            let screen = format!(
+                "{history}\n{}",
+                grok_composer("The change is complete.", footer)
+            );
+            let result = published(AgentKind::Grok, &screen, "grok");
+            assert_eq!(result.state, AgentState::Idle, "{footer}: {result:?}");
+            assert!(!result.visible_working);
+            assert!(!result.visible_blocker);
+        }
+    }
+
+    #[test]
+    fn grok_live_cancel_shortcut_does_not_become_a_foreground_dialog() {
+        let screen = grok_composer("⠹ Thinking…", "Esc:cancel │ Ctrl+.:shortcuts");
+        for title in ["grok", "⚠ Action Required - grok"] {
+            let result = published(AgentKind::Grok, &screen, title);
+            assert_eq!(result.state, AgentState::Working, "{title}: {result:?}");
+            assert!(result.visible_working);
+            assert!(!result.visible_blocker);
+        }
+    }
+
+    #[test]
+    fn grok_live_cancel_after_previous_approval_stays_working() {
+        // Reduced historical menu above a fresh composer, not a native capture.
+        let approval = "Earlier choice\n❯ Yes, proceed\n  No, reject\nEsc:cancel";
+        let screen = format!(
+            "{approval}\n{}",
+            grok_composer("⠹ Thinking…", "Esc:cancel │ Ctrl+.:shortcuts")
+        );
+        for title in ["grok", "⚠ Action Required - grok"] {
+            let result = published(AgentKind::Grok, &screen, title);
+            assert_eq!(result.state, AgentState::Working, "{title}: {result:?}");
+            assert!(result.visible_working);
+            assert!(!result.visible_blocker);
+        }
+    }
+
+    #[test]
+    fn grok_captured_working_frames_stay_working_after_control_detection() {
+        for screen in [
+            include_str!("../../../tests/fixtures/grok-composer/native-1.0.70-waiting-stop.txt"),
+            include_str!("../../../tests/fixtures/grok-composer/native-1.0.70-foreground-stop.txt"),
+            include_str!("../../../tests/fixtures/grok-composer/native-1.0.70-background-turn.txt"),
+        ] {
+            for title in ["grok", "⚠ Action Required - grok"] {
+                let result = published(AgentKind::Grok, screen, title);
+                assert_eq!(result.state, AgentState::Working, "{title}: {result:?}");
+                assert!(result.visible_working);
+                assert!(!result.visible_blocker);
+            }
+        }
+    }
+
+    #[test]
+    fn grok_command_approval_card_stays_blocked_despite_progress_and_stop() {
+        let screen =
+            include_str!("../../../tests/fixtures/grok-dialog/native-1.0.70-command-approval.txt");
+        for title in ["grok", "⚠ Action Required - grok", "⠹ Working - grok"] {
+            let result = published(AgentKind::Grok, screen, title);
+            assert_eq!(result.state, AgentState::Blocked, "{title}: {result:?}");
+            assert!(result.visible_blocker);
+            assert!(!result.visible_working);
+        }
+    }
+
+    #[test]
+    fn grok_always_approve_composer_without_a_menu_is_not_blocked() {
+        for activity in ["", "The change is complete."] {
+            let screen = grok_composer(activity, GROK_THINKING_FOOTER);
+            assert!(!crate::terminal::driver::has_input_controls(&screen));
+            for title in ["grok", "⚠ Action Required - grok"] {
+                let result = published(AgentKind::Grok, &screen, title);
+                assert!(
+                    matches!(result.state, AgentState::Idle | AgentState::Working),
+                    "{title}: {result:?}"
+                );
+                assert!(!result.visible_blocker);
+            }
+        }
+    }
+
     #[test]
     fn a_queued_send_hint_or_quoted_working_line_stays_blocked() {
         for screen in [

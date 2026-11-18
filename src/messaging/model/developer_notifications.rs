@@ -170,6 +170,9 @@ fn insert_prompt<'a>(
             None => return,
         },
         Author::Developer => return,
+        Author::ExternalAgent { ref name, .. } => {
+            (name.as_str(), None, prompt.recipient_ids.is_empty())
+        }
     };
     messages.insert(
         Key::Prompt(prompt.id),

@@ -3,18 +3,20 @@
 # Offline 1.0.5 evidence confirms the boxed composer and Ctrl+X footer.
 # Answerable screens are classified by the shared terminal driver.
 id = "grok"
-version = "2026.10.31.3"
+version = "2026.11.16.1"
 min_engine_version = 3
-updated_at = "2026-10-31T00:00:00Z"
+updated_at = "2026-11-16T00:00:00Z"
 aliases = ["grok-build"]
 
 # Evidence: Grok Build 0.2.101 source and live pane reads.
 #
 # Grok emits OSC 0 titles by default. Idle is "grok" or
 # "<session> - grok". During a turn, the configured title gains a braille
-# spinner and activity text. Permission prompts add "⚠ Action Required";
-# that prefix blinks while the terminal is unfocused, so its native OSC
-# status rule outranks the generic non-idle title rule.
+# spinner and activity text. Permission prompts add "⚠ Action Required",
+# but Grok 4.7 can retain that title after the card is gone, including while
+# Thought / Explored / Edited progress is visible. The title is an activity
+# hint, not proof of a waiting approval. The shared driver's foreground
+# controls still make an actual approval card Blocked, even beside [stop].
 #
 # Grok also emits OSC 9;4 progress on supported terminals. Bus retains the
 # payload after "9;": "4;1;-1" while busy and "4;0;0" when idle.
@@ -45,11 +47,11 @@ any = [
 ]
 
 [[rules]]
-id = "osc_title_blocked"
-state = "blocked"
+id = "osc_title_action_required_working"
+state = "working"
 priority = 1300
 region = "osc_title"
-visible_blocker = true
+visible_working = true
 contains = ["Action Required"]
 
 # Grok clears its OSC busy signals while background work runs. The first
@@ -66,7 +68,7 @@ line_regex = ['[⋅:⸬⁙.·]\s+[1-9][0-9]*\s+│']
 # Grok 1.0.70 keeps an idle OSC title ("grok") and idle progress ("4;0;0")
 # during a live turn. A running task row and the [stop] status line are the
 # signals that remain. They must outrank the idle OSC rules below, and stay
-# under native blocked-title and login status rules.
+# under the native action-required title and login status rules.
 # Captured 2026-10-31: "▾ Tasks 1" plus "⸬ Run …", while a braille status
 # line ended in "[stop]". The same live row animates through ⸬, ⋅, :, and ⁙
 # before "Run". Matching only ⸬ lets the other frames fall through to the
@@ -190,14 +192,30 @@ regex = ['^4;0;0$']
 
 # Above osc_title_idle (1100). Grok 1.0.70 drops the braille spinner from
 # the OSC title while this [stop] line is still on screen, so a lower
-# priority let Bus treat a running turn as idle and type into it.
+# priority let Bus treat a running turn as idle and type into it. The live
+# status row can also use ◆; a real approval menu still wins in the driver.
 [[rules]]
 id = "spinner_status_working"
 state = "working"
 priority = 1160
 region = "whole_recent"
 visible_working = true
-line_regex = ['^\s*[\x{2801}-\x{28FF}]\s.*\[stop\]\s*$']
+line_regex = ['^\s*[◆\x{2801}-\x{28FF}]\s.*\[stop\]\s*$']
+
+# Grok 4.7 can keep the idle title while its latest progress row sits above
+# the composer with the thinking footer. Require that row at the composer
+# boundary and require the complete composer/footer at the end of the screen:
+# an earlier full frame, a completed reply or a draft is not live work.
+# Completed ◈ summaries do not match. The progress-only layouts are reduced
+# regression cases, not additional native captures.
+[[rules]]
+id = "progress_at_composer_working"
+state = "working"
+priority = 1154
+region = "whole_recent"
+visible_working = true
+contains = ["Ctrl+e:expand thinking", "Space:prompt", "Ctrl+l:add to chat", "Ctrl+.:shortcuts"]
+regex = ['(?m)^[ \t]*◆[ \t]+(?:Thought|Explored|Edited)\b[^\n]*\n(?:[ \t]*\n)*[ \t]*[╭┌]─+[╮┐][ \t]*\n[ \t]*│[ \t]*❯[^\n]*│[ \t]*\n(?:[ \t]*│[^\n]*│[ \t]*\n)*[ \t]*[╰└][^\n]*[╯┘][ \t]*\n(?:[ \t]*\n)*[ \t]*Ctrl\+e:expand thinking[^\n]*\s*\z']
 
 # Above osc_title_idle. A Thinking row whose only cancel hint is Esc:cancel
 # has no [stop] chip.

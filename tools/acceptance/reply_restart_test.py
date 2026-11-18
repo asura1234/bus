@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.acceptance.harness_test import Bus, CliError  # noqa: E402
 from tools.acceptance.native_restart_test import (  # noqa: E402
-    capture_restart_failure, complete_restart_fixture, restart_directory,
+    capture_restart_failure, complete_restart_fixture, private_client_state, restart_directory,
 )
 
 
@@ -56,6 +56,7 @@ def scenario(binary, root, provider, master, retain_failure=False):
     data = root / "data"
     # Closed environment: provider and effects names resolve only to our stand-ins.
     env = {"PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home),
+           "BUS_CLIENT_ID": "reply-restart",
            "BUS_DATA_DIR": str(data), "BUS_TUI_FAKE_AGENT": "1", "TERM": "xterm-256color",
            "SHELL": "/bin/bash", "XDG_CONFIG_HOME": str(root / "xdg"),
            "BUS_TUI_EFFECTS": str(root / "effects.jsonl"),
@@ -64,6 +65,7 @@ def scenario(binary, root, provider, master, retain_failure=False):
     began = time.monotonic()
     evidence = {}
     original_error = None
+    paused_server = None
     try:
         bus.start()
         # Keep the default first work room as the observer across restart;
@@ -82,8 +84,7 @@ def scenario(binary, root, provider, master, retain_failure=False):
             return json.loads((data / "state.json").read_text())["state"]
 
         observer = next(r["id"] for r in durable()["rooms"].values() if r["name"] == "bus")
-        source = next(r["id"] for r in durable()["rooms"].values() if r["name"].lower() == room)
-        until(lambda: durable()["visible_room"] == observer)
+        until(lambda: private_client_state(data, "reply-restart").get("room") == observer)
         before = {key: value["unread_count"] for key, value in durable()["rooms"].items()}
         sent = bus.cli("send", "--room", room, "--to", "restart-agent", "--text",
                        "fake:raw-reply restart-proof")
@@ -101,13 +102,20 @@ def scenario(binary, root, provider, master, retain_failure=False):
         # Stop only this scratch coordinator while its native provider keeps running.
         # The provider cannot produce a final until this pause is established,
         # even if polling or SIGSTOP is delayed longer than the old fake work.
-        os.kill(bus.child.pid, signal.SIGSTOP)
+        paused_server = bus.cli("state")["build"]["server"]["pid"]
+        assert paused_server != bus.child.pid, "the native server owns the coordinator"
+        os.kill(paused_server, signal.SIGSTOP)
         release.touch()
         until(lambda: stop_spooled(data), timeout=15)
+        # The coordinator now shares the native server process. Kill that exact
+        # paused fixture process before cleanup can consume the spooled Stop.
+        os.kill(paused_server, signal.SIGKILL)
+        paused_server = None
         stopped = subprocess.run([str(binary), "stop"], env=env, capture_output=True, text=True,
                                  timeout=20, check=False)
         assert stopped.returncode == 0, stopped.stderr
-        os.kill(bus.child.pid, signal.SIGKILL)
+        if bus.child.poll() is None:
+            os.kill(bus.child.pid, signal.SIGKILL)
         bus.child.wait(timeout=10)
         os.close(bus.master)
         bus.master = None
@@ -135,7 +143,7 @@ def scenario(binary, root, provider, master, retain_failure=False):
         # A turn that ends without --reply-to stores no reply, so the unviewed
         # source room gains no unread mark. Repeated reads must not add one.
         state = durable()
-        assert state["visible_room"] != source, state["visible_room"]
+        assert private_client_state(data, "reply-restart")["room"] == observer
         expected = dict(before)
         assert {key: value["unread_count"] for key, value in state["rooms"].items()} == expected, state
         for target in ["master", "reply-work"]:
@@ -158,6 +166,8 @@ def scenario(binary, root, provider, master, retain_failure=False):
                 evidence["capture_error"] = str(diagnostic)
         raise
     finally:
+        if paused_server is not None:
+            os.kill(paused_server, signal.SIGCONT)
         try:
             release.touch()
         finally:

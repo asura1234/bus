@@ -17,6 +17,8 @@ pub const AGENT_NOTES: &str =
     "Control commands emit one JSON envelope, including failures; require ok:true.
 Use bus <command> --help for behavior, defaults, result fields, errors and examples.
 Control commands target an existing session: BUS_DATA_DIR, else the last opened one.
+Use bus machine --help to save SSH peers; bus --machine LABEL runs a command there.
+A label missing locally uses an already-connected viewer's route with that label.
 Every MASTER agent orchestrates exactly one work room for its whole life.
 Read the short how-to-bus-cli.md for the room/message/turn model and workflows.";
 
@@ -58,10 +60,11 @@ pub(super) fn print_help(dev: bool) {
         write_stdout_line(format_args!("{AGENT_NOTES}\n"));
     }
     write_stdout_line(format_args!("--yolo bypasses provider permission prompts for all workers and MASTER orchestrators\n(new and resumed) in this run only. It is off by default and is never saved.\n"));
+    write_stdout_line(format_args!("{}", crate::messaging::machines::HELP));
     if dev {
         write_stdout_line(format_args!("{}", DEV_HELP));
     }
-    write_stdout_line(format_args!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n`bus stop` stops the session's server and closes its agent panes; quit an open UI first.\n`bus perf` summarizes the session's perf records (stalls, slow windows, CPU/memory/load peaks;\ndefault last 30 min) from perf/ in the logs directory (see --paths); it reads files only, so it works while Bus is hung.\n--dev starts a session with dev tools on (listed by `bus --dev --help`) and developer log files,\nexcluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F find · Ctrl+O files · F2 rename\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved."));
+    write_stdout_line(format_args!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n`bus stop` explicitly stops the session's server and closes its agent panes.\nCtrl+Q saves this client's state and detaches; the Bus and its agents keep running.\n`bus perf` summarizes the session's perf records (stalls, slow windows, CPU/memory/load peaks;\ndefault last 30 min) from perf/ in the logs directory (see --paths); it reads files only, so it works while Bus is hung.\n--dev starts a session with dev tools on (listed by `bus --dev --help`) and developer log files,\nexcluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F find · Ctrl+O files · F2 rename\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+Q save client state and detach\n\nBuilt on Herdr; upstream license and attribution are preserved."));
 }
 
 /// `bus stop` targets `BUS_DATA_DIR`, else the last opened local session,

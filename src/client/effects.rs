@@ -153,7 +153,12 @@ pub(super) fn finish_client_shell_input(
     if outcome.detach {
         // Only Bus quits a shell client, and quitting Bus ends the whole session
         // like `bus stop`: Bus state is already saved, the server saves the rest.
-        STOP_SERVER_AFTER_QUIT.store(true, Ordering::Release);
+        let owns_coordinator = state
+            .shell
+            .as_ref()
+            .and_then(|shell| shell.bus.as_ref())
+            .is_none_or(|bus| bus.owns_coordinator());
+        STOP_SERVER_AFTER_QUIT.store(owns_coordinator, Ordering::Release);
         let _ = write_to_server(connection, &ClientMessage::Detach);
         return Ok(true);
     }

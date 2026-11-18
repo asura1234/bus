@@ -131,7 +131,7 @@ const fn supported_prompt_placeholders(template: &str) -> bool {
 }
 
 /// What a MASTER agent is created with, beyond the plain agent input.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct OrchestratorSpec {
     /// The work room it orchestrates for its whole life; required, because
     /// the system prompt names it at launch. Clear re-sends that saved prompt

@@ -199,6 +199,7 @@ impl BusUi {
         if let Some((_, target)) = pressed.filter(|(cell, _)| *cell == (column, row)) {
             outcome.actions.push(match target {
                 Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url),
+                Target::Path(_) if self.remote_machine => return,
                 Target::Path(path) => ClientShellAction::OpenPath(path),
             });
         }

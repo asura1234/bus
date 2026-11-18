@@ -12,6 +12,8 @@ mod history;
 mod history_filters;
 mod input;
 mod links;
+mod local_state;
+mod machines;
 mod notices;
 mod quit;
 #[path = "widgets/recipients.rs"]
@@ -42,7 +44,7 @@ impl crate::client::compositor::ClientShellState {
     /// terminal must also be one known to draw images (Kitty or iTerm2).
     pub(crate) fn set_bus_kitty_graphics(&mut self, enabled: bool) {
         if let Some(bus) = self.bus.as_mut() {
-            bus.graphics = enabled
+            bus.graphics = (enabled && !bus.remote_machine)
                 .then(|| thumbnails::host_graphics_protocol(|key| std::env::var(key).ok()))
                 .flatten();
             if let Some(protocol) = bus.graphics {
@@ -95,19 +97,34 @@ impl crate::client::compositor::ClientShellState {
         let Some(root) = crate::utils::env::bus_data_dir() else {
             return Ok(());
         };
-        let target = crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
-            crate::messaging::coordinator::DEFAULT_SESSION.into(),
-        ));
         let dashboard_root = root.clone();
-        let handle = crate::messaging::coordinator::BusHandle::start(root, target)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let handle = loop {
+            match crate::messaging::coordinator::BusHandle::connect_existing(root.clone()) {
+                Ok(handle) => break handle,
+                Err(error) => {
+                    if let Ok(failure) =
+                        std::fs::read_to_string(root.join("coordinator-startup-error"))
+                    {
+                        return Err(failure);
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(error);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        };
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
+        bus.owns_coordinator = false;
+        bus.enable_client_state(&root, "local")?;
         bus.history.enable_background()?;
         bus.handle = Some(handle);
         bus.dashboard_root = Some(dashboard_root);
         bus.yolo = server_yolo();
         bus.dev_settings = crate::client::perf::overlay_available();
-        // Only the client that owns the coordinator plays room sounds, so each rings once.
+        // Sound and unread presentation belong to this viewer, like its drafts.
         bus.sound_config = Some(sound.clone());
         bus.settings_path = crate::messaging::prefs::settings::path();
         if let Some(path) = &bus.settings_path {
@@ -123,12 +140,6 @@ impl crate::client::compositor::ClientShellState {
         if let Some(room) = bus.room {
             bus.open_room(room);
         }
-        if bus.seed_first_room {
-            bus.queue(
-                crate::messaging::coordinator::BusCommand::CreateRoom("bus".into()),
-                Effect::None,
-            );
-        }
         bus.tick();
         if std::env::var_os("BUS_DEV_EXISTING_SERVER").is_some() {
             tracing::warn!(
@@ -141,8 +152,7 @@ impl crate::client::compositor::ClientShellState {
         Ok(())
     }
 
-    /// A live `[ui.sound]` reload reaches room notifications. A view that
-    /// does not own the coordinator stays silent.
+    /// A live `[ui.sound]` reload reaches this client's room notifications.
     pub(crate) fn reload_bus_sound(&mut self, sound: &crate::utils::config::SoundConfig) {
         if let Some(config) = self.bus.as_mut().and_then(|bus| bus.sound_config.as_mut()) {
             config.clone_from(sound);
@@ -226,6 +236,9 @@ impl crate::client::compositor::ClientShellState {
         let Some(bus) = &self.bus else {
             return false;
         };
+        if !bus.machine_available {
+            return false;
+        }
         let Some(snapshot) = self.snapshot.as_ref() else {
             return false;
         };

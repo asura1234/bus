@@ -399,6 +399,24 @@ fn bus_state(session: &Session) -> Value {
     serde_json::from_str::<Value>(stdout.trim()).unwrap()["result"].clone()
 }
 
+fn private_view(session: &Session) -> Value {
+    let clients = session_dir(&session.0).join("data/clients");
+    let views: Vec<Value> = std::fs::read_dir(clients)
+        .unwrap()
+        .flatten()
+        .flat_map(|entry| std::fs::read_dir(entry.path()).unwrap().flatten())
+        .filter_map(|entry| std::fs::read(entry.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|value| value.get("seen").is_some())
+        .collect();
+    assert_eq!(
+        views.len(),
+        1,
+        "one stable client must own this fixture's view: {views:?}"
+    );
+    views.into_iter().next().unwrap()
+}
+
 #[test]
 fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() {
     let name = session_name("dot");
@@ -528,23 +546,26 @@ fn scratch_restart_preserves_unread_dot_and_trace_then_keeps_seen_rooms_clear() 
     session.ok(&["click", "--hit", "room:MASTER"]);
     session.ok(&["click", "--hit", "room:bus"]);
     session.ok(&["press", "ctrl+q"]);
+    let seen = private_view(&session)["seen_ids"].clone();
     session.ok(&["restart"]);
-    for room in bus_state(&session)["rooms"].as_array().unwrap() {
-        assert_eq!(room["unseen_to_developer"], false);
-    }
+    assert_eq!(
+        private_view(&session)["seen_ids"],
+        seen,
+        "restart must retain this client's read positions"
+    );
     session.ok(&[
         "wait",
         "--text",
         "●",
         "--gone",
         "--rows",
-        "1-7",
+        "0-13",
         "--timeout",
         "10s",
     ]);
 }
 
-fn assert_client_death_stops_scratch_tree(signal: i32, tag: &str) {
+fn assert_client_death_keeps_owner_until_explicit_stop(signal: i32, tag: &str) {
     use std::time::{Duration, Instant};
     let session = Session::start(tag);
     let work = session_dir(&session.0).join("work");
@@ -605,32 +626,55 @@ fn assert_client_death_stops_scratch_tree(signal: i32, tag: &str) {
     );
     assert_eq!(unsafe { libc::kill(client as i32, signal) }, 0);
     let deadline = Instant::now() + Duration::from_secs(12);
-    let survivors = loop {
-        let survivors: Vec<_> = owned
-            .iter()
-            .copied()
-            .filter(|pid| unsafe { libc::kill(*pid as i32, 0) == 0 })
-            .collect();
-        if survivors.is_empty() || Instant::now() >= deadline {
-            break survivors;
-        }
+    while process_alive(client) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
-    };
-    // Assert before Session::Drop invokes the driver's fallback teardown.
+    }
+    assert!(!process_alive(client), "viewer survived signal {signal}");
+    let owner_pids: Vec<_> = owned.into_iter().filter(|pid| *pid != client).collect();
     assert!(
-        survivors.is_empty(),
-        "Bus-owned processes survived client signal {signal}: {survivors:?}"
+        owner_pids.iter().all(|pid| process_alive(*pid)),
+        "the server and provider panes must outlive their viewer: {owner_pids:?}"
+    );
+    let data = session_dir(&session.0).join("data");
+    let state = bus(&session.0)
+        .env("BUS_DATA_DIR", &data)
+        .arg("state")
+        .output()
+        .unwrap();
+    assert!(
+        state.status.success(),
+        "server stopped with viewer: {state:?}"
+    );
+    let state: Value = serde_json::from_slice(&state.stdout).unwrap();
+    assert!(state["result"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|agent| agent["name"] == "cleanup"));
+    let stopped = bus(&session.0)
+        .env("BUS_DATA_DIR", &data)
+        .arg("stop")
+        .output()
+        .unwrap();
+    assert!(stopped.status.success(), "{stopped:?}");
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while owner_pids.iter().any(|pid| process_alive(*pid)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        owner_pids.iter().all(|pid| !process_alive(*pid)),
+        "explicit stop left owned processes: {owner_pids:?}"
     );
 }
 
 #[test]
-fn client_sigkill_stops_server_and_provider_panes() {
-    assert_client_death_stops_scratch_tree(libc::SIGKILL, "kill");
+fn client_sigkill_keeps_server_and_provider_panes_until_explicit_stop() {
+    assert_client_death_keeps_owner_until_explicit_stop(libc::SIGKILL, "kill");
 }
 
 #[test]
-fn client_sigterm_stops_server_and_provider_panes() {
-    assert_client_death_stops_scratch_tree(libc::SIGTERM, "term");
+fn client_sigterm_keeps_server_and_provider_panes_until_explicit_stop() {
+    assert_client_death_keeps_owner_until_explicit_stop(libc::SIGTERM, "term");
 }
 
 #[test]
@@ -650,7 +694,8 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     // Focus the default room by clicking its sidebar entry.
     let clicked = session.ok(&["click", "--hit", "room:bus"]);
     assert_eq!(clicked["at"][0], 5);
-    session.ok(&["wait", "--state", "visible_room == 1"]);
+    session.ok(&["wait", "--text", "# bus", "--rows", "0-2"]);
+    assert_eq!(private_view(&session)["room"], 1);
 
     // A fake Claude agent answers through Bus's real hooks.
     let work = session_dir(&session.0).join("work");
@@ -1192,7 +1237,7 @@ fn reads_still_work_after_a_quit() {
     }
     for read in [
         &["snapshot", "--plain"][..],
-        &["find", "Stopping"][..],
+        &["find", "# bus"][..],
         &["cells", "0", "0"][..],
         &["screenshot"][..],
         &["effects"][..],
@@ -1212,7 +1257,16 @@ fn reads_still_work_after_a_quit() {
     );
     let raw = std::fs::read(run.join("pty.raw")).unwrap();
     let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
-    assert!(has(b"Stopping Bus"), "pty.raw lacks the quit message");
+    let data = session_dir(&session.0).join("data");
+    let state = bus(&session.0)
+        .env("BUS_DATA_DIR", &data)
+        .arg("state")
+        .output()
+        .unwrap();
+    assert!(
+        state.status.success(),
+        "detaching the viewer must leave the server available: {state:?}"
+    );
     assert!(
         has(b"\x1b[?1049l"),
         "pty.raw lacks the alternate-screen exit"
@@ -1648,6 +1702,20 @@ fn named_hits_effects_fixtures_and_screenshots_work_on_a_scratch_bus() {
     // Settings by name; the toggle changes the setting and its own row.
     session.ok(&["click", "--hit", "settings"]);
     session.ok(&["wait", "--text", "[ ] Color blind mode"]);
+    // The frame arrives before its diagnostics cross the local proxy.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !session.ok(&["hits"])["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|hit| hit["name"] == "color-blind")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "settings hit map did not follow its displayed frame"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
     session.ok(&["click", "--hit", "color-blind"]);
     session.ok(&["wait", "--changed", "--rows", "0-10"]);
     session.ok(&["wait", "--text", "[x] Color blind mode"]);
@@ -1702,21 +1770,21 @@ fn a_fixture_file_name_leaves_the_selected_session_alone() {
 }
 
 /// The first `perf/client.jsonl` window under `dir` that has every named metric.
-fn client_perf_window(dir: &Path, metrics: &[&str]) -> Option<Value> {
-    fn find(dir: &Path) -> Option<PathBuf> {
+fn role_perf_window(dir: &Path, role: &str, metrics: &[&str]) -> Option<Value> {
+    fn find(dir: &Path, role: &str) -> Option<PathBuf> {
         for entry in std::fs::read_dir(dir).ok()?.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if let Some(found) = find(&path) {
+                if let Some(found) = find(&path, role) {
                     return Some(found);
                 }
-            } else if path.ends_with("perf/client.jsonl") {
+            } else if path.ends_with(format!("perf/{role}.jsonl")) {
                 return Some(path);
             }
         }
         None
     }
-    let text = std::fs::read_to_string(find(dir)?).ok()?;
+    let text = std::fs::read_to_string(find(dir, role)?).ok()?;
     text.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find(|record| {
@@ -1728,35 +1796,46 @@ fn client_perf_window(dir: &Path, metrics: &[&str]) -> Option<Value> {
 }
 
 #[test]
-fn the_client_records_ui_loop_and_coordinator_perf_windows() {
+fn client_and_server_record_ui_loop_and_coordinator_perf_windows() {
     let session = Session::start("perf");
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     session.ok(&["press", "ctrl+shift+r"]);
     session.ok(&["wait", "--text", "Room name"]);
     session.ok(&["press", "escape"]);
-    let metrics = [
+    let client_metrics = [
         "client.ui_loop",
         "client.timer_lag",
         "client.compose",
         "client.present",
+    ];
+    let server_metrics = [
         "coordinator.loop",
         "coordinator.snapshot",
         "coordinator.tick",
     ];
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut window = None;
-    while window.is_none() && std::time::Instant::now() < deadline {
-        window = client_perf_window(&root(&session.0), &metrics);
+    let mut server_window = None;
+    while (window.is_none() || server_window.is_none()) && std::time::Instant::now() < deadline {
+        window = role_perf_window(&root(&session.0), "client", &client_metrics);
+        server_window = role_perf_window(&root(&session.0), "server", &server_metrics);
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let window = window.unwrap_or_else(|| {
         panic!(
-            "no client perf window with {metrics:?} under {}",
+            "no client perf window with {client_metrics:?} under {}",
             root(&session.0).display()
         )
     });
     assert_eq!(window["role"], "client");
     assert!(window["rss_mb"].as_f64().unwrap() > 0.0, "{window}");
+    let server_window =
+        server_window.unwrap_or_else(|| panic!("no server perf window with {server_metrics:?}"));
+    assert_eq!(server_window["role"], "server");
+    assert!(
+        server_window["rss_mb"].as_f64().unwrap() > 0.0,
+        "{server_window}"
+    );
 }
 
 /// Where the overlay label shows, if it does.

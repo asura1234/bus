@@ -40,7 +40,7 @@ pub(crate) struct PreparedLaunch {
 }
 
 /// Provider setup information presented by the caller before consent.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SetupNotice {
     pub(crate) path: PathBuf,
     pub(crate) message: String,

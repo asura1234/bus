@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PathSuggestion {
     pub(crate) path: PathBuf,
     pub(crate) is_directory: bool,

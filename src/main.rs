@@ -60,6 +60,9 @@ fn main() -> io::Result<()> {
         }
     }
     match raw_args.get(1).map(String::as_str) {
+        Some("--machine-bridge") if raw_args.len() == 3 => {
+            messaging::machines::bridge(&raw_args[2])
+        }
         // Hidden entry the client spawns for the persistent daemon.
         Some("server") if raw_args.len() == 2 => {
             utils::launch_guard::guard_launch()?;

@@ -250,10 +250,16 @@ const SAMPLES: &[&[&str]] = &[
 ];
 
 #[test]
-fn every_tier_table_method_has_a_valid_command_and_sits_in_its_tiers_help() {
+fn every_public_tier_table_method_has_a_valid_command_and_sits_in_its_tiers_help() {
     use crate::messaging::coordinator::{dev_tier_mentions, Tier, METHODS};
-    assert_eq!(SAMPLES.len(), METHODS.len());
-    for spec in METHODS {
+    assert_eq!(
+        SAMPLES.len(),
+        METHODS.iter().filter(|spec| spec.command.is_some()).count()
+    );
+    for (spec, cli_command) in METHODS
+        .iter()
+        .filter_map(|spec| spec.command.map(|command| (spec, command)))
+    {
         let sample = SAMPLES
             .iter()
             .find(|args| {
@@ -265,9 +271,8 @@ fn every_tier_table_method_has_a_valid_command_and_sits_in_its_tiers_help() {
                 }
             })
             .unwrap_or_else(|| panic!("no sample parses into {}", spec.method));
-        assert!(sample.join(" ").starts_with(spec.command), "{sample:?}");
-        let words: Vec<_> = spec
-            .command
+        assert!(sample.join(" ").starts_with(cli_command), "{sample:?}");
+        let words: Vec<_> = cli_command
             .split_whitespace()
             .take_while(|part| !part.starts_with("--"))
             .collect();
@@ -275,23 +280,21 @@ fn every_tier_table_method_has_a_valid_command_and_sits_in_its_tiers_help() {
         let mut help_args: Vec<_> = words.iter().map(|word| (*word).to_owned()).collect();
         help_args.push("--help".into());
         let help = help_for(command_tree(spec.tier == Tier::Dev), &help_args).unwrap();
-        for flag in spec
-            .command
+        for flag in cli_command
             .split_whitespace()
             .filter(|part| part.starts_with("--"))
         {
-            assert!(help.contains(flag), "{} omits {flag}: {help}", spec.command);
+            assert!(help.contains(flag), "{cli_command} omits {flag}: {help}");
         }
         match spec.tier {
             Tier::Agent => assert!(
                 agent_help().contains(&line),
                 "{} missing from bus --help",
-                spec.command
+                cli_command
             ),
-            Tier::Dev if spec.command.contains(" --") => {
-                assert!(DEV_HELP.contains(&format!("\n  {}", spec.command)));
-                for flag in spec
-                    .command
+            Tier::Dev if cli_command.contains(" --") => {
+                assert!(DEV_HELP.contains(&format!("\n  {cli_command}")));
+                for flag in cli_command
                     .split_whitespace()
                     .filter(|part| part.starts_with("--"))
                 {
@@ -305,17 +308,39 @@ fn every_tier_table_method_has_a_valid_command_and_sits_in_its_tiers_help() {
                 assert!(
                     DEV_HELP.contains(&line),
                     "{} missing from bus --dev --help",
-                    spec.command
+                    cli_command
                 );
                 assert!(
                     !agent_help().contains(&line),
                     "{} is a dev tool in bus --help",
-                    spec.command
+                    cli_command
                 );
             }
         }
     }
     assert_eq!(dev_tier_mentions(&agent_help()), Vec::<String>::new());
+}
+
+#[test]
+fn internal_machine_rpc_methods_do_not_invent_public_commands() {
+    use crate::messaging::coordinator::{method_spec, METHODS};
+    for method in [
+        "client.snapshot",
+        "client.command",
+        "machine.forward",
+        "message.sender",
+    ] {
+        assert!(method_spec(method).unwrap().command.is_none());
+        let words: Vec<_> = method.split('.').collect();
+        assert!(
+            command(&words).is_err(),
+            "{method} unexpectedly has a public command"
+        );
+    }
+    assert_eq!(
+        METHODS.iter().filter(|spec| spec.command.is_none()).count(),
+        4
+    );
 }
 
 /// `DEV_HELP` is compiled in from docs/dev-tools.md, so every source closure

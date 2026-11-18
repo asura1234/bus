@@ -10,7 +10,7 @@ use std::thread::JoinHandle;
 
 type Completion = (String, Result<SentMessage, String>);
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, serde::Deserialize)]
 pub(crate) struct Status {
     pub(crate) enabled: bool,
     pub(crate) pending: bool,

@@ -291,6 +291,38 @@ fn room_with_recipient(state: &mut BusState) -> crate::messaging::model::RoomId 
 }
 
 #[test]
+fn machine_client_submission_replay_preserves_unrelated_draft() {
+    let dir = temp_dir("machine-client-draft-replay");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    state.set_draft_text(room, "private unsent text").unwrap();
+    let original = state.room(room).unwrap().draft.clone();
+    store.save(&state).unwrap();
+    let mut submitted = original.clone();
+    submitted.text = "sent by another viewer".into();
+    store
+        .journal(JournalOp::SubmitClientDraft {
+            room,
+            draft: submitted,
+            queued: true,
+            now_ms: 1_000,
+        })
+        .unwrap();
+    for _ in 0..2 {
+        let loaded = JsonStore::new(path.clone()).load().unwrap().unwrap();
+        assert_eq!(loaded.room(room).unwrap().draft, original);
+        assert_eq!(loaded.requests().count(), 1);
+        assert_eq!(
+            loaded.requests().next().unwrap().prompt.text,
+            "sent by another viewer"
+        );
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn captured_draft_and_latency_metadata_replay_together_without_resubmitting() {
     let dir = temp_dir("draft-latency-replay");
     let path = dir.join("state.json");

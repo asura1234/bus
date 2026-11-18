@@ -217,7 +217,7 @@ silences audio. See state/settings help for effective versus saved values.
 
 Resolve deletion targets with state, prefer IDs, then use --confirm. Read each
 delete command's help for pending deletion and terminals left open. Quit the UI
-with Ctrl+Q to save drafts before stopping; `bus stop` disconnects without saving.
+with Ctrl+Q to save this client's drafts and detach. Its rooms, agents and coordinator keep running in the owning Bus server. `bus stop` explicitly stops that server and its agents; save any open clients first.
 A failed or five-second save shows an unsaved warning: Ctrl+Q again within five seconds forces quit,
 potentially losing edits. Wait out that window to retry saving; presses before a warning keep waiting.
 
@@ -225,6 +225,13 @@ Sessions from pre-control builds answer control only if launched in developer mo
 session does. Older orchestrator-build sessions gain MASTER (a conflicting old room becomes Master (old)).
 Obsolete orchestrator transcripts/workflow drafts/capability
 grants are dropped. private/orchestrator-credentials.json is no longer read; delete it yourself if its old API key is no longer needed.
+
+## Other machines
+
+Save an SSH target with `bus machine add build user@host`; `bus machine list`, `enable LABEL`, `disable LABEL`, and `remove LABEL` manage the list. SSH owns keys and authentication. Bus must already be running on the target and its `bus` executable must be available to SSH; connecting never installs or starts it. The room sidebar includes machine-qualified rooms and agent panes, including each machine's own MASTER. Room and agent
+creation apply to the selected machine; agent directories and attachment paths are checked there. Files are not copied. Disconnected machines keep their last room inventory as Unavailable, Agents 0/0. Use `bus --machine LABEL send --room ROOM --as AGENT --to RECIPIENT --text TEXT` for a cross-machine send. `--as` identifies the source agent; `--room` identifies the destination conversation. Source machine, agent and home room travel
+with the message. A label absent from the source's saved targets can use an already-connected viewer's route: B can reach C through A while A is connected to both. There is no separate relay process, and that route disappears when the viewer leaves. A missing route fails without an outbox. A lost acknowledgement after possible acceptance is reported as unknown; Bus never resends it. Drafts, selected rooms and read marks remain private
+to each client. Closing a viewer keeps the owning Bus servers and their agents running.
 
 ## Developer restart for orchestrators
 

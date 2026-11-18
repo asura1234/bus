@@ -116,7 +116,11 @@ impl BusUi {
             .iter()
             .skip(self.main_scroll)
             .take(usize::from(view.history.height));
-        let links = visible_links(&mut self.link_paths, visible);
+        let links = if self.remote_machine {
+            Vec::new()
+        } else {
+            visible_links(&mut self.link_paths, visible)
+        };
         self.paint_history_rows(view, content, &links);
         if !title.is_empty() && view.composer_box.height > 0 {
             view.row(
@@ -269,7 +273,11 @@ impl BusUi {
         if composer_y > 2 {
             view.row(
                 Rect::new(x, 1, width, 1),
-                format!("# {}", room.name),
+                if self.remote_machine {
+                    format!("[{}] # {}", self.machine_label, room.name)
+                } else {
+                    format!("# {}", room.name)
+                },
                 None,
                 false,
                 false,
@@ -538,7 +546,12 @@ impl BusUi {
             ..
         } = layout;
         if let Some(path) = &self.detail_path {
-            let lines = wrap(path, width);
+            let qualified = if self.remote_machine {
+                format!("{}:{path}", self.machine_label)
+            } else {
+                path.clone()
+            };
+            let lines = wrap(&qualified, width);
             let fits_above = lines.len() <= usize::from(composer_y.saturating_sub(7));
             let popup_bottom = if fits_above {
                 composer_y.saturating_sub(1)
