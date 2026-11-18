@@ -156,7 +156,7 @@ the wrapper remains held.
   for self-contained phone asks, developer authority of Feishu replies, Bus-only
   answers, optional bridge availability and the rule against re-paging.
 
-- **Let Bus identify the sender.** Bus adds one sender header: `name (room R):` on every message; IDs appear only for numeric or historical names. Send only the body; do not add a "from X", "X here" or signature line.
+- **Let Bus identify the sender.** Bus adds one sender header: `name:` locally, `name (room R):` across rooms or MASTER; IDs appear only for numeric or historical names. Send only the body; do not add a "from X", "X here" or signature line.
   Include this instruction in every worker brief. Agents can message any agent
   across rooms; `--to orchestrator` names their home room's bound orchestrator.
 
