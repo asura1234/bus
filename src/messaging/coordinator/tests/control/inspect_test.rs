@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn settings_feishu_notifications_toggle_persists_through_control() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let path = dir.join("settings.json");
+    worker.settings_path = Some(path.clone());
+    crate::messaging::prefs::settings::save(
+        &path,
+        &crate::messaging::prefs::settings::BusSettings {
+            feishu_bridge_path: Some("/usr/bin/true".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (events, _receiver) = mpsc::channel();
+    let toggle = |worker: &mut Worker, id: &str, on: bool| {
+        worker.control_response_with_events(
+            &ControlRequest {
+                id: id.into(),
+                method: "settings.feishu_notifications".into(),
+                params: json!({"on": on}),
+            },
+            Some(&events),
+        )
+    };
+    let off = toggle(&mut worker, "feishu-off", false);
+    assert!(off.ok, "{off:?}");
+    assert_eq!(off.result["updated"], true);
+    assert_eq!(off.result["feishu"]["enabled"], false);
+    assert!(
+        !crate::messaging::prefs::settings::load(&path)
+            .unwrap()
+            .feishu_notifications
+    );
+    let on = toggle(&mut worker, "feishu-on", true);
+    assert!(on.ok, "{on:?}");
+    assert_eq!(on.result["feishu"]["enabled"], true);
+    assert_eq!(on.result["feishu"]["available"], true);
+    assert!(
+        crate::messaging::prefs::settings::load(&path)
+            .unwrap()
+            .feishu_notifications
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_selectors_confirmation_and_normal_mode_fail_closed() {
     let (mut worker, room, _agent, dir) = fixture();
     let bad = call(

@@ -204,6 +204,23 @@ mod tests {
     }
 
     #[test]
+    fn feishu_sink_refuses_registry_input_while_notifications_are_off() {
+        let fixture = Fixture::new();
+        crate::messaging::prefs::settings::update(&fixture.base.join("settings.json"), |saved| {
+            saved.feishu_notifications = false;
+        })
+        .unwrap();
+        for event in [wire(None, "Unknown"), wire(Some("om_first"), "Proceed")] {
+            let error = ingest_with(&fixture.base, "cli_test", event.as_slice(), |_, _| {
+                panic!("disabled Feishu input cannot reach a control socket")
+            })
+            .unwrap_err();
+            assert!(error.contains("disabled"), "{error}");
+        }
+        assert!(!fixture.base.join("feishu-inbox.json").exists());
+    }
+
+    #[test]
     fn feishu_sink_durably_parks_cross_session_conflicts_and_unknown_replies_before_dispatch() {
         let fixture = Fixture::new();
         for (index, event) in [

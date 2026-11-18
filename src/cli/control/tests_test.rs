@@ -2867,9 +2867,10 @@ fn interrupt_state_reads_are_bounded_by_the_stop_deadline() {
     assert!(outcome.is_ok());
 }
 #[test]
-fn feishu_cli_observes_pending_status_and_reports_notifications_off() {
+fn feishu_cli_on_without_a_bridge_reports_the_setup_error() {
     let mut output = Vec::new();
     let mut methods = Vec::new();
+    let setup_error = crate::messaging::coordinator::attention::FEISHU_UNAVAILABLE;
     let result = run_with_pause(
         &[
             "settings".into(),
@@ -2882,9 +2883,9 @@ fn feishu_cli_observes_pending_status_and_reports_notifications_off() {
             Ok(Response::success(
                 &request.id,
                 if request.method == "settings.feishu_notifications" {
-                    json!({"feishu":{"enabled":false,"pending":true}})
+                    json!({"feishu":{"enabled":true,"available":false,"pending":true}})
                 } else {
-                    json!({"settings":{"feishu":{"enabled":false,"pending":false,"error":"notifications remain off"}}})
+                    json!({"settings":{"feishu":{"enabled":true,"available":false,"pending":false,"error":setup_error}}})
                 },
             ))
         },
@@ -2892,9 +2893,67 @@ fn feishu_cli_observes_pending_status_and_reports_notifications_off() {
     );
     assert!(
         result.is_err(),
-        "CLI must report that notifications remain off"
+        "CLI must report the missing bridge setup error"
     );
     assert_eq!(methods, ["settings.feishu_notifications", "settings"]);
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["error"]["code"], "feishu_unavailable");
+    assert_eq!(response["error"]["message"], setup_error);
+}
+
+#[test]
+fn feishu_cli_off_persists_without_waiting_for_status() {
+    let mut output = Vec::new();
+    let mut methods = Vec::new();
+    let result = run_with_pause(
+        &[
+            "settings".into(),
+            "feishu-notifications".into(),
+            "--off".into(),
+        ],
+        &mut output,
+        &mut |request: &Request, _| {
+            methods.push(request.method.clone());
+            Ok(Response::success(
+                &request.id,
+                json!({"updated":true,"feishu":{"enabled":false,"available":false,"pending":false}}),
+            ))
+        },
+        |_| {},
+    );
+    assert!(result.is_ok());
+    assert_eq!(methods, ["settings.feishu_notifications"]);
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["result"]["updated"], true);
+    assert_eq!(response["result"]["feishu"]["enabled"], false);
+}
+
+#[test]
+fn feishu_cli_on_succeeds_once_the_bridge_is_available() {
+    let mut output = Vec::new();
+    let result = run_with_pause(
+        &[
+            "settings".into(),
+            "feishu-notifications".into(),
+            "--on".into(),
+        ],
+        &mut output,
+        &mut |request: &Request, _| {
+            Ok(Response::success(
+                &request.id,
+                if request.method == "settings.feishu_notifications" {
+                    json!({"feishu":{"enabled":true,"available":true,"pending":true}})
+                } else {
+                    json!({"settings":{"feishu":{"enabled":true,"available":true,"pending":false,"error":null}}})
+                },
+            ))
+        },
+        |_| {},
+    );
+    assert!(result.is_ok());
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["result"]["feishu"]["enabled"], true);
+    assert_eq!(response["result"]["feishu"]["available"], true);
 }
 
 #[test]

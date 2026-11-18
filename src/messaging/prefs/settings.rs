@@ -45,11 +45,9 @@ pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
     /// Dev-only target, resolved against current MASTER orchestrator names.
     pub(crate) error_orchestrator: Option<String>,
-    // Read the legacy toggle for compatibility; developer alerts are mandatory.
-    #[serde(
-        rename = "feishu_waiting_notifications",
-        deserialize_with = "mandatory_notifications"
-    )]
+    /// The explicit Feishu developer-notification toggle, shared across
+    /// sessions. Bridge availability is separate and reported at runtime.
+    #[serde(rename = "feishu_waiting_notifications")]
     pub(crate) feishu_notifications: bool,
     pub(crate) feishu_recipient: String,
     pub(crate) feishu_bridge_path: Option<String>,
@@ -79,13 +77,6 @@ pub(crate) struct BusSettings {
     /// narrow terminal.
     #[serde(deserialize_with = "deserialize_sidebar_width")]
     pub(crate) sidebar_width: u16,
-}
-
-fn mandatory_notifications<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<bool, D::Error> {
-    let _ = bool::deserialize(deserializer)?;
-    Ok(true)
 }
 
 impl Default for BusSettings {
@@ -320,21 +311,21 @@ mod tests {
     }
 
     #[test]
-    fn legacy_freeze_preference_is_dropped_without_changing_developer_alerts_or_sound() {
-        let root = crate::utils::test_temp::unique_temp_path("bus-retired-freeze-setting");
+    fn explicit_feishu_setting_is_honored_from_old_files_and_round_trips() {
+        let root = crate::utils::test_temp::unique_temp_path("bus-feishu-toggle-setting");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.json");
         for old_value in [false, true] {
             let old = serde_json::json!({
                 "freeze_notifications": old_value,
-                "feishu_waiting_notifications": false,
+                "feishu_waiting_notifications": old_value,
                 "feishu_recipient": "ou_saved",
                 "master_sound": {"enabled": false, "name": "Glass"},
                 "sidebar_width": 35
             });
             std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
             let loaded = load(&path).unwrap();
-            assert!(loaded.feishu_notifications);
+            assert_eq!(loaded.feishu_notifications, old_value);
             assert_eq!(loaded.feishu_recipient, "ou_saved");
             assert!(!loaded.master_sound.enabled);
             assert_eq!(loaded.master_sound.name.as_deref(), Some("Glass"));
@@ -343,7 +334,13 @@ mod tests {
             let saved: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert!(saved.get("freeze_notifications").is_none());
+            assert_eq!(saved["feishu_waiting_notifications"], old_value);
             assert_eq!(load(&path).unwrap(), loaded);
+        }
+        // The CLI and Settings write both values and they survive a reload.
+        for on in [false, true] {
+            update(&path, |settings| settings.feishu_notifications = on).unwrap();
+            assert_eq!(load(&path).unwrap().feishu_notifications, on);
         }
         std::fs::remove_dir_all(root).unwrap();
     }

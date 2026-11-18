@@ -31,7 +31,7 @@ pub(super) fn run(
         };
         let status = &response.result["settings"]["feishu"];
         if status["pending"] == false {
-            return if status["enabled"] == true {
+            return if status["enabled"] == true && status["available"] == true {
                 Response::success(&sent.id, serde_json::json!({"feishu":status}))
             } else {
                 Response::failure(
@@ -39,7 +39,7 @@ pub(super) fn run(
                     "feishu_unavailable",
                     status["error"]
                         .as_str()
-                        .unwrap_or("Feishu notifications remain off"),
+                        .unwrap_or(crate::messaging::coordinator::attention::FEISHU_UNAVAILABLE),
                 )
             };
         }

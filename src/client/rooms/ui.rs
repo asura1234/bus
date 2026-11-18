@@ -326,8 +326,10 @@ impl BusUi {
 
     pub(super) fn toggle_feishu_notifications(&mut self) {
         self.settings_field = self.feishu_field();
-        // Normalize a legacy saved off value when this informational row is activated.
-        self.queue(BusCommand::SetFeishuNotifications(true), Effect::None);
+        let on = !self.settings.feishu_notifications;
+        // Shown at once; the coordinator's saved copy follows.
+        self.settings.feishu_notifications = on;
+        self.queue(BusCommand::SetFeishuNotifications(on), Effect::None);
     }
 
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -394,7 +396,7 @@ impl BusUi {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
             BusEvent::SettingsChanged(settings) => self.receive_settings(settings),
-            BusEvent::FeishuStatusChanged(status) => self.feishu_status = status,
+            BusEvent::FeishuStatusChanged(status) => self.receive_feishu_status(status),
             BusEvent::StorageRecovered => self.receive_storage_recovered(),
             BusEvent::DevFocusRequested {
                 room,

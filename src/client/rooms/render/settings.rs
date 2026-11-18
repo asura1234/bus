@@ -384,6 +384,32 @@ impl BusUi {
     }
 
     fn feishu_settings_row(&self, view: &mut View, rect: Rect, field: usize) {
+        let enabled = self.settings.feishu_notifications;
+        let recipient = display(&self.settings.feishu_recipient);
+        let bridge = display(
+            self.settings
+                .feishu_bridge_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .unwrap_or("PATH"),
+        );
+        // The setup error leads so a narrow terminal still shows it; the
+        // editable path and recipient rows follow below.
+        let detail = if enabled && !self.feishu_status.available {
+            let error = self
+                .feishu_status
+                .error
+                .as_deref()
+                .unwrap_or(crate::messaging::coordinator::attention::FEISHU_UNAVAILABLE);
+            format!(
+                "{} · {} · feishu-bridge: {}",
+                display(error),
+                recipient,
+                bridge
+            )
+        } else {
+            format!("{} · feishu-bridge: {}", recipient, bridge)
+        };
         let suffix = if self.feishu_status.pending {
             " (sending…)".into()
         } else if self.feishu_status.queued > 0 {
@@ -402,13 +428,11 @@ impl BusUi {
         view.row(
             rect,
             format!(
-                "Feishu notifications ({}){}",
-                if self.feishu_status.enabled {
-                    "on"
-                } else {
-                    "off"
-                },
-                suffix
+                "[{}] Feishu notifications ({}){} — {}",
+                if enabled { "x" } else { " " },
+                if enabled { "on" } else { "off" },
+                suffix,
+                detail
             ),
             Some(Action::ToggleFeishuNotifications),
             self.settings_field == field,

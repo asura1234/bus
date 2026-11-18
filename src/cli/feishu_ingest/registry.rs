@@ -33,6 +33,9 @@ pub(super) fn ingest(
     if input.sender_id != settings.feishu_recipient {
         return Err("Feishu sender does not match the configured recipient".into());
     }
+    if !settings.feishu_notifications {
+        return Err("Feishu notifications are disabled".into());
+    }
     if Client::default()
         .program(settings.feishu_bridge_path.as_deref())
         .is_none()

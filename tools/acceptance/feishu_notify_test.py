@@ -89,18 +89,24 @@ class Run(helper.Run):
 
         self.command("click", "--hit", "settings")
         self.edit("feishu-cli-path", str(self.bin / "not-installed"))
-        self.command("wait", "--text", "Feishu notifications (off)")
+        self.until(lambda: self.state()["settings"]["feishu"]["available"] is False,
+                   "missing explicit plugin path reported")
+        screen = str(self.command("snapshot"))
+        assert "Feishu notifications (on)" in screen and "feishu-bridge is not installed" in screen, screen
         self.command("press", "esc")
         self.post("master", agents[0], "[waiting-on-you] Off-period ask")
         self.quiet()
         assert len(self.calls()) == 3
         self.command("click", "--hit", "settings")
         self.edit("feishu-cli-path", "")
-        self.command("wait", "--text", "Feishu notifications (on)")
+        self.until(lambda: self.state()["settings"]["feishu"]["available"] is True,
+                   "PATH discovery restored")
+        screen = str(self.command("snapshot"))
+        assert "feishu-bridge is not installed" not in screen, screen
         self.command("press", "esc")
         self.quiet()
         assert len(self.calls()) == 3, "restoring the plugin cannot replay off-period alerts"
-        self.step(3, "Missing explicit plugin path disabled Feishu; restoring PATH discovery did not replay the off-period ask")
+        self.step(3, "A missing explicit plugin path kept Feishu on with the setup error and sent nothing; restoring PATH discovery cleared the error without replaying the off-period ask")
 
         (self.bin / "bridge-mode").write_text("fail")
         failed_source = self.post("master", agents[0], "[waiting-on-you] Synthetic failure")

@@ -379,14 +379,18 @@ Result: {settings:{color_blind_mode,master_sound,room_sound,developer_sound:
   through the current defaults. There is no first-launch seeding step.
 Errors: common errors; settings.error reports a settings-file read failure."#;
 
-const SETTINGS_FEISHU_NOTIFICATIONS: &str = r#"Inspect mandatory Feishu delivery by requesting --on; --off is rejected because
-developer blocker notifications remain mandatory even with a legacy off setting.
-One of --on/--off is required. --on waits up to 15s for notification setup.
-Result: {feishu:{enabled,pending,error,...}} (status from the shared settings).
-Errors: feishu_unavailable: fix the reported bot/recipient/CLI setup;
-feishu_timeout: inspect settings and retry after setup completes; command_failed
-for --off. control_unavailable can occur while reading the completion status.
-See docs/developer-notifications.md for recipient and CLI configuration."#;
+const SETTINGS_FEISHU_NOTIFICATIONS: &str = r#"Turn Feishu developer notifications on or off, or read their status with either flag.
+One of --on/--off is required. The choice is an explicit saved setting shared by
+every running and later Bus. --off stops Feishu DMs in both directions; TUI
+developer alerts and room sounds are separate and stay as they are. --on saves
+the setting, then waits up to 15s for feishu-bridge setup and fails while the
+bridge executable cannot be resolved.
+Result: {feishu:{enabled,available,pending,error,...}} (status from the shared settings).
+enabled is the saved toggle; available reports whether feishu-bridge resolves now.
+Errors: feishu_unavailable: the toggle is on but feishu-bridge could not be found;
+install it or set its path in Settings; feishu_timeout: inspect settings and retry
+after setup completes; control_unavailable can occur while reading the completion
+status. See docs/developer-notifications.md for recipient and bridge configuration."#;
 
 const SEND: &str = r#"Persist a message and one request per recipient; a receipt is not completion.
 Bus refuses new worker sends in MASTER (master_reserved); use your own room, or --reply-to for a MASTER request.

@@ -63,7 +63,7 @@ you saw. You do not decide what the product should do, and you never change the 
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
 - Notifications: direct developer posts, explicit @you mentions and waiting-tagged agent
   messages notify in every room; bare waiting phrases qualify only in developer conversations.
-  Bot DMs are always on, with editable recipient/CLI path and a two-second burst; assert argv
+  Bot DMs follow an explicit on/off toggle (default on), with editable recipient/CLI path and a two-second burst; assert argv
   through a recording shim on a closed PATH. Notify you sound (always on) cycles System default
   and installed system sounds, recording previews and alerts by their system file target.
   Room switches, focus and ordinary cooldown do not suppress this cue. Developer-authored sends

@@ -637,7 +637,7 @@ fn written_waiting_on_you_guidance_covers_phone_replies() {
         "optional `feishu-bridge` installed and configured",
         "normal developer instruction with `in_reply_to` provenance",
         "Act on it like a MASTER message and answer only through Bus",
-        "Without the bridge, Feishu is off: asks remain one-way TUI alerts",
+        "Without a resolvable bridge, no Feishu DM can be sent: asks remain one-way TUI alerts",
         "Do not re-page the same ask",
         "same agent within 30 minutes of the newest confirmed DM",
         "a reply answers them all",
