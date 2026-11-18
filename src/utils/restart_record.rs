@@ -603,7 +603,15 @@ mod tests {
         let identity = parse_identity(&identity_json()).unwrap();
         assert_eq!(
             identity.providers,
-            ["claude", "claude-ds", "codex", "cursor", "grok", "kimi", "agy"]
+            [
+                "claude",
+                "claude-ds",
+                "codex",
+                "cursor",
+                "grok",
+                "kimi",
+                "agy"
+            ]
         );
     }
 

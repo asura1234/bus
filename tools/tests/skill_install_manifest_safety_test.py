@@ -105,4 +105,3 @@ def test_symlinked_gemini_ancestors_are_not_written_through(tmp_path):
         assert result.returncode == 0, result.stderr
         assert "agy: skipped: skills path is a symlink" in result.stdout
         assert list(target.iterdir()) == []
-

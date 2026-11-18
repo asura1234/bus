@@ -153,4 +153,3 @@ def test_nested_gemini_config_preserves_sibling_cli_settings_and_user_skill(tmp_
     assert run_tool(home, "remove-skills", "--yes").returncode == 0
     assert (cli / "settings.json").read_text() == "{}"
     assert (user_skill / "SKILL.md").read_text() == "mine"
-
